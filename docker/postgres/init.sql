@@ -1,0 +1,4 @@
+-- Runs once, on first container start, against a fresh data volume.
+-- Empty on purpose: no schema exists yet. Alembic migrations (backend/alembic)
+-- own schema creation from here on; this file is reserved for one-time
+-- bootstrap concerns (extensions, roles) if a future migration needs them.
