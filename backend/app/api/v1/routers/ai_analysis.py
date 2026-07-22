@@ -80,6 +80,7 @@ async def run_ai_analysis(
         migration_advice=[ma.model_dump() for ma in result.migration_advice],
         suggested_reviewers=[sr.model_dump() for sr in result.suggested_reviewers],
         regression_tests=[rt.model_dump() for rt in result.regression_tests],
+        release_coordination_plan=result.release_coordination_plan.model_dump(),
         confidence=result.confidence.model_dump(),
         prompt_version=result.prompt_version,
     )

@@ -41,6 +41,28 @@ class RegressionTestResponse(BaseModel):
     confidence: ConfidenceScoreResponse
 
 
+class DeploymentStepResponse(BaseModel):
+    order: int
+    repository: str
+    action: str
+    reason: str
+
+
+class RepositoryToNotifyResponse(BaseModel):
+    repository: str
+    reason: str
+    urgency: str
+
+
+class ReleaseCoordinationPlanResponse(BaseModel):
+    deployment_order: list[DeploymentStepResponse]
+    repositories_to_notify: list[RepositoryToNotifyResponse]
+    rollout_strategy: str
+    backward_compatibility_advice: str
+    communication_summary: str
+    rollout_risks: list[str]
+
+
 class AIAnalysisResponse(BaseModel):
     """Response returned by GET /pull-requests/{id}/ai-analysis."""
 
@@ -70,5 +92,6 @@ class AIAnalysisResultResponse(BaseModel):
     migration_advice: list[MigrationAdviceResponse] = Field(default_factory=list)
     suggested_reviewers: list[SuggestedReviewerResponse] = Field(default_factory=list)
     regression_tests: list[RegressionTestResponse] = Field(default_factory=list)
+    release_coordination_plan: ReleaseCoordinationPlanResponse
     confidence: ConfidenceScoreResponse
     prompt_version: str = ""

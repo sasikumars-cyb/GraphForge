@@ -68,6 +68,7 @@ class AIAnalysisService:
         deterministic = await self._get_or_run_deterministic(pull_request_id)
 
         # 2. Build context
+        impacted_repositories = await self._resolve_impacted_repositories(repository, deterministic)
         context = (
             ContextBuilder()
             .with_repository(
@@ -82,6 +83,7 @@ class AIAnalysisService:
                 base_ref=pull_request.base_ref,
             )
             .with_analysis_from_persisted(deterministic)
+            .with_repositories(impacted_repositories)
             .build()
         )
 
@@ -111,6 +113,54 @@ class AIAnalysisService:
 
         logger.info("No deterministic analysis found for PR %s, running now.", pull_request_id)
         return await self._impact_engine.analyze_pull_request(pull_request_id)
+
+    async def _resolve_impacted_repositories(
+        self, repository: Repository, deterministic: PullRequestAnalysis
+    ) -> list[dict[str, str]]:
+        """Resolve the current repository plus every repository id already
+        present in the deterministic engine's cross-repository impact
+        (``indirectly_impacted_services``) to human-readable metadata.
+
+        A Postgres primary-key lookup on ids the deterministic engine
+        already produced — never a new Neo4j traversal, never dependency
+        discovery. Unresolvable ids (e.g. a repository since removed) are
+        silently skipped rather than treated as an error.
+        """
+        downstream_ids: set[uuid.UUID] = set()
+        for node in deterministic.indirectly_impacted_services:
+            raw_id = node.get("repository_id")
+            if not raw_id or raw_id == str(repository.id):
+                continue
+            try:
+                downstream_ids.add(uuid.UUID(raw_id))
+            except ValueError:
+                continue
+
+        resolved = [
+            {
+                "id": str(repository.id),
+                "owner": repository.owner,
+                "name": repository.name,
+                "full_name": repository.full_name,
+                "relation": "current",
+            }
+        ]
+
+        if downstream_ids:
+            stmt = select(Repository).where(Repository.id.in_(downstream_ids))
+            result = await self._db.execute(stmt)
+            for repo in result.scalars().all():
+                resolved.append(
+                    {
+                        "id": str(repo.id),
+                        "owner": repo.owner,
+                        "name": repo.name,
+                        "full_name": repo.full_name,
+                        "relation": "downstream",
+                    }
+                )
+
+        return resolved
 
     async def _persist(
         self, pull_request_id: uuid.UUID, result: AIAnalysisResult

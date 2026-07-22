@@ -10,6 +10,19 @@ from app.analysis.models.impact import (
 )
 
 
+class _FakePersistedAnalysis:
+    """Minimal stand-in for a persisted `PullRequestAnalysis` row - only the
+    attributes `with_analysis_from_persisted` actually reads via `getattr`."""
+
+    risk = "LOW"
+    directly_impacted_services: list[dict[str, str]] = []
+    indirectly_impacted_services: list[dict[str, str]] = []
+    impacted_apis: list[dict[str, str]] = []
+    impacted_topics: list[dict[str, str]] = []
+    impacted_libraries: list[dict[str, str]] = []
+    dependency_paths: list[list[dict[str, str]]] = []
+
+
 def _node(name: str, node_type: str = "Service") -> ImpactedNode:
     return ImpactedNode(id=f"r1:{name}", name=name, node_type=node_type, repository_id="r1")
 
@@ -54,6 +67,7 @@ def test_build_empty_context() -> None:
     assert ctx.repository_name == ""
     assert ctx.changed_files == []
     assert ctx.jira_issues == []
+    assert ctx.impacted_repositories == []
 
 
 def test_with_repository() -> None:
@@ -116,6 +130,42 @@ def test_with_jira_issues() -> None:
     assert ctx.jira_issues == issues
 
 
+def test_with_repositories() -> None:
+    repos = [
+        {
+            "id": "r1",
+            "owner": "acme",
+            "name": "order-service",
+            "full_name": "acme/order-service",
+            "relation": "current",
+        },
+        {
+            "id": "r2",
+            "owner": "acme",
+            "name": "inventory-service",
+            "full_name": "acme/inventory-service",
+            "relation": "downstream",
+        },
+    ]
+    ctx = ContextBuilder().with_repositories(repos).build()
+    assert ctx.impacted_repositories == repos
+
+
+def test_with_repositories_persisted_path() -> None:
+    """`with_repositories` must survive the persisted branch of `build()`
+    too, not just the live `with_analysis` branch."""
+    repos = [
+        {"id": "r1", "owner": "acme", "name": "svc", "full_name": "acme/svc", "relation": "current"}
+    ]
+    ctx = (
+        ContextBuilder()
+        .with_analysis_from_persisted(_FakePersistedAnalysis())
+        .with_repositories(repos)
+        .build()
+    )
+    assert ctx.impacted_repositories == repos
+
+
 def test_fluent_chaining() -> None:
     result = _analysis(risk=RiskLevel.LOW)
     ctx = (
@@ -125,12 +175,24 @@ def test_fluent_chaining() -> None:
         .with_analysis(result)
         .with_changed_files(["a.py"])
         .with_jira_issues([])
+        .with_repositories(
+            [
+                {
+                    "id": "r1",
+                    "owner": "org",
+                    "name": "svc",
+                    "full_name": "org/svc",
+                    "relation": "current",
+                }
+            ]
+        )
         .build()
     )
     assert ctx.repository_name == "svc"
     assert ctx.pull_request_title == "PR"
     assert ctx.risk == "LOW"
     assert ctx.changed_files == ["a.py"]
+    assert ctx.impacted_repositories[0]["name"] == "svc"
 
 
 def test_truncate_file_list_within_budget() -> None:
@@ -207,3 +269,27 @@ def test_to_prompt_variables_dependency_paths() -> None:
     variables = ctx.to_prompt_variables()
     assert "Svc1" in variables["dependency_paths"]
     assert "Svc2" in variables["dependency_paths"]
+
+
+def test_to_prompt_variables_impacted_repositories() -> None:
+    repos = [
+        {
+            "id": "r1",
+            "owner": "acme",
+            "name": "order-service",
+            "full_name": "acme/order-service",
+            "relation": "current",
+        },
+        {
+            "id": "r2",
+            "owner": "acme",
+            "name": "inventory-service",
+            "full_name": "acme/inventory-service",
+            "relation": "downstream",
+        },
+    ]
+    ctx = ContextBuilder().with_repositories(repos).build()
+    variables = ctx.to_prompt_variables()
+    assert "order-service" in variables["impacted_repositories"]
+    assert "inventory-service" in variables["impacted_repositories"]
+    assert "downstream" in variables["impacted_repositories"]

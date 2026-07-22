@@ -46,6 +46,7 @@ class AIContext:
     dependency_paths: list[list[dict[str, str]]] = field(default_factory=list)
     changed_files: list[str] = field(default_factory=list)
     jira_issues: list[dict[str, str]] = field(default_factory=list)
+    impacted_repositories: list[dict[str, str]] = field(default_factory=list)
 
     def to_prompt_variables(self) -> dict[str, str]:
         """Convert this context into the variable dict expected by
@@ -78,6 +79,7 @@ class AIContext:
             "changed_files": "\n".join(self.changed_files),
             "impacted_components": json.dumps(impacted_components, indent=2),
             "dependency_paths": json.dumps(self.dependency_paths, indent=2),
+            "impacted_repositories": json.dumps(self.impacted_repositories, indent=2),
         }
 
 
@@ -138,6 +140,7 @@ class ContextBuilder:
         self._dependency_paths: list[DependencyPath] = []
         self._changed_files: list[str] = []
         self._jira_issues: list[dict[str, str]] = []
+        self._repositories: list[dict[str, str]] = []
         self._from_persisted: bool = False
         self._persisted_directly: list[dict[str, str]] = []
         self._persisted_indirectly: list[dict[str, str]] = []
@@ -212,6 +215,15 @@ class ContextBuilder:
         self._jira_issues = list(issues)
         return self
 
+    def with_repositories(self, repositories: list[dict[str, str]]) -> ContextBuilder:
+        """Add resolved repository metadata (id/owner/name/full_name/relation)
+        for the current repository and every repository appearing in the
+        deterministic analysis's cross-repository impact - resolved by the
+        caller (a Postgres lookup on already-known ids), never discovered
+        here."""
+        self._repositories = list(repositories)
+        return self
+
     def build(self) -> AIContext:
         """Assemble the final bounded context, truncating if needed."""
         changed = self._truncate_file_list(self._changed_files)
@@ -234,6 +246,7 @@ class ContextBuilder:
                 dependency_paths=self._persisted_paths,
                 changed_files=changed,
                 jira_issues=self._jira_issues,
+                impacted_repositories=self._repositories,
             )
 
         return AIContext(
@@ -255,6 +268,7 @@ class ContextBuilder:
             dependency_paths=[_dependency_path_to_list(p) for p in self._dependency_paths],
             changed_files=changed,
             jira_issues=self._jira_issues,
+            impacted_repositories=self._repositories,
         )
 
     def _truncate_file_list(self, files: list[str]) -> list[str]:

@@ -16,6 +16,9 @@ def test_load_impact_analysis_template(builder: PromptBuilder) -> None:
     raw = builder.load("impact_analysis")
     assert "Impact Analysis" in raw
     assert "{{ repository }}" in raw
+    assert "{{ impacted_repositories }}" in raw
+    assert "{{ dependency_paths }}" in raw
+    assert "release coordination plan" in raw.lower()
 
 
 def test_load_reviewer_template(builder: PromptBuilder) -> None:
@@ -35,7 +38,7 @@ def test_load_nonexistent_template_raises(builder: PromptBuilder) -> None:
 
 def test_extract_version_impact_analysis(builder: PromptBuilder) -> None:
     version = builder.extract_version("impact_analysis")
-    assert version == "1.0"
+    assert version == "1.1"
 
 
 def test_extract_version_reviewer(builder: PromptBuilder) -> None:

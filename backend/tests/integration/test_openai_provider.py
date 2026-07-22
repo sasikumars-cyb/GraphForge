@@ -33,6 +33,24 @@ def _sample_context() -> AIContext:
         .with_repository(name="order-svc", owner="acme", default_branch="main")
         .with_pull_request(title="Fix payment flow", number=42, head_ref="fix/pay", base_ref="main")
         .with_changed_files(["src/payments.py"])
+        .with_repositories(
+            [
+                {
+                    "id": "r1",
+                    "owner": "acme",
+                    "name": "order-svc",
+                    "full_name": "acme/order-svc",
+                    "relation": "current",
+                },
+                {
+                    "id": "r2",
+                    "owner": "acme",
+                    "name": "inventory-svc",
+                    "full_name": "acme/inventory-svc",
+                    "relation": "downstream",
+                },
+            ]
+        )
         .build()
     )
 
@@ -57,6 +75,33 @@ def _valid_ai_result() -> dict[str, object]:
                 "confidence": {"score": 0.85, "reasoning": "Critical path"},
             }
         ],
+        "release_coordination_plan": {
+            "deployment_order": [
+                {
+                    "order": 1,
+                    "repository": "order-svc",
+                    "action": "Deploy first",
+                    "reason": "Producer of the changed event",
+                },
+                {
+                    "order": 2,
+                    "repository": "inventory-svc",
+                    "action": "Deploy after order-svc",
+                    "reason": "Consumes the changed event",
+                },
+            ],
+            "repositories_to_notify": [
+                {
+                    "repository": "inventory-svc",
+                    "reason": "Consumes the affected Kafka topic",
+                    "urgency": "before deployment",
+                }
+            ],
+            "rollout_strategy": "Deploy order-svc behind a feature flag first.",
+            "backward_compatibility_advice": "Keep the event schema backward compatible.",
+            "communication_summary": "Notify inventory-svc before rollout.",
+            "rollout_risks": ["Kafka deserialization failures during rollout"],
+        },
         "confidence": {"score": 0.88, "reasoning": "High confidence analysis"},
     }
 
@@ -95,7 +140,15 @@ async def test_analyze_success() -> None:
     assert len(result.suggested_reviewers) == 1
     assert result.suggested_reviewers[0].reviewer == "payments-team"
     assert len(result.regression_tests) == 1
-    assert result.prompt_version == "1.0"
+    assert result.prompt_version == "1.1"
+
+    plan = result.release_coordination_plan
+    assert len(plan.deployment_order) == 2
+    assert plan.deployment_order[0].repository == "order-svc"
+    assert plan.deployment_order[1].repository == "inventory-svc"
+    assert len(plan.repositories_to_notify) == 1
+    assert plan.repositories_to_notify[0].repository == "inventory-svc"
+    assert plan.rollout_risks == ["Kafka deserialization failures during rollout"]
 
 
 @pytest.mark.asyncio

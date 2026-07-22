@@ -32,6 +32,7 @@ class FakeRepository:
     name: str = "order-svc"
     owner: str = "acme"
     default_branch: str = "main"
+    full_name: str = "acme/order-svc"
 
 
 @dataclass
@@ -83,8 +84,17 @@ def _make_service(
     repository: FakeRepository | None = None,
     existing_analysis: FakePullRequestAnalysis | None = None,
     ai_result: AIAnalysisResult | None = None,
+    cross_repo_repositories: list[FakeRepository] | None = None,
 ) -> _Mocks:
-    """Build an AIAnalysisService with mocked dependencies."""
+    """Build an AIAnalysisService with mocked dependencies.
+
+    ``db.execute`` now has to distinguish three distinct query shapes:
+    - ``select(PullRequestAnalysis)`` (existing deterministic-analysis check)
+    - ``select(PullRequestAIAnalysis)`` (existing persist-upsert check)
+    - ``select(Repository).where(id.in_(...))`` (new cross-repository name
+      resolution) - the only one needing ``.scalars().all()`` rather than
+      ``.scalar_one_or_none()``.
+    """
     pr_id = uuid.uuid4()
     repo_id = uuid.uuid4()
     pr = pull_request or FakePullRequest(id=pr_id, repository_id=repo_id)
@@ -102,10 +112,16 @@ def _make_service(
 
     db.get = AsyncMock(side_effect=mock_get)
 
-    # Mock execute for select queries
-    mock_result = MagicMock()
-    mock_result.scalar_one_or_none.return_value = existing_analysis
-    db.execute = AsyncMock(return_value=mock_result)
+    def mock_execute(stmt: Any) -> MagicMock:
+        entity = stmt.column_descriptions[0]["entity"]
+        result = MagicMock()
+        if entity is not None and entity.__name__ == "Repository":
+            result.scalars.return_value.all.return_value = cross_repo_repositories or []
+        else:
+            result.scalar_one_or_none.return_value = existing_analysis
+        return result
+
+    db.execute = AsyncMock(side_effect=mock_execute)
     db.add = MagicMock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()
@@ -226,3 +242,105 @@ async def test_analyze_persists_result() -> None:
     await mocks.service.analyze(pr_id)
 
     mocks.db.commit.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_resolves_current_repository_with_no_cross_repo_impact() -> None:
+    """With no indirectly-impacted services, the context only carries the
+    current repository, and no Repository lookup is needed."""
+    pr_id = uuid.uuid4()
+    repo_id = uuid.uuid4()
+    pr = FakePullRequest(id=pr_id, repository_id=repo_id)
+    repo = FakeRepository(id=repo_id, name="order-svc", owner="acme", full_name="acme/order-svc")
+    analysis = FakePullRequestAnalysis(id=uuid.uuid4(), pull_request_id=pr_id)
+
+    mocks = _make_service(pull_request=pr, repository=repo, existing_analysis=analysis)
+    await mocks.service.analyze(pr_id)
+
+    context = mocks.llm_provider.analyze.call_args.args[0]
+    assert context.impacted_repositories == [
+        {
+            "id": str(repo_id),
+            "owner": "acme",
+            "name": "order-svc",
+            "full_name": "acme/order-svc",
+            "relation": "current",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_resolves_cross_repository_names() -> None:
+    """A cross-repository entry in indirectly_impacted_services is resolved
+    to its owner/name via a Repository lookup and reaches the context
+    alongside the current repository."""
+    pr_id = uuid.uuid4()
+    repo_id = uuid.uuid4()
+    downstream_repo_id = uuid.uuid4()
+    pr = FakePullRequest(id=pr_id, repository_id=repo_id)
+    repo = FakeRepository(id=repo_id, name="order-svc", owner="acme", full_name="acme/order-svc")
+    downstream_repo = FakeRepository(
+        id=downstream_repo_id,
+        name="inventory-svc",
+        owner="acme",
+        full_name="acme/inventory-svc",
+    )
+    analysis = FakePullRequestAnalysis(
+        id=uuid.uuid4(),
+        pull_request_id=pr_id,
+        indirectly_impacted_services=[
+            {
+                "id": f"{downstream_repo_id}:component:InventoryConsumer",
+                "name": "InventoryConsumer",
+                "node_type": "Component",
+                "repository_id": str(downstream_repo_id),
+            }
+        ],
+    )
+
+    mocks = _make_service(
+        pull_request=pr,
+        repository=repo,
+        existing_analysis=analysis,
+        cross_repo_repositories=[downstream_repo],
+    )
+    await mocks.service.analyze(pr_id)
+
+    context = mocks.llm_provider.analyze.call_args.args[0]
+    relations = {r["name"]: r["relation"] for r in context.impacted_repositories}
+    assert relations == {"order-svc": "current", "inventory-svc": "downstream"}
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_cross_repository_id_is_skipped() -> None:
+    """A repository_id that no longer resolves to a Repository row (e.g. a
+    removed repository) is skipped, not treated as an error."""
+    pr_id = uuid.uuid4()
+    repo_id = uuid.uuid4()
+    pr = FakePullRequest(id=pr_id, repository_id=repo_id)
+    repo = FakeRepository(id=repo_id, name="order-svc", owner="acme", full_name="acme/order-svc")
+    analysis = FakePullRequestAnalysis(
+        id=uuid.uuid4(),
+        pull_request_id=pr_id,
+        indirectly_impacted_services=[
+            {
+                "id": "gone:component:X",
+                "name": "X",
+                "node_type": "Component",
+                "repository_id": str(uuid.uuid4()),
+            }
+        ],
+    )
+
+    mocks = _make_service(
+        pull_request=pr,
+        repository=repo,
+        existing_analysis=analysis,
+        cross_repo_repositories=[],
+    )
+    result = await mocks.service.analyze(pr_id)
+
+    assert isinstance(result, AIAnalysisResult)
+    context = mocks.llm_provider.analyze.call_args.args[0]
+    assert len(context.impacted_repositories) == 1
+    assert context.impacted_repositories[0]["relation"] == "current"

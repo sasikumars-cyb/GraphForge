@@ -7,8 +7,11 @@ from app.ai.schemas.analysis_result import (
     AIAnalysisResult,
     BreakingChange,
     ConfidenceScore,
+    DeploymentStep,
     MigrationAdvice,
     RegressionTest,
+    ReleaseCoordinationPlan,
+    RepositoryToNotify,
     SuggestedReviewer,
 )
 
@@ -90,6 +93,73 @@ def test_regression_test_valid() -> None:
     assert rt.priority == "critical"
 
 
+def test_deployment_step_valid() -> None:
+    step = DeploymentStep(
+        order=1,
+        repository="order-service",
+        action="Deploy first",
+        reason="No other repository depends on it deploying later",
+    )
+    assert step.order == 1
+    assert step.repository == "order-service"
+
+
+def test_deployment_step_order_must_be_at_least_one() -> None:
+    with pytest.raises(ValidationError):
+        DeploymentStep(order=0, repository="order-service", action="Deploy", reason="Why")
+
+
+def test_repository_to_notify_valid() -> None:
+    notify = RepositoryToNotify(
+        repository="inventory-service",
+        reason="Consumes the order-created topic",
+        urgency="before deployment",
+    )
+    assert notify.repository == "inventory-service"
+    assert notify.urgency == "before deployment"
+
+
+def test_release_coordination_plan_empty_defaults() -> None:
+    plan = ReleaseCoordinationPlan()
+    assert plan.deployment_order == []
+    assert plan.repositories_to_notify == []
+    assert plan.rollout_strategy == ""
+    assert plan.backward_compatibility_advice == ""
+    assert plan.communication_summary == ""
+    assert plan.rollout_risks == []
+
+
+def test_release_coordination_plan_full() -> None:
+    plan = ReleaseCoordinationPlan(
+        deployment_order=[
+            DeploymentStep(
+                order=1, repository="order-service", action="Deploy first", reason="Producer"
+            ),
+            DeploymentStep(
+                order=2,
+                repository="inventory-service",
+                action="Deploy after order-service",
+                reason="Consumer",
+            ),
+        ],
+        repositories_to_notify=[
+            RepositoryToNotify(
+                repository="inventory-service",
+                reason="Consumes order-created",
+                urgency="before deployment",
+            )
+        ],
+        rollout_strategy="Deploy order-service behind a feature flag first.",
+        backward_compatibility_advice="Keep the event schema backward compatible.",
+        communication_summary="Notify inventory team before rollout.",
+        rollout_risks=["Kafka deserialization failures during rollout"],
+    )
+    assert len(plan.deployment_order) == 2
+    assert plan.deployment_order[0].order == 1
+    assert len(plan.repositories_to_notify) == 1
+    assert plan.rollout_risks == ["Kafka deserialization failures during rollout"]
+
+
 def test_ai_analysis_result_empty_defaults() -> None:
     result = AIAnalysisResult()
     assert result.executive_summary == ""
@@ -97,6 +167,7 @@ def test_ai_analysis_result_empty_defaults() -> None:
     assert result.migration_advice == []
     assert result.suggested_reviewers == []
     assert result.regression_tests == []
+    assert result.release_coordination_plan == ReleaseCoordinationPlan()
     assert result.confidence.score == 0.0
     assert result.prompt_version == ""
 
@@ -127,6 +198,9 @@ def test_ai_analysis_result_full() -> None:
                 confidence=ConfidenceScore(score=0.85),
             )
         ],
+        release_coordination_plan=ReleaseCoordinationPlan(
+            rollout_strategy="Ship X on its own.",
+        ),
         executive_summary="One breaking change in X",
         confidence=ConfidenceScore(score=0.88, reasoning="High signal"),
         prompt_version="1.0",
@@ -135,5 +209,6 @@ def test_ai_analysis_result_full() -> None:
     assert len(result.migration_advice) == 1
     assert len(result.suggested_reviewers) == 1
     assert len(result.regression_tests) == 1
+    assert result.release_coordination_plan.rollout_strategy == "Ship X on its own."
     assert result.executive_summary == "One breaking change in X"
     assert result.confidence.score == 0.88
