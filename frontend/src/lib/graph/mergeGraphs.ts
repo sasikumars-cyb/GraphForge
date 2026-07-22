@@ -1,4 +1,4 @@
-import type { Graph, GraphEdge, GraphNode } from "../../types/graph";
+import type { CrossRepositoryLink, Graph, GraphEdge, GraphNode } from "../../types/graph";
 
 /**
  * Merges one graph per repository into a single graph, deduplicating
@@ -49,4 +49,109 @@ export function mergeGraphs(graphs: Graph[]): Graph {
   }
 
   return { nodes: Array.from(nodesById.values()), edges };
+}
+
+export interface RepositoryDependencyEdge {
+  source: string;
+  target: string;
+  topics: string[];
+}
+
+/**
+ * Aggregates repository-to-repository dependency edges for the overview
+ * graph from a flat list of cross-repository links (fetched in a single
+ * request via `getAllCrossRepositoryLinks`) - no new backend logic, no
+ * per-topic node detail. Each link's own `relationship` field is always the
+ * *peer's* true PRODUCES_TO/CONSUMES_FROM edge (see the backend query), so
+ * collecting every repo's own relation to every topic just means walking
+ * the list once - direction then falls out as producer -> consumer.
+ */
+export function buildRepositoryDependencyEdges(
+  links: CrossRepositoryLink[],
+): RepositoryDependencyEdge[] {
+  const relationByRepoTopic = new Map<string, "PRODUCES_TO" | "CONSUMES_FROM">();
+  for (const link of links) {
+    if (link.relationship === "PRODUCES_TO" || link.relationship === "CONSUMES_FROM") {
+      relationByRepoTopic.set(`${link.repository_id}:${link.topic_name}`, link.relationship);
+    }
+  }
+
+  const topicsByName = new Map<string, { repoId: string; relationship: string }[]>();
+  for (const [repoTopicKey, relationship] of relationByRepoTopic) {
+    const separatorIndex = repoTopicKey.indexOf(":");
+    const repoId = repoTopicKey.slice(0, separatorIndex);
+    const topicName = repoTopicKey.slice(separatorIndex + 1);
+    const entries = topicsByName.get(topicName) ?? [];
+    entries.push({ repoId, relationship });
+    topicsByName.set(topicName, entries);
+  }
+
+  const edgeByPair = new Map<string, RepositoryDependencyEdge>();
+  for (const [topicName, entries] of topicsByName) {
+    const producers = entries.filter((e) => e.relationship === "PRODUCES_TO");
+    const consumers = entries.filter((e) => e.relationship === "CONSUMES_FROM");
+    for (const producer of producers) {
+      for (const consumer of consumers) {
+        if (producer.repoId === consumer.repoId) continue;
+        const key = `${producer.repoId}->${consumer.repoId}`;
+        const edge = edgeByPair.get(key) ?? {
+          source: producer.repoId,
+          target: consumer.repoId,
+          topics: [],
+        };
+        if (!edge.topics.includes(topicName)) {
+          edge.topics.push(topicName);
+        }
+        edgeByPair.set(key, edge);
+      }
+    }
+  }
+
+  return Array.from(edgeByPair.values());
+}
+
+/**
+ * Adds a single repository's cross-repository neighbors (fetched via the
+ * lightweight `/cross-repository-links` endpoint) onto that repository's
+ * own graph - one small peer node + one edge per link. This never requires
+ * fetching any other repository's full graph: the "own" graph already
+ * contains the shared `KafkaTopic` node (matched here by `name`), so only
+ * the remote component needs to be synthesized.
+ */
+export function mergeCrossRepositoryLinks(ownGraph: Graph, links: CrossRepositoryLink[]): Graph {
+  const topicNodeIdByName = new Map(
+    ownGraph.nodes
+      .filter((n) => n.labels.includes("KafkaTopic"))
+      .map((n) => [String(n.properties.name ?? ""), n.id]),
+  );
+
+  const peerNodes: GraphNode[] = [];
+  const peerEdges: GraphEdge[] = [];
+  const seenPeerIds = new Set<string>();
+
+  for (const link of links) {
+    const topicNodeId = topicNodeIdByName.get(link.topic_name);
+    if (!topicNodeId) {
+      continue;
+    }
+    if (!seenPeerIds.has(link.component_id)) {
+      seenPeerIds.add(link.component_id);
+      peerNodes.push({
+        id: link.component_id,
+        labels: ["Component"],
+        properties: { name: link.component_name, repository_id: link.repository_id },
+      });
+    }
+    peerEdges.push({
+      source_id: link.component_id,
+      target_id: topicNodeId,
+      type: link.relationship,
+      properties: {},
+    });
+  }
+
+  return {
+    nodes: [...ownGraph.nodes, ...peerNodes],
+    edges: [...ownGraph.edges, ...peerEdges],
+  };
 }

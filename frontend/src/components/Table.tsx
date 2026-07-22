@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 
 export interface TableColumn<T> {
   key: string;
-  header: string;
+  header: ReactNode;
   render: (row: T) => ReactNode;
   className?: string;
 }

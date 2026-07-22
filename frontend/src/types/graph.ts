@@ -21,6 +21,16 @@ export interface Graph {
   edges: GraphEdge[];
 }
 
+/** Mirrors backend/app/schemas/indexing.py's `CrossRepositoryLinkResponse`. */
+export interface CrossRepositoryLink {
+  repository_id: string;
+  repository_name: string;
+  component_id: string;
+  component_name: string;
+  relationship: string;
+  topic_name: string;
+}
+
 export interface IndexingJob {
   id: string;
   repository_id: string;

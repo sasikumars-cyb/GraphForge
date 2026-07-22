@@ -40,3 +40,17 @@ class GraphEdgeResponse(BaseModel):
 class GraphResponse(BaseModel):
     nodes: list[GraphNodeResponse]
     edges: list[GraphEdgeResponse]
+
+
+class CrossRepositoryLinkResponse(BaseModel):
+    """One component in another repository sharing a Kafka topic with the
+    requested repository - lightweight relationship metadata only, no
+    graph/nodes/edges, so discovering cross-repository links never requires
+    downloading another repository's full graph."""
+
+    repository_id: str
+    repository_name: str
+    component_id: str
+    component_name: str
+    relationship: str
+    topic_name: str
