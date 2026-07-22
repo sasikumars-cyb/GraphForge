@@ -95,6 +95,14 @@ class AIAnalysisService:
         )
         result = await self._llm_provider.analyze(context)
 
+        # 3b. Strip any repository the model invented, independent of
+        # whether it followed the prompt's grounding instructions - a
+        # deterministic backstop, not a hope.
+        known_repository_names = {r["name"] for r in impacted_repositories}
+        result.release_coordination_plan = result.release_coordination_plan.grounded_in(
+            known_repository_names, repository.name
+        )
+
         # 4. Persist
         await self._persist(pull_request_id, result)
 

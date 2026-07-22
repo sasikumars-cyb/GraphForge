@@ -38,7 +38,7 @@ def test_load_nonexistent_template_raises(builder: PromptBuilder) -> None:
 
 def test_extract_version_impact_analysis(builder: PromptBuilder) -> None:
     version = builder.extract_version("impact_analysis")
-    assert version == "1.1"
+    assert version == "1.2"
 
 
 def test_extract_version_reviewer(builder: PromptBuilder) -> None:

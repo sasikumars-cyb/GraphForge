@@ -5,7 +5,9 @@ deterministic analysis from ``app.analysis``.  Validation only — no
 business logic lives here.
 """
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, Field, model_validator
 
 
 class ConfidenceScore(BaseModel):
@@ -59,18 +61,35 @@ class DeploymentStep(BaseModel):
 
 
 class RepositoryToNotify(BaseModel):
-    """A repository (team) that should be informed before this change ships."""
+    """A repository (team) that should be informed before this change ships.
+
+    ``urgency`` is a closed vocabulary, not free text, so a frontend can
+    render it as a consistent badge (e.g. red "blocking" vs. grey
+    "advisory") rather than parsing arbitrary phrases like "ASAP" or
+    "before deployment" or "high priority".
+    """
 
     repository: str = Field(min_length=1)
     reason: str = Field(min_length=1)
-    urgency: str = Field(min_length=1)
+    urgency: Literal["blocking", "advisory"]
 
 
 class ReleaseCoordinationPlan(BaseModel):
     """AI-synthesized coordination plan for a change spanning repositories.
 
     Explains and sequences the deterministic engine's already-computed
-    cross-repository impact - never discovers dependencies itself.
+    cross-repository impact - never discovers dependencies itself. Two
+    guarantees are enforced here in code, not just requested in the prompt
+    (this provider doesn't use strict JSON-schema-enforced output, so a
+    prose instruction alone isn't reliable):
+
+    - A single "deployment order" of one repository is a contradiction in
+      terms - it's cleared automatically unless at least two distinct
+      repositories are named (see :meth:`_no_order_for_a_single_repository`).
+    - Only repositories the deterministic engine actually found may appear
+      anywhere in the plan - see :meth:`grounded_in`, which the caller
+      applies after the fact using the exact repository names that were in
+      context, filtering out anything the model invented.
     """
 
     deployment_order: list[DeploymentStep] = Field(default_factory=list)
@@ -79,6 +98,45 @@ class ReleaseCoordinationPlan(BaseModel):
     backward_compatibility_advice: str = Field(default="")
     communication_summary: str = Field(default="")
     rollout_risks: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _no_order_for_a_single_repository(self) -> "ReleaseCoordinationPlan":
+        distinct_repos = {step.repository for step in self.deployment_order}
+        if len(distinct_repos) <= 1:
+            self.deployment_order = []
+        return self
+
+    def grounded_in(
+        self, known_repository_names: set[str], current_repository_name: str
+    ) -> "ReleaseCoordinationPlan":
+        """Strip any deployment step or notify entry referencing a
+        repository that isn't actually in ``known_repository_names``, and
+        drop any attempt to "notify" the current repository about itself.
+
+        A deterministic backstop against the model inventing or
+        hallucinating a repository - independent of whether it followed the
+        prompt's instructions. Rebuilding via the normal constructor (not
+        ``model_construct``) re-runs validation, including
+        :meth:`_no_order_for_a_single_repository` against the filtered
+        result.
+        """
+        filtered_steps = [
+            step for step in self.deployment_order if step.repository in known_repository_names
+        ]
+        filtered_notify = [
+            entry
+            for entry in self.repositories_to_notify
+            if entry.repository in known_repository_names
+            and entry.repository != current_repository_name
+        ]
+        return ReleaseCoordinationPlan(
+            deployment_order=filtered_steps,
+            repositories_to_notify=filtered_notify,
+            rollout_strategy=self.rollout_strategy,
+            backward_compatibility_advice=self.backward_compatibility_advice,
+            communication_summary=self.communication_summary,
+            rollout_risks=self.rollout_risks,
+        )
 
 
 class AIAnalysisResult(BaseModel):

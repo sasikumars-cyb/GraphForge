@@ -94,7 +94,7 @@ def _valid_ai_result() -> dict[str, object]:
                 {
                     "repository": "inventory-svc",
                     "reason": "Consumes the affected Kafka topic",
-                    "urgency": "before deployment",
+                    "urgency": "blocking",
                 }
             ],
             "rollout_strategy": "Deploy order-svc behind a feature flag first.",
@@ -140,7 +140,7 @@ async def test_analyze_success() -> None:
     assert len(result.suggested_reviewers) == 1
     assert result.suggested_reviewers[0].reviewer == "payments-team"
     assert len(result.regression_tests) == 1
-    assert result.prompt_version == "1.1"
+    assert result.prompt_version == "1.2"
 
     plan = result.release_coordination_plan
     assert len(plan.deployment_order) == 2
@@ -233,6 +233,43 @@ async def test_analyze_schema_validation_failure() -> None:
 
     with pytest.raises(AIProviderResponseError):
         await provider.analyze(_sample_context())
+
+
+@pytest.mark.asyncio
+async def test_analyze_rejects_arbitrary_urgency_value() -> None:
+    """A model that ignores the prompt's closed urgency vocabulary fails
+    validation rather than reaching the client with an unrenderable value."""
+    result = _valid_ai_result()
+    result["release_coordination_plan"]["repositories_to_notify"][0]["urgency"] = "ASAP"
+    transport = httpx.MockTransport(lambda request: _openai_response(result))
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    with pytest.raises(AIProviderResponseError):
+        await provider.analyze(_sample_context())
+
+
+@pytest.mark.asyncio
+async def test_analyze_clears_single_repository_deployment_order() -> None:
+    """Even if the model produces a single-repository "deployment order",
+    the parsed result never carries one - enforced by the schema, not the
+    prompt."""
+    result = _valid_ai_result()
+    result["release_coordination_plan"]["deployment_order"] = [
+        {
+            "order": 1,
+            "repository": "order-svc",
+            "action": "Deploy carefully",
+            "reason": "Solo change",
+        }
+    ]
+    transport = httpx.MockTransport(lambda request: _openai_response(result))
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    parsed = await provider.analyze(_sample_context())
+
+    assert parsed.release_coordination_plan.deployment_order == []
 
 
 # -- Tests: Factory ---------------------------------------------------------

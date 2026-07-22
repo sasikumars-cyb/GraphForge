@@ -113,10 +113,15 @@ def test_repository_to_notify_valid() -> None:
     notify = RepositoryToNotify(
         repository="inventory-service",
         reason="Consumes the order-created topic",
-        urgency="before deployment",
+        urgency="blocking",
     )
     assert notify.repository == "inventory-service"
-    assert notify.urgency == "before deployment"
+    assert notify.urgency == "blocking"
+
+
+def test_repository_to_notify_rejects_arbitrary_urgency() -> None:
+    with pytest.raises(ValidationError):
+        RepositoryToNotify(repository="x", reason="y", urgency="ASAP")
 
 
 def test_release_coordination_plan_empty_defaults() -> None:
@@ -146,7 +151,7 @@ def test_release_coordination_plan_full() -> None:
             RepositoryToNotify(
                 repository="inventory-service",
                 reason="Consumes order-created",
-                urgency="before deployment",
+                urgency="blocking",
             )
         ],
         rollout_strategy="Deploy order-service behind a feature flag first.",
@@ -158,6 +163,71 @@ def test_release_coordination_plan_full() -> None:
     assert plan.deployment_order[0].order == 1
     assert len(plan.repositories_to_notify) == 1
     assert plan.rollout_risks == ["Kafka deserialization failures during rollout"]
+
+
+def test_release_coordination_plan_clears_single_repository_order() -> None:
+    """A "deployment order" naming only one repository is a contradiction in
+    terms - the model shouldn't have produced it, and it's cleared
+    automatically regardless of whether the prompt was followed."""
+    plan = ReleaseCoordinationPlan(
+        deployment_order=[
+            DeploymentStep(
+                order=1, repository="order-service", action="Deploy", reason="Solo change"
+            )
+        ]
+    )
+    assert plan.deployment_order == []
+
+
+def test_release_coordination_plan_keeps_multi_repository_order() -> None:
+    plan = ReleaseCoordinationPlan(
+        deployment_order=[
+            DeploymentStep(order=1, repository="order-service", action="Deploy first", reason="A"),
+            DeploymentStep(
+                order=2, repository="inventory-service", action="Deploy after", reason="B"
+            ),
+        ]
+    )
+    assert len(plan.deployment_order) == 2
+
+
+def test_grounded_in_strips_invented_repository() -> None:
+    plan = ReleaseCoordinationPlan(
+        deployment_order=[
+            DeploymentStep(order=1, repository="order-service", action="Deploy first", reason="A"),
+            DeploymentStep(order=2, repository="not-a-real-repo", action="Deploy", reason="B"),
+        ]
+    )
+    grounded = plan.grounded_in({"order-service"}, "order-service")
+    # Only one real repository remains, so the order is also cleared by the
+    # same single-repository rule, re-applied on reconstruction.
+    assert grounded.deployment_order == []
+
+
+def test_grounded_in_strips_self_notification() -> None:
+    plan = ReleaseCoordinationPlan(
+        repositories_to_notify=[
+            RepositoryToNotify(repository="order-service", reason="self", urgency="advisory"),
+            RepositoryToNotify(repository="inventory-service", reason="real", urgency="blocking"),
+        ]
+    )
+    grounded = plan.grounded_in({"order-service", "inventory-service"}, "order-service")
+    assert [r.repository for r in grounded.repositories_to_notify] == ["inventory-service"]
+
+
+def test_grounded_in_preserves_valid_multi_repository_plan() -> None:
+    plan = ReleaseCoordinationPlan(
+        deployment_order=[
+            DeploymentStep(order=1, repository="order-service", action="Deploy first", reason="A"),
+            DeploymentStep(
+                order=2, repository="inventory-service", action="Deploy after", reason="B"
+            ),
+        ],
+        rollout_strategy="Feature-flagged rollout.",
+    )
+    grounded = plan.grounded_in({"order-service", "inventory-service"}, "order-service")
+    assert len(grounded.deployment_order) == 2
+    assert grounded.rollout_strategy == "Feature-flagged rollout."
 
 
 def test_ai_analysis_result_empty_defaults() -> None:

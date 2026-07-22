@@ -19,11 +19,9 @@ from app.ai.schemas.analysis_result import (
     AIAnalysisResult,
     BreakingChange,
     ConfidenceScore,
-    DeploymentStep,
     MigrationAdvice,
     RegressionTest,
     ReleaseCoordinationPlan,
-    RepositoryToNotify,
     SuggestedReviewer,
 )
 from app.database.session import AsyncSessionLocal
@@ -69,22 +67,14 @@ _FAKE_AI_RESULT = AIAnalysisResult(
             confidence=ConfidenceScore(score=0.8, reasoning="Critical path"),
         ),
     ],
+    # This fixture's repository is the only one tracked/indexed in
+    # ai_test_setup - a real multi-repository plan is covered directly in
+    # tests/unit/ai/test_schemas.py and tests/unit/ai/test_ai_analysis_service.py.
+    # Here, deployment_order and repositories_to_notify are deliberately
+    # empty, matching what a single-repository change should actually
+    # produce (and what AIAnalysisService.grounded_in() would reduce a
+    # self-referential plan to anyway).
     release_coordination_plan=ReleaseCoordinationPlan(
-        deployment_order=[
-            DeploymentStep(
-                order=1,
-                repository="ai-test-repo",
-                action="Deploy first",
-                reason="Producer of the changed topic",
-            ),
-        ],
-        repositories_to_notify=[
-            RepositoryToNotify(
-                repository="ai-test-repo",
-                reason="Owns the changed producer",
-                urgency="before deployment",
-            ),
-        ],
         rollout_strategy="Ship behind a feature flag.",
         backward_compatibility_advice="Keep the Kafka payload schema backward compatible.",
         communication_summary="No other tracked repository consumes this topic.",
@@ -219,9 +209,9 @@ async def test_post_ai_analysis_then_get(
     # Release Coordination Plan is AI-enriched output, only returned live -
     # never persisted this iteration (see ADR 0009 / this feature's scope).
     plan = body["release_coordination_plan"]
-    assert len(plan["deployment_order"]) == 1
-    assert plan["deployment_order"][0]["repository"] == "ai-test-repo"
-    assert len(plan["repositories_to_notify"]) == 1
+    # Single-repository change: no deployment order, nothing to notify.
+    assert plan["deployment_order"] == []
+    assert plan["repositories_to_notify"] == []
     assert plan["rollout_strategy"] == "Ship behind a feature flag."
     assert plan["rollout_risks"] == ["Kafka deserialization failures during rollout"]
 

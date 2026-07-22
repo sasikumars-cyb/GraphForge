@@ -6,6 +6,7 @@ Field names match ``PullRequestAIAnalysis`` columns so that
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,7 +52,7 @@ class DeploymentStepResponse(BaseModel):
 class RepositoryToNotifyResponse(BaseModel):
     repository: str
     reason: str
-    urgency: str
+    urgency: Literal["blocking", "advisory"]
 
 
 class ReleaseCoordinationPlanResponse(BaseModel):
