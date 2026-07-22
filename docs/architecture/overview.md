@@ -7,7 +7,7 @@ backend/app/
   api/            FastAPI routers (versioned: api/v1/)
   services/       Business logic — auth_service, github_service, webhook_service
   models/         SQLAlchemy ORM models — user, github_connection, repository, pull_request,
-                   indexing_job, pull_request_analysis
+                   indexing_job, pull_request_analysis, pull_request_ai_analysis
   schemas/        Pydantic request/response schemas
   database/       Async engine, session factory, declarative base
   core/           Settings, logging, exceptions/handlers, JWT + password hashing + token encryption
@@ -15,9 +15,13 @@ backend/app/
   integrations/   github.py (real GitHub OAuth + repo listing + PR changed-file listing) -
                    Jira still interfaces.py only
   graph/          Architecture graph domain — Neo4jGraphRepository (real) behind IGraphRepository
-  ai/             AI analysis engine — NOT implemented; interfaces.py only (deliberately
-                   distinct from analysis/ below — this is reserved for a future LLM-backed
-                   reasoning engine; nothing in this module is used yet)
+  ai/             AI-enriched analysis (Phase 8) — LLM-backed reasoning on top of
+                   deterministic analysis. Fully implemented with OpenAI provider.
+    interfaces/      ILLMProvider ABC — single-method contract for any LLM backend
+    providers/       Concrete implementations (OpenAI) + factory
+    services/        AIAnalysisService orchestration, ContextBuilder, PromptBuilder
+    schemas/         AIAnalysisResult Pydantic schema (LLM output contract)
+    prompts/         Markdown templates with YAML front-matter (versioned)
   indexer/        Codebase → graph indexing pipeline (Java + Spring Boot only) — real, deterministic
     scanner/        Language detection + git cloning
     parsers/java/    tree-sitter-based Spring Boot parser + pom.xml parser
@@ -40,7 +44,7 @@ Dependency direction: `api` → `services` → (`models`, `schemas`, and the int
 | Module | Interface | Status |
 |---|---|---|
 | `graph/` | `IGraphRepository` | **Real, working** — `Neo4jGraphRepository` in `graph/neo4j_repository.py` |
-| `ai/` | `IAnalysisEngine` | Not built — future LLM-backed change impact reasoning (distinct from `analysis/`, which is real and deliberately non-AI) |
+| `ai/` | `ILLMProvider` | **Real, working** — `OpenAIProvider` in `ai/providers/openai_provider.py`; factory supports future Claude/Gemini/Ollama providers |
 | `integrations/` | `IOAuthProvider` (+ `list_repositories`) | **Real, working** — `GitHubOAuthProvider` in `integrations/github.py` |
 | `integrations/` | `IVersionControlProvider` | **Real (partially)** — `GitHubVersionControlProvider.list_changed_files` is real; `get_diff` (full diff content) remains unimplemented |
 | `integrations/` | `IIssueTrackerProvider` | Not built — future Jira client |

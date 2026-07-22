@@ -119,6 +119,25 @@ curl -X POST http://localhost:8000/api/v1/auth/register \
 
 Or use Swagger UI at `http://localhost:8000/docs` → `POST /auth/register` → "Try it out".
 
+## AI Analysis (Phase 8)
+
+To use the AI-enriched analysis endpoints, set the following environment variables in `backend/.env`:
+
+```bash
+# Required for AI analysis
+AI_PROVIDER=openai
+OPENAI_API_KEY=sk-...your-key-here...
+
+# Optional (defaults shown)
+OPENAI_MODEL=gpt-4o
+OPENAI_TEMPERATURE=0.2
+OPENAI_MAX_TOKENS=4096
+```
+
+Without `OPENAI_API_KEY`, the `POST /pull-requests/{id}/ai-analysis` endpoint returns HTTP 503. All other endpoints (including the deterministic `POST /pull-requests/{id}/analyze`) work without any AI configuration.
+
+See [Architecture: AI Analysis](architecture/ai-analysis.md) for full documentation.
+
 `JWT_SECRET_KEY` has an insecure default (`dev-only-insecure-secret-change-me`) so login works with zero config locally — see `backend/.env.example`. Any real deployment must override it with a long random value (`openssl rand -hex 32`).
 
 GitHub OAuth ("Continue with GitHub" on the login page) is intentionally disabled — `GET /api/v1/auth/github/login` returns `501 not_implemented` until a provider is registered. See ADR 0005 for the extension point. This is a *different* thing from "Connect GitHub" in Settings, below — see ADR 0006.

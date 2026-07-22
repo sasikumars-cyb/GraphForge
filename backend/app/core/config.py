@@ -72,6 +72,13 @@ class Settings(BaseSettings):
     # after each indexing run, success or failure.
     indexer_clone_root: str = Field(default="/tmp/changeguard-indexer")
 
+    # --- AI Provider ---
+    ai_provider: str = Field(default="openai")
+    openai_api_key: str | None = Field(default=None)
+    openai_model: str = Field(default="gpt-4o")
+    openai_temperature: float = Field(default=0.2)
+    openai_max_tokens: int = Field(default=4096)
+
     # --- Future integrations (unused until their adapters are implemented) ---
     jira_base_url: str | None = Field(default=None)
     jira_api_token: str | None = Field(default=None)

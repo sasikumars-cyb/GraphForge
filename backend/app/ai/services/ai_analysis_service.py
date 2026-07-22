@@ -1,0 +1,145 @@
+"""AI analysis orchestration service.
+
+Coordinates the full AI analysis workflow for a pull request:
+1. Ensure deterministic analysis exists (run if missing).
+2. Build bounded context from deterministic results.
+3. Call the LLM provider.
+4. Persist and return the result.
+
+Never duplicates deterministic logic — delegates to
+:class:`~app.analysis.engine.impact_analysis_engine.ImpactAnalysisEngine`.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.ai.interfaces.llm_provider import ILLMProvider
+from app.ai.schemas.analysis_result import AIAnalysisResult
+from app.ai.services.context_builder import ContextBuilder
+from app.analysis.engine.impact_analysis_engine import ImpactAnalysisEngine
+from app.core.exceptions import NotFoundError
+from app.models.pull_request import PullRequest
+from app.models.pull_request_ai_analysis import PullRequestAIAnalysis
+from app.models.pull_request_analysis import PullRequestAnalysis
+from app.models.repository import Repository
+
+logger = logging.getLogger(__name__)
+
+
+class AIAnalysisService:
+    """Orchestrates AI-enriched impact analysis for a pull request.
+
+    Depends on:
+    - ``ImpactAnalysisEngine`` for deterministic analysis (reused, never duplicated).
+    - ``ILLMProvider`` for the AI enrichment call.
+    - ``AsyncSession`` for persistence.
+    """
+
+    def __init__(
+        self,
+        db: AsyncSession,
+        llm_provider: ILLMProvider,
+        impact_engine: ImpactAnalysisEngine,
+    ) -> None:
+        self._db = db
+        self._llm_provider = llm_provider
+        self._impact_engine = impact_engine
+
+    async def analyze(self, pull_request_id: uuid.UUID) -> AIAnalysisResult:
+        """Run AI analysis for a pull request.
+
+        Ensures deterministic analysis exists first (runs it if missing),
+        then builds context, calls the provider, persists, and returns.
+        """
+        pull_request = await self._db.get(PullRequest, pull_request_id)
+        if pull_request is None:
+            raise NotFoundError("Pull request not found.")
+
+        repository = await self._db.get(Repository, pull_request.repository_id)
+        if repository is None:
+            raise NotFoundError("Repository not found.")
+
+        # 1. Ensure deterministic analysis exists
+        deterministic = await self._get_or_run_deterministic(pull_request_id)
+
+        # 2. Build context
+        context = (
+            ContextBuilder()
+            .with_repository(
+                name=repository.name,
+                owner=repository.owner,
+                default_branch=repository.default_branch,
+            )
+            .with_pull_request(
+                title=pull_request.title,
+                number=pull_request.number,
+                head_ref=pull_request.head_ref,
+                base_ref=pull_request.base_ref,
+            )
+            .with_analysis_from_persisted(deterministic)
+            .build()
+        )
+
+        # 3. Call provider
+        logger.info(
+            "Calling AI provider for PR %s (%s)",
+            pull_request_id,
+            pull_request.title,
+        )
+        result = await self._llm_provider.analyze(context)
+
+        # 4. Persist
+        await self._persist(pull_request_id, result)
+
+        return result
+
+    async def _get_or_run_deterministic(self, pull_request_id: uuid.UUID) -> PullRequestAnalysis:
+        """Return existing deterministic analysis or run it now."""
+        stmt = select(PullRequestAnalysis).where(
+            PullRequestAnalysis.pull_request_id == pull_request_id
+        )
+        existing = await self._db.execute(stmt)
+        analysis = existing.scalar_one_or_none()
+
+        if analysis is not None:
+            return analysis
+
+        logger.info("No deterministic analysis found for PR %s, running now.", pull_request_id)
+        return await self._impact_engine.analyze_pull_request(pull_request_id)
+
+    async def _persist(
+        self, pull_request_id: uuid.UUID, result: AIAnalysisResult
+    ) -> PullRequestAIAnalysis:
+        """Persist or replace the AI analysis for a pull request."""
+        stmt = select(PullRequestAIAnalysis).where(
+            PullRequestAIAnalysis.pull_request_id == pull_request_id
+        )
+        existing = await self._db.execute(stmt)
+        ai_analysis = existing.scalar_one_or_none()
+
+        fields: dict[str, object] = {
+            "executive_summary": result.executive_summary,
+            "breaking_changes": [bc.model_dump() for bc in result.breaking_changes],
+            "migration_advice": [ma.model_dump() for ma in result.migration_advice],
+            "suggested_reviewers": [sr.model_dump() for sr in result.suggested_reviewers],
+            "regression_tests": [rt.model_dump() for rt in result.regression_tests],
+            "confidence_score": result.confidence.score,
+            "confidence_reasoning": result.confidence.reasoning,
+            "prompt_version": result.prompt_version,
+        }
+
+        if ai_analysis is None:
+            ai_analysis = PullRequestAIAnalysis(pull_request_id=pull_request_id, **fields)
+            self._db.add(ai_analysis)
+        else:
+            for field_name, value in fields.items():
+                setattr(ai_analysis, field_name, value)
+
+        await self._db.commit()
+        await self._db.refresh(ai_analysis)
+        return ai_analysis
