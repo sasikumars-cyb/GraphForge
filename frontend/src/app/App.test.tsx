@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routes } from "./router";
+import { AiModelProvider } from "./AiModelContext";
 import { AuthProvider } from "./AuthContext";
 import * as authApi from "../lib/api/auth";
 import * as githubApi from "../lib/api/github";
@@ -25,7 +26,9 @@ function renderApp(initialPath = "/") {
   const router = createMemoryRouter(routes, { initialEntries: [initialPath] });
   return render(
     <AuthProvider>
-      <RouterProvider router={router} />
+      <AiModelProvider>
+        <RouterProvider router={router} />
+      </AiModelProvider>
     </AuthProvider>,
   );
 }
@@ -66,6 +69,7 @@ describe("App navigation (authenticated)", () => {
 
   afterEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     vi.restoreAllMocks();
   });
 
@@ -143,6 +147,11 @@ describe("App navigation (authenticated)", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run analysis" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run AI analysis" })).toBeInTheDocument();
+
+    // AI model selector: defaults to GPT-5, shows provider/reasoning/cost info.
+    expect(screen.getByLabelText("AI model")).toHaveValue("gpt-5");
+    expect(screen.getByText("OpenAI")).toBeInTheDocument();
+    expect(screen.getByText("~₹3 / PR Analysis")).toBeInTheDocument();
   });
 
   it("shows the logged-in user's name and logs out via the sidebar", async () => {
@@ -163,6 +172,7 @@ describe("App navigation (authenticated)", () => {
 describe("App navigation (unauthenticated)", () => {
   afterEach(() => {
     localStorage.clear();
+    sessionStorage.clear();
     vi.restoreAllMocks();
   });
 

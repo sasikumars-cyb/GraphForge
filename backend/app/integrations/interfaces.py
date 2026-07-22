@@ -85,17 +85,22 @@ class ChangedFile:
 
 
 class IVersionControlProvider(ABC):
-    """Port for fetching repository content and change diffs.
+    """Port for fetching repository content, change diffs, and file
+    history.
 
     `list_changed_files` is real, working (Phase 7 - deterministic impact
-    analysis). `get_diff` (full diff content) remains unimplemented — a
-    future AI-analysis feature, not needed for file-path-level impact
-    mapping.
+    analysis). `get_diff` and `get_recent_file_authors` back the Change
+    Investigation Agent's optional evidence-gathering tools (see
+    `app.ai.agent`) - the agent decides whether to call them at all, so
+    neither is invoked by the deterministic engine or the original
+    single-shot AI analysis path.
     """
 
     @abstractmethod
-    async def get_diff(self, repository: str, ref: str) -> Any:
-        """Return the diff for `ref` within `repository`."""
+    async def get_diff(
+        self, owner: str, repo: str, pull_number: int, access_token: str | None = None
+    ) -> str:
+        """Return the unified diff for a pull request's changes."""
         raise NotImplementedError
 
     @abstractmethod
@@ -105,6 +110,15 @@ class IVersionControlProvider(ABC):
         """List the files changed by a pull request. `access_token` may be
         omitted for public repositories (subject to the provider's
         unauthenticated rate limits)."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_recent_file_authors(
+        self, owner: str, repo: str, file_paths: set[str], access_token: str | None = None
+    ) -> dict[str, list[str]]:
+        """For each of `file_paths`, the logins/names of whoever most
+        recently committed to it - real authorship data to ground
+        reviewer suggestions in, instead of the model guessing a name."""
         raise NotImplementedError
 
 

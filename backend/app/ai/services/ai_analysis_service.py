@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.ai.interfaces.llm_provider import ILLMProvider
 from app.ai.schemas.analysis_result import AIAnalysisResult
 from app.ai.services.context_builder import ContextBuilder
+from app.ai.services.persistence import persist_ai_analysis_result
+from app.ai.services.repository_resolution import resolve_impacted_repositories
 from app.analysis.engine.impact_analysis_engine import ImpactAnalysisEngine
 from app.core.exceptions import NotFoundError
 from app.models.pull_request import PullRequest
@@ -125,79 +127,17 @@ class AIAnalysisService:
     async def _resolve_impacted_repositories(
         self, repository: Repository, deterministic: PullRequestAnalysis
     ) -> list[dict[str, str]]:
-        """Resolve the current repository plus every repository id already
-        present in the deterministic engine's cross-repository impact
-        (``indirectly_impacted_services``) to human-readable metadata.
-
-        A Postgres primary-key lookup on ids the deterministic engine
-        already produced — never a new Neo4j traversal, never dependency
-        discovery. Unresolvable ids (e.g. a repository since removed) are
-        silently skipped rather than treated as an error.
-        """
-        downstream_ids: set[uuid.UUID] = set()
-        for node in deterministic.indirectly_impacted_services:
-            raw_id = node.get("repository_id")
-            if not raw_id or raw_id == str(repository.id):
-                continue
-            try:
-                downstream_ids.add(uuid.UUID(raw_id))
-            except ValueError:
-                continue
-
-        resolved = [
-            {
-                "id": str(repository.id),
-                "owner": repository.owner,
-                "name": repository.name,
-                "full_name": repository.full_name,
-                "relation": "current",
-            }
-        ]
-
-        if downstream_ids:
-            stmt = select(Repository).where(Repository.id.in_(downstream_ids))
-            result = await self._db.execute(stmt)
-            for repo in result.scalars().all():
-                resolved.append(
-                    {
-                        "id": str(repo.id),
-                        "owner": repo.owner,
-                        "name": repo.name,
-                        "full_name": repo.full_name,
-                        "relation": "downstream",
-                    }
-                )
-
-        return resolved
+        """Thin delegator - see `resolve_impacted_repositories` (shared
+        with `app.ai.agent.InvestigationAgent` so both orchestrators
+        resolve cross-repository metadata identically)."""
+        return await resolve_impacted_repositories(
+            self._db, repository, deterministic.indirectly_impacted_services
+        )
 
     async def _persist(
         self, pull_request_id: uuid.UUID, result: AIAnalysisResult
     ) -> PullRequestAIAnalysis:
-        """Persist or replace the AI analysis for a pull request."""
-        stmt = select(PullRequestAIAnalysis).where(
-            PullRequestAIAnalysis.pull_request_id == pull_request_id
-        )
-        existing = await self._db.execute(stmt)
-        ai_analysis = existing.scalar_one_or_none()
-
-        fields: dict[str, object] = {
-            "executive_summary": result.executive_summary,
-            "breaking_changes": [bc.model_dump() for bc in result.breaking_changes],
-            "migration_advice": [ma.model_dump() for ma in result.migration_advice],
-            "suggested_reviewers": [sr.model_dump() for sr in result.suggested_reviewers],
-            "regression_tests": [rt.model_dump() for rt in result.regression_tests],
-            "confidence_score": result.confidence.score,
-            "confidence_reasoning": result.confidence.reasoning,
-            "prompt_version": result.prompt_version,
-        }
-
-        if ai_analysis is None:
-            ai_analysis = PullRequestAIAnalysis(pull_request_id=pull_request_id, **fields)
-            self._db.add(ai_analysis)
-        else:
-            for field_name, value in fields.items():
-                setattr(ai_analysis, field_name, value)
-
-        await self._db.commit()
-        await self._db.refresh(ai_analysis)
-        return ai_analysis
+        """Thin delegator - see `persist_ai_analysis_result` (shared with
+        `app.ai.agent.InvestigationAgent` so both orchestrators persist
+        identically)."""
+        return await persist_ai_analysis_result(self._db, pull_request_id, result)

@@ -47,6 +47,13 @@ class AIContext:
     changed_files: list[str] = field(default_factory=list)
     jira_issues: list[dict[str, str]] = field(default_factory=list)
     impacted_repositories: list[dict[str, str]] = field(default_factory=list)
+    # Both empty by default: only the Change Investigation Agent
+    # (`app.ai.agent`) populates these, when it decides the evidence is
+    # worth the extra tool call. The original single-shot path never sets
+    # them, so the prompt sections they feed render as "not gathered"
+    # rather than a missing-placeholder artifact.
+    diff_content: str = ""
+    recent_file_authors: dict[str, list[str]] = field(default_factory=dict)
 
     def to_prompt_variables(self) -> dict[str, str]:
         """Convert this context into the variable dict expected by
@@ -80,6 +87,12 @@ class AIContext:
             "impacted_components": json.dumps(impacted_components, indent=2),
             "dependency_paths": json.dumps(self.dependency_paths, indent=2),
             "impacted_repositories": json.dumps(self.impacted_repositories, indent=2),
+            "diff_content": self.diff_content or "Not gathered for this analysis.",
+            "recent_file_authors": (
+                json.dumps(self.recent_file_authors, indent=2)
+                if self.recent_file_authors
+                else "Not gathered for this analysis."
+            ),
         }
 
 
@@ -141,6 +154,8 @@ class ContextBuilder:
         self._changed_files: list[str] = []
         self._jira_issues: list[dict[str, str]] = []
         self._repositories: list[dict[str, str]] = []
+        self._diff_content: str = ""
+        self._recent_file_authors: dict[str, list[str]] = {}
         self._from_persisted: bool = False
         self._persisted_directly: list[dict[str, str]] = []
         self._persisted_indirectly: list[dict[str, str]] = []
@@ -224,6 +239,21 @@ class ContextBuilder:
         self._repositories = list(repositories)
         return self
 
+    def with_diff(self, diff_content: str) -> ContextBuilder:
+        """Add the pull request's unified diff content - only ever set by
+        the Change Investigation Agent, when it decides the risk warrants
+        seeing the actual code change rather than just which nodes it
+        touches."""
+        self._diff_content = diff_content
+        return self
+
+    def with_recent_file_authors(self, authors: dict[str, list[str]]) -> ContextBuilder:
+        """Add real recent-commit authorship per changed file path - only
+        ever set by the Change Investigation Agent, to ground reviewer
+        suggestions in actual history instead of a guess."""
+        self._recent_file_authors = dict(authors)
+        return self
+
     def build(self) -> AIContext:
         """Assemble the final bounded context, truncating if needed."""
         changed = self._truncate_file_list(self._changed_files)
@@ -247,6 +277,8 @@ class ContextBuilder:
                 changed_files=changed,
                 jira_issues=self._jira_issues,
                 impacted_repositories=self._repositories,
+                diff_content=self._diff_content,
+                recent_file_authors=self._recent_file_authors,
             )
 
         return AIContext(
@@ -269,6 +301,8 @@ class ContextBuilder:
             changed_files=changed,
             jira_issues=self._jira_issues,
             impacted_repositories=self._repositories,
+            diff_content=self._diff_content,
+            recent_file_authors=self._recent_file_authors,
         )
 
     def _truncate_file_list(self, files: list[str]) -> list[str]:

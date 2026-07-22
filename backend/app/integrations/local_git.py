@@ -8,7 +8,6 @@ opt-in for local demo environments.
 
 import subprocess
 from pathlib import Path
-from typing import Any
 
 from app.core.exceptions import AppError
 from app.integrations.interfaces import ChangedFile, IVersionControlProvider
@@ -47,11 +46,52 @@ class LocalGitVersionControlProvider(IVersionControlProvider):
     def __init__(self, clone_root: Path) -> None:
         self._clone_root = clone_root
 
-    async def get_diff(self, repository: str, ref: str) -> Any:
-        raise NotImplementedError(
-            "Reading full diff content is not implemented - the demo only needs "
-            "changed file paths (see list_changed_files)."
-        )
+    async def get_diff(
+        self, owner: str, repo: str, pull_number: int, access_token: str | None = None
+    ) -> str:
+        repo_dir = self._clone_root / repo
+        head_ref = f"pr-{pull_number}"
+        try:
+            result = subprocess.run(
+                ["git", "diff", "-M", "main", head_ref],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise LocalGitDiffError(
+                f"git diff failed for {repo} ({head_ref} vs main): {exc.stderr}"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise LocalGitDiffError(f"git diff timed out for {repo} ({head_ref})") from exc
+        return result.stdout
+
+    async def get_recent_file_authors(
+        self, owner: str, repo: str, file_paths: set[str], access_token: str | None = None
+    ) -> dict[str, list[str]]:
+        repo_dir = self._clone_root / repo
+        authors_by_path: dict[str, list[str]] = {}
+        for path in file_paths:
+            try:
+                result = subprocess.run(
+                    ["git", "log", "--format=%an", "-n", "5", "--", path],
+                    cwd=repo_dir,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+                authors_by_path[path] = []
+                continue
+            seen: dict[str, None] = {}
+            for name in result.stdout.splitlines():
+                if name:
+                    seen.setdefault(name, None)
+            authors_by_path[path] = list(seen)[:3]
+        return authors_by_path
 
     async def list_changed_files(
         self, owner: str, repo: str, pull_number: int, access_token: str | None = None

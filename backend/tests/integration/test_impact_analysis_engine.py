@@ -35,7 +35,14 @@ class StubVersionControlProvider(IVersionControlProvider):
     def __init__(self, changed_files: list[ChangedFile]) -> None:
         self._changed_files = changed_files
 
-    async def get_diff(self, repository: str, ref: str) -> None:
+    async def get_diff(
+        self, owner: str, repo: str, pull_number: int, access_token: str | None = None
+    ) -> str:
+        raise NotImplementedError
+
+    async def get_recent_file_authors(
+        self, owner: str, repo: str, file_paths: set[str], access_token: str | None = None
+    ) -> dict[str, list[str]]:
         raise NotImplementedError
 
     async def list_changed_files(

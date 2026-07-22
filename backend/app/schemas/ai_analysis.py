@@ -11,6 +11,18 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class RunAIAnalysisRequest(BaseModel):
+    """Optional request body for POST .../ai-analysis and .../investigate.
+
+    ``model`` lets the UI pick which supported OpenAI model this run uses
+    (see `app.ai.providers.factory.SUPPORTED_OPENAI_MODELS`) - validated
+    against that closed list, never a free-text vendor string. Omitted or
+    ``null`` falls back to the server's configured default model.
+    """
+
+    model: str | None = None
+
+
 class ConfidenceScoreResponse(BaseModel):
     score: float
     reasoning: str = ""
@@ -96,3 +108,43 @@ class AIAnalysisResultResponse(BaseModel):
     release_coordination_plan: ReleaseCoordinationPlanResponse
     confidence: ConfidenceScoreResponse
     prompt_version: str = ""
+
+
+class ObservationResponse(BaseModel):
+    """What a single tool call returned, for the reasoning log."""
+
+    tool_name: str
+    summary: str
+
+
+class ReasoningStepResponse(BaseModel):
+    """One iteration of the Change Investigation Agent's Plan -> Select
+    Tool -> Execute -> Observe -> Decide loop. ``tool_selected`` is
+    ``None`` for a step where the agent decided evidence wasn't needed -
+    a skip is itself a recorded decision, not a gap in the log.
+    """
+
+    step_number: int
+    goal: str
+    plan: str
+    tool_selected: str | None
+    observation: ObservationResponse | None
+    decision: str
+
+
+class InvestigationResponse(BaseModel):
+    """Response returned by POST /pull-requests/{id}/investigate.
+
+    Mirrors ``AIAnalysisResultResponse`` plus the agent's full,
+    explainable reasoning log.
+    """
+
+    executive_summary: str = ""
+    breaking_changes: list[BreakingChangeResponse] = Field(default_factory=list)
+    migration_advice: list[MigrationAdviceResponse] = Field(default_factory=list)
+    suggested_reviewers: list[SuggestedReviewerResponse] = Field(default_factory=list)
+    regression_tests: list[RegressionTestResponse] = Field(default_factory=list)
+    release_coordination_plan: ReleaseCoordinationPlanResponse
+    confidence: ConfidenceScoreResponse
+    prompt_version: str = ""
+    reasoning_log: list[ReasoningStepResponse] = Field(default_factory=list)

@@ -18,10 +18,15 @@ export function getDeterministicAnalysis(
   return apiFetch<PullRequestAnalysis>(`/pull-requests/${pullRequestId}/analysis`, { token });
 }
 
-export function runAiAnalysis(token: string, pullRequestId: string): Promise<AIAnalysisResult> {
+export function runAiAnalysis(
+  token: string,
+  pullRequestId: string,
+  model?: string,
+): Promise<AIAnalysisResult> {
   return apiFetch<AIAnalysisResult>(`/pull-requests/${pullRequestId}/ai-analysis`, {
     method: "POST",
     token,
+    body: { model: model ?? null },
   });
 }
 

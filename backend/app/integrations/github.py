@@ -14,7 +14,7 @@ from typing import Any
 
 import httpx
 
-from app.core.exceptions import AppError, NotImplementedYetError
+from app.core.exceptions import AppError
 from app.integrations.interfaces import (
     ChangedFile,
     IOAuthProvider,
@@ -148,11 +148,30 @@ class GitHubVersionControlProvider(IVersionControlProvider):
     credentials, just a per-call (optional) access token.
     """
 
-    async def get_diff(self, repository: str, ref: str) -> Any:
-        raise NotImplementedYetError(
-            "Reading full diff content is not implemented yet - impact analysis "
-            "only needs changed file paths (see list_changed_files)."
-        )
+    async def get_diff(
+        self, owner: str, repo: str, pull_number: int, access_token: str | None = None
+    ) -> str:
+        """Unlike every other call in this module, GitHub returns this as
+        raw diff *text*, not JSON - requested via the `.diff` media type
+        rather than the default `_API_HEADERS`, so this doesn't go through
+        `_github_get`."""
+        headers = {
+            "Accept": "application/vnd.github.v3.diff",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{_API_BASE}/repos/{owner}/{repo}/pulls/{pull_number}", headers=headers
+            )
+        if response.is_error:
+            raise GitHubApiError(
+                f"GitHub diff request for {owner}/{repo}#{pull_number} failed with status "
+                f"{response.status_code}: {response.text}"
+            )
+        return response.text
 
     async def list_changed_files(
         self, owner: str, repo: str, pull_number: int, access_token: str | None = None
@@ -173,3 +192,27 @@ class GitHubVersionControlProvider(IVersionControlProvider):
             )
             for item in data
         ]
+
+    async def get_recent_file_authors(
+        self, owner: str, repo: str, file_paths: set[str], access_token: str | None = None
+    ) -> dict[str, list[str]]:
+        """Up to 3 most recent distinct commit authors per file, via
+        GitHub's commits API filtered by `path`. Real authorship, not a
+        guess - grounds reviewer suggestions the same way the graph
+        grounds impact claims."""
+        authors_by_path: dict[str, list[str]] = {}
+        for path in file_paths:
+            commits = await _github_get(
+                f"/repos/{owner}/{repo}/commits",
+                access_token,
+                params={"path": path, "per_page": 5},
+            )
+            seen: dict[str, None] = {}
+            for commit in commits:
+                author = (commit.get("author") or {}).get("login") or commit.get("commit", {}).get(
+                    "author", {}
+                ).get("name")
+                if author:
+                    seen.setdefault(author, None)
+            authors_by_path[path] = list(seen)[:3]
+        return authors_by_path

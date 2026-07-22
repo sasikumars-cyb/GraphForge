@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from app.ai.providers.factory import (
+    UnsupportedModelError,
     UnsupportedProviderError,
     create_llm_provider,
 )
@@ -140,7 +141,7 @@ async def test_analyze_success() -> None:
     assert len(result.suggested_reviewers) == 1
     assert result.suggested_reviewers[0].reviewer == "payments-team"
     assert len(result.regression_tests) == 1
-    assert result.prompt_version == "1.2"
+    assert result.prompt_version == "1.3"
 
     plan = result.release_coordination_plan
     assert len(plan.deployment_order) == 2
@@ -309,3 +310,21 @@ def test_factory_unknown_provider_raises() -> None:
     settings = Settings(ai_provider="unknown_vendor", openai_api_key="sk-test")
     with pytest.raises(UnsupportedProviderError):
         create_llm_provider(settings)
+
+
+def test_factory_model_override_selects_requested_model() -> None:
+    settings = Settings(ai_provider="openai", openai_api_key="sk-test", openai_model="gpt-5")
+    provider = create_llm_provider(settings, model="gpt-5-mini")
+    assert provider._model == "gpt-5-mini"  # noqa: SLF001
+
+
+def test_factory_no_override_falls_back_to_configured_default() -> None:
+    settings = Settings(ai_provider="openai", openai_api_key="sk-test", openai_model="gpt-5")
+    provider = create_llm_provider(settings)
+    assert provider._model == "gpt-5"  # noqa: SLF001
+
+
+def test_factory_rejects_unsupported_model() -> None:
+    settings = Settings(ai_provider="openai", openai_api_key="sk-test")
+    with pytest.raises(UnsupportedModelError):
+        create_llm_provider(settings, model="gpt-3.5-turbo")

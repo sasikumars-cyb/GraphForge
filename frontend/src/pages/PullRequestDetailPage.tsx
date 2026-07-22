@@ -1,8 +1,10 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
+import { AiModelSelector } from "../components/AiModelSelector";
 import { Card } from "../components/Card";
 import { RiskBadge } from "../components/RiskBadge";
 import { StatusBadge } from "../components/StatusBadge";
+import { useAiModel } from "../app/ai-model-context";
 import { useAuth } from "../app/auth-context";
 import { ApiError } from "../lib/api/client";
 import {
@@ -12,6 +14,7 @@ import {
   runDeterministicAnalysis,
 } from "../lib/api/analysis";
 import { usePullRequestsData } from "../hooks/usePullRequestsData";
+import { findAiModel, type AiModelId } from "../types/aiModel";
 import type {
   AIAnalysis,
   AIAnalysisResult,
@@ -301,6 +304,7 @@ function ReleaseCoordinationPanel({
 export function PullRequestDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { token } = useAuth();
+  const { modelId } = useAiModel();
   const { pullRequests } = usePullRequestsData();
   const pr = pullRequests.find((row) => row.id === id);
 
@@ -312,6 +316,7 @@ export function PullRequestDetailPage() {
   const [isRunningDeterministic, setIsRunningDeterministic] = useState(false);
   const [isRunningAi, setIsRunningAi] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [generatedWithModelId, setGeneratedWithModelId] = useState<AiModelId | null>(null);
 
   useEffect(() => {
     if (!token || !id) {
@@ -351,9 +356,10 @@ export function PullRequestDetailPage() {
     setIsRunningAi(true);
     setError(null);
     try {
-      const result = await runAiAnalysis(token, id);
+      const result = await runAiAnalysis(token, id, modelId);
       setAiAnalysis(result);
       setReleasePlan(result.release_coordination_plan);
+      setGeneratedWithModelId(modelId);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to run AI analysis.");
     } finally {
@@ -422,11 +428,35 @@ export function PullRequestDetailPage() {
           </button>
         }
       >
-        {aiAnalysis ? (
-          <AiAnalysisPanel ai={aiAnalysis} />
-        ) : (
-          <p className="text-sm text-slate-500">Not analyzed yet.</p>
-        )}
+        <div className="flex flex-col gap-4">
+          <AiModelSelector />
+          {aiAnalysis ? (
+            <>
+              {generatedWithModelId && (
+                <div className="flex flex-wrap gap-x-6 gap-y-1 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs">
+                  <span className="text-slate-500">
+                    Generated using{" "}
+                    <span className="font-medium text-slate-200">
+                      {findAiModel(generatedWithModelId).label}
+                    </span>
+                  </span>
+                  <span className="text-slate-500">
+                    Estimated cost{" "}
+                    <span className="font-medium text-slate-200">
+                      {findAiModel(generatedWithModelId).estimatedCost}
+                    </span>
+                  </span>
+                  <span className="text-slate-500">
+                    Provider <span className="font-medium text-slate-200">OpenAI</span>
+                  </span>
+                </div>
+              )}
+              <AiAnalysisPanel ai={aiAnalysis} />
+            </>
+          ) : (
+            <p className="text-sm text-slate-500">Not analyzed yet.</p>
+          )}
+        </div>
       </Card>
 
       <Card

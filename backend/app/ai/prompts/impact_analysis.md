@@ -1,5 +1,5 @@
 ---
-version: "1.2"
+version: "1.3"
 name: impact_analysis
 ---
 
@@ -27,6 +27,27 @@ Pull Request: {{ pull_request_title }}
 ## Impacted Repositories
 
 {{ impacted_repositories }}
+
+## Code Diff
+
+{{ diff_content }}
+
+If a diff is present above, use it only to sharpen the severity and
+description of breaking changes already implied by the deterministic
+analysis - never as a basis for claiming a new dependency, repository, or
+downstream impact that isn't in the sections above. If it reads "Not
+gathered for this analysis," the investigating agent judged the risk too
+low to warrant fetching it - reason from the sections above instead.
+
+## Recent File Authors
+
+{{ recent_file_authors }}
+
+If author data is present above, prefer these real names when suggesting
+reviewers, and cite the specific file each name is tied to. If it reads
+"Not gathered for this analysis," do not invent a reviewer name - either
+omit `suggested_reviewers` or describe the role/team generically without
+a fabricated identity.
 
 The repository marked `"relation": "current"` is the one this pull request
 is in. Any repository marked `"relation": "downstream"` is a *separate,

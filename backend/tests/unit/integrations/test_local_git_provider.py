@@ -69,8 +69,23 @@ async def test_list_changed_files_unknown_branch_raises(demo_repo: Path) -> None
 
 
 @pytest.mark.asyncio
-async def test_get_diff_not_implemented(demo_repo: Path) -> None:
+async def test_get_diff_returns_unified_diff_content(demo_repo: Path) -> None:
     provider = LocalGitVersionControlProvider(clone_root=demo_repo)
 
-    with pytest.raises(NotImplementedError):
-        await provider.get_diff("order-service", "main")
+    diff = await provider.get_diff(owner="local", repo="order-service", pull_number=1)
+
+    assert "modify_me.txt" in diff
+    assert "-original" in diff
+    assert "+changed" in diff
+
+
+@pytest.mark.asyncio
+async def test_get_recent_file_authors_returns_the_commit_author(demo_repo: Path) -> None:
+    provider = LocalGitVersionControlProvider(clone_root=demo_repo)
+
+    authors = await provider.get_recent_file_authors(
+        owner="local", repo="order-service", file_paths={"modify_me.txt", "new_file.txt"}
+    )
+
+    assert authors["modify_me.txt"] == ["Test"]
+    assert authors["new_file.txt"] == ["Test"]

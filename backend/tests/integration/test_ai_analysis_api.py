@@ -266,3 +266,102 @@ async def test_ai_analysis_requires_authentication(client: AsyncClient) -> None:
 
     assert post_response.status_code == 401
     assert get_response.status_code == 401
+
+
+async def test_post_investigate_returns_analysis_and_reasoning_log(
+    client: AsyncClient, ai_test_setup: tuple[dict[str, str], str, str]
+) -> None:
+    """The Change Investigation Agent, run end-to-end through the real
+    HTTP path: routing -> auth -> ownership -> agent -> persist -> response.
+    Same fixture, same fake LLM result as the single-shot endpoint - only
+    the extra `reasoning_log` and the agent's own tool decisions differ."""
+    headers, _, pull_request_id = ai_test_setup
+
+    mock_provider = AsyncMock()
+    mock_provider.analyze = AsyncMock(return_value=_FAKE_AI_RESULT)
+
+    with (
+        patch.object(
+            GitHubVersionControlProvider,
+            "list_changed_files",
+            AsyncMock(
+                return_value=[
+                    ChangedFile(
+                        path="src/main/java/com/example/orders/OrderEventProducer.java",
+                        status="modified",
+                    )
+                ]
+            ),
+        ),
+        patch.object(
+            GitHubVersionControlProvider,
+            "get_diff",
+            AsyncMock(return_value="--- a/x\n+++ b/x\n"),
+        ),
+        patch.object(
+            GitHubVersionControlProvider,
+            "get_recent_file_authors",
+            AsyncMock(return_value={"OrderEventProducer.java": ["alice"]}),
+        ),
+        patch(
+            "app.api.v1.routers.ai_analysis.create_llm_provider",
+            return_value=mock_provider,
+        ),
+    ):
+        response = await client.post(
+            f"/api/v1/pull-requests/{pull_request_id}/investigate", headers=headers
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["executive_summary"] == "This PR modifies the order event producer."
+    assert body["confidence"]["score"] == 0.88
+
+    reasoning_log = body["reasoning_log"]
+    assert len(reasoning_log) >= 2
+    tools_called = {step["tool_selected"] for step in reasoning_log if step["tool_selected"]}
+    assert "read_dependency_graph" in tools_called
+    assert "traverse_dependency_graph" in tools_called
+    for step in reasoning_log:
+        assert step["goal"]
+        assert step["plan"]
+        assert step["decision"]
+
+    # Persists through the same path as POST .../ai-analysis, so GET
+    # returns it too.
+    get_response = await client.get(
+        f"/api/v1/pull-requests/{pull_request_id}/ai-analysis", headers=headers
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()["executive_summary"] == "This PR modifies the order event producer."
+
+
+async def test_investigate_endpoint_404s_for_another_users_pr(
+    client: AsyncClient, ai_test_setup: tuple[dict[str, str], str, str]
+) -> None:
+    _, _, pull_request_id = ai_test_setup
+    other_email = f"investigate-other-{uuid.uuid4().hex[:8]}@example.com"
+    password = "correct-horse-battery-staple"  # noqa: S105
+
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": other_email, "password": password, "full_name": "Other User"},
+    )
+    login = await client.post(
+        "/api/v1/auth/login", json={"email": other_email, "password": password}
+    )
+    other_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    response = await client.post(
+        f"/api/v1/pull-requests/{pull_request_id}/investigate", headers=other_headers
+    )
+
+    assert response.status_code == 404
+
+
+async def test_investigate_requires_authentication(client: AsyncClient) -> None:
+    fake_id = str(uuid.uuid4())
+
+    response = await client.post(f"/api/v1/pull-requests/{fake_id}/investigate")
+
+    assert response.status_code == 401

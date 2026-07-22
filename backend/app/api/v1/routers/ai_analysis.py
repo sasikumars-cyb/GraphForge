@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.agent.investigation_agent import InvestigationAgent
 from app.ai.providers.factory import create_llm_provider
 from app.ai.services.ai_analysis_service import AIAnalysisService
 from app.analysis.engine.impact_analysis_engine import ImpactAnalysisEngine
@@ -21,7 +22,14 @@ from app.models.pull_request import PullRequest
 from app.models.pull_request_ai_analysis import PullRequestAIAnalysis
 from app.models.repository import Repository
 from app.models.user import User
-from app.schemas.ai_analysis import AIAnalysisResponse, AIAnalysisResultResponse
+from app.schemas.ai_analysis import (
+    AIAnalysisResponse,
+    AIAnalysisResultResponse,
+    InvestigationResponse,
+    ObservationResponse,
+    ReasoningStepResponse,
+    RunAIAnalysisRequest,
+)
 
 router = APIRouter(prefix="/pull-requests", tags=["ai-analysis"])
 
@@ -40,7 +48,7 @@ async def _get_owned_pull_request(
     return pull_request
 
 
-def _build_ai_service(db: AsyncSession) -> AIAnalysisService:
+def _build_ai_service(db: AsyncSession, model: str | None = None) -> AIAnalysisService:
     driver = get_driver()
     impact_engine = ImpactAnalysisEngine(
         db=db,
@@ -48,11 +56,22 @@ def _build_ai_service(db: AsyncSession) -> AIAnalysisService:
         impact_graph_reader=Neo4jImpactGraphReader(driver),
         version_control_provider=create_version_control_provider(get_settings()),
     )
-    llm_provider = create_llm_provider()
+    llm_provider = create_llm_provider(model=model)
     return AIAnalysisService(
         db=db,
         llm_provider=llm_provider,
         impact_engine=impact_engine,
+    )
+
+
+def _build_investigation_agent(db: AsyncSession, model: str | None = None) -> InvestigationAgent:
+    driver = get_driver()
+    return InvestigationAgent(
+        db=db,
+        graph_repository=Neo4jGraphRepository(driver),
+        impact_graph_reader=Neo4jImpactGraphReader(driver),
+        version_control_provider=create_version_control_provider(get_settings()),
+        llm_provider=create_llm_provider(model=model),
     )
 
 
@@ -68,12 +87,13 @@ def _build_ai_service(db: AsyncSession) -> AIAnalysisService:
 )
 async def run_ai_analysis(
     pull_request_id: uuid.UUID,
+    payload: RunAIAnalysisRequest | None = None,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> AIAnalysisResultResponse:
     """Trigger AI-enriched analysis for a pull request."""
     pull_request = await _get_owned_pull_request(db, pull_request_id, current_user)
-    service = _build_ai_service(db)
+    service = _build_ai_service(db, model=payload.model if payload else None)
     result = await service.analyze(pull_request.id)
     return AIAnalysisResultResponse(
         executive_summary=result.executive_summary,
@@ -113,3 +133,57 @@ async def get_ai_analysis(
     if ai_analysis is None:
         raise NotFoundError("No AI analysis has been run for this pull request yet.")
     return ai_analysis
+
+
+@router.post(
+    "/{pull_request_id}/investigate",
+    response_model=InvestigationResponse,
+    summary="Run the Change Investigation Agent",
+    description=(
+        "Autonomously investigates a pull request: the agent decides which "
+        "evidence (graph traversal, cross-repository metadata, indexing "
+        "summary, diff, git history) is actually worth gathering before "
+        "generating the final AI-enriched impact analysis, and records every "
+        "decision - including skips - in the returned reasoning log. Replaces "
+        "any prior AI analysis for this pull request, the same as POST "
+        ".../ai-analysis."
+    ),
+)
+async def investigate_pull_request(
+    pull_request_id: uuid.UUID,
+    payload: RunAIAnalysisRequest | None = None,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> InvestigationResponse:
+    """Trigger the Change Investigation Agent for a pull request."""
+    pull_request = await _get_owned_pull_request(db, pull_request_id, current_user)
+    agent = _build_investigation_agent(db, model=payload.model if payload else None)
+    investigation = await agent.investigate(pull_request.id)
+    result = investigation.analysis
+    return InvestigationResponse(
+        executive_summary=result.executive_summary,
+        breaking_changes=[bc.model_dump() for bc in result.breaking_changes],
+        migration_advice=[ma.model_dump() for ma in result.migration_advice],
+        suggested_reviewers=[sr.model_dump() for sr in result.suggested_reviewers],
+        regression_tests=[rt.model_dump() for rt in result.regression_tests],
+        release_coordination_plan=result.release_coordination_plan.model_dump(),
+        confidence=result.confidence.model_dump(),
+        prompt_version=result.prompt_version,
+        reasoning_log=[
+            ReasoningStepResponse(
+                step_number=step.step_number,
+                goal=step.goal,
+                plan=step.plan,
+                tool_selected=step.tool_selected,
+                observation=(
+                    ObservationResponse(
+                        tool_name=step.observation.tool_name, summary=step.observation.summary
+                    )
+                    if step.observation
+                    else None
+                ),
+                decision=step.decision,
+            )
+            for step in investigation.reasoning_log
+        ],
+    )

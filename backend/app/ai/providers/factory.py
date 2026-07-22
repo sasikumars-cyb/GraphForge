@@ -11,6 +11,11 @@ from app.ai.providers.openai_provider import OpenAIProvider
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError
 
+# The only models the UI is allowed to select (see frontend
+# `src/types/aiModel.ts`, which mirrors this list for display). Closed
+# vocabulary - never accept an arbitrary model string from a request body.
+SUPPORTED_OPENAI_MODELS = ("gpt-5.5", "gpt-5", "gpt-5-mini")
+
 
 class UnsupportedProviderError(AppError):
     """Raised when the configured AI provider is not yet implemented."""
@@ -19,12 +24,24 @@ class UnsupportedProviderError(AppError):
     error_code = "unsupported_ai_provider"
 
 
-def create_llm_provider(settings: Settings | None = None) -> ILLMProvider:
+class UnsupportedModelError(AppError):
+    """Raised when a request asks for a model outside the supported set."""
+
+    status_code = 422
+    error_code = "unsupported_ai_model"
+
+
+def create_llm_provider(settings: Settings | None = None, model: str | None = None) -> ILLMProvider:
     """Instantiate the configured LLM provider.
 
     Reads ``ai_provider`` from settings and returns the matching concrete
     implementation.  Raises :class:`UnsupportedProviderError` for providers
     that are not yet implemented.
+
+    ``model`` optionally overrides ``settings.openai_model`` for this call
+    only (e.g. a per-request model chosen in the UI) - it never mutates
+    the process-wide settings object. Must be one of
+    :data:`SUPPORTED_OPENAI_MODELS`.
     """
     cfg = settings or get_settings()
     provider_name = cfg.ai_provider.lower()
@@ -36,9 +53,11 @@ def create_llm_provider(settings: Settings | None = None) -> ILLMProvider:
                 status_code=503,
                 error_code="ai_provider_not_configured",
             )
+        if model is not None and model not in SUPPORTED_OPENAI_MODELS:
+            raise UnsupportedModelError(f"Unsupported AI model: '{model}'.")
         return OpenAIProvider(
             api_key=cfg.openai_api_key,
-            model=cfg.openai_model,
+            model=model or cfg.openai_model,
             temperature=cfg.openai_temperature,
             max_tokens=cfg.openai_max_tokens,
         )
