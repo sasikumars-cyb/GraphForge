@@ -1,43 +1,46 @@
+import { Link } from "react-router-dom";
 import { Card } from "../components/Card";
 import { Table, type TableColumn } from "../components/Table";
 import { RiskBadge } from "../components/RiskBadge";
 import { StatusBadge } from "../components/StatusBadge";
-import { mockPullRequests } from "../lib/mock/pullRequests";
-import { pullRequestStatusPresentation } from "../lib/statusPresentation";
 import { formatRelativeTime } from "../lib/formatDate";
-import type { PullRequest } from "../types/domain";
+import { usePullRequestsData, type PullRequestRow } from "../hooks/usePullRequestsData";
 
-const columns: TableColumn<PullRequest>[] = [
+const columns: TableColumn<PullRequestRow>[] = [
   {
     key: "title",
     header: "Pull request",
     render: (pr) => (
-      <div>
+      <Link to={`/pull-requests/${pr.id}`} className="block hover:underline">
         <p className="font-medium text-slate-100">{pr.title}</p>
-        <p className="text-xs text-slate-500">#{pr.id.replace("pr-", "")}</p>
-      </div>
+        <p className="text-xs text-slate-500">#{pr.number}</p>
+      </Link>
     ),
   },
-  { key: "repository", header: "Repository", render: (pr) => pr.repository },
-  { key: "author", header: "Author", render: (pr) => pr.author },
+  { key: "repository", header: "Repository", render: (pr) => pr.repositoryFullName },
+  { key: "author", header: "Author", render: (pr) => pr.authorLogin },
   {
     key: "status",
     header: "Status",
-    render: (pr) => {
-      const { label, tone } = pullRequestStatusPresentation(pr.status);
-      return <StatusBadge label={label} tone={tone} />;
-    },
+    render: (pr) => (
+      <StatusBadge
+        label={pr.isDraft ? "Draft" : pr.state === "open" ? "Open" : pr.state}
+        tone={pr.state === "open" ? (pr.isDraft ? "neutral" : "info") : "success"}
+      />
+    ),
   },
-  { key: "risk", header: "Risk", render: (pr) => <RiskBadge level={pr.risk} /> },
   {
-    key: "affected",
-    header: "Affected services",
-    render: (pr) => (pr.affectedServices === 0 ? "—" : pr.affectedServices),
+    key: "risk",
+    header: "Risk",
+    render: (pr) =>
+      pr.risk ? <RiskBadge level={pr.risk} /> : <StatusBadge label="Not analyzed" tone="neutral" />,
   },
   { key: "updated", header: "Updated", render: (pr) => formatRelativeTime(pr.updatedAt) },
 ];
 
 export function PullRequestsPage() {
+  const { pullRequests, isLoading, error } = usePullRequestsData();
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -47,8 +50,19 @@ export function PullRequestsPage() {
         </p>
       </div>
 
+      {error && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          {error}
+        </div>
+      )}
+
       <Card>
-        <Table columns={columns} data={mockPullRequests} getRowKey={(pr) => pr.id} />
+        <Table
+          columns={columns}
+          data={pullRequests}
+          getRowKey={(pr) => pr.id}
+          emptyMessage={isLoading ? "Loading…" : "No pull requests yet."}
+        />
       </Card>
     </div>
   );

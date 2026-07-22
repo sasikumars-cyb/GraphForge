@@ -4,7 +4,9 @@ import { RequireAuth } from "../components/layout/RequireAuth";
 import { LoginPage } from "../pages/LoginPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { PullRequestsPage } from "../pages/PullRequestsPage";
+import { PullRequestDetailPage } from "../pages/PullRequestDetailPage";
 import { RepositoriesPage } from "../pages/RepositoriesPage";
+import { RepositoryDetailPage } from "../pages/RepositoryDetailPage";
 import { ArchitecturePage } from "../pages/ArchitecturePage";
 import { ReportsPage } from "../pages/ReportsPage";
 import { SettingsPage } from "../pages/SettingsPage";
@@ -22,7 +24,9 @@ export const routes: RouteObject[] = [
         children: [
           { path: "/", element: <DashboardPage /> },
           { path: "/pull-requests", element: <PullRequestsPage /> },
+          { path: "/pull-requests/:id", element: <PullRequestDetailPage /> },
           { path: "/repositories", element: <RepositoriesPage /> },
+          { path: "/repositories/:id", element: <RepositoryDetailPage /> },
           { path: "/architecture", element: <ArchitecturePage /> },
           { path: "/reports", element: <ReportsPage /> },
           { path: "/settings", element: <SettingsPage /> },

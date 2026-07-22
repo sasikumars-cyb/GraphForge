@@ -5,7 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routes } from "./router";
 import { AuthProvider } from "./AuthContext";
 import * as authApi from "../lib/api/auth";
+import * as githubApi from "../lib/api/github";
+import * as repositoriesApi from "../lib/api/repositories";
+import * as analysisApi from "../lib/api/analysis";
+import { ApiError } from "../lib/api/client";
 import type { User } from "../types/auth";
+import type { TrackedRepository } from "../types/github";
+import type { PullRequest } from "../types/pullRequest";
 
 const FAKE_USER: User = {
   id: "11111111-1111-1111-1111-111111111111",
@@ -23,6 +29,34 @@ function renderApp(initialPath = "/") {
     </AuthProvider>,
   );
 }
+
+const FAKE_REPO: TrackedRepository = {
+  id: "repo-1",
+  github_repo_id: "local-1",
+  owner: "local",
+  name: "order-service",
+  full_name: "local/order-service",
+  private: false,
+  default_branch: "main",
+  html_url: "/demo/repositories/order-service",
+  created_at: "2026-07-01T00:00:00Z",
+};
+
+const FAKE_PR: PullRequest = {
+  id: "pr-1",
+  number: 1,
+  title: "Rename OrderCreated.total to totalCents",
+  state: "open",
+  is_draft: false,
+  author_login: "tester",
+  html_url: "https://example.invalid/pr/1",
+  head_ref: "pr-1",
+  base_ref: "main",
+  github_created_at: "2026-07-20T00:00:00Z",
+  github_updated_at: "2026-07-20T00:00:00Z",
+};
+
+const NOT_FOUND = new ApiError(404, "not_found", "not found");
 
 describe("App navigation (authenticated)", () => {
   beforeEach(() => {
@@ -77,6 +111,38 @@ describe("App navigation (authenticated)", () => {
   ])("renders the %s page at %s", async (path, heading) => {
     renderApp(path);
     expect(await screen.findByRole("heading", { level: 2, name: heading })).toBeInTheDocument();
+  });
+
+  it("renders the repository detail page and offers to run indexing", async () => {
+    vi.spyOn(githubApi, "listTrackedRepositories").mockResolvedValue([FAKE_REPO]);
+    vi.spyOn(repositoriesApi, "listPullRequests").mockResolvedValue([FAKE_PR]);
+    vi.spyOn(repositoriesApi, "getLatestIndexingJob").mockRejectedValue(NOT_FOUND);
+
+    renderApp("/repositories/repo-1");
+
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "local/order-service" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run indexing" })).toBeInTheDocument();
+    expect(await screen.findByText("Rename OrderCreated.total to totalCents")).toBeInTheDocument();
+  });
+
+  it("renders the pull request detail page with analysis trigger buttons", async () => {
+    vi.spyOn(githubApi, "listTrackedRepositories").mockResolvedValue([FAKE_REPO]);
+    vi.spyOn(repositoriesApi, "listPullRequests").mockResolvedValue([FAKE_PR]);
+    vi.spyOn(analysisApi, "getDeterministicAnalysis").mockRejectedValue(NOT_FOUND);
+    vi.spyOn(analysisApi, "getAiAnalysis").mockRejectedValue(NOT_FOUND);
+
+    renderApp("/pull-requests/pr-1");
+
+    expect(
+      await screen.findByRole("heading", {
+        level: 2,
+        name: "Rename OrderCreated.total to totalCents",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run analysis" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Run AI analysis" })).toBeInTheDocument();
   });
 
   it("shows the logged-in user's name and logs out via the sidebar", async () => {

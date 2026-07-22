@@ -1,0 +1,26 @@
+# Layers on top of docker-compose.yml to enable the local demo environment
+# (see demo/DEMO_GUIDE.md): mounts the four local demo Spring Boot repos
+# into the backend container read-only, and switches the version-control
+# provider from GitHub to LocalGitVersionControlProvider so "pull requests"
+# resolve to local git branches instead of real GitHub API calls.
+#
+# Usage: docker compose -f docker/docker-compose.yml -f docker/docker-compose.demo.yml up --build
+# (scripts/demo-up.sh does this for you.)
+#
+# Never used by default - docker-compose.yml alone is unaffected, so normal
+# GitHub-backed usage of the dev stack is unchanged.
+
+services:
+  backend:
+    environment:
+      VCS_PROVIDER: local_git
+      DEMO_REPOSITORIES_ROOT: /demo/repositories
+    volumes:
+      - ../demo:/demo:ro
+      # The demo repos are bind-mounted from the host, so git (inside the
+      # container) sees a different UID owning them and refuses to
+      # clone/diff them ("detected dubious ownership") unless explicitly
+      # trusted. `safe.directory` is deliberately only honored from a real
+      # config file (not environment-provided config), so it's mounted in
+      # rather than set via `environment:`.
+      - ./demo-gitconfig:/root/.gitconfig:ro

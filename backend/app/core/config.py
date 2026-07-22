@@ -72,6 +72,14 @@ class Settings(BaseSettings):
     # after each indexing run, success or failure.
     indexer_clone_root: str = Field(default="/tmp/changeguard-indexer")
 
+    # --- Version control provider (local demo support) ---
+    # "github" (default, unchanged production behavior) or "local_git" - an
+    # explicit opt-in used only by the local demo environment (see
+    # demo/DEMO_GUIDE.md), where "pull requests" are branches on disk
+    # instead of real GitHub PRs.
+    vcs_provider: str = Field(default="github")
+    demo_repositories_root: str = Field(default="../demo/repositories")
+
     # --- AI Provider ---
     ai_provider: str = Field(default="openai")
     openai_api_key: str | None = Field(default=None)

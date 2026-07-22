@@ -131,6 +131,28 @@ async def trigger_indexing(
     return job
 
 
+@router.get("/{repository_id}/index", response_model=IndexingJobResponse)
+async def get_latest_indexing_job(
+    repository_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> IndexingJob:
+    """The most recently created indexing job for this repository - lets a
+    client that just called `POST .../index` poll for completion."""
+    repository = await _get_owned_repository(db, repository_id, current_user)
+
+    result = await db.execute(
+        select(IndexingJob)
+        .where(IndexingJob.repository_id == repository.id)
+        .order_by(IndexingJob.created_at.desc())
+        .limit(1)
+    )
+    job = result.scalar_one_or_none()
+    if job is None:
+        raise NotFoundError("No indexing job has been run for this repository yet.")
+    return job
+
+
 @router.get("/{repository_id}/graph", response_model=GraphResponse)
 async def get_repository_graph(
     repository_id: uuid.UUID,

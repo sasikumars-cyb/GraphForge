@@ -113,6 +113,32 @@ async def test_trigger_index_then_read_graph_services_dependencies(
     assert "spring-boot-starter-web" in artifact_ids
 
 
+async def test_get_latest_indexing_job_after_trigger(
+    client: AsyncClient, registered_repository: tuple[dict[str, str], str]
+) -> None:
+    headers, repository_id = registered_repository
+
+    await client.post(f"/api/v1/repositories/{repository_id}/index", headers=headers)
+
+    status_response = await client.get(
+        f"/api/v1/repositories/{repository_id}/index", headers=headers
+    )
+    assert status_response.status_code == 200
+    body = status_response.json()
+    assert body["repository_id"] == repository_id
+    assert body["status"] == "completed"
+    assert body["finished_at"] is not None
+
+
+async def test_get_latest_indexing_job_404s_before_any_run(
+    client: AsyncClient, registered_repository: tuple[dict[str, str], str]
+) -> None:
+    headers, repository_id = registered_repository
+
+    response = await client.get(f"/api/v1/repositories/{repository_id}/index", headers=headers)
+    assert response.status_code == 404
+
+
 async def test_conflict_when_a_job_is_already_pending_or_running(
     client: AsyncClient, registered_repository: tuple[dict[str, str], str]
 ) -> None:

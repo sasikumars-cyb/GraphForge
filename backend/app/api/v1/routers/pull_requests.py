@@ -9,11 +9,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.analysis.engine.impact_analysis_engine import ImpactAnalysisEngine
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
 from app.api.v1.dependencies import get_current_user
+from app.core.config import get_settings
 from app.core.exceptions import NotFoundError
 from app.database.session import get_db_session
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
-from app.integrations.github import GitHubVersionControlProvider
+from app.integrations.factory import create_version_control_provider
 from app.models.pull_request import PullRequest
 from app.models.pull_request_analysis import PullRequestAnalysis
 from app.models.repository import Repository
@@ -43,7 +44,7 @@ def _build_engine(db: AsyncSession) -> ImpactAnalysisEngine:
         db=db,
         graph_repository=Neo4jGraphRepository(driver),
         impact_graph_reader=Neo4jImpactGraphReader(driver),
-        version_control_provider=GitHubVersionControlProvider(),
+        version_control_provider=create_version_control_provider(get_settings()),
     )
 
 

@@ -39,3 +39,7 @@ docker/postgres/data/
 # --- Logs ---
 *.log
 logs/
+
+# --- Local demo repositories (each is its own real, independent git repo -
+# never tracked/submoduled by this one; see demo/DEMO_GUIDE.md) ---
+demo/repositories/

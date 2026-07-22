@@ -1,0 +1,11 @@
+# Bind-mounted into the backend container at /root/.gitconfig by
+# docker-compose.demo.yml only - never used outside the demo overlay.
+#
+# The demo repos are bind-mounted from the host, so git inside the
+# container sees a different UID owning them and refuses to clone/diff
+# them ("detected dubious ownership") unless explicitly trusted. `git`
+# deliberately only honors `safe.directory` from a real config file, not
+# from environment-provided config, so this can't be set via `environment:`
+# in the compose file.
+[safe]
+	directory = *

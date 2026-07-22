@@ -1,46 +1,58 @@
+import { Link } from "react-router-dom";
 import { StatCard } from "../components/StatCard";
 import { Card } from "../components/Card";
 import { Table, type TableColumn } from "../components/Table";
 import { RiskBadge } from "../components/RiskBadge";
 import { StatusBadge } from "../components/StatusBadge";
-import { mockDashboardStats } from "../lib/mock/dashboardStats";
-import { mockPullRequests } from "../lib/mock/pullRequests";
-import { mockRepositories } from "../lib/mock/repositories";
-import {
-  pullRequestStatusPresentation,
-  repositoryHealthPresentation,
-} from "../lib/statusPresentation";
+import { repositoryHealthPresentation } from "../lib/statusPresentation";
 import { formatRelativeTime } from "../lib/formatDate";
-import type { PullRequest, Repository } from "../types/domain";
+import {
+  useDashboardData,
+  type DashboardPullRequestRow,
+  type DashboardRepositoryRow,
+} from "../hooks/useDashboardData";
 import { LayoutDashboard, FolderGit2, GitPullRequest, Clock } from "lucide-react";
 
-const STAT_ICONS = [FolderGit2, GitPullRequest, LayoutDashboard, Clock];
-
-const recentPullRequestColumns: TableColumn<PullRequest>[] = [
+const recentPullRequestColumns: TableColumn<DashboardPullRequestRow>[] = [
   {
     key: "title",
     header: "Pull request",
     render: (pr) => (
-      <div>
+      <Link to={`/pull-requests/${pr.id}`} className="block hover:underline">
         <p className="font-medium text-slate-100">{pr.title}</p>
-        <p className="text-xs text-slate-500">{pr.repository}</p>
-      </div>
+        <p className="text-xs text-slate-500">{pr.repositoryFullName}</p>
+      </Link>
     ),
   },
-  { key: "risk", header: "Risk", render: (pr) => <RiskBadge level={pr.risk} /> },
+  {
+    key: "risk",
+    header: "Risk",
+    render: (pr) =>
+      pr.risk ? <RiskBadge level={pr.risk} /> : <StatusBadge label="Not analyzed" tone="neutral" />,
+  },
   {
     key: "status",
     header: "Status",
-    render: (pr) => {
-      const { label, tone } = pullRequestStatusPresentation(pr.status);
-      return <StatusBadge label={label} tone={tone} />;
-    },
+    render: (pr) => (
+      <StatusBadge
+        label={pr.isDraft ? "Draft" : pr.state === "open" ? "Open" : pr.state}
+        tone={pr.state === "open" ? (pr.isDraft ? "neutral" : "info") : "success"}
+      />
+    ),
   },
   { key: "updated", header: "Updated", render: (pr) => formatRelativeTime(pr.updatedAt) },
 ];
 
-const repositoryColumns: TableColumn<Repository>[] = [
-  { key: "name", header: "Repository", render: (repo) => repo.name },
+const repositoryColumns: TableColumn<DashboardRepositoryRow>[] = [
+  {
+    key: "name",
+    header: "Repository",
+    render: (repo) => (
+      <Link to={`/repositories/${repo.id}`} className="hover:underline">
+        {repo.name}
+      </Link>
+    ),
+  },
   {
     key: "health",
     header: "Health",
@@ -53,6 +65,8 @@ const repositoryColumns: TableColumn<Repository>[] = [
 ];
 
 export function DashboardPage() {
+  const { stats, recentPullRequests, repositories, isLoading, error } = useDashboardData();
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -62,16 +76,37 @@ export function DashboardPage() {
         </p>
       </div>
 
+      {error && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          {error}
+        </div>
+      )}
+
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {mockDashboardStats.map((stat, index) => (
-          <StatCard
-            key={stat.label}
-            label={stat.label}
-            value={stat.value}
-            hint={stat.hint}
-            icon={STAT_ICONS[index]}
-          />
-        ))}
+        <StatCard
+          label="Repositories monitored"
+          value={isLoading ? "—" : String(stats.repositoriesMonitored)}
+          hint={`across ${stats.organizationCount} organization${stats.organizationCount === 1 ? "" : "s"}`}
+          icon={FolderGit2}
+        />
+        <StatCard
+          label="Open pull requests"
+          value={isLoading ? "—" : String(stats.openPullRequestCount)}
+          hint={`${stats.awaitingAnalysisCount} awaiting analysis`}
+          icon={GitPullRequest}
+        />
+        <StatCard
+          label="High risk changes"
+          value={isLoading ? "—" : String(stats.highRiskThisWeekCount)}
+          hint="critical or high this week"
+          icon={LayoutDashboard}
+        />
+        <StatCard
+          label="Avg. indexing time"
+          value={isLoading ? "—" : stats.avgIndexingTimeLabel}
+          hint="per repository"
+          icon={Clock}
+        />
       </div>
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
@@ -82,16 +117,18 @@ export function DashboardPage() {
         >
           <Table
             columns={recentPullRequestColumns}
-            data={mockPullRequests.slice(0, 5)}
+            data={recentPullRequests.slice(0, 5)}
             getRowKey={(pr) => pr.id}
+            emptyMessage={isLoading ? "Loading…" : "No pull requests yet."}
           />
         </Card>
 
         <Card title="Repositories at a glance" description="Current health status">
           <Table
             columns={repositoryColumns}
-            data={mockRepositories}
+            data={repositories}
             getRowKey={(repo) => repo.id}
+            emptyMessage={isLoading ? "Loading…" : "No repositories tracked yet."}
           />
         </Card>
       </div>
