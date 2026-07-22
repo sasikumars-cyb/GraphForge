@@ -2,7 +2,7 @@
 
 ChangeGuard turns an AI-generated development plan into a **visible, reasoned impact analysis**: a dependency graph of the affected services, a UML/sequence view of the change's call path, and an AI-grounded explanation of what breaks and why — before the change ships.
 
-> **Status:** backend scaffold with a working health endpoint, Swagger docs, database/config/logging/error-handling wired up. No business logic (change analysis, GitHub/Jira/Neo4j/AI integrations) has been implemented yet — see [`docs/architecture/overview.md`](docs/architecture/overview.md) for what's here and what's deliberately not.
+> **Status:** JWT authentication, a real GitHub integration (connect an account, list/select repositories, receive pull request webhooks), and a deterministic architecture discovery engine (clone a Java/Spring Boot repo, parse it with tree-sitter, persist the discovered controllers/services/Feign clients/Kafka usage/dependencies as a graph in Neo4j) are implemented. The dashboard pages still run on mock data, no AI analysis exists yet, and login-via-GitHub (as opposed to connecting one) is still just an interface + stub routes. See [`docs/architecture/overview.md`](docs/architecture/overview.md) for what's here and what's deliberately not.
 
 ## Stack
 
@@ -11,7 +11,9 @@ ChangeGuard turns an AI-generated development plan into a **visible, reasoned im
 | Frontend | React, TypeScript, Vite, Tailwind CSS, React Router |
 | Backend | Python, FastAPI, SQLAlchemy (async), Pydantic |
 | Database | PostgreSQL |
-| Future | Neo4j (graph storage), GitHub integration, Jira integration, AI analysis engine |
+| Graph store | Neo4j (architecture graph — repository indexer output) |
+| Integrations | GitHub (OAuth connect, repo selection, PR webhook) |
+| Future | Jira integration, AI analysis engine, login-via-GitHub |
 
 ## Project layout
 
@@ -26,23 +28,26 @@ changeguard/
 
 ## Getting started
 
-Prerequisites: Docker & Docker Compose, Node.js 20+, Python 3.12+.
+Requires only Docker — no local Python or Node install needed:
 
 ```bash
-./scripts/setup.sh   # copies .env.example files, installs dependencies
-./scripts/dev.sh      # starts Postgres, backend (http://localhost:8000), frontend (http://localhost:5173)
+./scripts/docker-dev.sh
 ```
 
-Backend interactive API docs: `http://localhost:8000/docs`.
+One command starts everything with hot reload: Postgres, Neo4j (bolt on `7687`, browser UI at `http://localhost:7474`), backend (`uvicorn --reload`) at `http://localhost:8000` (docs at `/docs`), and frontend (Vite dev server, HMR) at `http://localhost:5173`. Both `backend/` and `frontend/` are bind-mounted into their containers, so edits on the host apply immediately — no rebuild needed.
 
-See [`docs/setup.md`](docs/setup.md) for the manual, non-scripted setup path, and [`docs/architecture/overview.md`](docs/architecture/overview.md) for the clean-architecture layering and where the future integrations (Neo4j, GitHub, Jira, AI engine) plug in.
+There's no sign-up page yet — create a test account with `curl -X POST http://localhost:8000/api/v1/auth/register -H "Content-Type: application/json" -d '{"email": "you@example.com", "password": "a-password-at-least-8-chars", "full_name": "Your Name"}'` (or via Swagger at `/docs`), then log in at `http://localhost:5173`. See [`docs/setup.md`](docs/setup.md#logging-in) for details.
+
+Prefer running Python/Node natively instead of in containers? See [`docs/setup.md`](docs/setup.md) for that path (`scripts/setup.sh` + `scripts/dev.sh`), plus a production-style build (`scripts/docker-prod.sh`) and the fully manual, non-scripted version of each. See [`docs/architecture/overview.md`](docs/architecture/overview.md) for the backend's layering and where the remaining future integrations (Jira, AI engine) plug in.
 
 ## Development scripts
 
 | Script | Purpose |
 |---|---|
-| `scripts/setup.sh` | First-time environment setup |
-| `scripts/dev.sh` | Run the full stack locally |
+| `scripts/docker-dev.sh` | **One command, full stack, hot reload — start here** |
+| `scripts/docker-prod.sh` | Production-style build (Nginx, no reload) |
+| `scripts/setup.sh` | First-time environment setup for native (non-Docker) development |
+| `scripts/dev.sh` | Run the full stack natively (Postgres in Docker, backend/frontend as local processes) |
 | `scripts/lint.sh` | Lint + format-check both services |
 | `scripts/test.sh` | Run backend and frontend test suites |
 

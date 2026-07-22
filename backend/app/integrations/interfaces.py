@@ -1,18 +1,83 @@
-"""Contracts for external systems, implemented by nothing yet.
+"""Contracts for external systems.
 
-Defining these now - before any adapter exists - is what lets a GitHub
-client and a Jira client be added later as pure additions to this package,
-with no change to any service that depends on the interface.
+Defining these before an adapter exists is what lets a GitHub client and a
+Jira client be added as pure additions to this package, with no change to
+any service that depends on the interface.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from typing import Any
+
+
+@dataclass(frozen=True)
+class OAuthUserProfile:
+    """The subset of a provider's user profile needed to create/link a
+    local User account. GitHub's actual profile payload has many more
+    fields; a real adapter maps whatever it needs down to this shape.
+    """
+
+    provider_user_id: str
+    email: str | None
+    name: str | None
+
+
+@dataclass(frozen=True)
+class RepositoryInfo:
+    """The subset of a provider's repository payload needed to let a user
+    pick which repositories to track."""
+
+    provider_repo_id: str
+    owner: str
+    name: str
+    full_name: str
+    private: bool
+    default_branch: str
+    html_url: str
+
+
+class IOAuthProvider(ABC):
+    """Port for an OAuth-based provider (e.g. GitHub) — both the
+    login-identity use case and the "connect my account for repo access"
+    use case go through this same contract.
+
+    `GitHubOAuthProvider` (app.integrations.github) is a real, working
+    implementation used today by `/api/v1/github/connect` and
+    `/api/v1/github/callback` (repo-access "Connect GitHub", not login).
+
+    `api/v1/routers/oauth.py`'s `/auth/github/login` / `/auth/github/callback`
+    routes are a *separate*, still-unimplemented use case (signing in AS a
+    GitHub identity) and are deliberately not wired to this provider yet —
+    see ADR 0006.
+    """
+
+    @abstractmethod
+    def get_authorization_url(self, state: str) -> str:
+        """Return the URL to redirect the user to for consent."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def exchange_code_for_token(self, code: str) -> str:
+        """Exchange an authorization code for a provider access token."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def fetch_user_profile(self, access_token: str) -> OAuthUserProfile:
+        """Fetch the authenticated user's profile from the provider."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_repositories(self, access_token: str) -> list[RepositoryInfo]:
+        """List repositories the token's owner has access to."""
+        raise NotImplementedError
 
 
 class IVersionControlProvider(ABC):
     """Port for fetching repository content and change diffs.
 
-    Future implementation: a GitHub adapter (not built yet).
+    Future implementation: reading a PR's actual diff for AI analysis (not
+    built yet — this task only connects accounts, lists/selects
+    repositories, and ingests PR *metadata* via webhook, not diff content).
     """
 
     @abstractmethod

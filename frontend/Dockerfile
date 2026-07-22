@@ -1,3 +1,21 @@
+# --- Dev stage: Vite dev server with HMR, used by docker/docker-compose.yml ---
+# Source is bind-mounted over /app at runtime; node_modules stays inside the
+# container via an anonymous volume (see docker-compose.yml) so it's always
+# this image's own Linux-built install that runs, never whatever happens to
+# be in the host's node_modules.
+FROM node:20-alpine AS dev
+
+WORKDIR /app
+
+COPY package.json package-lock.json ./
+RUN npm ci
+
+COPY . .
+
+EXPOSE 5173
+
+CMD ["npm", "run", "dev"]
+
 # --- Build stage: compile the SPA to static assets ---
 FROM node:20-alpine AS builder
 

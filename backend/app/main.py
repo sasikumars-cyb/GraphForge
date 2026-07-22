@@ -18,6 +18,24 @@ OPENAPI_TAGS = [
         "name": "health",
         "description": "Liveness/readiness checks used by orchestrators and load balancers.",
     },
+    {
+        "name": "auth",
+        "description": "Registration, login, and the current user. The /auth/github/* routes "
+        "are a separate, still-unimplemented login-via-GitHub use case and return 501.",
+    },
+    {
+        "name": "github",
+        "description": "'Connect GitHub' for repo access (not login) - OAuth flow and the "
+        "live repository list.",
+    },
+    {
+        "name": "repositories",
+        "description": "Selected/tracked repositories and their ingested pull requests.",
+    },
+    {
+        "name": "webhooks",
+        "description": "Inbound webhook receivers. Signature-verified, not JWT-authenticated.",
+    },
 ]
 
 

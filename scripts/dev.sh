@@ -15,6 +15,14 @@ trap cleanup EXIT
 echo "==> Starting Postgres (docker compose)"
 docker compose -f "$ROOT_DIR/docker/docker-compose.yml" up -d db
 
+echo "==> Applying database migrations"
+(
+  cd "$ROOT_DIR/backend"
+  # shellcheck disable=SC1091
+  source .venv/bin/activate
+  alembic upgrade head
+)
+
 echo "==> Starting backend (http://localhost:8000)"
 (
   cd "$ROOT_DIR/backend"

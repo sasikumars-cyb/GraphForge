@@ -1,7 +1,7 @@
-"""The dependency graph domain: services, contracts, and the edges between
-them derived from a codebase.
+"""The architecture graph domain: nodes and edges discovered by
+`app.indexer`, persisted in and queried from Neo4j.
 
-Backed today by nothing; a Postgres-backed store is the likely first
-implementation, with Neo4j as a future adapter behind the same interface -
-see `interfaces.py`.
+`interfaces.IGraphRepository` is the contract; `neo4j_repository.py` is the
+(real, working) implementation. `models.py` defines the generic
+node/edge/payload shapes both the indexer and the API routers speak.
 """

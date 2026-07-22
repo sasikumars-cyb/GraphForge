@@ -14,9 +14,11 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from alembic import context
 from app.core.config import get_settings
 from app.database.base import Base
-
-# Import ORM models here so Base.metadata is populated for autogenerate,
-# e.g.: from app.models.change import ChangeModel  # noqa
+from app.models.github_connection import GitHubConnection  # noqa: F401
+from app.models.indexing_job import IndexingJob  # noqa: F401
+from app.models.pull_request import PullRequest  # noqa: F401
+from app.models.repository import Repository  # noqa: F401
+from app.models.user import User  # noqa: F401 - all five register with Base.metadata
 
 config = context.config
 if config.config_file_name is not None:

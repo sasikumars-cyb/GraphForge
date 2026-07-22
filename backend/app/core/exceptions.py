@@ -40,3 +40,17 @@ class ConflictError(AppError):
 
     status_code = 409
     error_code = "conflict"
+
+
+class UnauthorizedError(AppError):
+    """Raised when a request has no, or invalid/expired, credentials."""
+
+    status_code = 401
+    error_code = "unauthorized"
+
+
+class NotImplementedYetError(AppError):
+    """Raised by a prepared-but-unimplemented extension point (e.g. GitHub OAuth)."""
+
+    status_code = 501
+    error_code = "not_implemented"
