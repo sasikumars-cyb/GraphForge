@@ -2,7 +2,7 @@
 
 ChangeGuard turns an AI-generated development plan into a **visible, reasoned impact analysis**: a dependency graph of the affected services, a UML/sequence view of the change's call path, and an AI-grounded explanation of what breaks and why — before the change ships.
 
-> **Status:** JWT authentication, a real GitHub integration (connect an account, list/select repositories, receive pull request webhooks), and a deterministic architecture discovery engine (clone a Java/Spring Boot repo, parse it with tree-sitter, persist the discovered controllers/services/Feign clients/Kafka usage/dependencies as a graph in Neo4j) are implemented. The dashboard pages still run on mock data, no AI analysis exists yet, and login-via-GitHub (as opposed to connecting one) is still just an interface + stub routes. See [`docs/architecture/overview.md`](docs/architecture/overview.md) for what's here and what's deliberately not.
+> **Status:** JWT authentication, a real GitHub integration (connect an account, list/select repositories, receive pull request webhooks), a deterministic architecture discovery engine (clone a Java/Spring Boot repo, parse it with tree-sitter, persist the discovered controllers/services/Feign clients/Kafka usage/dependencies as a graph in Neo4j), and deterministic pull request impact analysis (map a PR's changed files to that graph, traverse it, and return a risk level plus every directly/indirectly impacted service, API, Kafka topic, and dependency) are implemented. The dashboard pages still run on mock data, no AI/LLM reasoning exists anywhere yet, and login-via-GitHub (as opposed to connecting one) is still just an interface + stub routes. See [`docs/architecture/overview.md`](docs/architecture/overview.md) for what's here and what's deliberately not.
 
 ## Stack
 
@@ -12,15 +12,15 @@ ChangeGuard turns an AI-generated development plan into a **visible, reasoned im
 | Backend | Python, FastAPI, SQLAlchemy (async), Pydantic |
 | Database | PostgreSQL |
 | Graph store | Neo4j (architecture graph — repository indexer output) |
-| Integrations | GitHub (OAuth connect, repo selection, PR webhook) |
-| Future | Jira integration, AI analysis engine, login-via-GitHub |
+| Integrations | GitHub (OAuth connect, repo selection, PR webhook, PR changed-file listing) |
+| Future | Jira integration, AI/LLM-backed analysis engine, login-via-GitHub |
 
 ## Project layout
 
 ```
 changeguard/
   frontend/   React + TypeScript SPA
-  backend/    FastAPI service (api / services / models / schemas / database / core / graph / ai / integrations / indexer)
+  backend/    FastAPI service (api / services / models / schemas / database / core / graph / ai / integrations / indexer / analysis)
   docs/       Architecture notes and Architecture Decision Records (ADRs)
   docker/     Compose orchestration, Nginx config, DB init scripts
   scripts/    Local dev convenience scripts

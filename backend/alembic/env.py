@@ -17,8 +17,9 @@ from app.database.base import Base
 from app.models.github_connection import GitHubConnection  # noqa: F401
 from app.models.indexing_job import IndexingJob  # noqa: F401
 from app.models.pull_request import PullRequest  # noqa: F401
+from app.models.pull_request_analysis import PullRequestAnalysis  # noqa: F401
 from app.models.repository import Repository  # noqa: F401
-from app.models.user import User  # noqa: F401 - all five register with Base.metadata
+from app.models.user import User  # noqa: F401 - all six register with Base.metadata
 
 config = context.config
 if config.config_file_name is not None:

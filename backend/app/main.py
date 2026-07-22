@@ -33,6 +33,11 @@ OPENAPI_TAGS = [
         "description": "Selected/tracked repositories and their ingested pull requests.",
     },
     {
+        "name": "pull-requests",
+        "description": "Deterministic pull request impact analysis (Phase 7) - no AI/LLM "
+        "involved. Requires the pull request's repository to already be indexed.",
+    },
+    {
         "name": "webhooks",
         "description": "Inbound webhook receivers. Signature-verified, not JWT-authenticated.",
     },

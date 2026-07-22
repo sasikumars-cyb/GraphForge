@@ -6,14 +6,18 @@
 backend/app/
   api/            FastAPI routers (versioned: api/v1/)
   services/       Business logic — auth_service, github_service, webhook_service
-  models/         SQLAlchemy ORM models — user, github_connection, repository, pull_request
+  models/         SQLAlchemy ORM models — user, github_connection, repository, pull_request,
+                   indexing_job, pull_request_analysis
   schemas/        Pydantic request/response schemas
   database/       Async engine, session factory, declarative base
   core/           Settings, logging, exceptions/handlers, JWT + password hashing + token encryption
   utils/          Shared stateless helpers — empty until something needs one
-  integrations/   github.py (real GitHub OAuth + repo listing) - Jira still interfaces.py only
+  integrations/   github.py (real GitHub OAuth + repo listing + PR changed-file listing) -
+                   Jira still interfaces.py only
   graph/          Architecture graph domain — Neo4jGraphRepository (real) behind IGraphRepository
-  ai/             AI analysis engine — NOT implemented; interfaces.py only
+  ai/             AI analysis engine — NOT implemented; interfaces.py only (deliberately
+                   distinct from analysis/ below — this is reserved for a future LLM-backed
+                   reasoning engine; nothing in this module is used yet)
   indexer/        Codebase → graph indexing pipeline (Java + Spring Boot only) — real, deterministic
     scanner/        Language detection + git cloning
     parsers/java/    tree-sitter-based Spring Boot parser + pom.xml parser
@@ -21,20 +25,27 @@ backend/app/
     graph/           ArchitectureModel → generic GraphPayload
     services/        Orchestrates clone → parse → build → persist
     workers/         BackgroundTasks entrypoint, tracks IndexingJob status
+  analysis/       Deterministic PR impact analysis (Phase 7) — no AI/LLM; reads the graph
+                   app.indexer/app.graph already built
+    models/          RiskLevel, ImpactedNode, DependencyPath, ImpactAnalysisResult
+    graph/           IImpactGraphReader + Neo4jImpactGraphReader — read-only traversal queries
+    services/        Pure functions: risk classification, dependency-path construction
+    engine/          ImpactAnalysisEngine - orchestrates the full workflow
 ```
 
-Dependency direction: `api` → `services` → (`models`, `schemas`, and the interfaces in `graph`/`ai`/`integrations`). Nothing in `services` imports a concrete class from `graph`, `ai`, or `integrations` directly — only their `interfaces.py` contracts — so a Neo4j-backed graph store, a GitHub client, a Jira client, or an LLM-backed analysis engine can each be added later as a new file in its module with zero change to any service that will depend on it.
+Dependency direction: `api` → `services` → (`models`, `schemas`, and the interfaces in `graph`/`ai`/`integrations`/`analysis`). Nothing in `services` imports a concrete class from `graph`, `ai`, `integrations`, or `analysis`'s Neo4j reader directly — only their `interfaces.py` contracts — so a Neo4j-backed graph store, a GitHub client, a Jira client, or an LLM-backed analysis engine can each be added later as a new file in its module with zero change to any service that will depend on it.
 
 ### Where the future integrations plug in
 
 | Module | Interface | Status |
 |---|---|---|
 | `graph/` | `IGraphRepository` | **Real, working** — `Neo4jGraphRepository` in `graph/neo4j_repository.py` |
-| `ai/` | `IAnalysisEngine` | Not built — future LLM-backed change impact reasoning |
+| `ai/` | `IAnalysisEngine` | Not built — future LLM-backed change impact reasoning (distinct from `analysis/`, which is real and deliberately non-AI) |
 | `integrations/` | `IOAuthProvider` (+ `list_repositories`) | **Real, working** — `GitHubOAuthProvider` in `integrations/github.py` |
-| `integrations/` | `IVersionControlProvider` | Not built — future diff-reading for AI analysis |
+| `integrations/` | `IVersionControlProvider` | **Real (partially)** — `GitHubVersionControlProvider.list_changed_files` is real; `get_diff` (full diff content) remains unimplemented |
 | `integrations/` | `IIssueTrackerProvider` | Not built — future Jira client |
 | `indexer/` | `ILanguageParser` | **Real, working** — `SpringBootJavaParser` (Java + Spring Boot/Maven only); registered in `indexer/parsers/registry.py` as the extension point for future languages |
+| `analysis/` | `IImpactGraphReader` | **Real, working** — `Neo4jImpactGraphReader` in `analysis/graph/neo4j_impact_reader.py` |
 
 ### Authentication
 
@@ -61,6 +72,14 @@ The pipeline itself (`indexer/services/indexing_service.py`): shallow-`git clone
 `GET /repositories/{id}/graph` returns the full graph; `GET .../services` and `GET .../dependencies` filter to `Component`- and `MavenDependency`-labelled nodes respectively. All four endpoints enforce the same repository-ownership check as the existing pull-request endpoints.
 
 See [ADR 0007](../adr/0007-architecture-discovery-engine.md) for the full reasoning — why tree-sitter over JavaParser, the deterministic-only (literal-values-only) parsing philosophy, the Neo4j label/relationship-type allowlist, the node-ID namespacing scheme, and the explicit scope boundaries (Gradle, multi-module Maven, cross-file call graphs, non-literal Kafka topics, and `BackgroundTasks` as a stand-in for a real task queue).
+
+### Pull request impact analysis
+
+Given a pull request (of an already-indexed repository), deterministically works out what its changed files could affect — again, no AI/LLM anywhere in this pipeline. `POST /pull-requests/{id}/analyze` runs synchronously (unlike indexing, this is just Neo4j queries plus one GitHub API call, not a clone-and-parse job) and returns `{risk, directly_impacted_services, indirectly_impacted_services, impacted_apis, impacted_topics, impacted_libraries, dependency_paths}`, persisting the result; `GET .../analysis` reads back whatever was last computed (`404` if nothing has been analyzed yet).
+
+The pipeline (`analysis/engine/impact_analysis_engine.py`): fetch the PR's changed file paths from GitHub (`integrations/github.py`'s `GitHubVersionControlProvider.list_changed_files`) → match them against the indexed graph's `file_path` properties (`analysis/graph/neo4j_impact_reader.py`'s `find_nodes_by_file_paths`) → traverse outward from those nodes via `EXPOSES`/`CALLS` (impacted APIs) and `PRODUCES_TO`/`CONSUMES_FROM` (impacted Kafka topics, and — by matching topic *names* across repositories, since no graph edge crosses a repository boundary — downstream services in *other* indexed repositories too) → classify risk (`analysis/services/risk_classifier.py`) → build human-readable `dependency_paths` explaining each hop (`analysis/services/dependency_path_builder.py`) → persist as a `PullRequestAnalysis` row, replacing any prior analysis for that PR.
+
+See [ADR 0008](../adr/0008-pull-request-impact-analysis.md) for the full reasoning — including the risk-classification tension between "controller changes" and "REST API changes" as originally stated (resolved with the user: Controller/Service changes are MEDIUM, not LOW), the cross-repository Kafka topic-name-matching decision, and the explicit scope boundaries (no diff-content analysis, no cross-repository REST/Feign correlation, no before/after graph diff).
 
 ### Error handling
 
@@ -111,4 +130,5 @@ The Dashboard, Pull Requests, Architecture, and Reports pages still render from 
 - [ADR 0005: Authentication](../adr/0005-authentication.md)
 - [ADR 0006: GitHub integration](../adr/0006-github-integration.md)
 - [ADR 0007: Architecture discovery engine](../adr/0007-architecture-discovery-engine.md)
+- [ADR 0008: Pull request impact analysis](../adr/0008-pull-request-impact-analysis.md)
 - [Setup guide](../setup.md)

@@ -72,17 +72,39 @@ class IOAuthProvider(ABC):
         raise NotImplementedError
 
 
+@dataclass(frozen=True)
+class ChangedFile:
+    """One file changed by a pull request — enough to map it to an indexed
+    graph node by `file_path`, without needing the diff content itself
+    (Phase 7's impact analysis is deterministic and file-based, not a
+    content/AST diff — see ADR 0008)."""
+
+    path: str
+    status: str
+    previous_path: str | None = None
+
+
 class IVersionControlProvider(ABC):
     """Port for fetching repository content and change diffs.
 
-    Future implementation: reading a PR's actual diff for AI analysis (not
-    built yet — this task only connects accounts, lists/selects
-    repositories, and ingests PR *metadata* via webhook, not diff content).
+    `list_changed_files` is real, working (Phase 7 - deterministic impact
+    analysis). `get_diff` (full diff content) remains unimplemented — a
+    future AI-analysis feature, not needed for file-path-level impact
+    mapping.
     """
 
     @abstractmethod
     async def get_diff(self, repository: str, ref: str) -> Any:
         """Return the diff for `ref` within `repository`."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def list_changed_files(
+        self, owner: str, repo: str, pull_number: int, access_token: str | None = None
+    ) -> list[ChangedFile]:
+        """List the files changed by a pull request. `access_token` may be
+        omitted for public repositories (subject to the provider's
+        unauthenticated rate limits)."""
         raise NotImplementedError
 
 

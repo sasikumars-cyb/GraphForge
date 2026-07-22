@@ -173,3 +173,28 @@ You can also inspect the graph directly in Neo4j's browser UI at `http://localho
 ```cypher
 MATCH (n {repository_id: "<repository-id-from-the-API>"}) RETURN n
 ```
+
+## Analyzing a pull request's impact
+
+Given an already-indexed repository's pull request, deterministically works out what its changed files could affect — changed services, downstream services (including other indexed repositories, via shared Kafka topic names), REST APIs, Kafka topics, shared libraries, and a risk level. No AI involved — see [ADR 0008](adr/0008-pull-request-impact-analysis.md) for the full design, including why Controller/Service changes are risk `MEDIUM` rather than `LOW`.
+
+Requires the pull request's repository to already be indexed (`POST /repositories/{id}/index` above) and a `pull_requests` row for it — normally ingested via the GitHub webhook (see "Receiving pull request webhooks" above).
+
+Via Swagger UI, authenticated as the pull request's repository owner:
+
+1. `POST /api/v1/pull-requests/{id}/analyze` — computes a fresh analysis synchronously (no background job — this is just graph queries and one GitHub API call, not a clone/parse pipeline) and persists it, replacing any prior analysis for this PR. Returns `422 repository_not_indexed` if the repository hasn't been indexed yet.
+2. `GET /api/v1/pull-requests/{id}/analysis` — reads back whatever was last computed. `404` if `analyze` hasn't been run yet.
+
+Both return the same shape:
+
+```json
+{
+  "risk": "LOW | MEDIUM | HIGH",
+  "directly_impacted_services": [{"id": "...", "name": "...", "node_type": "...", "repository_id": "..."}],
+  "indirectly_impacted_services": [...],
+  "impacted_apis": [...],
+  "impacted_topics": [...],
+  "impacted_libraries": [...],
+  "dependency_paths": [{"steps": [{"node_id": "...", "node_name": "...", "node_type": "...", "relationship": "..."}]}]
+}
+```

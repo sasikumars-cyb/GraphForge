@@ -13,6 +13,7 @@ from neo4j import AsyncDriver
 
 from app.graph.interfaces import IGraphRepository
 from app.graph.models import GraphEdge, GraphNode, GraphPayload
+from app.graph.neo4j_common import node_from_value
 
 # Every node/relationship type this codebase ever writes. Extend when the
 # indexer's vocabulary grows (see app.indexer.graph.builder) - anything not
@@ -144,15 +145,11 @@ class Neo4jGraphRepository(IGraphRepository):
 
         for record in records:
             source = record["n"]
-            nodes_by_id[source["id"]] = GraphNode(
-                id=source["id"], labels=list(source.labels), properties=dict(source)
-            )
+            nodes_by_id[source["id"]] = node_from_value(source)
             target = record["m"]
             relationship = record["r"]
             if target is not None:
-                nodes_by_id[target["id"]] = GraphNode(
-                    id=target["id"], labels=list(target.labels), properties=dict(target)
-                )
+                nodes_by_id[target["id"]] = node_from_value(target)
             if relationship is not None:
                 edges.append(
                     GraphEdge(
@@ -176,12 +173,7 @@ class Neo4jGraphRepository(IGraphRepository):
             )
             records = [record async for record in result]
 
-        return [
-            GraphNode(
-                id=record["n"]["id"], labels=list(record["n"].labels), properties=dict(record["n"])
-            )
-            for record in records
-        ]
+        return [node_from_value(record["n"]) for record in records]
 
     async def has_graph(self, repository_id: str) -> bool:
         async with self._driver.session() as session:

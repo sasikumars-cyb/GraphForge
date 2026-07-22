@@ -14,8 +14,14 @@ from typing import Any
 
 import httpx
 
-from app.core.exceptions import AppError
-from app.integrations.interfaces import IOAuthProvider, OAuthUserProfile, RepositoryInfo
+from app.core.exceptions import AppError, NotImplementedYetError
+from app.integrations.interfaces import (
+    ChangedFile,
+    IOAuthProvider,
+    IVersionControlProvider,
+    OAuthUserProfile,
+    RepositoryInfo,
+)
 
 _AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 _TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -37,6 +43,30 @@ class GitHubApiError(AppError):
 
     status_code = 502
     error_code = "github_api_error"
+
+
+async def _github_get(
+    path: str,
+    access_token: str | None,
+    params: dict[str, str | int] | None = None,
+) -> Any:
+    """Shared authenticated-GET helper for every GitHub REST call in this
+    module. `access_token` is optional — public repos/resources are
+    readable unauthenticated too, just subject to GitHub's lower
+    unauthenticated rate limit."""
+    headers = dict(_API_HEADERS)
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{_API_BASE}{path}", headers=headers, params=params)
+
+    if response.is_error:
+        raise GitHubApiError(
+            f"GitHub API request to {path} failed with status {response.status_code}: "
+            f"{response.text}"
+        )
+    return response.json()
 
 
 class GitHubOAuthProvider(IOAuthProvider):
@@ -80,7 +110,7 @@ class GitHubOAuthProvider(IOAuthProvider):
         return str(access_token)
 
     async def fetch_user_profile(self, access_token: str) -> OAuthUserProfile:
-        data = await self._get("/user", access_token)
+        data = await _github_get("/user", access_token)
         return OAuthUserProfile(
             provider_user_id=str(data["id"]),
             email=data.get("email"),
@@ -92,7 +122,7 @@ class GitHubOAuthProvider(IOAuthProvider):
         )
 
     async def list_repositories(self, access_token: str) -> list[RepositoryInfo]:
-        data = await self._get(
+        data = await _github_get(
             "/user/repos",
             access_token,
             params={"per_page": 100, "sort": "updated", "affiliation": "owner,collaborator"},
@@ -110,22 +140,36 @@ class GitHubOAuthProvider(IOAuthProvider):
             for repo in data
         ]
 
-    async def _get(
-        self,
-        path: str,
-        access_token: str,
-        params: dict[str, str | int] | None = None,
-    ) -> Any:
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{_API_BASE}{path}",
-                headers={**_API_HEADERS, "Authorization": f"Bearer {access_token}"},
-                params=params,
-            )
 
-        if response.is_error:
-            raise GitHubApiError(
-                f"GitHub API request to {path} failed with status {response.status_code}: "
-                f"{response.text}"
+class GitHubVersionControlProvider(IVersionControlProvider):
+    """A real, working `IVersionControlProvider` — used by Phase 7's
+    deterministic impact analysis to read a pull request's changed file
+    paths. Stateless: unlike `GitHubOAuthProvider`, it needs no OAuth App
+    credentials, just a per-call (optional) access token.
+    """
+
+    async def get_diff(self, repository: str, ref: str) -> Any:
+        raise NotImplementedYetError(
+            "Reading full diff content is not implemented yet - impact analysis "
+            "only needs changed file paths (see list_changed_files)."
+        )
+
+    async def list_changed_files(
+        self, owner: str, repo: str, pull_number: int, access_token: str | None = None
+    ) -> list[ChangedFile]:
+        # A single page (up to 100 files) - matches this codebase's existing
+        # list_repositories precedent of not exhaustively paginating GitHub
+        # list endpoints. See ADR 0008 for the documented limitation.
+        data = await _github_get(
+            f"/repos/{owner}/{repo}/pulls/{pull_number}/files",
+            access_token,
+            params={"per_page": 100},
+        )
+        return [
+            ChangedFile(
+                path=item["filename"],
+                status=item["status"],
+                previous_path=item.get("previous_filename"),
             )
-        return response.json()
+            for item in data
+        ]
