@@ -19,7 +19,11 @@ export function Card({ title, description, action, children, className = "" }: C
       {hasHeader && (
         <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4">
           <div>
-            {title && <h2 className="text-sm font-semibold text-slate-100">{title}</h2>}
+            {title && (
+              <h2 className="font-display text-sm font-semibold tracking-tight text-slate-100">
+                {title}
+              </h2>
+            )}
             {description && <p className="mt-0.5 text-xs text-slate-400">{description}</p>}
           </div>
           {action}

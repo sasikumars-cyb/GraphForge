@@ -95,9 +95,11 @@ export function DashboardPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-xl font-semibold text-slate-50">GraphForge</h2>
-        <p className="mt-1 text-sm text-slate-400">
-          AI Engineering Intelligence — every claim grounded in your Knowledge Graph, every decision
+        <h2 className="text-2xl font-bold tracking-tight text-slate-50">
+          Welcome back to <span className="text-brand-400">GraphForge</span>
+        </h2>
+        <p className="mt-1.5 max-w-2xl text-sm text-slate-400">
+          AI engineering intelligence — every claim grounded in your Knowledge Graph, every decision
           backed by evidence.
         </p>
       </div>

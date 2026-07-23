@@ -1,1 +1,38 @@
 @import "tailwindcss";
+
+@theme {
+  /* Typography — Sora for headings (geometric, technical), Plus Jakarta
+     Sans for body/UI text, JetBrains Mono for run IDs/confidence
+     scores/JSON so data reads as data. */
+  --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Sora", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Brand accent — matches the existing favicon mark's violet-to-blue
+     identity (previously unused anywhere in the app itself). */
+  --color-brand-50: #f5f0ff;
+  --color-brand-100: #ebe0ff;
+  --color-brand-200: #d9c2ff;
+  --color-brand-300: #bd94ff;
+  --color-brand-400: #9d5fff;
+  --color-brand-500: #8425ff;
+  --color-brand-600: #7114f0;
+  --color-brand-700: #5f0fd1;
+  --color-brand-800: #4d0ea8;
+  --color-brand-900: #3f0f85;
+  --color-brand-950: #26075a;
+  --color-brand-glow: #47bfff;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+}

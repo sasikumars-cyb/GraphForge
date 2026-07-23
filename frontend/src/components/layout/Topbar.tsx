@@ -24,7 +24,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
         >
           <Menu className="h-5 w-5" />
         </button>
-        <h1 className="text-base font-semibold text-slate-100">
+        <h1 className="font-display text-base font-semibold tracking-tight text-slate-100">
           {currentItem?.label ?? "GraphForge"}
         </h1>
       </div>

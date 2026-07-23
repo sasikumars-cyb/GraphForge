@@ -1,6 +1,7 @@
 import { NavLink } from "react-router-dom";
-import { ShieldCheck, X, LogOut } from "lucide-react";
+import { X, LogOut } from "lucide-react";
 import { NAV_ITEMS } from "./nav-items";
+import { Logomark } from "./Logomark";
 import { useAuth } from "../../app/auth-context";
 
 interface SidebarProps {
@@ -28,9 +29,11 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         }`}
       >
         <div className="flex items-center justify-between px-5 py-5">
-          <div className="flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-sky-400" aria-hidden="true" />
-            <span className="text-sm font-semibold tracking-wide text-slate-100">GraphForge</span>
+          <div className="flex items-center gap-2.5">
+            <Logomark className="h-8 w-8 shrink-0" />
+            <span className="font-display text-base font-bold tracking-tight text-slate-50">
+              GraphForge
+            </span>
           </div>
           <button
             type="button"
@@ -50,9 +53,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               end={item.path === "/"}
               onClick={onClose}
               className={({ isActive }) =>
-                `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                `relative flex items-center gap-3 rounded-lg py-2 pl-3 pr-3 text-sm font-medium transition-colors ${
                   isActive
-                    ? "bg-sky-500/10 text-sky-300"
+                    ? "bg-brand-500/10 text-brand-200 before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-brand-400"
                     : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
                 }`
               }
