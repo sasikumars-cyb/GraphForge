@@ -45,7 +45,11 @@ export function WorkflowTimeline({ stages, currentStage }: WorkflowTimelineProps
             <div className="flex flex-col items-center gap-1.5">
               <div
                 className={`flex h-9 w-9 items-center justify-center rounded-full ring-2 ring-inset ${config.bgColor} ${
-                  isActive ? "ring-sky-400" : stage.status === "completed" ? "ring-emerald-500/40" : "ring-slate-700"
+                  isActive
+                    ? "ring-sky-400"
+                    : stage.status === "completed"
+                      ? "ring-emerald-500/40"
+                      : "ring-slate-700"
                 }`}
               >
                 <Icon
@@ -55,7 +59,11 @@ export function WorkflowTimeline({ stages, currentStage }: WorkflowTimelineProps
               </div>
               <span
                 className={`text-xs font-medium ${
-                  isActive ? "text-sky-300" : stage.status === "completed" ? "text-emerald-300" : "text-slate-500"
+                  isActive
+                    ? "text-sky-300"
+                    : stage.status === "completed"
+                      ? "text-emerald-300"
+                      : "text-slate-500"
                 }`}
               >
                 {stage.label}

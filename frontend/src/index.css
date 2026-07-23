@@ -36,3 +36,33 @@
     text-wrap: balance;
   }
 }
+
+/* Running-stage progress shimmer in the Workflow pipeline graph. */
+@keyframes pipeline-shimmer {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(300%);
+  }
+}
+
+/* Activity-feed lines fading/sliding in as evidence "arrives". */
+@keyframes activity-in {
+  from {
+    opacity: 0;
+    transform: translateX(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
