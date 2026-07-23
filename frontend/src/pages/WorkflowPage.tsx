@@ -77,8 +77,9 @@ export function WorkflowPage() {
     try {
       const detail = await getAgentRun(token, runId);
       setSelectedRun(detail);
-    } catch {
-      // ignore
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load run detail.");
     }
   };
 
@@ -93,7 +94,10 @@ export function WorkflowPage() {
   if (error && !workflow) {
     return (
       <div className="flex flex-col gap-6">
-        <Link to="/" className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200">
+        <Link
+          to="/"
+          className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
+        >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           Back to dashboard
         </Link>
@@ -126,7 +130,8 @@ export function WorkflowPage() {
           <div>
             <h2 className="text-xl font-semibold text-slate-50">{workflow.title}</h2>
             <p className="text-sm text-slate-400">
-              SDLC Workflow • {workflow.status === "completed" ? "Complete" : `Stage: ${workflow.current_stage}`}
+              SDLC Workflow •{" "}
+              {workflow.status === "completed" ? "Complete" : `Stage: ${workflow.current_stage}`}
             </p>
           </div>
         </div>
@@ -194,7 +199,9 @@ export function WorkflowPage() {
             {step.result && Object.keys(step.result).length > 0 && (
               <>
                 {step.result.executive_summary && (
-                  <p className="text-sm text-slate-200 mb-3">{step.result.executive_summary as string}</p>
+                  <p className="text-sm text-slate-200 mb-3">
+                    {step.result.executive_summary as string}
+                  </p>
                 )}
                 <details className="group">
                   <summary className="cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-200">

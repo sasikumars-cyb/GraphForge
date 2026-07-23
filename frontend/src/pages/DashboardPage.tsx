@@ -16,7 +16,15 @@ import {
 import { useAuth } from "../app/auth-context";
 import { listWorkflows } from "../lib/api/workflows";
 import type { WorkflowListItem } from "../types/agent";
-import { LayoutDashboard, FolderGit2, GitPullRequest, Clock, Lightbulb, Search, GitMerge } from "lucide-react";
+import {
+  LayoutDashboard,
+  FolderGit2,
+  GitPullRequest,
+  Clock,
+  Lightbulb,
+  Search,
+  GitMerge,
+} from "lucide-react";
 
 const recentPullRequestColumns: TableColumn<DashboardPullRequestRow>[] = [
   {
@@ -73,12 +81,15 @@ export function DashboardPage() {
   const { stats, recentPullRequests, repositories, isLoading, error } = useDashboardData();
   const { token } = useAuth();
   const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
+  const [workflowsError, setWorkflowsError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!token) return;
     listWorkflows(token, { page_size: 5 })
       .then((res) => setWorkflows(res.items))
-      .catch(() => {});
+      .catch((err) => {
+        setWorkflowsError(err instanceof Error ? err.message : "Failed to load active workflows.");
+      });
   }, [token]);
 
   return (
@@ -86,7 +97,8 @@ export function DashboardPage() {
       <div>
         <h2 className="text-xl font-semibold text-slate-50">GraphForge</h2>
         <p className="mt-1 text-sm text-slate-400">
-          AI Engineering Intelligence — every claim grounded in your Knowledge Graph, every decision backed by evidence.
+          AI Engineering Intelligence — every claim grounded in your Knowledge Graph, every decision
+          backed by evidence.
         </p>
       </div>
 
@@ -97,6 +109,11 @@ export function DashboardPage() {
       )}
 
       {/* Active Workflows */}
+      {workflowsError && (
+        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          {workflowsError}
+        </div>
+      )}
       {workflows.length > 0 && (
         <Card
           title="Active SDLC Workflows"
@@ -146,7 +163,8 @@ export function DashboardPage() {
               SDLC Workflow
             </h3>
             <p className="mt-1 text-xs text-slate-400">
-              Start a guided engineering lifecycle. Planning → Development → Testing → Review — each phase feeds the next.
+              Start a guided engineering lifecycle. Planning → Development → Testing → Review — each
+              phase feeds the next.
             </p>
           </div>
         </Link>

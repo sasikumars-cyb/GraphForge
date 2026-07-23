@@ -12,13 +12,16 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_user
 from app.context.resolvers.freetext import resolve as resolve_freetext
 from app.core.exceptions import AppError, NotFoundError
 from app.database.session import get_db_session
+from app.models.run import Run
 from app.models.user import User
+from app.models.workflow import Workflow
 from app.orchestrator.registry import global_registry
 from app.orchestrator.selector import AgentSelector
 from app.services import workflow_service
@@ -105,36 +108,76 @@ def _iso(dt: object) -> str | None:
     return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
 
 
-def _build_stages(workflow) -> list[WorkflowStageResponse]:
+def _build_stages(workflow: Workflow) -> list[WorkflowStageResponse]:
     """Build the stage list from a workflow and its runs."""
     # Map stage → run
-    stage_runs: dict[str, object] = {}
+    stage_runs: dict[str, Run] = {}
     for run in (workflow.runs or []):
         if run.workflow_stage:
             stage_runs[run.workflow_stage] = run
 
     stages = []
     for stage in workflow_service.STAGES:
-        run = stage_runs.get(stage)
-        if run is not None:
-            stage_status = run.status  # completed/running/failed
-        elif stage == workflow.current_stage and workflow.status == "in_progress":
-            stage_status = "pending"
-        elif workflow_service.STAGES.index(stage) < workflow_service.STAGES.index(workflow.current_stage) if workflow.current_stage in workflow_service.STAGES else False:
-            stage_status = "pending"
-        else:
-            stage_status = "pending"
+        matched_run = stage_runs.get(stage)
+        # Any stage without a Run is simply "pending" — whether it's the
+        # current stage awaiting its first attempt, a future stage not yet
+        # reached, or (post-linkage-fix) a stage whose failed attempt was
+        # correctly linked and will show up via `matched_run.status` instead.
+        stage_status = matched_run.status if matched_run is not None else "pending"
 
         stages.append(WorkflowStageResponse(
             stage=stage,
             label=workflow_service.STAGE_LABELS[stage],
             status=stage_status,
-            run_id=str(run.id) if run is not None else None,
+            run_id=str(matched_run.id) if matched_run is not None else None,
         ))
     return stages
 
 
-def _build_run_responses(workflow) -> list[WorkflowRunResponse]:
+async def _link_failed_run(
+    db: AsyncSession,
+    workflow: Workflow,
+    subject_id: str,
+    goal: str,
+    stage: str,
+) -> None:
+    """Link an orphaned failed Run back to its workflow.
+
+    RunCoordinator.execute() always creates and commits a Run row before
+    raising on any failure path (selector, registry, or agent error) — but
+    it has no notion of "workflow" and never sets workflow_id/workflow_stage
+    itself. Without this, a failed stage run is invisible in the workflow's
+    stage/run list: the stage looks like it was never attempted, even though
+    it consumed a real run. Called from the `except` block of both endpoints
+    below, after the original exception has already propagated past
+    RunCoordinator (so the failed Run is guaranteed to exist and be committed).
+
+    `workflow` here is the same Python object `continue_workflow`/
+    `create_workflow` already loaded (with `.runs` eagerly populated
+    *before* this failed run existed) — setting the FK column on the Run
+    row alone doesn't retroactively add it to that already-loaded
+    in-memory collection, so callers reading `workflow.runs` right after
+    this (including a subsequent request that reuses the same
+    identity-mapped object) would still see it as missing. Appending it
+    explicitly keeps that collection consistent with what's now in Postgres.
+    """
+    result = await db.execute(
+        select(Run)
+        .where(Run.subject_id == subject_id, Run.goal == goal, Run.status == "failed")
+        .order_by(Run.created_at.desc())
+        .limit(1)
+    )
+    failed_run = result.scalar_one_or_none()
+    if failed_run is None:
+        return
+    failed_run.workflow_id = workflow.id
+    failed_run.workflow_stage = stage
+    await db.commit()
+    if failed_run not in workflow.runs:
+        workflow.runs.append(failed_run)
+
+
+def _build_run_responses(workflow: Workflow) -> list[WorkflowRunResponse]:
     items = []
     for run in sorted(workflow.runs or [], key=lambda r: r.created_at):
         best_confidence = None
@@ -183,10 +226,13 @@ async def create_workflow(
     try:
         run = await coordinator.execute(subject=subject, goal=goal, model=body.model)
     except NotFoundError:
+        await _link_failed_run(db, workflow, subject.subject_id, goal, stage)
         raise
     except AppError:
+        await _link_failed_run(db, workflow, subject.subject_id, goal, stage)
         raise
     except Exception as exc:
+        await _link_failed_run(db, workflow, subject.subject_id, goal, stage)
         raise AppError(
             f"Workflow stage execution failed: {exc}",
             status_code=500,
@@ -335,10 +381,13 @@ async def continue_workflow(
     try:
         run = await coordinator.execute(subject=subject, goal=goal, model=body.model)
     except NotFoundError:
+        await _link_failed_run(db, workflow, subject.subject_id, goal, target_stage)
         raise
     except AppError:
+        await _link_failed_run(db, workflow, subject.subject_id, goal, target_stage)
         raise
     except Exception as exc:
+        await _link_failed_run(db, workflow, subject.subject_id, goal, target_stage)
         raise AppError(
             f"Workflow stage execution failed: {exc}",
             status_code=500,

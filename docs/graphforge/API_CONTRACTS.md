@@ -5,6 +5,14 @@ routers this way). This document adds new resource groups; it does not change ex
 for `/auth`, `/github`, `/repositories`, `/pull-requests/*` (see current OpenAPI schema for those
 — unchanged by GraphForge).
 
+> **Implementation status**: this document was written as a design spec before the Agent
+> Orchestrator was built. **`## Agent Orchestrator API` is shipped** (`app/api/v1/routers/
+> agent_runs.py`, `app/api/v1/routers/workflows.py`) — see that section for the corrected,
+> as-built contract. **`## Knowledge Graph API`, `## Subject / Context API`, and
+> `## Project API`, below, are NOT implemented** — no `/knowledge-graph`, `/subjects`, or
+> `/projects` router exists in the codebase. They're kept here as forward-looking design
+> notes, not a reference for existing endpoints — do not build against them as-is.
+
 ## Naming Standards
 
 - Resource paths: plural, kebab-case (`/pull-requests`, `/knowledge-graph`, `/agent-runs`) —
@@ -44,11 +52,13 @@ single organization's dataset.
 
 ## Filtering
 
-Query-param filtering, closed vocabularies only:
+Query-param filtering, closed vocabularies only. As-built, `GET /api/v1/agent-runs` accepts
+`goal`, `status`, `subject_type`, and `subject_id` (there is no separate `agent_id` filter — a
+Run doesn't carry one directly; filter by `goal`, which determines the agent, instead):
 
 ```
-GET /api/v1/agent-runs?agent_id=review&status=completed&subject_type=pull_request
-GET /api/v1/knowledge-graph/nodes?node_type=Component&repository_id=<uuid>
+GET /api/v1/agent-runs?goal=review_pr&status=completed&subject_type=pull_request
+GET /api/v1/agent-runs?subject_id=pr:a1b2c3d4
 ```
 
 ## Versioning
@@ -169,10 +179,13 @@ Response (`202 Accepted` — run is async):
 {
   "run_id": "run-uuid",
   "status": "queued",
-  "subject": { "subject_id": "pr:a1b2c3d4", "subject_type": "pull_request", "...": "..." },
-  "agents_selected": ["review"]
+  "subject": { "subject_id": "pr:a1b2c3d4", "subject_type": "pull_request", "display_name": "..." },
+  "goal": "review_pr"
 }
 ```
+
+(as-built `CreateRunResponse` does not include an `agents_selected` list — a run always
+maps to exactly one agent via `goal`, so the response echoes `goal` instead.)
 
 ```
 GET /api/v1/agent-runs/{run_id}
@@ -205,8 +218,23 @@ the Orchestrator API is a run-tracking layer over existing domain APIs, not a re
 
 ```
 GET /api/v1/agent-runs?subject_id=pr:a1b2c3d4        # paginated, filterable — see Filtering
-GET /api/v1/agents                                     # list AgentManifests (id, purpose, goals handled)
+GET /api/v1/agent-runs/agents/manifests                # list AgentManifests (id, purpose, goals handled)
 ```
+
+Also shipped, sequencing several agent runs into one SDLC lifecycle (not part of the original
+design above — added afterwards, documented here rather than left drifting):
+
+```
+POST /api/v1/workflows                       # create a Workflow, run the planning stage
+GET  /api/v1/workflows                       # list workflows (paginated)
+GET  /api/v1/workflows/{workflow_id}         # workflow detail: stages + linked runs
+POST /api/v1/workflows/{workflow_id}/continue  # run the next stage (development → testing → review)
+```
+
+A `Workflow` groups a fixed, linear sequence of `Run`s (`planning → development → testing →
+review`, `app/services/workflow_service.py:STAGES`) — each stage's context is the original
+request plus a plain-text summary of every prior completed stage's output
+(`workflow_service.build_stage_context()`), not a structured/typed handoff.
 
 `POST /pull-requests/{id}/ai-analysis`, `.../investigate`, and `.../publish-review` (existing,
 unchanged) remain the direct, single-agent entry points for the Review agent specifically — they
@@ -214,7 +242,12 @@ become thin wrappers that internally call the same Orchestrator path with `goal=
 pinned to the Review agent, preserving existing frontend contracts while gaining run tracking for
 free.
 
-## Project API (Jira/Confluence-resolved work items)
+## Project API (Jira/Confluence-resolved work items) — NOT IMPLEMENTED
+
+Design-only. Depends on Jira/Confluence integration and on `requirement`/`architecture`/`release`
+stages that don't exist in the shipped `Workflow` (see Agent Orchestrator API above, whose real
+`STAGES` tuple is `planning, development, testing, review`). Nothing under `/api/v1/projects`
+exists in the codebase today.
 
 ```
 GET /api/v1/projects/{subject_id}          # a Story/Epic Subject with its resolved graph links

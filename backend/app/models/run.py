@@ -26,8 +26,10 @@ class Run(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
 
-    # Resolved subject fields — mirrors the Subject DTO from _contract.py
-    subject_id: Mapped[str] = mapped_column(String(512), nullable=False)
+    # Resolved subject fields — mirrors the Subject DTO from _contract.py.
+    # Indexed: GET /api/v1/agent-runs?subject_id=... is a documented,
+    # real filter (e.g. "all runs for this PR/workflow subject").
+    subject_id: Mapped[str] = mapped_column(String(512), nullable=False, index=True)
     subject_type: Mapped[str] = mapped_column(String(64), nullable=False)
     display_name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
 

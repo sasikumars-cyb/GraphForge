@@ -4,10 +4,11 @@ This is the inter-agent execution layer on top of each agent's own
 intra-agent Plan/Select/Execute/Observe/Decide loop. Phase 1 is
 sequential (one agent per run); Phase 2 adds parallel execution.
 
-RunContext is a plain dict attribute on RunCoordinator (not a separate
-module) — a single-process, in-memory, one-run-at-a-time hackathon build
-gets zero benefit from a dedicated module. Redis-backing is required
-before any multi-process deployment (see ARCHITECTURE.md addendum).
+Cross-stage context (e.g. the Workflow API chaining Planning → Development
+→ Testing → Review) is built by reading each stage's persisted Run/AgentStep
+rows back out of Postgres (see app/services/workflow_service.py), not via
+any in-memory state on this class — RunCoordinator itself is stateless
+across calls beyond the single (subject, goal) it's given.
 """
 
 from __future__ import annotations
@@ -32,12 +33,6 @@ from app.orchestrator.selector import AgentSelector
 class RunCoordinator:
     """Executes the agent selected for (subject, goal) and persists the
     outcome as a Run + AgentStep pair in Postgres.
-
-    RunContext is a plain dict scoped to this coordinator instance —
-    agents within a sequential chain can write draft outputs here and the
-    next agent can read them, without a round-trip through the graph.
-    On completion everything durable is written to Postgres; RunContext
-    is discarded with the instance.
     """
 
     def __init__(
@@ -49,8 +44,6 @@ class RunCoordinator:
         self._db = db
         self._registry = registry
         self._selector = selector
-        # In-memory scratch space scoped to this coordinator instance.
-        self._run_context: dict[str, object] = {}
 
     async def execute(
         self,
@@ -145,9 +138,6 @@ class RunCoordinator:
 
         run.status = "completed"
         run.completed_at = now
-
-        # Store output in RunContext for any downstream agent in a chain
-        self._run_context[agent_id] = output
 
         await self._db.commit()
 

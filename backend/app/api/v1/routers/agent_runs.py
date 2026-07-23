@@ -68,7 +68,7 @@ class StepResponse(BaseModel):
     status: str
     confidence: ConfidenceResponse
     evidence: list[EvidenceResponse]
-    result: dict
+    result: dict[str, object]
     prompt_version: str
     output_ref: str | None
     error_message: str | None
@@ -280,6 +280,7 @@ async def list_runs(
     goal: str | None = None,
     status: str | None = None,
     subject_type: str | None = None,
+    subject_id: str | None = None,
 ) -> RunListResponse:
     """List agent runs with pagination and optional filtering."""
     query = select(Run)
@@ -294,6 +295,9 @@ async def list_runs(
     if subject_type:
         query = query.where(Run.subject_type == subject_type)
         count_query = count_query.where(Run.subject_type == subject_type)
+    if subject_id:
+        query = query.where(Run.subject_id == subject_id)
+        count_query = count_query.where(Run.subject_id == subject_id)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
