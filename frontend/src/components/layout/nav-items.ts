@@ -6,6 +6,7 @@ import {
   FileBarChart,
   Settings,
   Lightbulb,
+  Code2,
   Search,
   History,
   type LucideIcon,
@@ -21,6 +22,7 @@ export interface NavItem {
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", path: "/", icon: LayoutDashboard },
   { label: "Planning", path: "/planning", icon: Lightbulb },
+  { label: "Development", path: "/development", icon: Code2 },
   { label: "Review", path: "/review", icon: Search },
   { label: "Run History", path: "/runs", icon: History },
   { label: "Pull Requests", path: "/pull-requests", icon: GitPullRequest },

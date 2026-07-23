@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 
+from app.agents.development.agent import DevelopmentAgent
+from app.agents.development.manifest import DEVELOPMENT_MANIFEST
 from app.agents.planning.agent import PlanningAgent
 
 logger = logging.getLogger(__name__)
@@ -36,3 +38,7 @@ def register_agents() -> None:
     if "planning" not in existing_ids:
         global_registry.register(PLANNING_MANIFEST, PlanningAgent())
         logger.info("registered_planning_agent")
+
+    if "development" not in existing_ids:
+        global_registry.register(DEVELOPMENT_MANIFEST, DevelopmentAgent())
+        logger.info("registered_development_agent")

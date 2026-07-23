@@ -113,3 +113,62 @@ export interface PlanningResult {
   graph_context_used: boolean;
   repositories_consulted?: string[];
 }
+
+// --- Development Plan Result (agent-specific payload inside step.result) ---
+
+export interface AffectedRepository {
+  name: string;
+  owner: string;
+  reason: string;
+}
+
+export interface AffectedComponent {
+  name: string;
+  component_type: string;
+  repository: string;
+  file_path: string;
+  change_description: string;
+}
+
+export interface PlanDependency {
+  source: string;
+  target: string;
+  relationship: string;
+  risk_note: string;
+}
+
+export interface ReusableImplementation {
+  name: string;
+  repository: string;
+  reason: string;
+}
+
+export interface ImplementationPhase {
+  order: number;
+  title: string;
+  description: string;
+  affected_components: string[];
+  estimated_complexity: string;
+  depends_on_phases: number[];
+}
+
+export interface PlanRisk {
+  description: string;
+  severity: string;
+  affected_component: string;
+  mitigation: string;
+}
+
+export interface DevelopmentPlanResult {
+  goal: string;
+  executive_summary: string;
+  repositories: AffectedRepository[];
+  components: AffectedComponent[];
+  dependencies: PlanDependency[];
+  reusable_implementations: ReusableImplementation[];
+  implementation_phases: ImplementationPhase[];
+  risks: PlanRisk[];
+  recommendations: string[];
+  graph_context_used: boolean;
+  repositories_consulted?: string[];
+}
