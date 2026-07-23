@@ -23,19 +23,24 @@ export function useRunHistory(params: ListRunsParams = {}): UseRunHistoryReturn 
   const [error, setError] = useState<string | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
 
+  // Stabilize filter values to avoid recreating the callback on every render
+  const goal = params.goal;
+  const filterStatus = params.status;
+  const subjectType = params.subject_type;
+
   const fetchRuns = useCallback(async () => {
     if (!token) return;
     setIsLoading(true);
     setError(null);
     try {
-      const result = await listAgentRuns(token, { ...params, page });
+      const result = await listAgentRuns(token, { goal, status: filterStatus, subject_type: subjectType, page });
       setData(result);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load run history.");
     } finally {
       setIsLoading(false);
     }
-  }, [token, page, params.goal, params.status, params.subject_type, refreshKey]);
+  }, [token, page, goal, filterStatus, subjectType, refreshKey]);
 
   useEffect(() => {
     fetchRuns();

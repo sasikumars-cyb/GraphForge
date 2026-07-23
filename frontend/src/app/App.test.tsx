@@ -112,7 +112,7 @@ describe("App navigation (authenticated)", () => {
     renderApp();
     // Both the Topbar (h1) and the page itself (h2) show the label, so
     // assert on the page-level heading specifically.
-    expect(await screen.findByRole("heading", { level: 2, name: "Dashboard" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 2, name: "GraphForge" })).toBeInTheDocument();
   });
 
   it("navigates to Pull Requests when its sidebar link is clicked", async () => {

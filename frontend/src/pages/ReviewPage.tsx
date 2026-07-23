@@ -51,7 +51,7 @@ export function ReviewPage() {
           <div>
             <h2 className="text-xl font-semibold text-slate-50">Review Pull Request</h2>
             <p className="text-sm text-slate-400">
-              Submit a GitHub PR for AI-powered change impact analysis with evidence-backed findings.
+              Submit a GitHub PR for AI-powered change impact analysis. Every finding is grounded in graph traversals — zero hallucination.
             </p>
           </div>
         </div>

@@ -37,14 +37,14 @@ function isFailed(ev: Evidence): boolean {
 export function EvidencePanel({ evidence }: EvidencePanelProps) {
   if (evidence.length === 0) {
     return (
-      <Card title="Evidence">
-        <p className="text-sm text-slate-500">No evidence recorded for this run.</p>
+      <Card title="Evidence Trail">
+        <p className="text-sm text-slate-500">No evidence was collected for this run. Evidence items show the graph traversals, tool calls, and reasoning that produced the result.</p>
       </Card>
     );
   }
 
   return (
-    <Card title="Evidence" description={`${evidence.length} item${evidence.length === 1 ? "" : "s"}`}>
+    <Card title="Evidence Trail" description={`${evidence.length} verifiable item${evidence.length === 1 ? "" : "s"} — every claim is traceable`}>
       <ul className="space-y-3" role="list" aria-label="Evidence items">
         {evidence.map((ev, i) => {
           const config = KIND_CONFIG[ev.kind] ?? KIND_CONFIG.tool_call;

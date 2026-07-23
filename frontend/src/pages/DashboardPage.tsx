@@ -70,9 +70,9 @@ export function DashboardPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-xl font-semibold text-slate-50">Dashboard</h2>
+        <h2 className="text-xl font-semibold text-slate-50">GraphForge</h2>
         <p className="mt-1 text-sm text-slate-400">
-          An overview of monitored repositories and their most recent analyzed changes.
+          AI Engineering Intelligence — every claim grounded in your Knowledge Graph, every decision backed by evidence.
         </p>
       </div>
 
@@ -86,7 +86,7 @@ export function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <Link
           to="/planning"
-          className="group flex items-start gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-6 shadow-sm shadow-black/20 transition-colors hover:border-sky-500/40 hover:bg-slate-900/80"
+          className="group flex items-start gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-6 shadow-sm shadow-black/20 transition-colors hover:border-sky-500/40 hover:bg-slate-900/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
           aria-label="Planning Assistant"
         >
           <div className="rounded-lg bg-sky-500/10 p-3 ring-1 ring-inset ring-sky-500/30">
@@ -98,14 +98,14 @@ export function DashboardPage() {
             </h3>
             <p className="mt-1 text-xs text-slate-400">
               Describe an engineering task and get an AI-generated implementation plan grounded in
-              your architecture graph.
+              your architecture graph. Every recommendation comes with verifiable evidence.
             </p>
           </div>
         </Link>
 
         <Link
           to="/review"
-          className="group flex items-start gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-6 shadow-sm shadow-black/20 transition-colors hover:border-emerald-500/40 hover:bg-slate-900/80"
+          className="group flex items-start gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-6 shadow-sm shadow-black/20 transition-colors hover:border-emerald-500/40 hover:bg-slate-900/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
           aria-label="Review Pull Request"
         >
           <div className="rounded-lg bg-emerald-500/10 p-3 ring-1 ring-inset ring-emerald-500/30">
@@ -116,8 +116,8 @@ export function DashboardPage() {
               Review Pull Request
             </h3>
             <p className="mt-1 text-xs text-slate-400">
-              Submit a GitHub PR URL for AI-powered change impact analysis with evidence-backed
-              findings.
+              Submit a GitHub PR URL for AI-powered change impact analysis. Get breaking changes,
+              blast radius, and reviewers — all backed by graph evidence, never hallucinated.
             </p>
           </div>
         </Link>

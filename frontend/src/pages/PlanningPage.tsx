@@ -48,7 +48,7 @@ export function PlanningPage() {
           <div>
             <h2 className="text-xl font-semibold text-slate-50">Planning Assistant</h2>
             <p className="text-sm text-slate-400">
-              Describe an engineering task to get an implementation plan grounded in your architecture graph.
+              Describe an engineering task. GraphForge queries your architecture graph and produces a plan backed by verifiable evidence — not hallucination.
             </p>
           </div>
         </div>
@@ -162,7 +162,7 @@ function PlanningResultView({ run, onNewPlan }: { run: NonNullable<ReturnType<ty
         <div className="flex items-center gap-3">
           <RunStatusBadge status={run.status} />
           {step?.confidence && (
-            <ConfidenceBadge confidence={step.confidence} />
+            <ConfidenceBadge confidence={step.confidence} showReasoning />
           )}
         </div>
         <button

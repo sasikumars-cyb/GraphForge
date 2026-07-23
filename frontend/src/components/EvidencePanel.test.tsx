@@ -23,12 +23,12 @@ describe("EvidencePanel", () => {
 
   it("shows evidence count", () => {
     render(<EvidencePanel evidence={sampleEvidence} />);
-    expect(screen.getByText("3 items")).toBeInTheDocument();
+    expect(screen.getByText(/3 verifiable item/)).toBeInTheDocument();
   });
 
   it("renders empty state", () => {
     render(<EvidencePanel evidence={[]} />);
-    expect(screen.getByText("No evidence recorded for this run.")).toBeInTheDocument();
+    expect(screen.getByText(/No evidence was collected/)).toBeInTheDocument();
   });
 
   it("renders failed evidence with distinct styling", () => {
