@@ -22,7 +22,8 @@ from app.models.pull_request_ai_analysis import PullRequestAIAnalysis  # noqa: F
 from app.models.pull_request_analysis import PullRequestAnalysis  # noqa: F401
 from app.models.repository import Repository  # noqa: F401
 from app.models.run import Run  # noqa: F401
-from app.models.user import User  # noqa: F401 - all nine register with Base.metadata
+from app.models.user import User  # noqa: F401
+from app.models.workflow import Workflow  # noqa: F401 - all ten register with Base.metadata
 
 config = context.config
 if config.config_file_name is not None:

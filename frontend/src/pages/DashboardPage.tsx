@@ -1,9 +1,11 @@
 import { Link } from "react-router-dom";
+import { useEffect, useState } from "react";
 import { StatCard } from "../components/StatCard";
 import { Card } from "../components/Card";
 import { Table, type TableColumn } from "../components/Table";
 import { RiskBadge } from "../components/RiskBadge";
 import { StatusBadge } from "../components/StatusBadge";
+import { WorkflowTimeline } from "../components/workflow/WorkflowTimeline";
 import { repositoryHealthPresentation } from "../lib/statusPresentation";
 import { formatRelativeTime } from "../lib/formatDate";
 import {
@@ -11,7 +13,10 @@ import {
   type DashboardPullRequestRow,
   type DashboardRepositoryRow,
 } from "../hooks/useDashboardData";
-import { LayoutDashboard, FolderGit2, GitPullRequest, Clock, Lightbulb, Search } from "lucide-react";
+import { useAuth } from "../app/auth-context";
+import { listWorkflows } from "../lib/api/workflows";
+import type { WorkflowListItem } from "../types/agent";
+import { LayoutDashboard, FolderGit2, GitPullRequest, Clock, Lightbulb, Search, GitMerge } from "lucide-react";
 
 const recentPullRequestColumns: TableColumn<DashboardPullRequestRow>[] = [
   {
@@ -66,6 +71,15 @@ const repositoryColumns: TableColumn<DashboardRepositoryRow>[] = [
 
 export function DashboardPage() {
   const { stats, recentPullRequests, repositories, isLoading, error } = useDashboardData();
+  const { token } = useAuth();
+  const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
+
+  useEffect(() => {
+    if (!token) return;
+    listWorkflows(token, { page_size: 5 })
+      .then((res) => setWorkflows(res.items))
+      .catch(() => {});
+  }, [token]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -82,8 +96,61 @@ export function DashboardPage() {
         </div>
       )}
 
+      {/* Active Workflows */}
+      {workflows.length > 0 && (
+        <Card
+          title="Active SDLC Workflows"
+          description="Engineering tasks progressing through the lifecycle"
+          action={
+            <Link
+              to="/workflows/new"
+              className="text-xs font-medium text-indigo-400 hover:text-indigo-300"
+            >
+              + New Workflow
+            </Link>
+          }
+        >
+          <div className="space-y-4">
+            {workflows.map((w) => (
+              <Link
+                key={w.workflow_id}
+                to={`/workflows/${w.workflow_id}`}
+                className="block rounded-lg border border-slate-800 bg-slate-900/40 p-4 transition-colors hover:border-indigo-500/40 hover:bg-slate-900/60"
+              >
+                <div className="mb-3 flex items-center justify-between">
+                  <h4 className="text-sm font-medium text-slate-100 truncate">{w.title}</h4>
+                  <StatusBadge
+                    label={w.status === "completed" ? "Complete" : "In Progress"}
+                    tone={w.status === "completed" ? "success" : "info"}
+                  />
+                </div>
+                <WorkflowTimeline stages={w.stages} currentStage={w.current_stage} />
+              </Link>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {/* Agent Actions */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        <Link
+          to="/workflows/new"
+          className="group flex items-start gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-6 shadow-sm shadow-black/20 transition-colors hover:border-indigo-500/40 hover:bg-slate-900/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
+          aria-label="Start SDLC Workflow"
+        >
+          <div className="rounded-lg bg-indigo-500/10 p-3 ring-1 ring-inset ring-indigo-500/30">
+            <GitMerge className="h-6 w-6 text-indigo-400" aria-hidden="true" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-slate-100 group-hover:text-indigo-300">
+              SDLC Workflow
+            </h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Start a guided engineering lifecycle. Planning → Development → Testing → Review — each phase feeds the next.
+            </p>
+          </div>
+        </Link>
+
         <Link
           to="/planning"
           className="group flex items-start gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-6 shadow-sm shadow-black/20 transition-colors hover:border-sky-500/40 hover:bg-slate-900/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"

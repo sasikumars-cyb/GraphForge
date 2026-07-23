@@ -88,6 +88,9 @@ class RunDetailResponse(BaseModel):
     completed_at: str | None
     created_at: str
     steps: list[StepResponse]
+    workflow_id: str | None = None
+    workflow_stage: str | None = None
+    previous_run_id: str | None = None
 
 
 class RunListItem(BaseModel):
@@ -98,6 +101,8 @@ class RunListItem(BaseModel):
     started_at: str | None
     completed_at: str | None
     created_at: str
+    workflow_id: str | None = None
+    workflow_stage: str | None = None
     confidence_score: float | None
 
 
@@ -260,6 +265,9 @@ async def get_run(
         completed_at=_iso(run.completed_at),
         created_at=_iso(run.created_at),
         steps=[_step_response(s) for s in run.steps],
+        workflow_id=str(run.workflow_id) if run.workflow_id else None,
+        workflow_stage=run.workflow_stage,
+        previous_run_id=str(run.previous_run_id) if run.previous_run_id else None,
     )
 
 
@@ -315,6 +323,8 @@ async def list_runs(
             completed_at=_iso(run.completed_at),
             created_at=_iso(run.created_at),
             confidence_score=best_confidence,
+            workflow_id=str(run.workflow_id) if run.workflow_id else None,
+            workflow_stage=run.workflow_stage,
         ))
 
     return RunListResponse(

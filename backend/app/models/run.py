@@ -18,6 +18,7 @@ from app.database.base import Base
 
 if TYPE_CHECKING:
     from app.models.agent_step import AgentStep
+    from app.models.workflow import Workflow
 
 
 class Run(Base):
@@ -45,9 +46,29 @@ class Run(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
 
+    # --- Workflow linkage (nullable — standalone runs have no workflow) ---
+    workflow_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    workflow_stage: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    previous_run_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("agent_runs.id", ondelete="SET NULL"), nullable=True
+    )
+
     steps: Mapped[list[AgentStep]] = relationship(
         "AgentStep",
         back_populates="run",
         order_by="AgentStep.created_at",
         cascade="all, delete-orphan",
+    )
+    workflow: Mapped[Workflow | None] = relationship(
+        "Workflow",
+        back_populates="runs",
+        foreign_keys=[workflow_id],
+    )
+    previous_run: Mapped[Run | None] = relationship(
+        "Run",
+        remote_side=[id],
+        foreign_keys=[previous_run_id],
+        uselist=False,
     )

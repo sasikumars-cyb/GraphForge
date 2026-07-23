@@ -1,5 +1,5 @@
 import { Link } from "react-router-dom";
-import { History, ChevronLeft, ChevronRight, RefreshCw } from "lucide-react";
+import { History, ChevronLeft, ChevronRight, RefreshCw, GitMerge } from "lucide-react";
 import { Card } from "../components/Card";
 import { Table, type TableColumn } from "../components/Table";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
@@ -11,6 +11,8 @@ import type { RunListItem } from "../types/agent";
 const GOAL_LABELS: Record<string, string> = {
   plan_freeform: "Planning",
   review_pr: "PR Review",
+  develop_change_plan: "Development",
+  plan_tests: "Testing",
 };
 
 const columns: TableColumn<RunListItem>[] = [
@@ -35,6 +37,22 @@ const columns: TableColumn<RunListItem>[] = [
     render: (row) => (
       <span className="text-sm text-slate-300">{GOAL_LABELS[row.goal] ?? row.goal}</span>
     ),
+  },
+  {
+    key: "workflow",
+    header: "Workflow",
+    render: (row) =>
+      row.workflow_id ? (
+        <Link
+          to={`/workflows/${row.workflow_id}`}
+          className="inline-flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300"
+        >
+          <GitMerge className="h-3 w-3" aria-hidden="true" />
+          {row.workflow_stage ?? "linked"}
+        </Link>
+      ) : (
+        <span className="text-xs text-slate-500">—</span>
+      ),
   },
   {
     key: "status",

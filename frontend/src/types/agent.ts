@@ -52,6 +52,9 @@ export interface RunDetail {
   completed_at: string | null;
   created_at: string;
   steps: AgentStep[];
+  workflow_id: string | null;
+  workflow_stage: string | null;
+  previous_run_id: string | null;
 }
 
 export interface RunListItem {
@@ -63,6 +66,8 @@ export interface RunListItem {
   completed_at: string | null;
   created_at: string;
   confidence_score: number | null;
+  workflow_id: string | null;
+  workflow_stage: string | null;
 }
 
 export interface RunListResponse {
@@ -253,4 +258,68 @@ export interface TestPlanResult {
   recommendations: string[];
   graph_context_used: boolean;
   repositories_consulted?: string[];
+}
+
+// --- Workflow Types ---
+
+export type WorkflowStage = "planning" | "development" | "testing" | "review";
+export type WorkflowStatus = "in_progress" | "completed";
+
+export interface WorkflowStageInfo {
+  stage: string;
+  label: string;
+  status: "completed" | "running" | "failed" | "pending";
+  run_id: string | null;
+}
+
+export interface WorkflowRunItem {
+  run_id: string;
+  goal: string;
+  status: string;
+  workflow_stage: string | null;
+  confidence_score: number | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+}
+
+export interface WorkflowDetail {
+  workflow_id: string;
+  title: string;
+  current_stage: string;
+  status: WorkflowStatus;
+  stages: WorkflowStageInfo[];
+  runs: WorkflowRunItem[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowListItem {
+  workflow_id: string;
+  title: string;
+  current_stage: string;
+  status: WorkflowStatus;
+  stages: WorkflowStageInfo[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface WorkflowListResponse {
+  items: WorkflowListItem[];
+  page: number;
+  page_size: number;
+  total: number;
+  has_more: boolean;
+}
+
+export interface CreateWorkflowRequest {
+  title: string;
+  model?: string;
+}
+
+export interface ContinueWorkflowResponse {
+  workflow_id: string;
+  run_id: string;
+  stage: string;
+  status: string;
 }

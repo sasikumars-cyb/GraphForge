@@ -1,6 +1,7 @@
 import {
   LayoutDashboard,
   GitPullRequest,
+  GitMerge,
   FolderGit2,
   Network,
   FileBarChart,
@@ -22,6 +23,7 @@ export interface NavItem {
 /** Single source of truth for sidebar links and the topbar's page title. */
 export const NAV_ITEMS: NavItem[] = [
   { label: "Dashboard", path: "/", icon: LayoutDashboard },
+  { label: "Workflows", path: "/workflows/new", icon: GitMerge },
   { label: "Planning", path: "/planning", icon: Lightbulb },
   { label: "Development", path: "/development", icon: Code2 },
   { label: "Testing", path: "/testing", icon: FlaskConical },
