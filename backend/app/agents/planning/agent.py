@@ -8,8 +8,10 @@ Implements the IAgent protocol for goal=plan_freeform. Every run:
    real graph context gathered in steps 1-2 (llm_reasoning evidence).
 
 The agent's own Plan -> Select Tool -> Execute -> Observe -> Decide loop
-is explicit in execute_tools() — the same five-state loop the Review
+is explicit inline in run() below — the same five-state shape the Review
 Agent uses internally, applied here to a different tool set and domain.
+No retry is implemented in this phase (unlike the Review Agent's
+confidence-triggered retry) — a single pass always runs to completion.
 
 The key demonstration requirement (RAJAN_PACKAGE.md): at least one
 Evidence entry must be kind="graph_traversal" or kind="tool_call". This
@@ -33,6 +35,7 @@ from app.agents._contract import (
     Confidence,
     Evidence,
 )
+from app.agents._llm import call_chat_completion_json, render_prompt_template
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +47,6 @@ from app.agents.planning.tools import (
     format_graph_context,
     to_evidence,
 )
-from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
@@ -76,72 +78,18 @@ async def _call_llm(
 ) -> str:
     """Make a single Chat Completions request and return the content string.
 
-    Uses the same settings (api_key, base_url, model) as the existing
-    OpenAI provider but with a planning-specific system prompt and without
-    the AIAnalysisResult response schema. This is not a duplicate of
-    OpenAIProvider — it serves a different purpose (free-form JSON
-    generation vs. strongly-typed impact analysis).
+    Thin wrapper around the shared `app.agents._llm` mechanics (identical
+    across Planning/Development/Testing) — kept as a module-level function
+    here so existing test seams (`patch("...agent._call_llm", ...)`) and
+    the `PlanningLLMError` error_code stay stable.
     """
-    settings = get_settings()
-    provider = settings.ai_provider.lower()
-
-    if provider == "openai":
-        if not settings.openai_api_key:
-            raise PlanningLLMError("OPENAI_API_KEY is not configured.")
-        api_key = settings.openai_api_key
-        base_url = "https://api.openai.com/v1/chat/completions"
-        effective_model = model or settings.openai_model
-    elif provider == "groq":
-        if not settings.groq_api_key:
-            raise PlanningLLMError("GROQ_API_KEY is not configured.")
-        api_key = settings.groq_api_key
-        base_url = "https://api.groq.com/openai/v1/chat/completions"
-        effective_model = settings.groq_model
-    else:
-        raise PlanningLLMError(f"Unsupported AI provider: {provider}")
-
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "model": effective_model,
-        "temperature": settings.openai_temperature,
-        "max_tokens": settings.openai_max_tokens,
-        "response_format": {"type": "json_object"},
-        "messages": [
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-    }
-
-    client = http_client or httpx.AsyncClient()
-    should_close = http_client is None
-
-    try:
-        response = await client.post(
-            base_url, headers=headers, json=payload, timeout=60.0
-        )
-    except httpx.TimeoutException as exc:
-        raise PlanningLLMError("LLM request timed out.") from exc
-    except httpx.HTTPError as exc:
-        raise PlanningLLMError(f"LLM communication error: {exc}") from exc
-    finally:
-        if should_close:
-            await client.aclose()
-
-    if response.status_code == 401:
-        raise PlanningLLMError("LLM API key is invalid.")
-    if response.status_code == 429:
-        raise PlanningLLMError("LLM rate limit exceeded.")
-    if response.status_code >= 400:
-        raise PlanningLLMError(f"LLM returned HTTP {response.status_code}.")
-
-    body = response.json()
-    try:
-        return body["choices"][0]["message"]["content"]
-    except (KeyError, IndexError) as exc:
-        raise PlanningLLMError(f"LLM response missing expected fields: {exc}") from exc
+    return await call_chat_completion_json(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        error_cls=PlanningLLMError,
+        model=model,
+        http_client=http_client,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -151,14 +99,9 @@ async def _call_llm(
 
 def _render_prompt(task_description: str, graph_context: str) -> str:
     """Render the planning.md template with the given variables."""
-    template_path = _PROMPT_DIR / "planning.md"
-    raw = template_path.read_text(encoding="utf-8")
-    # Strip YAML front-matter (same pattern as PromptBuilder)
-    import re
-    body = re.sub(r"^---\s*\n.*?\n---\s*\n", "", raw, flags=re.DOTALL)
-    body = body.replace("{{ task_description }}", task_description)
-    body = body.replace("{{ graph_context }}", graph_context[:_MAX_GRAPH_CONTEXT_CHARS])
-    return body
+    return render_prompt_template(
+        _PROMPT_DIR / "planning.md", task_description, graph_context, _MAX_GRAPH_CONTEXT_CHARS
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -239,7 +182,7 @@ class PlanningAgent:
         repos_obs = await repos_tool.execute()
         evidence.append(to_evidence(repos_obs, "tool_call"))
 
-        indexed_repos: list[dict] = repos_obs.data.get("indexed_repositories", [])
+        indexed_repos: list[dict[str, str]] = repos_obs.data.get("indexed_repositories", [])
 
         logger.info(
             "planning_agent_step1 indexed_repo_count=%d",
@@ -276,24 +219,21 @@ class PlanningAgent:
             and (component_count > 0 or topic_count > 0)
         )
         if graph_unavailable:
-            base_confidence = 0.30
+            base_confidence = 0.25
         elif has_graph_data:
             base_confidence = 0.85
         else:
-            base_confidence = 0.45
+            base_confidence = 0.40
 
         # ------------------------------------------------------------------
-        # Decide: if graph has no data AND this is a component-specific
-        # query, try once more before synthesising (low-confidence retry path).
-        # One retry, hard cap — same discipline as the Review Agent.
+        # Decide: no retry is implemented in this phase — a single pass
+        # always proceeds to synthesis, whatever the graph returned. (An
+        # earlier draft of this method claimed a Review-Agent-style
+        # confidence-triggered retry here; that was never implemented, so
+        # the claim was removed rather than left misleading.)
         # ------------------------------------------------------------------
-        retry_count = 0
-        if not has_graph_data and len(indexed_repos) == 0:
-            # No repositories indexed at all — confidence already low.
-            # Skip retry (nothing more to gather) and synthesise with a note.
-            logger.info(
-                "planning_agent_no_graph_data note=no indexed repositories"
-            )
+        if not indexed_repos:
+            logger.info("planning_agent_no_graph_data note=no indexed repositories")
 
         # ------------------------------------------------------------------
         # Synthesize: LLM call with real graph context
@@ -316,6 +256,11 @@ class PlanningAgent:
 
         # Back-fill repositories_consulted from the graph traversal
         planning_result.repositories_consulted = [r["name"] for r in indexed_repos]
+
+        # Never trust the LLM's self-reported graph_context_used — derive it
+        # from what the tools actually returned. If traversal failed or the
+        # graph was empty, this must be False regardless of what the model claims.
+        planning_result.graph_context_used = has_graph_data
 
         # LLM synthesis step is always the last evidence entry
         if graph_unavailable:

@@ -550,6 +550,103 @@ async def test_planning_agent_graph_unavailable_no_false_evidence() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Work Item 3: graph_context_used must be derived from execution, never
+# trusted from the LLM's self-report.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_graph_context_used_overridden_when_graph_fails() -> None:
+    """The LLM claims graph_context_used=True, but the graph traversal
+    actually failed — the persisted result must not repeat that claim."""
+    context = _make_planning_context()
+
+    mock_graph_repo = MagicMock()
+    mock_graph_repo.has_graph = AsyncMock(return_value=True)
+    mock_graph_repo.get_nodes_by_label = AsyncMock(
+        side_effect=Exception("Neo4j connection refused")
+    )
+
+    mock_db = context.extras["db"]
+    mock_repo = MagicMock()
+    mock_repo.id = "repo-uuid-1"
+    mock_repo.name = "order-service"
+    mock_repo.owner = "acme"
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [mock_repo]
+    mock_db.execute.return_value = mock_result
+
+    # LLM lies and claims it used graph context even though every
+    # traversal call failed.
+    llm_response = json.dumps({
+        "executive_summary": "Plan.",
+        "implementation_steps": [],
+        "affected_components": [],
+        "kafka_topics_involved": [],
+        "risk_considerations": [],
+        "graph_context_used": True,
+    })
+
+    with (
+        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
+        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    assert output.result["graph_context_used"] is False, (
+        "graph_context_used must reflect actual tool execution, not the "
+        "LLM's self-report — the graph traversal failed here."
+    )
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_graph_context_used_true_when_graph_has_data() -> None:
+    """When graph traversal genuinely succeeds and returns data,
+    graph_context_used must be True regardless of what the LLM reports."""
+    context = _make_planning_context()
+
+    mock_graph_repo = MagicMock()
+    mock_graph_repo.has_graph = AsyncMock(return_value=True)
+    component_node = GraphNode(
+        id="c1", labels=["Component", "Service"], properties={"name": "OrderService"},
+    )
+    mock_graph_repo.get_nodes_by_label = AsyncMock(
+        side_effect=lambda repo_id, label: [component_node] if label == "Component" else []
+    )
+
+    mock_db = context.extras["db"]
+    mock_repo = MagicMock()
+    mock_repo.id = "repo-uuid-1"
+    mock_repo.name = "order-service"
+    mock_repo.owner = "acme"
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [mock_repo]
+    mock_db.execute.return_value = mock_result
+
+    # LLM under-reports — the code's own signal should win.
+    llm_response = json.dumps({
+        "executive_summary": "Plan.",
+        "implementation_steps": [],
+        "affected_components": [],
+        "kafka_topics_involved": [],
+        "risk_considerations": [],
+        "graph_context_used": False,
+    })
+
+    with (
+        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
+        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    assert output.result["graph_context_used"] is True
+
+
+# ---------------------------------------------------------------------------
 # P1-3: Graph unavailable vs graph empty — confidence must distinguish
 # ---------------------------------------------------------------------------
 

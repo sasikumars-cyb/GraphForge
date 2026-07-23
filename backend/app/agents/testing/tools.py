@@ -1,9 +1,9 @@
-"""Development Agent tools — own minimal tool-calling code.
+"""Test Planning Agent tools — own minimal tool-calling code.
 
-NOT shared with the Planning or Review agents (per agent isolation pattern).
-These tools are specific to the development/change-planning domain:
-gathering detailed component, dependency, and relationship data from the
-Knowledge Graph to produce an implementation blueprint.
+NOT shared with Planning or Development agents (per agent isolation pattern).
+These tools gather architecture context to inform test strategy decisions:
+repository discovery, component discovery, and dependency traversal to
+identify integration points and regression scope.
 
 Each tool wraps existing graph-read methods and returns an Observation.
 No write operations — agents never write to the graph directly.
@@ -26,13 +26,13 @@ logger = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Observation — same pattern as PlanningObservation, separate type
+# Observation
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
-class DevelopmentObservation:
-    """What a development tool call returned."""
+class TestingObservation:
+    """What a testing tool call returned."""
 
     tool_name: str
     summary: str
@@ -42,23 +42,23 @@ class DevelopmentObservation:
 
 
 # ---------------------------------------------------------------------------
-# Development tools
+# Tools
 # ---------------------------------------------------------------------------
 
 
-class RepositoryDiscoveryTool:
-    """Discover all indexed repositories and their basic metadata.
+class TestRepositoryDiscoveryTool:
+    """Discover all indexed repositories for test scope determination.
 
     Evidence kind: tool_call
     """
 
-    name = "discover_repositories"
+    name = "discover_test_repositories"
 
     def __init__(self, db: AsyncSession, graph_repository: IGraphRepository) -> None:
         self._db = db
         self._graph_repository = graph_repository
 
-    async def execute(self) -> DevelopmentObservation:
+    async def execute(self) -> TestingObservation:
         try:
             result = await self._db.execute(select(Repository))
             all_repos: list[Repository] = list(result.scalars().all())
@@ -77,14 +77,14 @@ class RepositoryDiscoveryTool:
                 f"out of {len(all_repos)} tracked."
             )
 
-            return DevelopmentObservation(
+            return TestingObservation(
                 tool_name=self.name,
                 summary=summary,
                 data={"indexed_repositories": indexed, "total_tracked": len(all_repos)},
             )
         except Exception as exc:
-            logger.warning("dev_tool_discover_repos_failed error=%s", str(exc))
-            return DevelopmentObservation(
+            logger.warning("testing_tool_discover_repos_failed error=%s", str(exc))
+            return TestingObservation(
                 tool_name=self.name,
                 summary=f"Failed to discover repositories: {exc}",
                 data={},
@@ -93,27 +93,24 @@ class RepositoryDiscoveryTool:
             )
 
 
-class ComponentDiscoveryTool:
-    """Discover all components across indexed repositories with their types,
-    file paths, and relationships.
+class TestComponentDiscoveryTool:
+    """Discover components and Kafka topics for regression scope.
 
     Evidence kind: graph_traversal
     """
 
-    name = "discover_components"
-
-    _COMPONENT_LABELS = ("Component", "KafkaTopic")
+    name = "discover_test_components"
 
     def __init__(self, graph_repository: IGraphRepository) -> None:
         self._graph_repository = graph_repository
 
     async def execute(
         self, repositories: list[dict[str, str]]
-    ) -> DevelopmentObservation:
+    ) -> TestingObservation:
         if not repositories:
-            return DevelopmentObservation(
+            return TestingObservation(
                 tool_name=self.name,
-                summary="No indexed repositories — cannot discover components.",
+                summary="No indexed repositories — cannot discover components for testing.",
                 data={"components": [], "kafka_topics": [], "repository_count": 0},
             )
 
@@ -153,7 +150,7 @@ class ComponentDiscoveryTool:
             except Exception as exc:
                 errors.append(f"{repo_name}: {exc}")
                 logger.warning(
-                    "dev_tool_discover_components_failed repo=%s error=%s",
+                    "testing_tool_discover_components_failed repo=%s error=%s",
                     repo_name, str(exc),
                 )
 
@@ -166,7 +163,7 @@ class ComponentDiscoveryTool:
             summary += f" {len(errors)} repositor{'y' if len(errors) == 1 else 'ies'} failed."
 
         all_failed = len(errors) == len(repositories)
-        return DevelopmentObservation(
+        return TestingObservation(
             tool_name=self.name,
             summary=summary,
             data={
@@ -179,26 +176,26 @@ class ComponentDiscoveryTool:
         )
 
 
-class DependencyTraversalTool:
-    """Traverse edges in the Knowledge Graph to discover dependency
-    relationships: CALLS, PRODUCES_TO, CONSUMES_FROM, DEPENDS_ON.
+class TestDependencyTraversalTool:
+    """Traverse edges to identify integration points and cross-repo coupling
+    that require integration testing.
 
     Evidence kind: graph_traversal
     """
 
-    name = "traverse_dependencies"
+    name = "traverse_test_dependencies"
 
     def __init__(self, graph_repository: IGraphRepository) -> None:
         self._graph_repository = graph_repository
 
     async def execute(
         self, repositories: list[dict[str, str]]
-    ) -> DevelopmentObservation:
+    ) -> TestingObservation:
         if not repositories:
-            return DevelopmentObservation(
+            return TestingObservation(
                 tool_name=self.name,
-                summary="No indexed repositories — cannot traverse dependencies.",
-                data={"edges": [], "cross_repo_edges": []},
+                summary="No indexed repositories — cannot traverse dependencies for testing.",
+                data={"edges": [], "cross_repo_edges": [], "integration_points": []},
             )
 
         all_edges: list[dict[str, str]] = []
@@ -211,23 +208,20 @@ class DependencyTraversalTool:
             try:
                 graph_payload = await self._graph_repository.get_full_graph(repo_id)
                 for edge in graph_payload.edges:
-                    edge_data = {
+                    all_edges.append({
                         "source": edge.source_id,
                         "target": edge.target_id,
                         "type": edge.type,
                         "repository": repo_name,
-                    }
-                    all_edges.append(edge_data)
-
+                    })
             except Exception as exc:
                 errors.append(f"{repo_name}: {exc}")
                 logger.warning(
-                    "dev_tool_traverse_deps_failed repo=%s error=%s",
+                    "testing_tool_traverse_deps_failed repo=%s error=%s",
                     repo_name, str(exc),
                 )
 
-        # Identify cross-repository edges (edges referencing nodes from different repos)
-        # This is done by checking if topics/feign-clients are shared across repos
+        # Identify cross-repo coupling via shared topics
         topic_producers: dict[str, list[str]] = {}
         topic_consumers: dict[str, list[str]] = {}
         for edge_dict in all_edges:
@@ -248,21 +242,29 @@ class DependencyTraversalTool:
                             "type": "CROSS_REPO_KAFKA",
                         })
 
+        # Identify key integration points (CALLS, PRODUCES_TO, CONSUMES_FROM)
+        integration_points = [
+            e for e in all_edges
+            if e["type"] in ("CALLS", "PRODUCES_TO", "CONSUMES_FROM")
+        ]
+
         summary = (
             f"Traversed {len(all_edges)} edge(s) across "
             f"{len(repositories)} repositor{'y' if len(repositories) == 1 else 'ies'}. "
-            f"Found {len(cross_repo_edges)} cross-repository coupling(s)."
+            f"Found {len(integration_points)} integration point(s) and "
+            f"{len(cross_repo_edges)} cross-repository coupling(s)."
         )
         if errors:
             summary += f" {len(errors)} repositor{'y' if len(errors) == 1 else 'ies'} failed."
 
         all_failed = len(errors) == len(repositories) and len(repositories) > 0
-        return DevelopmentObservation(
+        return TestingObservation(
             tool_name=self.name,
             summary=summary,
             data={
-                "edges": all_edges[:100],  # cap for prompt budget
+                "edges": all_edges[:100],
                 "cross_repo_edges": cross_repo_edges,
+                "integration_points": integration_points[:50],
                 "total_edges": len(all_edges),
             },
             succeeded=not all_failed,
@@ -276,11 +278,11 @@ class DependencyTraversalTool:
 
 
 def format_graph_context(
-    repos_obs: DevelopmentObservation,
-    components_obs: DevelopmentObservation,
-    deps_obs: DevelopmentObservation,
+    repos_obs: TestingObservation,
+    components_obs: TestingObservation,
+    deps_obs: TestingObservation,
 ) -> str:
-    """Format all tool observations into a compact, LLM-readable context."""
+    """Format tool observations into LLM-readable context for test planning."""
     parts: list[str] = []
 
     indexed_repos = repos_obs.data.get("indexed_repositories", [])
@@ -315,24 +317,15 @@ def format_graph_context(
     else:
         parts.append("**Kafka topics**: none indexed yet")
 
-    # Dependency edges (summarized)
-    edges = deps_obs.data.get("edges", [])
-    if edges:
-        edge_types: dict[str, int] = {}
-        for e in edges:
-            edge_types[e["type"]] = edge_types.get(e["type"], 0) + 1
-        edge_summary = ", ".join(f"{k}: {v}" for k, v in sorted(edge_types.items()))
-        parts.append(f"**Dependency edges**: {deps_obs.data.get('total_edges', len(edges))} total ({edge_summary})")
-
-        # Show key relationships
-        key_edges = [e for e in edges if e["type"] in ("CALLS", "PRODUCES_TO", "CONSUMES_FROM")][:20]
-        if key_edges:
-            rel_lines = []
-            for e in key_edges:
-                rel_lines.append(f"  {e['source']} —[{e['type']}]→ {e['target']} ({e['repository']})")
-            parts.append("**Key relationships**:\n" + "\n".join(rel_lines))
+    # Integration points
+    integration_points = deps_obs.data.get("integration_points", [])
+    if integration_points:
+        int_lines = []
+        for e in integration_points[:20]:
+            int_lines.append(f"  {e['source']} —[{e['type']}]→ {e['target']} ({e['repository']})")
+        parts.append("**Integration points (require integration testing)**:\n" + "\n".join(int_lines))
     else:
-        parts.append("**Dependency edges**: none indexed yet")
+        parts.append("**Integration points**: none found")
 
     # Cross-repo coupling
     cross_repo = deps_obs.data.get("cross_repo_edges", [])
@@ -342,7 +335,7 @@ def format_graph_context(
             coupling_lines.append(
                 f"  {cr['producer_repo']} → [{cr['topic']}] → {cr['consumer_repo']}"
             )
-        parts.append("**Cross-repository coupling**:\n" + "\n".join(coupling_lines))
+        parts.append("**Cross-repository coupling (high-risk integration tests)**:\n" + "\n".join(coupling_lines))
 
     return "\n\n".join(parts)
 
@@ -352,11 +345,11 @@ def format_graph_context(
 # ---------------------------------------------------------------------------
 
 
-def to_evidence(observation: DevelopmentObservation, kind: str) -> Evidence:
-    """Convert a DevelopmentObservation to a contract Evidence entry.
+def to_evidence(observation: TestingObservation, kind: str) -> Evidence:
+    """Convert a TestingObservation to a contract Evidence entry.
 
     If the observation failed, evidence kind is forced to "tool_call"
-    with a failure-prefixed summary (never implies successful traversal).
+    with a failure-prefixed summary.
     """
     if not observation.succeeded:
         return Evidence(

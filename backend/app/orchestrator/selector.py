@@ -27,6 +27,7 @@ if TYPE_CHECKING:
 GOAL_REVIEW_PR = "review_pr"
 GOAL_PLAN_FREEFORM = "plan_freeform"
 GOAL_DEVELOP_CHANGE_PLAN = "develop_change_plan"
+GOAL_PLAN_TESTS = "plan_tests"
 
 
 class AgentSelector:

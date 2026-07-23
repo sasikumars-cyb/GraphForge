@@ -608,6 +608,29 @@ async def test_development_agent_graph_unavailable() -> None:
 
 
 @pytest.mark.asyncio
+async def test_development_agent_graph_context_used_overridden_when_graph_fails() -> None:
+    """Work Item 3: the LLM mock (`_make_development_llm_response`) claims
+    graph_context_used=True, but the graph is unavailable here — the
+    persisted result must not repeat that claim."""
+    context = _make_development_context()
+
+    mock_db = context.extras["db"]
+    mock_db.execute.side_effect = Exception("DB down")
+
+    mock_graph_repo = MagicMock()
+
+    with (
+        patch("app.agents.development.agent.get_driver", return_value=MagicMock()),
+        patch("app.agents.development.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.agents.development.agent._call_llm", new=AsyncMock(return_value=_make_development_llm_response())),
+    ):
+        agent = DevelopmentAgent()
+        output = await agent.run(context)
+
+    assert output.result["graph_context_used"] is False
+
+
+@pytest.mark.asyncio
 async def test_development_agent_llm_failure_raises() -> None:
     """LLM failure raises DevelopmentLLMError (per error policy)."""
     context = _make_development_context()

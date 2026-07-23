@@ -1,14 +1,15 @@
-"""Development Agent — Change Planning capability.
+"""Test Planning Agent — Testing Strategy capability.
 
-Implements the IAgent protocol for goal=develop_change_plan. Every run:
-1. Calls RepositoryDiscoveryTool to discover indexed repos (tool_call evidence).
-2. Calls ComponentDiscoveryTool to find all components and topics (graph_traversal evidence).
-3. Calls DependencyTraversalTool to map edges and cross-repo coupling (graph_traversal evidence).
-4. Synthesizes a structured implementation blueprint using the LLM,
-   grounded in the real graph context gathered in steps 1-3 (llm_reasoning evidence).
+Implements the IAgent protocol for goal=plan_tests. Every run:
+1. Calls TestRepositoryDiscoveryTool to discover indexed repos (tool_call evidence).
+2. Calls TestComponentDiscoveryTool to find components and topics (graph_traversal evidence).
+3. Calls TestDependencyTraversalTool to map integration points (graph_traversal evidence).
+4. Synthesizes a structured test plan using the LLM, grounded in the
+   real graph context gathered in steps 1-3 (llm_reasoning evidence).
 
-The agent thinks like a Senior Engineer: Which repos change? Which services?
-Which files? Can something be reused? What could break? What order?
+The agent thinks like a Senior QA Lead: What changed? Who depends on it?
+What could break? Which interfaces require integration tests? What edge
+cases are highest risk?
 """
 
 from __future__ import annotations
@@ -27,19 +28,22 @@ from app.agents._contract import (
     Evidence,
 )
 from app.agents._llm import call_chat_completion_json, render_prompt_template
-from app.agents.development.schemas import (
-    AffectedComponent,
-    AffectedRepository,
-    Dependency,
-    DevelopmentPlan,
-    ImplementationPhase,
-    ReusableImplementation,
-    Risk,
+from app.agents.testing.schemas import (
+    AutomationCandidate,
+    EdgeCase,
+    EnvironmentRequirement,
+    ExecutionPhase,
+    IntegrationTest,
+    ManualValidation,
+    RegressionTest,
+    TestPlan,
+    TestRisk,
+    TestScope,
 )
-from app.agents.development.tools import (
-    ComponentDiscoveryTool,
-    DependencyTraversalTool,
-    RepositoryDiscoveryTool,
+from app.agents.testing.tools import (
+    TestComponentDiscoveryTool,
+    TestDependencyTraversalTool,
+    TestRepositoryDiscoveryTool,
     format_graph_context,
     to_evidence,
 )
@@ -51,23 +55,23 @@ logger = logging.getLogger(__name__)
 
 _PROMPT_VERSION = "1.0"
 _PROMPT_DIR = Path(__file__).parent / "prompts"
-_MAX_GRAPH_CONTEXT_CHARS = 8_000  # larger budget for detailed blueprint
+_MAX_GRAPH_CONTEXT_CHARS = 8_000
 
 
 # ---------------------------------------------------------------------------
-# LLM call — development-specific, not shared with other agents
+# LLM call — testing-specific
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
-    "You are a Principal Software Engineer. "
+    "You are a Principal QA Engineer. "
     "Respond ONLY with valid JSON matching the requested schema. "
     "Do not include markdown fences or commentary outside the JSON object."
 )
 
 
-class DevelopmentLLMError(AppError):
+class TestingLLMError(AppError):
     status_code = 502
-    error_code = "development_llm_error"
+    error_code = "testing_llm_error"
 
 
 async def _call_llm(
@@ -80,12 +84,12 @@ async def _call_llm(
     Thin wrapper around the shared `app.agents._llm` mechanics (identical
     across Planning/Development/Testing) — kept as a module-level function
     here so existing test seams (`patch("...agent._call_llm", ...)`) and
-    the `DevelopmentLLMError` error_code stay stable.
+    the `TestingLLMError` error_code stay stable.
     """
     return await call_chat_completion_json(
         system_prompt=_SYSTEM_PROMPT,
         user_prompt=user_prompt,
-        error_cls=DevelopmentLLMError,
+        error_cls=TestingLLMError,
         model=model,
         http_client=http_client,
     )
@@ -97,9 +101,9 @@ async def _call_llm(
 
 
 def _render_prompt(task_description: str, graph_context: str) -> str:
-    """Render the development.md template with the given variables."""
+    """Render the testing.md template with the given variables."""
     return render_prompt_template(
-        _PROMPT_DIR / "development.md", task_description, graph_context, _MAX_GRAPH_CONTEXT_CHARS
+        _PROMPT_DIR / "testing.md", task_description, graph_context, _MAX_GRAPH_CONTEXT_CHARS
     )
 
 
@@ -108,66 +112,91 @@ def _render_prompt(task_description: str, graph_context: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _parse_llm_response(raw: str, goal: str) -> DevelopmentPlan:
-    """Parse the LLM's JSON response into a DevelopmentPlan."""
+def _parse_llm_response(raw: str, goal: str) -> TestPlan:
+    """Parse the LLM's JSON response into a TestPlan."""
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise DevelopmentLLMError(f"LLM response is not valid JSON: {exc}") from exc
+        raise TestingLLMError(f"LLM response is not valid JSON: {exc}") from exc
 
-    repositories = [
-        AffectedRepository(
-            name=r.get("name", ""),
-            owner=r.get("owner", ""),
-            reason=r.get("reason", ""),
+    scope_data = data.get("test_scope", {})
+    test_scope = TestScope(
+        in_scope=scope_data.get("in_scope", []),
+        out_of_scope=scope_data.get("out_of_scope", []),
+    )
+
+    regression_tests = [
+        RegressionTest(
+            component=r.get("component", ""),
+            description=r.get("description", ""),
+            priority=r.get("priority", ""),
+            automated=bool(r.get("automated", False)),
         )
-        for r in data.get("repositories", [])
+        for r in data.get("regression_tests", [])
     ]
 
-    components = [
-        AffectedComponent(
-            name=c.get("name", ""),
-            component_type=c.get("component_type", ""),
-            repository=c.get("repository", ""),
-            file_path=c.get("file_path", ""),
-            change_description=c.get("change_description", ""),
+    integration_tests = [
+        IntegrationTest(
+            source_component=t.get("source_component", ""),
+            target_component=t.get("target_component", ""),
+            relationship=t.get("relationship", ""),
+            description=t.get("description", ""),
+            priority=t.get("priority", ""),
         )
-        for c in data.get("components", [])
+        for t in data.get("integration_tests", [])
     ]
 
-    dependencies = [
-        Dependency(
-            source=d.get("source", ""),
-            target=d.get("target", ""),
-            relationship=d.get("relationship", ""),
-            risk_note=d.get("risk_note", ""),
+    edge_cases = [
+        EdgeCase(
+            description=e.get("description", ""),
+            component=e.get("component", ""),
+            severity=e.get("severity", ""),
+            category=e.get("category", ""),
         )
-        for d in data.get("dependencies", [])
+        for e in data.get("edge_cases", [])
     ]
 
-    reusable = [
-        ReusableImplementation(
-            name=r.get("name", ""),
-            repository=r.get("repository", ""),
-            reason=r.get("reason", ""),
+    environments = [
+        EnvironmentRequirement(
+            name=env.get("name", ""),
+            description=env.get("description", ""),
+            services_required=env.get("services_required", []),
         )
-        for r in data.get("reusable_implementations", [])
+        for env in data.get("environment_requirements", [])
     ]
 
-    phases = [
-        ImplementationPhase(
+    execution_order = [
+        ExecutionPhase(
             order=p.get("order", i + 1),
             title=p.get("title", ""),
             description=p.get("description", ""),
-            affected_components=p.get("affected_components", []),
-            estimated_complexity=p.get("estimated_complexity", ""),
+            test_types=p.get("test_types", []),
             depends_on_phases=p.get("depends_on_phases", []),
         )
-        for i, p in enumerate(data.get("implementation_phases", []))
+        for i, p in enumerate(data.get("execution_order", []))
+    ]
+
+    automation_candidates = [
+        AutomationCandidate(
+            description=a.get("description", ""),
+            component=a.get("component", ""),
+            test_type=a.get("test_type", ""),
+            reason=a.get("reason", ""),
+        )
+        for a in data.get("automation_candidates", [])
+    ]
+
+    manual_validations = [
+        ManualValidation(
+            description=m.get("description", ""),
+            component=m.get("component", ""),
+            reason=m.get("reason", ""),
+        )
+        for m in data.get("manual_validations", [])
     ]
 
     risks = [
-        Risk(
+        TestRisk(
             description=r.get("description", ""),
             severity=r.get("severity", ""),
             affected_component=r.get("affected_component", ""),
@@ -176,29 +205,34 @@ def _parse_llm_response(raw: str, goal: str) -> DevelopmentPlan:
         for r in data.get("risks", [])
     ]
 
-    return DevelopmentPlan(
+    return TestPlan(
         goal=goal,
         executive_summary=data.get("executive_summary", ""),
-        repositories=repositories,
-        components=components,
-        dependencies=dependencies,
-        reusable_implementations=reusable,
-        implementation_phases=phases,
+        test_scope=test_scope,
+        affected_repositories=data.get("affected_repositories", []),
+        affected_components=data.get("affected_components", []),
+        regression_tests=regression_tests,
+        integration_tests=integration_tests,
+        edge_cases=edge_cases,
+        environment_requirements=environments,
+        execution_order=execution_order,
+        automation_candidates=automation_candidates,
+        manual_validations=manual_validations,
         risks=risks,
         recommendations=data.get("recommendations", []),
         graph_context_used=bool(data.get("graph_context_used", False)),
-        repositories_consulted=[],  # filled by the agent
+        repositories_consulted=[],
         prompt_version=_PROMPT_VERSION,
     )
 
 
 # ---------------------------------------------------------------------------
-# Development Agent
+# Test Planning Agent
 # ---------------------------------------------------------------------------
 
 
-class DevelopmentAgent:
-    """Implements IAgent for goal=develop_change_plan.
+class TestPlanningAgent:
+    """Implements IAgent for goal=plan_tests.
 
     Stateless singleton — db session and Neo4j driver are resolved per-run
     from context.extras["db"] and get_driver().
@@ -209,7 +243,7 @@ class DevelopmentAgent:
         subject_id: str = context.subject.subject_id
 
         logger.info(
-            "development_agent_started subject_id=%s task=%.80s model=%s",
+            "testing_agent_started subject_id=%s task=%.80s model=%s",
             subject_id, task_description, context.model,
         )
 
@@ -222,39 +256,40 @@ class DevelopmentAgent:
         # ------------------------------------------------------------------
         # Step 1 — Discover indexed repositories (tool_call evidence)
         # ------------------------------------------------------------------
-        repos_tool = RepositoryDiscoveryTool(db=db, graph_repository=graph_repo)
+        repos_tool = TestRepositoryDiscoveryTool(db=db, graph_repository=graph_repo)
         repos_obs = await repos_tool.execute()
         evidence.append(to_evidence(repos_obs, "tool_call"))
 
         indexed_repos: list[dict[str, str]] = repos_obs.data.get("indexed_repositories", [])
-        logger.info("development_agent_step1 indexed_repo_count=%d", len(indexed_repos))
+        logger.info("testing_agent_step1 indexed_repo_count=%d", len(indexed_repos))
 
         # ------------------------------------------------------------------
         # Step 2 — Discover components (graph_traversal evidence)
         # ------------------------------------------------------------------
-        components_tool = ComponentDiscoveryTool(graph_repository=graph_repo)
+        components_tool = TestComponentDiscoveryTool(graph_repository=graph_repo)
         components_obs = await components_tool.execute(indexed_repos)
         evidence.append(to_evidence(components_obs, "graph_traversal"))
 
         component_count = len(components_obs.data.get("components", []))
         topic_count = len(components_obs.data.get("kafka_topics", []))
         logger.info(
-            "development_agent_step2 component_count=%d topic_count=%d",
+            "testing_agent_step2 component_count=%d topic_count=%d",
             component_count, topic_count,
         )
 
         # ------------------------------------------------------------------
-        # Step 3 — Traverse dependencies (graph_traversal evidence)
+        # Step 3 — Traverse dependencies for integration points (graph_traversal)
         # ------------------------------------------------------------------
-        deps_tool = DependencyTraversalTool(graph_repository=graph_repo)
+        deps_tool = TestDependencyTraversalTool(graph_repository=graph_repo)
         deps_obs = await deps_tool.execute(indexed_repos)
         evidence.append(to_evidence(deps_obs, "graph_traversal"))
 
         edge_count = deps_obs.data.get("total_edges", 0)
+        integration_count = len(deps_obs.data.get("integration_points", []))
         cross_repo_count = len(deps_obs.data.get("cross_repo_edges", []))
         logger.info(
-            "development_agent_step3 edge_count=%d cross_repo_couplings=%d",
-            edge_count, cross_repo_count,
+            "testing_agent_step3 edge_count=%d integration_points=%d cross_repo=%d",
+            edge_count, integration_count, cross_repo_count,
         )
 
         # ------------------------------------------------------------------
@@ -273,9 +308,10 @@ class DevelopmentAgent:
             base_confidence = 0.25
         elif has_graph_data:
             base_confidence = 0.85
-            # Boost for rich graph data
+            if integration_count > 0:
+                base_confidence = 0.88
             if cross_repo_count > 0:
-                base_confidence = 0.90
+                base_confidence = 0.92
         else:
             base_confidence = 0.40
 
@@ -286,23 +322,23 @@ class DevelopmentAgent:
         prompt = _render_prompt(task_description, graph_context_text)
 
         logger.info(
-            "development_agent_synthesizing has_graph_data=%s graph_context_chars=%d",
+            "testing_agent_synthesizing has_graph_data=%s graph_context_chars=%d",
             has_graph_data, len(graph_context_text),
         )
 
         try:
             raw_response = await _call_llm(user_prompt=prompt, model=context.model)
-            plan = _parse_llm_response(raw_response, task_description)
-        except DevelopmentLLMError as exc:
-            logger.error("development_agent_llm_failed error=%s", str(exc))
+            test_plan = _parse_llm_response(raw_response, task_description)
+        except TestingLLMError as exc:
+            logger.error("testing_agent_llm_failed error=%s", str(exc))
             raise
 
         # Back-fill repositories_consulted
-        plan.repositories_consulted = [r["name"] for r in indexed_repos]
+        test_plan.repositories_consulted = [r["name"] for r in indexed_repos]
 
         # Never trust the LLM's self-reported graph_context_used — derive it
         # from what the tools actually returned.
-        plan.graph_context_used = has_graph_data
+        test_plan.graph_context_used = has_graph_data
 
         # LLM synthesis evidence
         evidence.append(
@@ -310,10 +346,11 @@ class DevelopmentAgent:
                 kind="llm_reasoning",
                 reference="llm_synthesis",
                 summary=(
-                    f"LLM produced implementation blueprint with "
-                    f"{len(plan.implementation_phases)} phase(s), "
-                    f"{len(plan.components)} affected component(s), "
-                    f"and {len(plan.risks)} risk(s) for: {task_description[:60]}"
+                    f"LLM produced test plan with "
+                    f"{len(test_plan.regression_tests)} regression test(s), "
+                    f"{len(test_plan.integration_tests)} integration test(s), "
+                    f"and {len(test_plan.edge_cases)} edge case(s) for: "
+                    f"{task_description[:60]}"
                 ),
             )
         )
@@ -322,51 +359,53 @@ class DevelopmentAgent:
         # Confidence scoring
         # ------------------------------------------------------------------
         confidence_score = base_confidence
-        if plan.implementation_phases:
+        if test_plan.regression_tests or test_plan.integration_tests:
             confidence_score = min(confidence_score + 0.05, 1.0)
 
         if graph_unavailable:
             confidence_reasoning = (
                 "Knowledge Graph was unavailable (infrastructure error); "
-                "blueprint is based on general engineering practices only. "
+                "test plan is based on general QA practices only. "
                 "Retry when the graph service is restored."
             )
         elif has_graph_data:
             confidence_reasoning = (
                 f"Graph traversal found {component_count} component(s), "
-                f"{topic_count} Kafka topic(s), and {edge_count} edge(s) "
-                f"across {len(indexed_repos)} indexed "
+                f"{topic_count} Kafka topic(s), and {integration_count} "
+                f"integration point(s) across {len(indexed_repos)} indexed "
                 f"repositor{'y' if len(indexed_repos) == 1 else 'ies'}. "
             )
             if cross_repo_count > 0:
                 confidence_reasoning += (
-                    f"Identified {cross_repo_count} cross-repository coupling(s). "
+                    f"Identified {cross_repo_count} cross-repository coupling(s) "
+                    "requiring integration tests. "
                 )
-            confidence_reasoning += "Blueprint is grounded in real architecture data."
+            confidence_reasoning += "Test plan is grounded in real architecture data."
         else:
             confidence_reasoning = (
                 f"Graph is healthy but contains no architecture data "
                 f"({len(indexed_repos)} indexed "
                 f"repositor{'y' if len(indexed_repos) == 1 else 'ies'}, "
                 f"0 components, 0 edges). "
-                "Blueprint uses general engineering practices."
+                "Test plan uses general QA practices."
             )
 
         logger.info(
-            "development_agent_completed subject_id=%s confidence=%.2f "
-            "evidence_count=%d phases=%d components=%d risks=%d",
+            "testing_agent_completed subject_id=%s confidence=%.2f "
+            "evidence_count=%d regression=%d integration=%d edge_cases=%d",
             subject_id, confidence_score, len(evidence),
-            len(plan.implementation_phases), len(plan.components), len(plan.risks),
+            len(test_plan.regression_tests), len(test_plan.integration_tests),
+            len(test_plan.edge_cases),
         )
 
         return AgentOutput(
-            agent_id="development",
+            agent_id="testing",
             subject_id=subject_id,
             confidence=Confidence(
                 score=confidence_score,
                 reasoning=confidence_reasoning,
             ),
             evidence=evidence,
-            result=plan.model_dump(),
+            result=test_plan.model_dump(),
             prompt_version=_PROMPT_VERSION,
         )

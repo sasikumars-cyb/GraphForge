@@ -1,4 +1,7 @@
-"""Unit tests for the Orchestrator: Registry, Selector, and RunCoordinator."""
+"""Unit tests for AgentRegistry and AgentSelector.
+
+RunCoordinator has its own dedicated test file: test_run_coordinator.py.
+"""
 
 from __future__ import annotations
 
@@ -6,14 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from app.agents._contract import (
-    AgentContext,
-    AgentManifest,
-    AgentOutput,
-    Confidence,
-    Evidence,
-    Subject,
-)
+from app.agents._contract import AgentManifest
 from app.orchestrator.registry import AgentRegistry
 from app.orchestrator.selector import GOAL_PLAN_FREEFORM, GOAL_REVIEW_PR, AgentSelector
 
@@ -103,3 +99,6 @@ def test_selector_known_goals_returns_all() -> None:
     goals = selector.known_goals()
     assert GOAL_REVIEW_PR in goals
     assert GOAL_PLAN_FREEFORM in goals
+
+    # RunCoordinator has its own dedicated test file (test_run_coordinator.py) —
+    # not duplicated here.

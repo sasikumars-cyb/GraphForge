@@ -22,7 +22,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import Evidence
 from app.graph.interfaces import IGraphRepository
-from app.graph.models import GraphNode
 from app.models.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -269,12 +268,12 @@ def to_evidence(observation: PlanningObservation, kind: str) -> Evidence:
     """
     if not observation.succeeded:
         return Evidence(
-            kind="tool_call",  # type: ignore[arg-type]
+            kind="tool_call",
             reference=observation.tool_name,
             summary=f"FAILED: {observation.summary}",
         )
     return Evidence(
-        kind=kind,  # type: ignore[arg-type]
+        kind=kind,
         reference=observation.tool_name,
         summary=observation.summary,
     )

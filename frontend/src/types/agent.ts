@@ -172,3 +172,85 @@ export interface DevelopmentPlanResult {
   graph_context_used: boolean;
   repositories_consulted?: string[];
 }
+
+// --- Test Plan Result (agent-specific payload inside step.result) ---
+
+export interface TestScopeResult {
+  in_scope: string[];
+  out_of_scope: string[];
+}
+
+export interface RegressionTestResult {
+  component: string;
+  description: string;
+  priority: string;
+  automated: boolean;
+}
+
+export interface IntegrationTestResult {
+  source_component: string;
+  target_component: string;
+  relationship: string;
+  description: string;
+  priority: string;
+}
+
+export interface EdgeCaseResult {
+  description: string;
+  component: string;
+  severity: string;
+  category: string;
+}
+
+export interface EnvironmentRequirementResult {
+  name: string;
+  description: string;
+  services_required: string[];
+}
+
+export interface ExecutionPhaseResult {
+  order: number;
+  title: string;
+  description: string;
+  test_types: string[];
+  depends_on_phases: number[];
+}
+
+export interface AutomationCandidateResult {
+  description: string;
+  component: string;
+  test_type: string;
+  reason: string;
+}
+
+export interface ManualValidationResult {
+  description: string;
+  component: string;
+  reason: string;
+}
+
+export interface TestRiskResult {
+  description: string;
+  severity: string;
+  affected_component: string;
+  mitigation: string;
+}
+
+export interface TestPlanResult {
+  goal: string;
+  executive_summary: string;
+  test_scope: TestScopeResult;
+  affected_repositories: string[];
+  affected_components: string[];
+  regression_tests: RegressionTestResult[];
+  integration_tests: IntegrationTestResult[];
+  edge_cases: EdgeCaseResult[];
+  environment_requirements: EnvironmentRequirementResult[];
+  execution_order: ExecutionPhaseResult[];
+  automation_candidates: AutomationCandidateResult[];
+  manual_validations: ManualValidationResult[];
+  risks: TestRiskResult[];
+  recommendations: string[];
+  graph_context_used: boolean;
+  repositories_consulted?: string[];
+}

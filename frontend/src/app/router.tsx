@@ -5,6 +5,7 @@ import { LoginPage } from "../pages/LoginPage";
 import { DashboardPage } from "../pages/DashboardPage";
 import { PlanningPage } from "../pages/PlanningPage";
 import { DevelopmentPage } from "../pages/DevelopmentPage";
+import { TestingPage } from "../pages/TestingPage";
 import { ReviewPage } from "../pages/ReviewPage";
 import { RunHistoryPage } from "../pages/RunHistoryPage";
 import { RunDetailPage } from "../pages/RunDetailPage";
@@ -30,6 +31,7 @@ export const routes: RouteObject[] = [
           { path: "/", element: <DashboardPage /> },
           { path: "/planning", element: <PlanningPage /> },
           { path: "/development", element: <DevelopmentPage /> },
+          { path: "/testing", element: <TestingPage /> },
           { path: "/review", element: <ReviewPage /> },
           { path: "/runs", element: <RunHistoryPage /> },
           { path: "/runs/:runId", element: <RunDetailPage /> },

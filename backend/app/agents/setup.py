@@ -15,6 +15,8 @@ import logging
 from app.agents.development.agent import DevelopmentAgent
 from app.agents.development.manifest import DEVELOPMENT_MANIFEST
 from app.agents.planning.agent import PlanningAgent
+from app.agents.testing.agent import TestPlanningAgent
+from app.agents.testing.manifest import TESTING_MANIFEST
 
 logger = logging.getLogger(__name__)
 from app.agents.planning.manifest import PLANNING_MANIFEST
@@ -42,3 +44,7 @@ def register_agents() -> None:
     if "development" not in existing_ids:
         global_registry.register(DEVELOPMENT_MANIFEST, DevelopmentAgent())
         logger.info("registered_development_agent")
+
+    if "testing" not in existing_ids:
+        global_registry.register(TESTING_MANIFEST, TestPlanningAgent())
+        logger.info("registered_testing_agent")

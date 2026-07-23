@@ -212,25 +212,31 @@ async def test_invalid_goal_commits_before_raising() -> None:
 @pytest.mark.asyncio
 async def test_missing_agent_marks_run_as_failed() -> None:
     """Selector finds a goal but the registry doesn't have the agent.
-    Since P1-1 unified them, this scenario is unlikely but the RunCoordinator
-    still guards against it."""
+
+    Since the Selector now derives its mapping from a registry, this only
+    happens if RunCoordinator is constructed with a *different* registry
+    instance than the one the Selector was built with — a defensive path,
+    exercised here by deliberately mismatching them.
+    """
     mock_db = AsyncMock()
     mock_db.flush = AsyncMock()
     mock_db.commit = AsyncMock()
     mock_db.add = MagicMock()
 
-    registry = AgentRegistry()
-    # Register planning but not review
-    registry.register(
-        _make_manifest("planning", "plan_freeform"), AsyncMock()
-    )
-    selector = AgentSelector(registry)
-    coordinator = RunCoordinator(db=mock_db, registry=registry, selector=selector)
+    registry_with_agent = AgentRegistry()
+    registry_with_agent.register(_make_manifest("planning", "plan_freeform"), AsyncMock())
+    selector = AgentSelector(registry_with_agent)
+
+    empty_registry = AgentRegistry()
+    coordinator = RunCoordinator(db=mock_db, registry=empty_registry, selector=selector)
     subject = _make_subject()
 
-    # plan_freeform works
-    run = await coordinator.execute(subject, "plan_freeform")
-    assert run.status == "completed"
+    with pytest.raises(NotFoundError, match="not found in registry"):
+        await coordinator.execute(subject, "plan_freeform")
+
+    run = mock_db.add.call_args_list[0][0][0]
+    assert run.status == "failed"
+    mock_db.commit.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
