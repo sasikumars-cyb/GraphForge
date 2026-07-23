@@ -29,7 +29,7 @@ const RISK_STYLES: Record<RiskLevel, { label: string; badge: string; dot: string
 
 /**
  * Dedicated risk-level indicator — deliberately separate from StatusBadge
- * since risk is the one signal every page in ChangeGuard has to make
+ * since risk is the one signal every page in GraphForge has to make
  * scannable at a glance. Pairs color with a dot, not color alone.
  */
 export function RiskBadge({ level }: RiskBadgeProps) {

@@ -221,7 +221,7 @@ waiting on another person's code for more than one integration checkpoint (§5).
 |---|---|
 | **Purpose** | Prove the framework generalizes to a genuinely different agent, not a Review Agent clone |
 | **Owner** | Developer 1 |
-| **Scope** | `app/agents/planning/` (manifest, prompt, tools, output schema), `app/context/resolvers/freetext.py` (minimal Entry Resolver for free-text goals) |
+| **Scope** | `app/agents/planning/` (manifest, prompt, tools, output schema), `app/context/resolvers/freetext.py` (minimal Entry Resolver for free-text goals). **Note**: this is the standalone-input variant of the Planning Agent (`Goal=plan_freeform`, per `AGENT_FRAMEWORK.md`), not the sequential-handoff Planning Agent described in `ARCHITECTURE.md`/`ROADMAP.md` Phase 2, which consumes a real Requirement Agent's output (`Goal=plan_story`) — that version remains Phase 2/3 backlog work. |
 | **Deliverables** | A working Planning Agent producing a real `AgentOutput` with confidence + evidence, registered in WS2's Orchestrator |
 | **Dependencies** | WS1's `BaseAgent` contract (can start against a draft; the manifest schema itself, not the full implementation) |
 | **Public APIs** | None new beyond what WS2 already defines — the Planning Agent is a consumer of the Orchestrator API, not a new API surface |
@@ -238,7 +238,7 @@ waiting on another person's code for more than one integration checkpoint (§5).
 |---|---|
 | **Purpose** | Make the multi-agent story visible and demoable |
 | **Owner** | Developer 2 |
-| **Scope** | `AgentsPage`, `components/agents/*`, `lib/api/agentRuns.ts`, `hooks/useAgentRun.ts`, nav wiring |
+| **Scope** | `AgentsPage`, `components/agents/*`, `lib/api/agentRuns.ts`, `hooks/useAgentRun.ts`, nav wiring. The "trigger a run" button on the Agents page uses `violet-600` (agentic action, consistent with the existing "Investigate" button) — confirmed explicitly here so it isn't re-litigated mid-build. |
 | **Deliverables** | A working Agents page showing run history for both agents, reusing `ReasoningLogPanel` for detail |
 | **Dependencies** | WS2's API contract (can build against mocked responses immediately; needs the real endpoint only at the final integration checkpoint) |
 | **Public APIs** | None — pure consumer |
@@ -315,6 +315,7 @@ graph TD
 | `frontend/src/components/agents/` | Developer 2 | — | Captain | No |
 | `frontend/src/components/` (existing shared primitives) | (unowned — reused, not modified) | — | Developer 2 | **No — frozen** |
 | `frontend/src/components/layout/nav-items.ts`, `router.tsx` | Developer 2 | — | Captain | **Yes — one-line additions only, coordinate before editing** |
+| `backend/app/schemas/` (existing folder) | No single owner — each workstream adds its own new file (e.g. `schemas/orchestrator.py`, `schemas/planning_agent.py`) | — | Captain (any edit to an *existing* schema file) | No for new files, Yes for existing files |
 | `backend/tests/`, `frontend/**/*.test.tsx` | Each workstream owner (their own code) | Senior QA (coverage review) | Senior QA | Yes — everyone writes tests, QA reviews all of them |
 | `docs/graphforge/*`, `docs/GRAPHFORGE_TRANSFORMATION_PLAN.md`, this document | Captain | — | — | Yes — Captain merges, anyone can propose |
 
@@ -330,8 +331,13 @@ migration (do not let anyone "clean up" this file mid-hackathon — it's the pro
 
 **Protected Files** (frozen, no hackathon PR should touch these at all): `app/analysis/*`,
 `app/graph/*`, `app/indexer/*`, `app/integrations/*`, every existing frontend page except through
-WS4's additive nav change. If a workstream believes one of these needs a change, that's an
-escalation to the Captain, not a PR.
+WS4's additive nav change, and — critically — **`docker/docker-compose*.yml`'s `name:` field and
+every `POSTGRES_*`/`NEO4J_*` credential value in those files, `.env`, and `.env.example`**.
+Renaming any of these orphans the currently-running dev Postgres/Neo4j volumes (which hold real,
+non-trivially-reproducible seeded data — a real GitHub connection, four indexed repositories,
+seeded PR rows) rather than updating them in place; see `FINAL_ARCHITECTURE_REVIEW.md` Part 3 for
+the full analysis. If a workstream believes one of these needs a change, that's an escalation to
+the Captain, not a PR.
 
 ---
 

@@ -40,7 +40,7 @@ export function LoginPage() {
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center gap-2 text-center">
           <ShieldCheck className="h-8 w-8 text-sky-400" aria-hidden="true" />
-          <h1 className="text-xl font-semibold">Sign in to ChangeGuard</h1>
+          <h1 className="text-xl font-semibold">Sign in to GraphForge</h1>
           <p className="text-sm text-slate-400">Review pull request risk before it ships.</p>
         </div>
 

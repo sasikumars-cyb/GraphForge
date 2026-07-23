@@ -1,4 +1,4 @@
-# ChangeGuard — frontend
+# GraphForge — frontend
 
 React + TypeScript SPA, built with Vite. See the [root README](../README.md) and [`docs/architecture/overview.md`](../docs/architecture/overview.md) for the full project context.
 

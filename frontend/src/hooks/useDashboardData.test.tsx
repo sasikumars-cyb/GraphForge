@@ -107,7 +107,7 @@ function renderProbe() {
 
 describe("useDashboardData", () => {
   beforeEach(() => {
-    localStorage.setItem("changeguard.token", "fake-token");
+    localStorage.setItem("graphforge.token", "fake-token");
     vi.spyOn(authApi, "fetchCurrentUser").mockResolvedValue(FAKE_USER);
     vi.spyOn(repositoriesApi, "getLatestIndexingJob").mockRejectedValue(NOT_FOUND);
   });

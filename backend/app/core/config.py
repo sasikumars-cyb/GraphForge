@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     )
 
     # --- Application ---
-    app_name: str = "ChangeGuard"
+    app_name: str = "GraphForge"
     environment: str = Field(default="development")
     debug: bool = Field(default=True)
     api_v1_prefix: str = "/api/v1"

@@ -179,7 +179,7 @@ export function RepositoriesPage() {
       <div>
         <h2 className="text-xl font-semibold text-slate-50">Repositories</h2>
         <p className="mt-1 text-sm text-slate-400">
-          Repositories tracked and indexed by ChangeGuard.
+          Repositories tracked and indexed by GraphForge.
         </p>
       </div>
 

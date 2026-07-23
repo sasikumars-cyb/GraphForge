@@ -3,7 +3,7 @@ import { fetchCurrentUser, login as apiLogin } from "../lib/api/auth";
 import type { User } from "../types/auth";
 import { AuthContext } from "./auth-context";
 
-const TOKEN_STORAGE_KEY = "changeguard.token";
+const TOKEN_STORAGE_KEY = "graphforge.token";
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => localStorage.getItem(TOKEN_STORAGE_KEY));

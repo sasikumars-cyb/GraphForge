@@ -2,7 +2,7 @@ import { useState, type ReactNode } from "react";
 import { AI_MODEL_CATALOG, DEFAULT_AI_MODEL_ID, type AiModelId } from "../types/aiModel";
 import { AiModelContext } from "./ai-model-context";
 
-const MODEL_STORAGE_KEY = "changeguard.aiModel";
+const MODEL_STORAGE_KEY = "graphforge.aiModel";
 
 function isSupportedModelId(value: string | null): value is AiModelId {
   return AI_MODEL_CATALOG.some((option) => option.id === value);

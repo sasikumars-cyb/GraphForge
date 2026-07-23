@@ -166,6 +166,13 @@ N's draft output without a round-trip through the graph. On run completion, ever
 gets written to the graph/Postgres; `RunContext` is discarded. This keeps the graph the permanent
 source of truth (per Core Principle 4) while giving agents a fast scratch space mid-run.
 
+**Hackathon-phase addendum**: the initial implementation uses an in-memory `RunContext`
+(single-process), not Redis — see `TEAM_IMPLEMENTATION_PLAN.md` §9/§11/§14 for the rationale
+(avoids adding a new `docker-compose` service and its associated merge-conflict surface during a
+time-boxed build). This is a deliberate, temporary substitution: Redis-backing remains required
+before any multi-process/multi-replica deployment, and this addendum should be removed once that
+migration happens.
+
 ## Backend
 
 Reused wholesale: FastAPI, async SQLAlchemy, Alembic, the `IVersionControlProvider` /

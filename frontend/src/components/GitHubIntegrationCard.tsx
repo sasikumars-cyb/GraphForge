@@ -150,7 +150,7 @@ export function GitHubIntegrationCard() {
   }
 
   return (
-    <Card title="Integrations" description="Connect the systems ChangeGuard reads from">
+    <Card title="Integrations" description="Connect the systems GraphForge reads from">
       <div className="flex flex-col gap-4">
         <div className="flex items-center justify-between rounded-lg border border-slate-800 px-4 py-3">
           <div className="flex items-center gap-3">

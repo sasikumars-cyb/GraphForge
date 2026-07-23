@@ -1,4 +1,4 @@
-"""A local-filesystem `IVersionControlProvider`, for demoing ChangeGuard
+"""A local-filesystem `IVersionControlProvider`, for demoing GraphForge
 against repositories that only exist on disk (no GitHub involved at all).
 
 Not used in production - see `app.integrations.factory`, which only

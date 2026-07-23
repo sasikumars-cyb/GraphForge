@@ -82,7 +82,7 @@ const _FAKE_AI_RESULT: AIAnalysisResult = {
 
 describe("App navigation (authenticated)", () => {
   beforeEach(() => {
-    localStorage.setItem("changeguard.token", "fake-token");
+    localStorage.setItem("graphforge.token", "fake-token");
     vi.spyOn(authApi, "fetchCurrentUser").mockResolvedValue(FAKE_USER);
   });
 
@@ -260,9 +260,9 @@ describe("App navigation (authenticated)", () => {
     await user.click(screen.getByTitle("Log out"));
 
     expect(
-      await screen.findByRole("heading", { name: "Sign in to ChangeGuard" }),
+      await screen.findByRole("heading", { name: "Sign in to GraphForge" }),
     ).toBeInTheDocument();
-    expect(localStorage.getItem("changeguard.token")).toBeNull();
+    expect(localStorage.getItem("graphforge.token")).toBeNull();
   });
 });
 
@@ -277,19 +277,19 @@ describe("App navigation (unauthenticated)", () => {
     renderApp("/pull-requests");
 
     expect(
-      await screen.findByRole("heading", { name: "Sign in to ChangeGuard" }),
+      await screen.findByRole("heading", { name: "Sign in to GraphForge" }),
     ).toBeInTheDocument();
   });
 
   it("drops an invalid token and redirects to /login", async () => {
-    localStorage.setItem("changeguard.token", "invalid-token");
+    localStorage.setItem("graphforge.token", "invalid-token");
     vi.spyOn(authApi, "fetchCurrentUser").mockRejectedValue(new Error("401"));
 
     renderApp("/");
 
     await waitFor(() =>
-      expect(screen.getByRole("heading", { name: "Sign in to ChangeGuard" })).toBeInTheDocument(),
+      expect(screen.getByRole("heading", { name: "Sign in to GraphForge" })).toBeInTheDocument(),
     );
-    expect(localStorage.getItem("changeguard.token")).toBeNull();
+    expect(localStorage.getItem("graphforge.token")).toBeNull();
   });
 });

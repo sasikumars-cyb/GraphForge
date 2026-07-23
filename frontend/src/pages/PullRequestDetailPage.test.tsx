@@ -78,7 +78,7 @@ function renderPage(initialPath = "/pull-requests/pr-1") {
 
 describe("PullRequestDetailPage - Publish Review", () => {
   beforeEach(() => {
-    localStorage.setItem("changeguard.token", "fake-token");
+    localStorage.setItem("graphforge.token", "fake-token");
     vi.spyOn(authApi, "fetchCurrentUser").mockResolvedValue(FAKE_USER);
     vi.spyOn(githubApi, "listTrackedRepositories").mockResolvedValue([FAKE_REPO]);
     vi.spyOn(repositoriesApi, "listPullRequests").mockResolvedValue([FAKE_PR]);

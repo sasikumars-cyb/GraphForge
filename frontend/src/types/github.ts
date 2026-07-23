@@ -21,7 +21,7 @@ export interface AvailableRepository {
   is_selected: boolean;
 }
 
-/** One repo already tracked (persisted) in ChangeGuard. */
+/** One repo already tracked (persisted) in GraphForge. */
 export interface TrackedRepository {
   id: string;
   github_repo_id: string;

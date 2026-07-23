@@ -30,7 +30,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <div className="flex items-center justify-between px-5 py-5">
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-5 w-5 text-sky-400" aria-hidden="true" />
-            <span className="text-sm font-semibold tracking-wide text-slate-100">ChangeGuard</span>
+            <span className="text-sm font-semibold tracking-wide text-slate-100">GraphForge</span>
           </div>
           <button
             type="button"

@@ -219,11 +219,19 @@ run (e.g. Planning needs Requirement's *this-run* clarification, not last month'
 
 Phase 1: static `Goal → [agent_id]` rule table (see `ARCHITECTURE.md` § Agent Orchestrator). A
 `Goal` is itself a closed enum (`review_pr`, `clarify_requirement`, `plan_story`,
-`assess_architecture_impact`, ...), set by whatever triggered the run (a webhook event, a UI
-button, an API call) — never inferred from free text by an LLM in Phase 1, to keep agent
-selection deterministic and debuggable while the framework is new. LLM-based Goal inference from
-free-text entry points is an explicit Phase 3 upgrade, isolated behind `ISelector` so it's a
+`assess_architecture_impact`, `plan_freeform`, ...), set by whatever triggered the run (a webhook
+event, a UI button, an API call) — never inferred from free text by an LLM in Phase 1, to keep
+agent selection deterministic and debuggable while the framework is new. LLM-based Goal inference
+from free-text entry points is an explicit Phase 3 upgrade, isolated behind `ISelector` so it's a
 drop-in replacement, not a rearchitecture.
+
+`plan_freeform` maps to the Planning Agent's standalone-input variant (see
+`TEAM_IMPLEMENTATION_PLAN.md` WS3): a free-text goal resolved through a minimal Entry Resolver,
+with no linked Story and no upstream Requirement Agent output in context. This is distinct from
+`plan_story`, which assumes the sequential-handoff Planning Agent described earlier in this
+document (§ How Agents Collaborate) — consuming a real Requirement Agent's output in the same
+run. Both map to the same underlying Planning Agent implementation today; `plan_story`'s full
+sequential-handoff behavior is Phase 2/3 backlog work, not yet built.
 
 ## How Context Flows
 

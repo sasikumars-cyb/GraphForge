@@ -1,1 +1,1 @@
-"""ChangeGuard backend application package."""
+"""GraphForge backend application package."""

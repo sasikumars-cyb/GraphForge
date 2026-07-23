@@ -63,7 +63,7 @@ function renderCard(initialEntries: string[] = ["/settings"]) {
 
 describe("GitHubIntegrationCard", () => {
   beforeEach(() => {
-    localStorage.setItem("changeguard.token", "fake-token");
+    localStorage.setItem("graphforge.token", "fake-token");
     vi.spyOn(authApi, "fetchCurrentUser").mockResolvedValue(FAKE_USER);
     Object.defineProperty(window, "location", {
       value: { href: "" },

@@ -67,7 +67,7 @@ export function SettingsPage() {
 
       <Card
         title="Notifications"
-        description="How ChangeGuard should notify you about analyzed changes"
+        description="How GraphForge should notify you about analyzed changes"
       >
         <div className="divide-y divide-slate-800">
           <ToggleRow

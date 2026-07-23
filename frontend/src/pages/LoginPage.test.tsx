@@ -70,6 +70,6 @@ describe("LoginPage", () => {
     await user.click(screen.getByRole("button", { name: "Sign in" }));
 
     expect(await screen.findByText("Dashboard placeholder")).toBeInTheDocument();
-    expect(localStorage.getItem("changeguard.token")).toBe("fake-token");
+    expect(localStorage.getItem("graphforge.token")).toBe("fake-token");
   });
 });

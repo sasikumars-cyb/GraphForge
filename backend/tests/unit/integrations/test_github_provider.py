@@ -82,7 +82,7 @@ async def test_post_pull_request_comment_returns_posted_comment_on_201(
         assert request.method == "POST"
         assert request.url.path == "/repos/acme/order-svc/issues/42/comments"
         assert request.headers["Authorization"] == "Bearer gho_faketoken"
-        assert json.loads(request.content) == {"body": "# 🤖 ChangeGuard AI Review"}
+        assert json.loads(request.content) == {"body": "# 🤖 GraphForge AI Review"}
         return httpx.Response(
             status_code=201,
             json={"id": 987654321, "html_url": "https://github.com/acme/order-svc/pull/42#comment"},
@@ -101,7 +101,7 @@ async def test_post_pull_request_comment_returns_posted_comment_on_201(
         owner="acme",
         repo="order-svc",
         pull_number=42,
-        body="# 🤖 ChangeGuard AI Review",
+        body="# 🤖 GraphForge AI Review",
         access_token="gho_faketoken",
     )
 
