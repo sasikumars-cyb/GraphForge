@@ -24,7 +24,6 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.models import AgentState, ReasoningStep
@@ -41,21 +40,20 @@ from app.ai.agent.tools import (
 )
 from app.ai.interfaces.llm_provider import ILLMProvider
 from app.ai.schemas.analysis_result import AIAnalysisResult
-from app.ai.services.context_builder import ContextBuilder
+from app.ai.services.context_builder import AIContext, ContextBuilder
 from app.ai.services.persistence import persist_ai_analysis_result
 from app.analysis.engine.impact_analysis_engine import RepositoryNotIndexedError
 from app.analysis.graph.interfaces import IImpactGraphReader
 from app.analysis.models.impact import ImpactAnalysisResult, impacted_node_from_graph_node
 from app.analysis.services.dependency_path_builder import build_dependency_paths
 from app.analysis.services.risk_classifier import classify_risk
-from app.core.crypto import decrypt_secret
 from app.core.exceptions import NotFoundError
 from app.graph.interfaces import IGraphRepository
 from app.graph.models import GraphNode
 from app.integrations.interfaces import IVersionControlProvider
-from app.models.github_connection import GitHubConnection
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
+from app.services.github_service import get_decrypted_access_token
 
 
 def _is_pom_file(path: str) -> bool:
@@ -108,7 +106,7 @@ class InvestigationAgent:
                 "/repositories/{id}/index before investigating a pull request."
             )
 
-        access_token = await self._get_access_token(repository.user_id)
+        access_token = await get_decrypted_access_token(self._db, repository.user_id)
         changed_files = await self._version_control_provider.list_changed_files(
             owner=repository.owner,
             repo=repository.name,
@@ -136,6 +134,74 @@ class InvestigationAgent:
         await self._gather_evidence(state, executor)
 
         result = self._finalize_impact_result(state)
+        analysis, context = await self._synthesize(
+            state=state,
+            result=result,
+            repository=repository,
+            pull_request=pull_request,
+            synthesis_label="Sufficient evidence gathered - synthesizing with the LLM provider.",
+        )
+
+        retry_decision = self._planner.should_retry_after_low_confidence(
+            confidence_score=analysis.confidence.score,
+            has_diff=bool(state.diff_content),
+            has_authors=bool(state.recent_file_authors),
+            has_impacted_services=state.has_impacted_services,
+            has_impacted_repositories=bool(state.impacted_repositories),
+            has_cross_repository_peers=bool(state.cross_repository_peer_hops),
+        )
+        # Hard cap: at most one retry, ever - this is a plain `if`, never a
+        # loop, and confidence is not re-checked after the second
+        # synthesis. Do not "helpfully" wrap this in a while loop.
+        if retry_decision.should_call and retry_decision.tool_name:
+            observation = await executor.execute(retry_decision.tool_name, state)
+            state.reasoning_log.append(
+                ReasoningStep(
+                    step_number=len(state.reasoning_log) + 1,
+                    goal=(
+                        "Decide whether more evidence exists worth gathering after a "
+                        "low-confidence result."
+                    ),
+                    plan=retry_decision.reasoning,
+                    tool_selected=retry_decision.tool_name,
+                    observation=observation,
+                    decision="Re-synthesizing with the additional evidence.",
+                )
+            )
+            analysis, context = await self._synthesize(
+                state=state,
+                result=result,
+                repository=repository,
+                pull_request=pull_request,
+                synthesis_label=(
+                    f"Retried after confidence {analysis.confidence.score:.2f} (below 0.5)."
+                ),
+            )
+
+        # Grounding uses whichever context was produced *last* - a
+        # metadata retry can change `impacted_repositories`, so only the
+        # final context's known-repository set is valid to ground against.
+        known_repository_names = {r["name"] for r in context.impacted_repositories}
+        analysis.release_coordination_plan = analysis.release_coordination_plan.grounded_in(
+            known_repository_names, repository.name
+        )
+
+        await persist_ai_analysis_result(self._db, pull_request_id, analysis)
+
+        return InvestigationResult(analysis=analysis, reasoning_log=state.reasoning_log)
+
+    async def _synthesize(
+        self,
+        *,
+        state: AgentState,
+        result: ImpactAnalysisResult,
+        repository: Repository,
+        pull_request: PullRequest,
+        synthesis_label: str,
+    ) -> tuple[AIAnalysisResult, AIContext]:
+        """Build the current context and call the LLM once - shared by the
+        first synthesis and the conditional low-confidence retry so the
+        context-building sequence is never duplicated."""
         context = (
             ContextBuilder()
             .with_repository(
@@ -158,28 +224,19 @@ class InvestigationAgent:
             .with_recent_file_authors(state.recent_file_authors)
             .build()
         )
-
         state.reasoning_log.append(
             ReasoningStep(
                 step_number=len(state.reasoning_log) + 1,
                 goal="Generate the final grounded impact analysis.",
-                plan="Sufficient evidence gathered - synthesizing with the LLM provider.",
+                plan=synthesis_label,
                 tool_selected=None,
                 observation=None,
-                decision=f"Calling the LLM once with {result.risk.value} risk and "
+                decision=f"Calling the LLM with {result.risk.value} risk and "
                 f"{len(state.changed_files)} changed file(s) in context.",
             )
         )
-
         analysis = await self._llm_provider.analyze(context)
-        known_repository_names = {r["name"] for r in context.impacted_repositories}
-        analysis.release_coordination_plan = analysis.release_coordination_plan.grounded_in(
-            known_repository_names, repository.name
-        )
-
-        await persist_ai_analysis_result(self._db, pull_request_id, analysis)
-
-        return InvestigationResult(analysis=analysis, reasoning_log=state.reasoning_log)
+        return analysis, context
 
     def _build_tool_registry(
         self,
@@ -321,13 +378,8 @@ class InvestigationAgent:
                 )
             )
 
-        has_impacted_services = bool(
-            state.direct_service_nodes
-            or state.cross_repository_peer_hops
-            or state.same_repository_peer_hops
-        )
         history_decision = self._planner.should_read_git_history(
-            has_impacted_services=has_impacted_services
+            has_impacted_services=state.has_impacted_services
         )
         if history_decision.should_call:
             observation = await executor.execute("read_git_history", state)
@@ -395,10 +447,3 @@ class InvestigationAgent:
                 "relation": "current",
             }
         ]
-
-    async def _get_access_token(self, user_id: uuid.UUID) -> str | None:
-        result = await self._db.execute(
-            select(GitHubConnection).where(GitHubConnection.user_id == user_id)
-        )
-        connection = result.scalar_one_or_none()
-        return decrypt_secret(connection.encrypted_access_token) if connection else None

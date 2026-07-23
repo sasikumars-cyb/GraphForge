@@ -40,6 +40,12 @@ class PullRequestAIAnalysis(Base):
     regression_tests: Mapped[list[dict[str, object]]] = mapped_column(
         JSON, nullable=False, default=list
     )
+    # Nullable: rows written before this column existed have no plan to
+    # show. Ephemeral no longer - persisted so `publish-review` can post
+    # it without re-invoking the LLM (see app.ai.services.persistence).
+    release_coordination_plan: Mapped[dict[str, object] | None] = mapped_column(
+        JSON, nullable=True, default=None
+    )
     confidence_score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     confidence_reasoning: Mapped[str] = mapped_column(Text, nullable=False, default="")
     prompt_version: Mapped[str] = mapped_column(String(50), nullable=False, default="")

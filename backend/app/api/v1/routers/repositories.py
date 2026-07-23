@@ -137,6 +137,25 @@ async def select_repositories(
     return await set_selected_repositories(db, current_user, selection)
 
 
+@router.delete("/{repository_id}", status_code=204)
+async def remove_repository(
+    repository_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> None:
+    """Permanently removes a repository: clears its Neo4j graph, then
+    deletes the row (cascades to its pull requests, analyses, and
+    indexing jobs via existing FK constraints). Clearing the graph first
+    means a Neo4j failure leaves the repository intact and safe to retry,
+    rather than an orphaned graph with no owning row."""
+    repository = await _get_owned_repository(db, repository_id, current_user)
+    await Neo4jGraphRepository(get_driver()).replace_repository_graph(
+        str(repository.id), GraphPayload()
+    )
+    await db.delete(repository)
+    await db.commit()
+
+
 @router.get("/{repository_id}/pull-requests", response_model=list[PullRequestResponse])
 async def list_pull_requests(
     repository_id: uuid.UUID,

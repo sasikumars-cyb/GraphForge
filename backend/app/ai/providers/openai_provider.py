@@ -71,11 +71,17 @@ _SYSTEM_PROMPT = (
 
 
 class OpenAIProvider(ILLMProvider):
-    """OpenAI Chat Completions provider implementing :class:`ILLMProvider`.
+    """Chat Completions provider implementing :class:`ILLMProvider`.
 
     Renders prompt templates via :class:`PromptBuilder`, sends a single
-    request to OpenAI, and parses the JSON response into an
-    :class:`AIAnalysisResult`.
+    request, and parses the JSON response into an :class:`AIAnalysisResult`.
+
+    Despite the name, this also serves as the client for any vendor whose
+    API is a compatible superset of OpenAI's Chat Completions format (same
+    ``Authorization: Bearer``, ``messages``/``response_format`` request
+    shape, and ``choices[0].message.content`` response shape) - e.g. Groq,
+    a free-tier alternative with no billing required. Pass that vendor's
+    ``base_url`` and API key; nothing else in this class is OpenAI-specific.
     """
 
     def __init__(
@@ -86,6 +92,7 @@ class OpenAIProvider(ILLMProvider):
         temperature: float = 0.2,
         max_tokens: int = 4096,
         timeout: float = 60.0,
+        base_url: str = _OPENAI_CHAT_URL,
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._api_key = api_key
@@ -93,6 +100,7 @@ class OpenAIProvider(ILLMProvider):
         self._temperature = temperature
         self._max_tokens = max_tokens
         self._timeout = timeout
+        self._base_url = base_url
         self._http_client = http_client
         self._prompt_builder = PromptBuilder()
 
@@ -108,7 +116,7 @@ class OpenAIProvider(ILLMProvider):
         return self._prompt_builder.render("impact_analysis", variables)
 
     async def _call_openai(self, user_prompt: str) -> str:
-        """Make the HTTP request to OpenAI and return the content string."""
+        """Make the HTTP request to ``self._base_url`` and return the content string."""
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -129,16 +137,16 @@ class OpenAIProvider(ILLMProvider):
 
         try:
             response = await client.post(
-                _OPENAI_CHAT_URL,
+                self._base_url,
                 headers=headers,
                 json=payload,
                 timeout=self._timeout,
             )
         except httpx.TimeoutException as exc:
-            logger.error("OpenAI request timed out: %s", exc)
+            logger.error("AI provider request timed out: %s", exc)
             raise AIProviderTimeoutError("AI provider request timed out.") from exc
         except httpx.HTTPError as exc:
-            logger.error("OpenAI HTTP error: %s", exc)
+            logger.error("AI provider HTTP error: %s", exc)
             raise AIProviderError("AI provider communication error.") from exc
         finally:
             if should_close:
@@ -152,21 +160,22 @@ class OpenAIProvider(ILLMProvider):
         if response.status_code == 200:
             return
         if response.status_code == 401:
-            logger.error("OpenAI auth failure (401)")
+            logger.error("AI provider auth failure (401)")
             raise AIProviderAuthError("Invalid or missing API key.")
         if response.status_code == 429:
-            logger.warning("OpenAI rate limit hit (429)")
+            logger.warning("AI provider rate limit hit (429)")
             raise AIProviderRateLimitError("AI provider rate limit exceeded.")
-        logger.error("OpenAI error %d: %s", response.status_code, response.text[:200])
+        logger.error("AI provider error %d: %s", response.status_code, response.text[:200])
         raise AIProviderError(f"AI provider returned status {response.status_code}.")
 
     def _extract_content(self, response: httpx.Response) -> str:
-        """Extract the message content from OpenAI's response JSON."""
+        """Extract the message content from the response JSON (Chat
+        Completions shape - shared by OpenAI and OpenAI-compatible vendors)."""
         try:
             body = response.json()
             return str(body["choices"][0]["message"]["content"])
         except (KeyError, IndexError, TypeError) as exc:
-            logger.error("Malformed OpenAI response structure: %s", exc)
+            logger.error("Malformed AI provider response structure: %s", exc)
             raise AIProviderResponseError(
                 "AI provider returned an unexpected response structure."
             ) from exc
@@ -176,13 +185,13 @@ class OpenAIProvider(ILLMProvider):
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
-            logger.error("OpenAI response is not valid JSON: %s", exc)
+            logger.error("AI provider response is not valid JSON: %s", exc)
             raise AIProviderResponseError("AI provider returned invalid JSON.") from exc
 
         try:
             result = AIAnalysisResult.model_validate(data)
         except Exception as exc:
-            logger.error("OpenAI response failed schema validation: %s", exc)
+            logger.error("AI provider response failed schema validation: %s", exc)
             raise AIProviderResponseError(
                 "AI provider response does not match expected schema."
             ) from exc

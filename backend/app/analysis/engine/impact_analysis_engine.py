@@ -16,15 +16,14 @@ from app.analysis.graph.interfaces import IImpactGraphReader
 from app.analysis.models.impact import ImpactAnalysisResult, impacted_node_from_graph_node
 from app.analysis.services.dependency_path_builder import build_dependency_paths
 from app.analysis.services.risk_classifier import classify_risk
-from app.core.crypto import decrypt_secret
 from app.core.exceptions import AppError, NotFoundError
 from app.graph.interfaces import IGraphRepository
 from app.graph.models import GraphNode
 from app.integrations.interfaces import IVersionControlProvider
-from app.models.github_connection import GitHubConnection
 from app.models.pull_request import PullRequest
 from app.models.pull_request_analysis import PullRequestAnalysis
 from app.models.repository import Repository
+from app.services.github_service import get_decrypted_access_token
 
 
 class RepositoryNotIndexedError(AppError):
@@ -73,7 +72,7 @@ class ImpactAnalysisEngine:
                 "/repositories/{id}/index before analyzing a pull request."
             )
 
-        access_token = await self._get_access_token(repository.user_id)
+        access_token = await get_decrypted_access_token(self._db, repository.user_id)
         changed_files = await self._version_control_provider.list_changed_files(
             owner=repository.owner,
             repo=repository.name,
@@ -155,13 +154,6 @@ class ImpactAnalysisEngine:
         )
 
         return await self._persist(pull_request.id, result)
-
-    async def _get_access_token(self, user_id: uuid.UUID) -> str | None:
-        result = await self._db.execute(
-            select(GitHubConnection).where(GitHubConnection.user_id == user_id)
-        )
-        connection = result.scalar_one_or_none()
-        return decrypt_secret(connection.encrypted_access_token) if connection else None
 
     async def _persist(
         self, pull_request_id: uuid.UUID, result: ImpactAnalysisResult

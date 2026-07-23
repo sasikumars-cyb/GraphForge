@@ -1,7 +1,13 @@
 """Selecting/persisting repositories and listing their pull requests."""
 
+from pathlib import Path
+
 import pytest
 from httpx import AsyncClient
+
+from app.graph.neo4j_repository import Neo4jGraphRepository
+from app.graph.session import get_driver
+from app.indexer.services.indexing_service import index_repository
 
 pytestmark = pytest.mark.asyncio
 
@@ -126,3 +132,71 @@ async def test_pull_requests_endpoint_404s_for_another_users_repository(
     )
 
     assert response.status_code == 404
+
+
+async def test_remove_repository_deletes_it_and_clears_its_graph(
+    db_client: AsyncClient, spring_boot_git_repo: Path
+) -> None:
+    token = await _register_and_get_token(db_client, USER_A)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    select_response = await db_client.post(
+        "/api/v1/repositories",
+        headers=headers,
+        json={"repositories": [{**REPO_ENGINE, "html_url": str(spring_boot_git_repo)}]},
+    )
+    repo_id = select_response.json()[0]["id"]
+
+    await index_repository(repository_id=repo_id, html_url=str(spring_boot_git_repo), ref="main")
+    assert await Neo4jGraphRepository(get_driver()).has_graph(repo_id) is True
+
+    response = await db_client.delete(f"/api/v1/repositories/{repo_id}", headers=headers)
+
+    assert response.status_code == 204
+    assert await Neo4jGraphRepository(get_driver()).has_graph(repo_id) is False
+
+    listed = await db_client.get("/api/v1/repositories", headers=headers)
+    assert listed.json() == []
+
+    prs = await db_client.get(f"/api/v1/repositories/{repo_id}/pull-requests", headers=headers)
+    assert prs.status_code == 404
+
+
+async def test_remove_repository_404s_for_another_users_repository(
+    db_client: AsyncClient,
+) -> None:
+    token_a = await _register_and_get_token(db_client, USER_A)
+    token_b = await _register_and_get_token(db_client, USER_B)
+
+    select_response = await db_client.post(
+        "/api/v1/repositories",
+        headers={"Authorization": f"Bearer {token_a}"},
+        json={"repositories": [REPO_ENGINE]},
+    )
+    repo_id = select_response.json()[0]["id"]
+
+    response = await db_client.delete(
+        f"/api/v1/repositories/{repo_id}",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+
+    assert response.status_code == 404
+
+    still_listed = await db_client.get(
+        "/api/v1/repositories", headers={"Authorization": f"Bearer {token_a}"}
+    )
+    assert len(still_listed.json()) == 1
+
+
+async def test_remove_repository_requires_authentication(db_client: AsyncClient) -> None:
+    token = await _register_and_get_token(db_client, USER_A)
+    select_response = await db_client.post(
+        "/api/v1/repositories",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"repositories": [REPO_ENGINE]},
+    )
+    repo_id = select_response.json()[0]["id"]
+
+    response = await db_client.delete(f"/api/v1/repositories/{repo_id}")
+
+    assert response.status_code == 401

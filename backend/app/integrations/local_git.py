@@ -93,6 +93,26 @@ class LocalGitVersionControlProvider(IVersionControlProvider):
             authors_by_path[path] = list(seen)[:3]
         return authors_by_path
 
+    async def get_file_content(
+        self, owner: str, repo: str, path: str, access_token: str | None = None
+    ) -> str | None:
+        """`git show main:{path}` - deliberately no `check=True` (unlike
+        every other method in this class): a missing path is the expected,
+        normal case for the CODEOWNERS fallback, never an error worth
+        raising `LocalGitDiffError` over."""
+        repo_dir = self._clone_root / repo
+        try:
+            result = subprocess.run(
+                ["git", "show", f"main:{path}"],
+                cwd=repo_dir,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (subprocess.TimeoutExpired, OSError):
+            return None
+        return result.stdout if result.returncode == 0 else None
+
     async def list_changed_files(
         self, owner: str, repo: str, pull_number: int, access_token: str | None = None
     ) -> list[ChangedFile]:

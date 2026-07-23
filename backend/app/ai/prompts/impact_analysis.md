@@ -1,5 +1,5 @@
 ---
-version: "1.3"
+version: "1.4"
 name: impact_analysis
 ---
 
@@ -67,6 +67,53 @@ provide:
 3. A concise summary of the overall impact.
 4. A release coordination plan — follow the rules in "Release Coordination
    Plan Rules" below exactly.
+
+Use exactly these field names and shapes — do not rename, omit, or flatten
+any field, and do not substitute a plain string where an object is shown:
+
+```json
+{
+  "executive_summary": "One paragraph, plain prose.",
+  "breaking_changes": [
+    {
+      "component": "The exact node/service name from the sections above",
+      "description": "What breaks and why, one or two sentences",
+      "severity": "high | medium | low",
+      "confidence": {"score": 0.9, "reasoning": "Why this confidence level"}
+    }
+  ],
+  "migration_advice": [
+    {
+      "component": "The exact node/service name this advice is for",
+      "advice": "The concrete action to take, one or two sentences",
+      "priority": "high | medium | low"
+    }
+  ],
+  "suggested_reviewers": [
+    {
+      "reviewer": "A name from Recent File Authors above, or a role if none was gathered",
+      "reason": "Why this reviewer, citing the specific file/authorship evidence",
+      "confidence": {"score": 0.8, "reasoning": "Why this confidence level"}
+    }
+  ],
+  "regression_tests": [
+    {
+      "component": "The exact node/service name to test",
+      "test_description": "The specific scenario to test, one sentence",
+      "priority": "high | medium | low",
+      "confidence": {"score": 0.8, "reasoning": "Why this confidence level"}
+    }
+  ]
+}
+```
+
+`confidence` is always a `{"score": <0.0-1.0>, "reasoning": "..."}` object,
+never a bare string or number — this applies everywhere it appears, in
+`breaking_changes` and `suggested_reviewers` alike. Every object in every
+list above must include every field shown, even if the value is a short
+placeholder — an omitted field is a validation failure, not an
+acceptable shortcut. Empty lists (e.g. `"breaking_changes": []`) are fine
+when nothing qualifies; a list containing an incomplete object is not.
 
 ## Release Coordination Plan Rules
 

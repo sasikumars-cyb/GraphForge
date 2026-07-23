@@ -1,7 +1,8 @@
 """Factory for creating LLM provider instances.
 
-Supports multiple provider backends.  Only OpenAI is currently implemented;
-others raise ``NotImplementedError`` until their adapters are built.
+Supports multiple provider backends.  OpenAI and Groq (a free-tier,
+OpenAI-compatible alternative requiring no billing) are implemented;
+others raise ``UnsupportedProviderError`` until their adapters are built.
 """
 
 from __future__ import annotations
@@ -14,7 +15,11 @@ from app.core.exceptions import AppError
 # The only models the UI is allowed to select (see frontend
 # `src/types/aiModel.ts`, which mirrors this list for display). Closed
 # vocabulary - never accept an arbitrary model string from a request body.
+# Only meaningful when `ai_provider` is "openai" - Groq has its own model
+# (`settings.groq_model`), not user-selectable from this UI yet.
 SUPPORTED_OPENAI_MODELS = ("gpt-5.5", "gpt-5", "gpt-5-mini")
+
+_GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 
 class UnsupportedProviderError(AppError):
@@ -60,6 +65,21 @@ def create_llm_provider(settings: Settings | None = None, model: str | None = No
             model=model or cfg.openai_model,
             temperature=cfg.openai_temperature,
             max_tokens=cfg.openai_max_tokens,
+        )
+
+    if provider_name == "groq":
+        if not cfg.groq_api_key:
+            raise AppError(
+                "GROQ_API_KEY is not configured.",
+                status_code=503,
+                error_code="ai_provider_not_configured",
+            )
+        return OpenAIProvider(
+            api_key=cfg.groq_api_key,
+            model=cfg.groq_model,
+            temperature=cfg.openai_temperature,
+            max_tokens=cfg.openai_max_tokens,
+            base_url=_GROQ_CHAT_URL,
         )
 
     if provider_name in ("claude", "anthropic"):

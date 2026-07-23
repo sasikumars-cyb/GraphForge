@@ -79,3 +79,16 @@ class AgentState:
         components (`Controller`/`Service`/`FeignClient`) rather than
         DTOs, config, or anything else the indexer doesn't track."""
         return [node for node in self.direct_nodes if "Component" in node.labels]
+
+    @property
+    def has_impacted_services(self) -> bool:
+        """Whether there is any real service impact at all - directly
+        changed, or reachable via a same-repository/cross-repository topic
+        peer. Used both to decide whether a reviewer suggestion is worth
+        grounding, and (on a low-confidence retry) whether git history is
+        worth fetching."""
+        return bool(
+            self.direct_service_nodes
+            or self.cross_repository_peer_hops
+            or self.same_repository_peer_hops
+        )

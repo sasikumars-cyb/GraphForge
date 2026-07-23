@@ -1,5 +1,11 @@
 import { apiFetch } from "./client";
-import type { AIAnalysis, AIAnalysisResult, PullRequestAnalysis } from "../../types/analysis";
+import type {
+  AIAnalysis,
+  AIAnalysisResult,
+  InvestigationResult,
+  PublishReviewResult,
+  PullRequestAnalysis,
+} from "../../types/analysis";
 
 export function runDeterministicAnalysis(
   token: string,
@@ -32,4 +38,34 @@ export function runAiAnalysis(
 
 export function getAiAnalysis(token: string, pullRequestId: string): Promise<AIAnalysis> {
   return apiFetch<AIAnalysis>(`/pull-requests/${pullRequestId}/ai-analysis`, { token });
+}
+
+/**
+ * Runs the Change Investigation Agent - the agent decides which evidence is
+ * worth gathering before producing the same AIAnalysisResult shape, plus a
+ * `reasoning_log` explaining every decision it made along the way.
+ */
+export function investigatePullRequest(
+  token: string,
+  pullRequestId: string,
+  model?: string,
+): Promise<InvestigationResult> {
+  return apiFetch<InvestigationResult>(`/pull-requests/${pullRequestId}/investigate`, {
+    method: "POST",
+    token,
+    body: { model: model ?? null },
+  });
+}
+
+/**
+ * Publishes the already-computed AI analysis (from runAiAnalysis or
+ * investigatePullRequest) as a comment on the corresponding GitHub pull
+ * request. Never re-invokes the LLM - just formats and posts what's
+ * already stored.
+ */
+export function publishReview(token: string, pullRequestId: string): Promise<PublishReviewResult> {
+  return apiFetch<PublishReviewResult>(`/pull-requests/${pullRequestId}/publish-review`, {
+    method: "POST",
+    token,
+  });
 }

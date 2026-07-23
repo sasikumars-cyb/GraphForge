@@ -1,6 +1,8 @@
 """Unit tests for `AgentPlanner` - pure rule-based decisions, no I/O."""
 
-from app.ai.agent.planner import AgentPlanner
+from typing import Any
+
+from app.ai.agent.planner import AgentPlanner, PlannerDecision
 from app.analysis.models.impact import RiskLevel
 
 
@@ -44,6 +46,88 @@ def test_should_read_git_history_only_with_impacted_services() -> None:
     planner = AgentPlanner()
     assert planner.should_read_git_history(has_impacted_services=False).should_call is False
     assert planner.should_read_git_history(has_impacted_services=True).should_call is True
+
+
+def _retry_decision(planner: AgentPlanner, **overrides: Any) -> PlannerDecision:
+    base: dict[str, Any] = {
+        "confidence_score": 0.3,
+        "has_diff": True,
+        "has_authors": True,
+        "has_impacted_services": True,
+        "has_impacted_repositories": True,
+        "has_cross_repository_peers": True,
+    }
+    base.update(overrides)
+    return planner.should_retry_after_low_confidence(**base)
+
+
+def test_should_retry_after_low_confidence_skips_when_confidence_is_sufficient() -> None:
+    planner = AgentPlanner()
+    decision = _retry_decision(planner, confidence_score=0.5)
+    assert decision.should_call is False
+    assert decision.tool_name is None
+
+
+def test_should_retry_after_low_confidence_prefers_diff_first() -> None:
+    planner = AgentPlanner()
+    decision = _retry_decision(planner, confidence_score=0.2, has_diff=False)
+    assert decision.should_call is True
+    assert decision.tool_name == "read_git_diff"
+
+
+def test_should_retry_after_low_confidence_falls_back_to_history() -> None:
+    planner = AgentPlanner()
+    decision = _retry_decision(
+        planner,
+        confidence_score=0.2,
+        has_diff=True,
+        has_authors=False,
+        has_impacted_services=True,
+    )
+    assert decision.should_call is True
+    assert decision.tool_name == "read_git_history"
+
+
+def test_should_retry_after_low_confidence_skips_history_without_impacted_services() -> None:
+    planner = AgentPlanner()
+    decision = _retry_decision(
+        planner,
+        confidence_score=0.2,
+        has_diff=True,
+        has_authors=False,
+        has_impacted_services=False,
+        has_impacted_repositories=False,
+        has_cross_repository_peers=False,
+    )
+    assert decision.should_call is False
+
+
+def test_should_retry_after_low_confidence_falls_back_to_repository_metadata() -> None:
+    planner = AgentPlanner()
+    decision = _retry_decision(
+        planner,
+        confidence_score=0.2,
+        has_diff=True,
+        has_authors=True,
+        has_impacted_repositories=False,
+        has_cross_repository_peers=True,
+    )
+    assert decision.should_call is True
+    assert decision.tool_name == "retrieve_repository_metadata"
+
+
+def test_should_retry_after_low_confidence_declines_when_nothing_eligible() -> None:
+    planner = AgentPlanner()
+    decision = _retry_decision(
+        planner,
+        confidence_score=0.1,
+        has_diff=True,
+        has_authors=True,
+        has_impacted_repositories=True,
+        has_cross_repository_peers=True,
+    )
+    assert decision.should_call is False
+    assert decision.tool_name is None
 
 
 def test_decision_reasoning_is_never_empty() -> None:

@@ -45,6 +45,11 @@ class StubVersionControlProvider(IVersionControlProvider):
     ) -> dict[str, list[str]]:
         raise NotImplementedError
 
+    async def get_file_content(
+        self, owner: str, repo: str, path: str, access_token: str | None = None
+    ) -> str | None:
+        raise NotImplementedError
+
     async def list_changed_files(
         self, owner: str, repo: str, pull_number: int, access_token: str | None = None
     ) -> list[ChangedFile]:

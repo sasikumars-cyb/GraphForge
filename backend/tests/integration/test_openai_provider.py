@@ -141,7 +141,7 @@ async def test_analyze_success() -> None:
     assert len(result.suggested_reviewers) == 1
     assert result.suggested_reviewers[0].reviewer == "payments-team"
     assert len(result.regression_tests) == 1
-    assert result.prompt_version == "1.3"
+    assert result.prompt_version == "1.4"
 
     plan = result.release_coordination_plan
     assert len(plan.deployment_order) == 2
@@ -328,3 +328,19 @@ def test_factory_rejects_unsupported_model() -> None:
     settings = Settings(ai_provider="openai", openai_api_key="sk-test")
     with pytest.raises(UnsupportedModelError):
         create_llm_provider(settings, model="gpt-3.5-turbo")
+
+
+def test_factory_creates_groq_provider_pointed_at_groq_url() -> None:
+    settings = Settings(
+        ai_provider="groq", groq_api_key="gsk-test", groq_model="llama-3.3-70b-versatile"
+    )
+    provider = create_llm_provider(settings)
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._model == "llama-3.3-70b-versatile"  # noqa: SLF001
+    assert provider._base_url == "https://api.groq.com/openai/v1/chat/completions"  # noqa: SLF001
+
+
+def test_factory_groq_missing_api_key_raises() -> None:
+    settings = Settings(ai_provider="groq", groq_api_key=None)
+    with pytest.raises(Exception, match="GROQ_API_KEY"):
+        create_llm_provider(settings)

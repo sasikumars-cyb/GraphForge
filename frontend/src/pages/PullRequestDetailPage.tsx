@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { AiModelSelector } from "../components/AiModelSelector";
 import { Card } from "../components/Card";
+import { ReasoningLogPanel } from "../components/ReasoningLogPanel";
 import { RiskBadge } from "../components/RiskBadge";
 import { StatusBadge } from "../components/StatusBadge";
 import { useAiModel } from "../app/ai-model-context";
@@ -10,6 +11,8 @@ import { ApiError } from "../lib/api/client";
 import {
   getAiAnalysis,
   getDeterministicAnalysis,
+  investigatePullRequest,
+  publishReview,
   runAiAnalysis,
   runDeterministicAnalysis,
 } from "../lib/api/analysis";
@@ -20,6 +23,7 @@ import type {
   AIAnalysisResult,
   ImpactedNode,
   PullRequestAnalysis,
+  ReasoningStep,
   RiskLevel,
 } from "../types/analysis";
 
@@ -315,8 +319,12 @@ export function PullRequestDetailPage() {
   >(null);
   const [isRunningDeterministic, setIsRunningDeterministic] = useState(false);
   const [isRunningAi, setIsRunningAi] = useState(false);
+  const [isInvestigating, setIsInvestigating] = useState(false);
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [publishedCommentUrl, setPublishedCommentUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [generatedWithModelId, setGeneratedWithModelId] = useState<AiModelId | null>(null);
+  const [reasoningLog, setReasoningLog] = useState<ReasoningStep[] | null>(null);
 
   useEffect(() => {
     if (!token || !id) {
@@ -360,10 +368,47 @@ export function PullRequestDetailPage() {
       setAiAnalysis(result);
       setReleasePlan(result.release_coordination_plan);
       setGeneratedWithModelId(modelId);
+      // Only the investigate flow produces a reasoning log - clear any
+      // stale one from a prior "Investigate (Agent)" click.
+      setReasoningLog(null);
+      // A fresh analysis supersedes whatever was previously published.
+      setPublishedCommentUrl(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to run AI analysis.");
     } finally {
       setIsRunningAi(false);
+    }
+  }
+
+  async function handlePublishReview() {
+    if (!token || !id) return;
+    setIsPublishing(true);
+    setError(null);
+    try {
+      const result = await publishReview(token, id);
+      setPublishedCommentUrl(result.comment_url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to publish review to GitHub.");
+    } finally {
+      setIsPublishing(false);
+    }
+  }
+
+  async function handleInvestigate() {
+    if (!token || !id) return;
+    setIsInvestigating(true);
+    setError(null);
+    try {
+      const result = await investigatePullRequest(token, id, modelId);
+      setAiAnalysis(result);
+      setReleasePlan(result.release_coordination_plan);
+      setGeneratedWithModelId(modelId);
+      setReasoningLog(result.reasoning_log);
+      setPublishedCommentUrl(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to run the investigation agent.");
+    } finally {
+      setIsInvestigating(false);
     }
   }
 
@@ -418,14 +463,38 @@ export function PullRequestDetailPage() {
         title="AI analysis"
         description="Executive summary, breaking changes, migration advice, and suggested reviewers"
         action={
-          <button
-            type="button"
-            onClick={() => void handleRunAi()}
-            disabled={isRunningAi}
-            className="rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {isRunningAi ? "Running…" : aiAnalysis ? "Re-run AI analysis" : "Run AI analysis"}
-          </button>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={() => void handleRunAi()}
+              disabled={isRunningAi || isInvestigating}
+              className="rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isRunningAi ? "Running…" : aiAnalysis ? "Re-run AI analysis" : "Run AI analysis"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleInvestigate()}
+              disabled={isRunningAi || isInvestigating}
+              title="Runs the Change Investigation Agent - it decides which evidence to gather"
+              className="rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isInvestigating ? "Investigating…" : "Investigate (Agent)"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handlePublishReview()}
+              disabled={isRunningAi || isInvestigating || isPublishing || !aiAnalysis}
+              title="Publishes the AI analysis above as a comment on the GitHub pull request"
+              className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isPublishing
+                ? "Publishing…"
+                : publishedCommentUrl
+                  ? "✓ Review published"
+                  : "Publish Review"}
+            </button>
+          </div>
         }
       >
         <div className="flex flex-col gap-4">
@@ -452,6 +521,17 @@ export function PullRequestDetailPage() {
                 </div>
               )}
               <AiAnalysisPanel ai={aiAnalysis} />
+              {publishedCommentUrl && (
+                <a
+                  href={publishedCommentUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-medium text-emerald-400 hover:underline"
+                >
+                  View published comment on GitHub →
+                </a>
+              )}
+              {reasoningLog && <ReasoningLogPanel steps={reasoningLog} />}
             </>
           ) : (
             <p className="text-sm text-slate-500">Not analyzed yet.</p>

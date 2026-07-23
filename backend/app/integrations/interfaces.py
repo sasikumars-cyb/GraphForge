@@ -121,6 +121,16 @@ class IVersionControlProvider(ABC):
         reviewer suggestions in, instead of the model guessing a name."""
         raise NotImplementedError
 
+    @abstractmethod
+    async def get_file_content(
+        self, owner: str, repo: str, path: str, access_token: str | None = None
+    ) -> str | None:
+        """Raw content of `path` at the repository's default branch, or
+        `None` if it doesn't exist. Used only by the CODEOWNERS fallback
+        in `ReadGitHistoryTool` (`app.ai.agent.tools`) - a missing file is
+        the normal case here, never an error."""
+        raise NotImplementedError
+
 
 class IIssueTrackerProvider(ABC):
     """Port for reading and creating tracker issues.

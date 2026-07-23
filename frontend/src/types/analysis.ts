@@ -123,3 +123,37 @@ export interface AIAnalysisResult {
   confidence: ConfidenceScore;
   prompt_version: string;
 }
+
+// --- Change Investigation Agent ---
+
+export interface Observation {
+  tool_name: string;
+  summary: string;
+}
+
+/**
+ * One iteration of the agent's Plan -> Select Tool -> Execute -> Observe ->
+ * Decide loop. `tool_selected` is `null` for a step where the agent decided
+ * evidence wasn't needed - a skip is itself a recorded decision, not a gap.
+ */
+export interface ReasoningStep {
+  step_number: number;
+  goal: string;
+  plan: string;
+  tool_selected: string | null;
+  observation: Observation | null;
+  decision: string;
+}
+
+/** POST /pull-requests/{id}/investigate - AIAnalysisResult plus the agent's reasoning log. */
+export interface InvestigationResult extends AIAnalysisResult {
+  reasoning_log: ReasoningStep[];
+}
+
+// --- Publish Review ---
+
+/** POST /pull-requests/{id}/publish-review - the newly created GitHub PR comment. */
+export interface PublishReviewResult {
+  comment_id: number;
+  comment_url: string;
+}

@@ -1,12 +1,17 @@
 import { useEffect, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { Table, type TableColumn } from "../components/Table";
 import { StatusBadge } from "../components/StatusBadge";
 import { useAuth } from "../app/auth-context";
 import { ApiError } from "../lib/api/client";
 import { listTrackedRepositories } from "../lib/api/github";
-import { getLatestIndexingJob, listPullRequests, triggerIndexing } from "../lib/api/repositories";
+import {
+  getLatestIndexingJob,
+  listPullRequests,
+  removeRepository,
+  triggerIndexing,
+} from "../lib/api/repositories";
 import { formatRelativeTime } from "../lib/formatDate";
 import type { TrackedRepository } from "../types/github";
 import type { IndexingJob } from "../types/graph";
@@ -37,11 +42,13 @@ const pullRequestColumns: TableColumn<PullRequest>[] = [
 export function RepositoryDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { token } = useAuth();
+  const navigate = useNavigate();
   const [repository, setRepository] = useState<TrackedRepository | null>(null);
   const [pullRequests, setPullRequests] = useState<PullRequest[]>([]);
   const [indexingJob, setIndexingJob] = useState<IndexingJob | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isIndexing, setIsIndexing] = useState(false);
+  const [isRemoving, setIsRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -108,6 +115,26 @@ export function RepositoryDetailPage() {
     }
   }
 
+  async function handleRemove() {
+    if (!token || !id) return;
+    if (
+      !window.confirm(
+        `Remove ${repository?.full_name}? This permanently deletes its pull requests, analyses, and architecture graph.`,
+      )
+    ) {
+      return;
+    }
+    setIsRemoving(true);
+    setError(null);
+    try {
+      await removeRepository(token, id);
+      navigate("/repositories");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove repository.");
+      setIsRemoving(false);
+    }
+  }
+
   if (isLoading) {
     return <p className="text-sm text-slate-500">Loading…</p>;
   }
@@ -123,12 +150,22 @@ export function RepositoryDetailPage() {
           <h2 className="text-xl font-semibold text-slate-50">{repository.full_name}</h2>
           <p className="mt-1 text-sm text-slate-400">{repository.html_url}</p>
         </div>
-        <Link
-          to={`/architecture?repository=${repository.id}`}
-          className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:border-slate-500"
-        >
-          View graph
-        </Link>
+        <div className="flex gap-2">
+          <Link
+            to={`/architecture?repository=${repository.id}`}
+            className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:border-slate-500"
+          >
+            View graph
+          </Link>
+          <button
+            type="button"
+            onClick={() => void handleRemove()}
+            disabled={isRemoving}
+            className="rounded-md border border-rose-500/50 px-3 py-1.5 text-sm font-medium text-rose-300 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {isRemoving ? "Removing…" : "Remove repository"}
+          </button>
+        </div>
       </div>
 
       {error && (

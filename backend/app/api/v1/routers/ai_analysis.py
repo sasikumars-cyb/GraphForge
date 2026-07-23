@@ -8,18 +8,30 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.agent.investigation_agent import InvestigationAgent
 from app.ai.providers.factory import create_llm_provider
+from app.ai.schemas.analysis_result import (
+    AIAnalysisResult,
+    BreakingChange,
+    ConfidenceScore,
+    MigrationAdvice,
+    RegressionTest,
+    ReleaseCoordinationPlan,
+    SuggestedReviewer,
+)
 from app.ai.services.ai_analysis_service import AIAnalysisService
+from app.ai.services.github_comment_formatter import format_review_comment
 from app.analysis.engine.impact_analysis_engine import ImpactAnalysisEngine
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
 from app.api.v1.dependencies import get_current_user
 from app.core.config import get_settings
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, UnauthorizedError
 from app.database.session import get_db_session
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
 from app.integrations.factory import create_version_control_provider
+from app.integrations.github import GitHubVersionControlProvider
 from app.models.pull_request import PullRequest
 from app.models.pull_request_ai_analysis import PullRequestAIAnalysis
+from app.models.pull_request_analysis import PullRequestAnalysis
 from app.models.repository import Repository
 from app.models.user import User
 from app.schemas.ai_analysis import (
@@ -27,9 +39,11 @@ from app.schemas.ai_analysis import (
     AIAnalysisResultResponse,
     InvestigationResponse,
     ObservationResponse,
+    PublishReviewResponse,
     ReasoningStepResponse,
     RunAIAnalysisRequest,
 )
+from app.services.github_service import get_decrypted_access_token
 
 router = APIRouter(prefix="/pull-requests", tags=["ai-analysis"])
 
@@ -187,3 +201,88 @@ async def investigate_pull_request(
             for step in investigation.reasoning_log
         ],
     )
+
+
+@router.post(
+    "/{pull_request_id}/publish-review",
+    response_model=PublishReviewResponse,
+    summary="Publish the stored AI analysis as a GitHub PR comment",
+    description=(
+        "Posts the most recently persisted AI analysis for this pull request "
+        "(from POST .../ai-analysis or .../investigate) as a comment on the "
+        "corresponding GitHub pull request. Does not call the LLM again - "
+        "publishes whatever was last computed and stored."
+    ),
+)
+async def publish_review(
+    pull_request_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> PublishReviewResponse:
+    """Format the persisted AI analysis as markdown and post it as a real
+    GitHub PR comment. Never invokes an LLM provider - the analysis must
+    already have been run and persisted via .../ai-analysis or
+    .../investigate."""
+    pull_request = await _get_owned_pull_request(db, pull_request_id, current_user)
+
+    ai_result = await db.execute(
+        select(PullRequestAIAnalysis).where(
+            PullRequestAIAnalysis.pull_request_id == pull_request.id
+        )
+    )
+    ai_analysis = ai_result.scalar_one_or_none()
+    if ai_analysis is None:
+        raise NotFoundError("No AI analysis has been run for this pull request yet.")
+
+    deterministic_result = await db.execute(
+        select(PullRequestAnalysis).where(PullRequestAnalysis.pull_request_id == pull_request.id)
+    )
+    deterministic = deterministic_result.scalar_one_or_none()
+
+    access_token = await get_decrypted_access_token(db, current_user.id)
+    if access_token is None:
+        raise UnauthorizedError("GitHub is not connected for this user.")
+
+    repository = await db.get(Repository, pull_request.repository_id)
+    assert repository is not None  # FK to repositories.id; ownership check already required it
+
+    ai_result_model = AIAnalysisResult(
+        executive_summary=ai_analysis.executive_summary,
+        breaking_changes=[BreakingChange.model_validate(bc) for bc in ai_analysis.breaking_changes],
+        migration_advice=[
+            MigrationAdvice.model_validate(ma) for ma in ai_analysis.migration_advice
+        ],
+        suggested_reviewers=[
+            SuggestedReviewer.model_validate(sr) for sr in ai_analysis.suggested_reviewers
+        ],
+        regression_tests=[RegressionTest.model_validate(rt) for rt in ai_analysis.regression_tests],
+        release_coordination_plan=ReleaseCoordinationPlan.model_validate(
+            ai_analysis.release_coordination_plan or {}
+        ),
+        confidence=ConfidenceScore(
+            score=ai_analysis.confidence_score, reasoning=ai_analysis.confidence_reasoning
+        ),
+        prompt_version=ai_analysis.prompt_version,
+    )
+
+    comment_body = format_review_comment(
+        ai_result=ai_result_model,
+        risk=deterministic.risk if deterministic else "UNKNOWN",
+        directly_impacted_services=(
+            deterministic.directly_impacted_services if deterministic else []
+        ),
+        indirectly_impacted_services=(
+            deterministic.indirectly_impacted_services if deterministic else []
+        ),
+    )
+
+    provider = GitHubVersionControlProvider()
+    posted = await provider.post_pull_request_comment(
+        owner=repository.owner,
+        repo=repository.name,
+        pull_number=pull_request.number,
+        body=comment_body,
+        access_token=access_token,
+    )
+
+    return PublishReviewResponse(comment_id=posted.id, comment_url=posted.html_url)

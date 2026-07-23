@@ -40,3 +40,9 @@ export function getRepositoryServices(token: string, repositoryId: string): Prom
 export function getRepositoryDependencies(token: string, repositoryId: string): Promise<Graph> {
   return apiFetch<Graph>(`/repositories/${repositoryId}/dependencies`, { token });
 }
+
+/** Permanently deletes the repository - its pull requests, analyses,
+ * indexing jobs, and Neo4j graph are all removed with it. */
+export function removeRepository(token: string, repositoryId: string): Promise<void> {
+  return apiFetch<void>(`/repositories/${repositoryId}`, { method: "DELETE", token });
+}

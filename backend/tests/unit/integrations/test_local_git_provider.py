@@ -89,3 +89,23 @@ async def test_get_recent_file_authors_returns_the_commit_author(demo_repo: Path
 
     assert authors["modify_me.txt"] == ["Test"]
     assert authors["new_file.txt"] == ["Test"]
+
+
+@pytest.mark.asyncio
+async def test_get_file_content_returns_committed_content(demo_repo: Path) -> None:
+    provider = LocalGitVersionControlProvider(clone_root=demo_repo)
+
+    content = await provider.get_file_content(owner="local", repo="order-service", path="keep.txt")
+
+    assert content == "unchanged\n"
+
+
+@pytest.mark.asyncio
+async def test_get_file_content_returns_none_for_missing_file(demo_repo: Path) -> None:
+    provider = LocalGitVersionControlProvider(clone_root=demo_repo)
+
+    content = await provider.get_file_content(
+        owner="local", repo="order-service", path="CODEOWNERS"
+    )
+
+    assert content is None

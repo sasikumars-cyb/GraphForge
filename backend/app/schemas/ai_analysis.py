@@ -148,3 +148,14 @@ class InvestigationResponse(BaseModel):
     confidence: ConfidenceScoreResponse
     prompt_version: str = ""
     reasoning_log: list[ReasoningStepResponse] = Field(default_factory=list)
+
+
+class PublishReviewResponse(BaseModel):
+    """Response returned by POST /pull-requests/{id}/publish-review.
+
+    No persisted counterpart to mirror flatly - GitHub itself is the
+    source of truth for the comment after this call.
+    """
+
+    comment_id: int
+    comment_url: str

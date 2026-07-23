@@ -32,10 +32,22 @@ pytestmark = pytest.mark.asyncio
 class StubVersionControlProvider(IVersionControlProvider):
     """Unlike `test_impact_analysis_engine.py`'s stub, `get_diff` and
     `get_recent_file_authors` return real values here - the agent may
-    decide to call either, and this test asserts on what it decided."""
+    decide to call either, and this test asserts on what it decided.
 
-    def __init__(self, changed_files: list[ChangedFile]) -> None:
+    `authors` and `file_contents` are overridable so a test can simulate
+    "no git history found" (empty author lists) and a CODEOWNERS file
+    living at a given path, without touching real git/GitHub at all.
+    """
+
+    def __init__(
+        self,
+        changed_files: list[ChangedFile],
+        authors: dict[str, list[str]] | None = None,
+        file_contents: dict[str, str] | None = None,
+    ) -> None:
         self._changed_files = changed_files
+        self._authors = authors
+        self._file_contents = file_contents or {}
 
     async def get_diff(
         self, owner: str, repo: str, pull_number: int, access_token: str | None = None
@@ -45,7 +57,14 @@ class StubVersionControlProvider(IVersionControlProvider):
     async def get_recent_file_authors(
         self, owner: str, repo: str, file_paths: set[str], access_token: str | None = None
     ) -> dict[str, list[str]]:
+        if self._authors is not None:
+            return self._authors
         return {path: ["alice"] for path in file_paths}
+
+    async def get_file_content(
+        self, owner: str, repo: str, path: str, access_token: str | None = None
+    ) -> str | None:
+        return self._file_contents.get(path)
 
     async def list_changed_files(
         self, owner: str, repo: str, pull_number: int, access_token: str | None = None
@@ -53,10 +72,12 @@ class StubVersionControlProvider(IVersionControlProvider):
         return self._changed_files
 
 
-def _fake_ai_result() -> AIAnalysisResult:
+def _fake_ai_result(
+    confidence_score: float = 0.9, executive_summary: str = "Stub summary."
+) -> AIAnalysisResult:
     return AIAnalysisResult(
-        executive_summary="Stub summary.",
-        confidence=ConfidenceScore(score=0.9, reasoning="Stub"),
+        executive_summary=executive_summary,
+        confidence=ConfidenceScore(score=confidence_score, reasoning="Stub"),
         prompt_version="1.3",
     )
 
@@ -119,16 +140,22 @@ async def indexed_repository_and_pr(
 
 
 def _agent(
-    db_session: AsyncSession, changed_files: list[ChangedFile], llm_result: AIAnalysisResult
+    db_session: AsyncSession,
+    changed_files: list[ChangedFile],
+    llm_result: AIAnalysisResult | list[AIAnalysisResult],
+    vcs_provider: IVersionControlProvider | None = None,
 ) -> tuple[InvestigationAgent, AsyncMock]:
     driver = get_driver()
     llm_provider = AsyncMock()
-    llm_provider.analyze = AsyncMock(return_value=llm_result)
+    if isinstance(llm_result, list):
+        llm_provider.analyze = AsyncMock(side_effect=llm_result)
+    else:
+        llm_provider.analyze = AsyncMock(return_value=llm_result)
     agent = InvestigationAgent(
         db=db_session,
         graph_repository=Neo4jGraphRepository(driver),
         impact_graph_reader=Neo4jImpactGraphReader(driver),
-        version_control_provider=StubVersionControlProvider(changed_files),
+        version_control_provider=vcs_provider or StubVersionControlProvider(changed_files),
         llm_provider=llm_provider,
     )
     return agent, llm_provider
@@ -195,6 +222,95 @@ async def test_dto_only_change_skips_traversal_and_checks_indexing(
     prompt_variables = context.to_prompt_variables()
     assert prompt_variables["diff_content"] == "Not gathered for this analysis."
     assert prompt_variables["recent_file_authors"] == "Not gathered for this analysis."
+
+
+async def test_falls_back_to_codeowners_when_git_history_finds_no_authors(
+    db_session: AsyncSession, indexed_repository_and_pr: tuple[Repository, PullRequest]
+) -> None:
+    """When `get_recent_file_authors` returns zero authors for every
+    changed file (e.g. a brand-new file with no commit history yet),
+    `ReadGitHistoryTool` escalates to CODEOWNERS instead of leaving
+    `recent_file_authors` empty."""
+    _, pull_request = indexed_repository_and_pr
+    changed_path = "src/main/java/com/example/orders/OrderEventProducer.java"
+    changed = [ChangedFile(path=changed_path, status="modified")]
+    vcs_provider = StubVersionControlProvider(
+        changed_files=changed,
+        authors={changed_path: []},
+        file_contents={"CODEOWNERS": f"{changed_path} @platform-team\n"},
+    )
+    agent, llm_provider = _agent(db_session, changed, _fake_ai_result(), vcs_provider=vcs_provider)
+
+    investigation = await agent.investigate(pull_request.id)
+
+    history_step = next(
+        step for step in investigation.reasoning_log if step.tool_selected == "read_git_history"
+    )
+    assert history_step.observation is not None
+    assert "fell back to CODEOWNERS" in history_step.observation.summary
+
+    context = llm_provider.analyze.call_args.args[0]
+    assert context.recent_file_authors[changed_path] == ["@platform-team"]
+
+
+async def test_retries_with_diff_after_low_confidence_result(
+    db_session: AsyncSession, indexed_repository_and_pr: tuple[Repository, PullRequest]
+) -> None:
+    """A DTO-only change never reads the diff in the normal flow (LOW
+    risk). If the first synthesis comes back low-confidence, the agent
+    should fetch the diff - the only thing not yet gathered - and
+    re-synthesize exactly once, using the second result."""
+    _, pull_request = indexed_repository_and_pr
+    changed = [
+        ChangedFile(path="src/main/java/com/example/orders/OrderDto.java", status="modified")
+    ]
+    low_confidence = _fake_ai_result(confidence_score=0.2, executive_summary="First guess.")
+    high_confidence = _fake_ai_result(
+        confidence_score=0.85, executive_summary="Second, sure guess."
+    )
+    agent, llm_provider = _agent(db_session, changed, [low_confidence, high_confidence])
+
+    investigation = await agent.investigate(pull_request.id)
+
+    assert llm_provider.analyze.await_count == 2
+    assert investigation.analysis.executive_summary == "Second, sure guess."
+
+    retry_step = next(
+        step
+        for step in investigation.reasoning_log
+        if step.tool_selected == "read_git_diff" and "low-confidence" in step.goal
+    )
+    assert retry_step.observation is not None
+
+    final_synthesis_step = investigation.reasoning_log[-1]
+    assert final_synthesis_step.tool_selected is None
+    assert "Retried after confidence" in final_synthesis_step.plan
+
+    context = llm_provider.analyze.call_args.args[0]
+    assert context.diff_content != ""
+
+
+async def test_no_retry_when_nothing_eligible_to_gather(
+    db_session: AsyncSession, indexed_repository_and_pr: tuple[Repository, PullRequest]
+) -> None:
+    """A Kafka producer change already reads the diff and git history in
+    the normal HIGH-risk flow, and this single-repository fixture has no
+    cross-repository peers to resolve - so even a low-confidence first
+    result has nothing left to retry with, and the agent must not call
+    the LLM a second time."""
+    _, pull_request = indexed_repository_and_pr
+    changed = [
+        ChangedFile(
+            path="src/main/java/com/example/orders/OrderEventProducer.java", status="modified"
+        )
+    ]
+    low_confidence = _fake_ai_result(confidence_score=0.1)
+    agent, llm_provider = _agent(db_session, changed, [low_confidence])
+
+    investigation = await agent.investigate(pull_request.id)
+
+    assert llm_provider.analyze.await_count == 1
+    assert investigation.analysis.confidence.score == 0.1
 
 
 async def test_reasoning_log_records_every_decision_including_skips(

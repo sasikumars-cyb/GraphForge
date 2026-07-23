@@ -87,6 +87,11 @@ class Settings(BaseSettings):
     openai_temperature: float = Field(default=0.2)
     openai_max_tokens: int = Field(default=4096)
 
+    # --- Groq (free-tier alternative - OpenAI-compatible Chat Completions
+    # API, no billing required; see console.groq.com) ---
+    groq_api_key: str | None = Field(default=None)
+    groq_model: str = Field(default="llama-3.3-70b-versatile")
+
     # --- Future integrations (unused until their adapters are implemented) ---
     jira_base_url: str | None = Field(default=None)
     jira_api_token: str | None = Field(default=None)

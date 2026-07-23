@@ -16,6 +16,7 @@ from dataclasses import dataclass
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.agent.codeowners import match_owners
 from app.ai.agent.models import AgentState, Observation
 from app.ai.services.repository_resolution import resolve_impacted_repositories
 from app.analysis.graph.interfaces import IImpactGraphReader
@@ -243,12 +244,21 @@ class ReadGitDiffTool(Tool):
         )
 
 
+_CODEOWNERS_PATHS = ("CODEOWNERS", ".github/CODEOWNERS", "docs/CODEOWNERS")
+
+
 class ReadGitHistoryTool(Tool):
     """Fetches real recent commit authorship per changed file - wraps
     `IVersionControlProvider.get_recent_file_authors`. Called only when
     there is an actual service impacted (so a reviewer suggestion is
     about to be made), to ground that suggestion in real history instead
-    of letting the model guess a name."""
+    of letting the model guess a name.
+
+    Falls back to a CODEOWNERS file (checked at the well-known GitHub
+    locations, in order) when git history found zero authors for every
+    changed file - e.g. brand-new files with no commit history yet. Still
+    grounded, real data; just a second source when the first has nothing.
+    """
 
     name = "read_git_history"
 
@@ -271,12 +281,33 @@ class ReadGitHistoryTool(Tool):
             file_paths=set(state.changed_files),
             access_token=self._access_token,
         )
+
+        used_codeowners_fallback = False
+        if authors and all(not names for names in authors.values()):
+            for candidate in _CODEOWNERS_PATHS:
+                content = await self._provider.get_file_content(
+                    owner=self._owner,
+                    repo=self._repo,
+                    path=candidate,
+                    access_token=self._access_token,
+                )
+                if content is not None:
+                    authors = match_owners(set(state.changed_files), content)
+                    used_codeowners_fallback = True
+                    break
+
         state.recent_file_authors = authors
         files_with_authors = sum(1 for names in authors.values() if names)
+        summary = f"Found authorship for {files_with_authors} of {len(authors)} changed file(s)."
+        if used_codeowners_fallback:
+            summary += " (No commit history found; fell back to CODEOWNERS.)"
         return Observation(
             tool_name=self.name,
-            summary=f"Found authorship for {files_with_authors} of {len(authors)} changed file(s).",
-            data={"files_with_authors": files_with_authors},
+            summary=summary,
+            data={
+                "files_with_authors": files_with_authors,
+                "used_codeowners_fallback": used_codeowners_fallback,
+            },
         )
 
 

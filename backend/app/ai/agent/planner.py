@@ -20,10 +20,14 @@ from app.analysis.models.impact import RiskLevel
 class PlannerDecision:
     """Whether to call a tool, and the plain-language reason why - the
     reason is what makes the reasoning log explain itself rather than
-    just recording a bare true/false."""
+    just recording a bare true/false. `tool_name` is only set by decisions
+    that must name *which* tool among several candidates (currently only
+    `should_retry_after_low_confidence`) - every other decision point has
+    exactly one tool in mind already, so it's implicit there."""
 
     should_call: bool
     reasoning: str
+    tool_name: str | None = None
 
 
 class AgentPlanner:
@@ -106,5 +110,63 @@ class AgentPlanner:
             reasoning=(
                 "Service impact found - fetching real commit authorship to ground "
                 "reviewer suggestions."
+            ),
+        )
+
+    def should_retry_after_low_confidence(
+        self,
+        *,
+        confidence_score: float,
+        has_diff: bool,
+        has_authors: bool,
+        has_impacted_services: bool,
+        has_impacted_repositories: bool,
+        has_cross_repository_peers: bool,
+    ) -> PlannerDecision:
+        """Whether the agent should react to its own low-confidence result
+        by gathering exactly one more piece of evidence before re-asking
+        the LLM. Priority order (first eligible candidate wins): diff,
+        then git history, then repository metadata - each gated on both
+        "not already gathered" and the same precondition its own planner
+        method already requires, so this never re-fetches something
+        pointless just because confidence happened to be low. Called at
+        most once per investigation - the caller enforces the hard cap,
+        not this method."""
+        if confidence_score >= 0.5:
+            return PlannerDecision(
+                should_call=False, reasoning="Confidence is sufficient - no retry needed."
+            )
+        if not has_diff:
+            return PlannerDecision(
+                should_call=True,
+                reasoning=(
+                    f"Confidence ({confidence_score:.2f}) is below 0.5 and no diff was read "
+                    "yet - fetching it to ground the retry."
+                ),
+                tool_name="read_git_diff",
+            )
+        if not has_authors and has_impacted_services:
+            return PlannerDecision(
+                should_call=True,
+                reasoning=(
+                    f"Confidence ({confidence_score:.2f}) is below 0.5 and no authorship was "
+                    "gathered yet - fetching git history to ground the retry."
+                ),
+                tool_name="read_git_history",
+            )
+        if not has_impacted_repositories and has_cross_repository_peers:
+            return PlannerDecision(
+                should_call=True,
+                reasoning=(
+                    f"Confidence ({confidence_score:.2f}) is below 0.5 and cross-repository "
+                    "impact is still unresolved - retrieving repository metadata."
+                ),
+                tool_name="retrieve_repository_metadata",
+            )
+        return PlannerDecision(
+            should_call=False,
+            reasoning=(
+                f"Confidence ({confidence_score:.2f}) is below 0.5 but no further evidence "
+                "exists worth gathering."
             ),
         )

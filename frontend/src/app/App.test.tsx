@@ -10,6 +10,7 @@ import * as githubApi from "../lib/api/github";
 import * as repositoriesApi from "../lib/api/repositories";
 import * as analysisApi from "../lib/api/analysis";
 import { ApiError } from "../lib/api/client";
+import type { AIAnalysisResult } from "../types/analysis";
 import type { User } from "../types/auth";
 import type { TrackedRepository } from "../types/github";
 import type { PullRequest } from "../types/pullRequest";
@@ -60,6 +61,24 @@ const FAKE_PR: PullRequest = {
 };
 
 const NOT_FOUND = new ApiError(404, "not_found", "not found");
+
+const _FAKE_AI_RESULT: AIAnalysisResult = {
+  executive_summary: "No breaking changes.",
+  breaking_changes: [],
+  migration_advice: [],
+  suggested_reviewers: [],
+  regression_tests: [],
+  release_coordination_plan: {
+    deployment_order: [],
+    repositories_to_notify: [],
+    rollout_strategy: "",
+    backward_compatibility_advice: "",
+    communication_summary: "",
+    rollout_risks: [],
+  },
+  confidence: { score: 0.9, reasoning: "Clear analysis" },
+  prompt_version: "1.4",
+};
 
 describe("App navigation (authenticated)", () => {
   beforeEach(() => {
@@ -131,6 +150,46 @@ describe("App navigation (authenticated)", () => {
     expect(await screen.findByText("Rename OrderCreated.total to totalCents")).toBeInTheDocument();
   });
 
+  it("removes the repository and navigates away when the confirm dialog is accepted", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(githubApi, "listTrackedRepositories").mockResolvedValue([FAKE_REPO]);
+    vi.spyOn(repositoriesApi, "listPullRequests").mockResolvedValue([FAKE_PR]);
+    vi.spyOn(repositoriesApi, "getLatestIndexingJob").mockRejectedValue(NOT_FOUND);
+    vi.spyOn(repositoriesApi, "removeRepository").mockResolvedValue(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    renderApp("/repositories/repo-1");
+    await screen.findByRole("heading", { level: 2, name: "local/order-service" });
+
+    await user.click(screen.getByRole("button", { name: "Remove repository" }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(repositoriesApi.removeRepository).toHaveBeenCalledWith("fake-token", "repo-1");
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Repositories" }),
+    ).toBeInTheDocument();
+  });
+
+  it("does not remove the repository when the confirm dialog is declined", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(githubApi, "listTrackedRepositories").mockResolvedValue([FAKE_REPO]);
+    vi.spyOn(repositoriesApi, "listPullRequests").mockResolvedValue([FAKE_PR]);
+    vi.spyOn(repositoriesApi, "getLatestIndexingJob").mockRejectedValue(NOT_FOUND);
+    const removeSpy = vi.spyOn(repositoriesApi, "removeRepository");
+    vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    renderApp("/repositories/repo-1");
+    await screen.findByRole("heading", { level: 2, name: "local/order-service" });
+
+    await user.click(screen.getByRole("button", { name: "Remove repository" }));
+
+    expect(window.confirm).toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole("heading", { level: 2, name: "local/order-service" }),
+    ).toBeInTheDocument();
+  });
+
   it("renders the pull request detail page with analysis trigger buttons", async () => {
     vi.spyOn(githubApi, "listTrackedRepositories").mockResolvedValue([FAKE_REPO]);
     vi.spyOn(repositoriesApi, "listPullRequests").mockResolvedValue([FAKE_PR]);
@@ -147,11 +206,49 @@ describe("App navigation (authenticated)", () => {
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run analysis" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run AI analysis" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Investigate (Agent)" })).toBeInTheDocument();
 
     // AI model selector: defaults to GPT-5, shows provider/reasoning/cost info.
     expect(screen.getByLabelText("AI model")).toHaveValue("gpt-5");
     expect(screen.getByText("OpenAI")).toBeInTheDocument();
     expect(screen.getByText("~₹3 / PR Analysis")).toBeInTheDocument();
+  });
+
+  it("runs the investigation agent and shows its reasoning log, cleared on a plain AI run", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(githubApi, "listTrackedRepositories").mockResolvedValue([FAKE_REPO]);
+    vi.spyOn(repositoriesApi, "listPullRequests").mockResolvedValue([FAKE_PR]);
+    vi.spyOn(analysisApi, "getDeterministicAnalysis").mockRejectedValue(NOT_FOUND);
+    vi.spyOn(analysisApi, "getAiAnalysis").mockRejectedValue(NOT_FOUND);
+    vi.spyOn(analysisApi, "investigatePullRequest").mockResolvedValue({
+      ..._FAKE_AI_RESULT,
+      executive_summary: "Agent-generated summary.",
+      reasoning_log: [
+        {
+          step_number: 1,
+          goal: "Determine whether this change touches the indexed architecture graph.",
+          plan: "Always map changed files to graph nodes first.",
+          tool_selected: "read_dependency_graph",
+          observation: { tool_name: "read_dependency_graph", summary: "Matched 1 node." },
+          decision: "Proceeding to decide whether downstream traversal is warranted.",
+        },
+      ],
+    });
+    vi.spyOn(analysisApi, "runAiAnalysis").mockResolvedValue(_FAKE_AI_RESULT);
+
+    renderApp("/pull-requests/pr-1");
+    await screen.findByRole("button", { name: "Investigate (Agent)" });
+
+    await user.click(screen.getByRole("button", { name: "Investigate (Agent)" }));
+
+    expect(await screen.findByText("Agent-generated summary.")).toBeInTheDocument();
+    expect(screen.getByText("Agent reasoning log")).toBeInTheDocument();
+    expect(screen.getByText("read_dependency_graph")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Re-run AI analysis" }));
+
+    expect(await screen.findByText(_FAKE_AI_RESULT.executive_summary)).toBeInTheDocument();
+    expect(screen.queryByText("Agent reasoning log")).not.toBeInTheDocument();
   });
 
   it("shows the logged-in user's name and logs out via the sidebar", async () => {

@@ -50,6 +50,19 @@ async def get_connection(db: AsyncSession, user: User) -> GitHubConnection | Non
     return result.scalar_one_or_none()
 
 
+async def get_decrypted_access_token(db: AsyncSession, user_id: uuid.UUID) -> str | None:
+    """Resolve a user's GitHub access token for provider calls, decrypted -
+    or `None` if they haven't connected GitHub. Takes a bare `user_id`
+    (rather than `get_connection`'s `User`) since every call site already
+    has one handy (e.g. `repository.user_id`) without a separate `User`
+    row loaded. Was previously duplicated verbatim as a private
+    `_get_access_token` in both `app.ai.agent.investigation_agent` and
+    `app.analysis.engine.impact_analysis_engine` - both now call this."""
+    result = await db.execute(select(GitHubConnection).where(GitHubConnection.user_id == user_id))
+    connection = result.scalar_one_or_none()
+    return decrypt_secret(connection.encrypted_access_token) if connection else None
+
+
 def get_connect_authorization_url(user: User) -> str:
     """Builds the GitHub authorize URL, with a signed, time-limited `state`
     that encodes which user initiated the connect flow — GitHub's redirect

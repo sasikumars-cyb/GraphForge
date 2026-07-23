@@ -10,6 +10,7 @@ makes no assumption about *whose* GitHub OAuth App is configured — that's
 user's own personal OAuth App, never a company-owned one.
 """
 
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -43,6 +44,19 @@ class GitHubApiError(AppError):
 
     status_code = 502
     error_code = "github_api_error"
+
+
+@dataclass(frozen=True)
+class PostedComment:
+    """What GitHub returns after creating an Issues API comment - just
+    enough to link back to it. Lives here, not in `interfaces.py`:
+    `post_pull_request_comment` isn't part of `IVersionControlProvider`
+    (see `GitHubVersionControlProvider.post_pull_request_comment`'s
+    docstring for why), so this return type has no reason to be shared
+    either."""
+
+    id: int
+    html_url: str
 
 
 async def _github_get(
@@ -146,6 +160,11 @@ class GitHubVersionControlProvider(IVersionControlProvider):
     deterministic impact analysis to read a pull request's changed file
     paths. Stateless: unlike `GitHubOAuthProvider`, it needs no OAuth App
     credentials, just a per-call (optional) access token.
+
+    Every `IVersionControlProvider` method here is read-only. The one
+    exception is `post_pull_request_comment`, a real write added for
+    publishing AI review results - it isn't part of the interface (see its
+    own docstring), so it's the only place this class has a side effect.
     """
 
     async def get_diff(
@@ -216,3 +235,64 @@ class GitHubVersionControlProvider(IVersionControlProvider):
                     seen.setdefault(author, None)
             authors_by_path[path] = list(seen)[:3]
         return authors_by_path
+
+    async def get_file_content(
+        self, owner: str, repo: str, path: str, access_token: str | None = None
+    ) -> str | None:
+        """Raw file content via GitHub's contents API, requested with the
+        `.raw` media type so the body is the file itself rather than a
+        base64-wrapped JSON envelope - like `get_diff`, this doesn't go
+        through `_github_get` (which always `.json()`s the body and treats
+        every error status as fatal; a 404 here is the normal "no
+        CODEOWNERS file" case, not an error)."""
+        headers = {
+            "Accept": "application/vnd.github.raw+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+        }
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{_API_BASE}/repos/{owner}/{repo}/contents/{path}", headers=headers
+            )
+        if response.status_code == 404:
+            return None
+        if response.is_error:
+            raise GitHubApiError(
+                f"GitHub content request for {owner}/{repo}/{path} failed with status "
+                f"{response.status_code}: {response.text}"
+            )
+        return response.text
+
+    async def post_pull_request_comment(
+        self,
+        owner: str,
+        repo: str,
+        pull_number: int,
+        body: str,
+        access_token: str | None = None,
+    ) -> PostedComment:
+        """Posts `body` as a new comment on the PR's conversation tab, via
+        GitHub's Issues Comment API - pull requests *are* issues for
+        commenting purposes: `POST /repos/{owner}/{repo}/issues/{pull_number}/comments`.
+        A real write, unlike every other method on this class - like
+        `GitHubOAuthProvider.exchange_code_for_token`, this doesn't go
+        through `_github_get` (GET-only, and always `.json()`s the body)."""
+        headers = dict(_API_HEADERS)
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{_API_BASE}/repos/{owner}/{repo}/issues/{pull_number}/comments",
+                headers=headers,
+                json={"body": body},
+            )
+        if response.is_error:
+            raise GitHubApiError(
+                f"GitHub comment post to {owner}/{repo}#{pull_number} failed with status "
+                f"{response.status_code}: {response.text}"
+            )
+        data = response.json()
+        return PostedComment(id=data["id"], html_url=data["html_url"])
