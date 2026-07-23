@@ -14,13 +14,15 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from alembic import context
 from app.core.config import get_settings
 from app.database.base import Base
+from app.models.agent_step import AgentStep  # noqa: F401
 from app.models.github_connection import GitHubConnection  # noqa: F401
 from app.models.indexing_job import IndexingJob  # noqa: F401
 from app.models.pull_request import PullRequest  # noqa: F401
 from app.models.pull_request_ai_analysis import PullRequestAIAnalysis  # noqa: F401
 from app.models.pull_request_analysis import PullRequestAnalysis  # noqa: F401
 from app.models.repository import Repository  # noqa: F401
-from app.models.user import User  # noqa: F401 - all seven register with Base.metadata
+from app.models.run import Run  # noqa: F401
+from app.models.user import User  # noqa: F401 - all nine register with Base.metadata
 
 config = context.config
 if config.config_file_name is not None:

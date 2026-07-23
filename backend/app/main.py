@@ -8,6 +8,7 @@ schema at `/openapi.json`) - no extra wiring needed beyond the metadata below.
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.agents.setup import register_agents
 from app.api.v1.routers import api_router
 from app.core.config import get_settings
 from app.core.error_handlers import register_exception_handlers
@@ -73,6 +74,8 @@ def create_app() -> FastAPI:
     register_exception_handlers(app)
 
     app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+    register_agents()
 
     return app
 
