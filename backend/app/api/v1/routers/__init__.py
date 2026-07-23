@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter
 
+from app.api.v1.routers.agent_runs import router as agent_runs_router
 from app.api.v1.routers.ai_analysis import router as ai_analysis_router
 from app.api.v1.routers.auth import router as auth_router
 from app.api.v1.routers.github import router as github_router
@@ -19,6 +20,7 @@ api_router.include_router(github_router)
 api_router.include_router(repositories_router)
 api_router.include_router(pull_requests_router)
 api_router.include_router(ai_analysis_router)
+api_router.include_router(agent_runs_router)
 api_router.include_router(webhooks_router)
 
 __all__ = ["api_router"]

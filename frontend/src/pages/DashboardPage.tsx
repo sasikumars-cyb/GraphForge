@@ -11,7 +11,7 @@ import {
   type DashboardPullRequestRow,
   type DashboardRepositoryRow,
 } from "../hooks/useDashboardData";
-import { LayoutDashboard, FolderGit2, GitPullRequest, Clock } from "lucide-react";
+import { LayoutDashboard, FolderGit2, GitPullRequest, Clock, Lightbulb, Search } from "lucide-react";
 
 const recentPullRequestColumns: TableColumn<DashboardPullRequestRow>[] = [
   {
@@ -81,6 +81,47 @@ export function DashboardPage() {
           {error}
         </div>
       )}
+
+      {/* Agent Actions */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+        <Link
+          to="/planning"
+          className="group flex items-start gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-6 shadow-sm shadow-black/20 transition-colors hover:border-sky-500/40 hover:bg-slate-900/80"
+          aria-label="Planning Assistant"
+        >
+          <div className="rounded-lg bg-sky-500/10 p-3 ring-1 ring-inset ring-sky-500/30">
+            <Lightbulb className="h-6 w-6 text-sky-400" aria-hidden="true" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-slate-100 group-hover:text-sky-300">
+              Planning Assistant
+            </h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Describe an engineering task and get an AI-generated implementation plan grounded in
+              your architecture graph.
+            </p>
+          </div>
+        </Link>
+
+        <Link
+          to="/review"
+          className="group flex items-start gap-4 rounded-xl border border-slate-800 bg-slate-900/60 p-6 shadow-sm shadow-black/20 transition-colors hover:border-emerald-500/40 hover:bg-slate-900/80"
+          aria-label="Review Pull Request"
+        >
+          <div className="rounded-lg bg-emerald-500/10 p-3 ring-1 ring-inset ring-emerald-500/30">
+            <Search className="h-6 w-6 text-emerald-400" aria-hidden="true" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold text-slate-100 group-hover:text-emerald-300">
+              Review Pull Request
+            </h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Submit a GitHub PR URL for AI-powered change impact analysis with evidence-backed
+              findings.
+            </p>
+          </div>
+        </Link>
+      </div>
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard

@@ -1,0 +1,77 @@
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
+import { MemoryRouter } from "react-router-dom";
+import { AuthContext, type AuthContextValue } from "../app/auth-context";
+import { PlanningPage } from "./PlanningPage";
+
+// Mock the API module
+vi.mock("../lib/api/agentRuns", () => ({
+  createAgentRun: vi.fn(),
+  getAgentRun: vi.fn(),
+}));
+
+function renderWithAuth(authValue?: Partial<AuthContextValue>) {
+  const defaultAuth: AuthContextValue = {
+    user: { id: "u1", email: "test@test.com", full_name: "Test User", is_active: true },
+    token: "test-token",
+    isLoading: false,
+    login: vi.fn(),
+    logout: vi.fn(),
+    ...authValue,
+  };
+
+  return render(
+    <AuthContext.Provider value={defaultAuth}>
+      <MemoryRouter>
+        <PlanningPage />
+      </MemoryRouter>
+    </AuthContext.Provider>,
+  );
+}
+
+describe("PlanningPage", () => {
+  it("renders the planning assistant heading", () => {
+    renderWithAuth();
+    expect(screen.getByText("Planning Assistant")).toBeInTheDocument();
+  });
+
+  it("renders the text input", () => {
+    renderWithAuth();
+    expect(screen.getByLabelText("What would you like to plan?")).toBeInTheDocument();
+  });
+
+  it("renders example buttons", () => {
+    renderWithAuth();
+    expect(screen.getByText("Plan migration from Kafka to Google PubSub")).toBeInTheDocument();
+  });
+
+  it("disables submit button when input is empty", () => {
+    renderWithAuth();
+    const button = screen.getByRole("button", { name: "Submit planning request" });
+    expect(button).toBeDisabled();
+  });
+
+  it("enables submit button when input has text", async () => {
+    const user = userEvent.setup();
+    renderWithAuth();
+    const textarea = screen.getByLabelText("What would you like to plan?");
+    await user.type(textarea, "Plan a new feature");
+    const button = screen.getByRole("button", { name: "Submit planning request" });
+    expect(button).toBeEnabled();
+  });
+
+  it("fills textarea when example is clicked", async () => {
+    const user = userEvent.setup();
+    renderWithAuth();
+    const example = screen.getByText("Plan migration from Kafka to Google PubSub");
+    await user.click(example);
+    const textarea = screen.getByLabelText("What would you like to plan?") as HTMLTextAreaElement;
+    expect(textarea.value).toBe("Plan migration from Kafka to Google PubSub");
+  });
+
+  it("has a link to run history", () => {
+    renderWithAuth();
+    expect(screen.getByRole("link", { name: "View run history" })).toHaveAttribute("href", "/runs");
+  });
+});
