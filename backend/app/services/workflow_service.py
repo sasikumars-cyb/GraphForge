@@ -23,14 +23,33 @@ from app.models.workflow import Workflow
 logger = logging.getLogger(__name__)
 
 # --- Stage definitions ---
+#
+# WORKFLOW_TYPE_STAGES is the one thing that differs between workflow
+# types — everything else in this module (advance_workflow, build_stage_
+# context, the router's continue/approve endpoints) reads a workflow's own
+# `workflow_type` to pick its sequence, rather than branching on type
+# itself. This is the "shared engine, not two engines" design: one set of
+# functions, parameterized by a data table.
+#
+# "legacy_sdlc" is the exact, frozen 4-stage sequence every workflow used
+# before workflow_type existed — the Workflow.workflow_type column defaults
+# to it, so pre-existing rows are never reinterpreted. "planning" is the
+# new, human-gated, no-repo-writes sequence and is what NewWorkflowPage
+# creates by default going forward.
 
 STAGES = ("planning", "development", "testing", "review")
+
+WORKFLOW_TYPE_STAGES: dict[str, tuple[str, ...]] = {
+    "legacy_sdlc": STAGES,
+    "planning": ("planning", "development", "testing", "engineering_review"),
+}
 
 STAGE_GOALS: dict[str, str] = {
     "planning": "plan_freeform",
     "development": "develop_change_plan",
     "testing": "plan_tests",
     "review": "review_pr",
+    "engineering_review": "review_readiness",
 }
 
 STAGE_LABELS: dict[str, str] = {
@@ -38,16 +57,25 @@ STAGE_LABELS: dict[str, str] = {
     "development": "Development",
     "testing": "Testing",
     "review": "Review",
+    "engineering_review": "Engineering Review",
 }
 
 
-def next_stage(current: str) -> str | None:
-    """Return the next SDLC stage, or None if already at the end."""
+def stage_sequence(workflow_type: str) -> tuple[str, ...]:
+    """The ordered stage sequence for a workflow type. Unknown/missing
+    types fall back to "legacy_sdlc" so old data is never reinterpreted."""
+    return WORKFLOW_TYPE_STAGES.get(workflow_type, STAGES)
+
+
+def next_stage(current: str, workflow_type: str = "legacy_sdlc") -> str | None:
+    """Return the next stage in `workflow_type`'s sequence, or None if
+    `current` is already the last stage."""
+    sequence = stage_sequence(workflow_type)
     try:
-        idx = STAGES.index(current)
+        idx = sequence.index(current)
     except ValueError:
         return None
-    return STAGES[idx + 1] if idx + 1 < len(STAGES) else None
+    return sequence[idx + 1] if idx + 1 < len(sequence) else None
 
 
 def _summarize_previous_output(run: Run) -> str:
@@ -63,7 +91,11 @@ def _summarize_previous_output(run: Run) -> str:
     if summary := result.get("executive_summary"):
         parts.append(f"Previous stage ({run.goal}) summary: {summary}")
 
-    # Key fields that provide useful context
+    # Key fields that provide useful context. Extended (not replaced) for
+    # Engineering Review, which needs to validate risks/dependencies/test
+    # coverage — it reuses this exact same summarization mechanism every
+    # other stage already relies on, just benefiting from a richer field
+    # list, rather than a special-cased raw-JSON context path of its own.
     for key in (
         "affected_components",
         "affected_repositories",
@@ -71,29 +103,55 @@ def _summarize_previous_output(run: Run) -> str:
         "kafka_topics_involved",
         "risk_considerations",
         "recommendations",
+        "risks",
+        "dependencies",
+        "implementation_phases",
+        "regression_tests",
+        "integration_tests",
+        "edge_cases",
     ):
         if items := result.get(key):
             if isinstance(items, list) and items:
-                parts.append(f"{key.replace('_', ' ').title()}: {', '.join(str(i) for i in items[:10])}")
+                parts.append(
+                    f"{key.replace('_', ' ').title()}: {', '.join(str(i) for i in items[:10])}"
+                )
 
     return "\n".join(parts)
+
+
+CREATABLE_WORKFLOW_TYPES: frozenset[str] = frozenset(
+    WORKFLOW_TYPE_STAGES.keys() - {"legacy_sdlc"}
+)
 
 
 async def create_workflow(
     db: AsyncSession,
     title: str,
+    workflow_type: str = "planning",
 ) -> Workflow:
-    """Create a new SDLC workflow starting at the planning stage."""
+    """Create a new workflow starting at its type's first stage. Planning
+    is the default per the approved design — it's the only type
+    NewWorkflowPage lets a user pick today."""
+    if workflow_type not in CREATABLE_WORKFLOW_TYPES:
+        from app.core.exceptions import AppError
+
+        raise AppError(
+            f"Invalid workflow_type '{workflow_type}'. "
+            f"Allowed: {sorted(CREATABLE_WORKFLOW_TYPES)}.",
+            status_code=400,
+            error_code="invalid_workflow_type",
+        )
     workflow = Workflow(
         id=uuid.uuid4(),
         title=title,
-        current_stage="planning",
+        current_stage=stage_sequence(workflow_type)[0],
         status="in_progress",
+        workflow_type=workflow_type,
     )
     db.add(workflow)
     await db.flush()
 
-    logger.info("workflow_created id=%s title=%s", str(workflow.id), title)
+    logger.info("workflow_created id=%s title=%s type=%s", str(workflow.id), title, workflow_type)
     return workflow
 
 
@@ -113,13 +171,37 @@ async def get_workflow(
     return workflow
 
 
+async def get_workflow_for_update(
+    db: AsyncSession,
+    workflow_id: uuid.UUID,
+) -> Workflow:
+    """Fetch a workflow with a row-level lock (FOR UPDATE).
+
+    Use this in mutating endpoints (continue, approve, reject) to prevent
+    TOCTOU races where concurrent requests both pass the in-memory
+    status/stage checks before either commits.
+    """
+    result = await db.execute(
+        select(Workflow)
+        .options(selectinload(Workflow.runs).selectinload(Run.steps))
+        .where(Workflow.id == workflow_id)
+        .with_for_update()
+    )
+    workflow = result.scalar_one_or_none()
+    if workflow is None:
+        raise NotFoundError(f"Workflow '{workflow_id}' not found.")
+    return workflow
+
+
 async def list_workflows(
     db: AsyncSession,
     status: str | None = None,
+    workflow_type: str | None = None,
     page: int = 1,
     page_size: int = 25,
 ) -> tuple[list[Workflow], int]:
-    """List workflows with pagination, optionally filtered by status."""
+    """List workflows with pagination, optionally filtered by status
+    and/or workflow_type."""
     from sqlalchemy import func as sa_func
 
     query = select(Workflow)
@@ -128,6 +210,9 @@ async def list_workflows(
     if status:
         query = query.where(Workflow.status == status)
         count_query = count_query.where(Workflow.status == status)
+    if workflow_type:
+        query = query.where(Workflow.workflow_type == workflow_type)
+        count_query = count_query.where(Workflow.workflow_type == workflow_type)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0
@@ -161,7 +246,9 @@ def build_stage_context(
         if run.status == "completed" and run.workflow_stage != target_stage:
             summary = _summarize_previous_output(run)
             if summary:
-                parts.append(f"\n--- Context from {STAGE_LABELS.get(run.workflow_stage or '', run.workflow_stage or '')} stage (run {run.id}) ---\n{summary}")
+                parts.append(
+                    f"\n--- Context from {STAGE_LABELS.get(run.workflow_stage or '', run.workflow_stage or '')} stage (run {run.id}) ---\n{summary}"
+                )
 
     return "\n".join(parts)
 
@@ -171,7 +258,14 @@ async def advance_workflow(
     workflow: Workflow,
     completed_run: Run,
 ) -> None:
-    """Advance the workflow to the next stage after a run completes."""
+    """Advance the workflow to the next stage after a run completes.
+
+    When a "planning" workflow finishes its last stage, it doesn't
+    auto-complete like legacy_sdlc — it gates on human approval instead
+    (see the /approve and /reject endpoints). current_stage deliberately
+    stays at the stage that just ran (there's nothing to advance to yet,
+    and nothing has actually "completed" until a human decides).
+    """
     if completed_run.status != "completed":
         return
 
@@ -179,10 +273,13 @@ async def advance_workflow(
     if not current:
         return
 
-    nxt = next_stage(current)
+    nxt = next_stage(current, workflow.workflow_type)
     if nxt is None:
-        workflow.status = "completed"
-        workflow.current_stage = "completed"
+        if workflow.workflow_type == "planning":
+            workflow.status = "awaiting_approval"
+        else:
+            workflow.status = "completed"
+            workflow.current_stage = "completed"
     else:
         workflow.current_stage = nxt
 
@@ -190,8 +287,27 @@ async def advance_workflow(
     await db.flush()
 
     logger.info(
-        "workflow_advanced id=%s from=%s to=%s",
+        "workflow_advanced id=%s from=%s to=%s status=%s",
         str(workflow.id),
         current,
         workflow.current_stage,
+        workflow.status,
     )
+
+
+async def approve_workflow(db: AsyncSession, workflow: Workflow) -> None:
+    """Human approves a completed blueprint — terminal, no further stages
+    run automatically (matches Auto Execution being a separate, explicit
+    workflow the user creates from this one, not an auto-continuation)."""
+    workflow.status = "approved"
+    workflow.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    logger.info("workflow_approved id=%s", str(workflow.id))
+
+
+async def reject_workflow(db: AsyncSession, workflow: Workflow) -> None:
+    """Human rejects a completed blueprint — terminal."""
+    workflow.status = "rejected"
+    workflow.updated_at = datetime.now(timezone.utc)
+    await db.flush()
+    logger.info("workflow_rejected id=%s", str(workflow.id))

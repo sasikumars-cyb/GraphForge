@@ -9,6 +9,7 @@ import {
   formatDuration,
   progressFraction,
   stageLabel,
+  workflowStatusDisplay,
   type WorkflowPhase,
 } from "../../lib/workflowDerived";
 
@@ -20,14 +21,6 @@ interface WorkflowHeaderProps {
    * so it can't disagree with the pipeline or the approval/failure banner. */
   phase: WorkflowPhase;
 }
-
-const STATUS_CONFIG: Record<WorkflowPhase, { label: string; tone: "success" | "info" | "danger" }> =
-  {
-    completed: { label: "Completed", tone: "success" },
-    failed: { label: "Failed", tone: "danger" },
-    running: { label: "In Progress", tone: "info" },
-    awaiting_approval: { label: "In Progress", tone: "info" },
-  };
 
 /** Feature 1 — Workflow Command Center header: title, status, progress,
  * live-ticking duration, current stage, and a rough remaining-time
@@ -53,7 +46,7 @@ export function WorkflowHeader({ workflow, completedSteps, phase }: WorkflowHead
     : phase === "failed"
       ? `${stageLabel(workflow.current_stage)} (failed)`
       : stageLabel(workflow.current_stage);
-  const status = STATUS_CONFIG[phase];
+  const status = workflowStatusDisplay(workflow, phase);
 
   return (
     <div className="flex flex-col gap-5 rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-900/40 p-6 shadow-sm shadow-black/20">
@@ -64,7 +57,7 @@ export function WorkflowHeader({ workflow, completedSteps, phase }: WorkflowHead
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-brand-400">
-              Agentic Workflow
+              {workflow.workflow_type === "planning" ? "Planning Workflow" : "Agentic Workflow"}
             </p>
             <h1 className="font-display text-xl font-bold tracking-tight text-slate-50 sm:text-2xl">
               {workflow.title}

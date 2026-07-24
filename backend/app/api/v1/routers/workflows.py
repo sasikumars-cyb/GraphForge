@@ -3,7 +3,9 @@
 POST /workflows                    → Create a workflow and run the first stage
 GET  /workflows                    → List workflows (paginated)
 GET  /workflows/{workflow_id}      → Get workflow with all stages and runs
-POST /workflows/{workflow_id}/continue → Continue to the next SDLC stage
+POST /workflows/{workflow_id}/continue → Continue to the next stage
+POST /workflows/{workflow_id}/approve  → Approve a completed Planning blueprint
+POST /workflows/{workflow_id}/reject   → Reject a completed Planning blueprint
 """
 
 from __future__ import annotations
@@ -37,6 +39,9 @@ router = APIRouter(prefix="/workflows", tags=["workflows"])
 class CreateWorkflowRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=512)
     model: str | None = None
+    # "planning" is the only type NewWorkflowPage lets a user create today —
+    # also the module-level default in workflow_service.create_workflow().
+    workflow_type: str = "planning"
 
 
 class ContinueWorkflowRequest(BaseModel):
@@ -64,6 +69,7 @@ class WorkflowStageResponse(BaseModel):
 class WorkflowDetailResponse(BaseModel):
     workflow_id: str
     title: str
+    workflow_type: str
     current_stage: str
     status: str
     stages: list[WorkflowStageResponse]
@@ -75,6 +81,7 @@ class WorkflowDetailResponse(BaseModel):
 class WorkflowListItem(BaseModel):
     workflow_id: str
     title: str
+    workflow_type: str
     current_stage: str
     status: str
     stages: list[WorkflowStageResponse]
@@ -97,6 +104,11 @@ class ContinueWorkflowResponse(BaseModel):
     status: str
 
 
+class WorkflowApprovalResponse(BaseModel):
+    workflow_id: str
+    status: str
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -112,12 +124,12 @@ def _build_stages(workflow: Workflow) -> list[WorkflowStageResponse]:
     """Build the stage list from a workflow and its runs."""
     # Map stage → run
     stage_runs: dict[str, Run] = {}
-    for run in (workflow.runs or []):
+    for run in workflow.runs or []:
         if run.workflow_stage:
             stage_runs[run.workflow_stage] = run
 
     stages = []
-    for stage in workflow_service.STAGES:
+    for stage in workflow_service.stage_sequence(workflow.workflow_type):
         matched_run = stage_runs.get(stage)
         # Any stage without a Run is simply "pending" — whether it's the
         # current stage awaiting its first attempt, a future stage not yet
@@ -125,12 +137,14 @@ def _build_stages(workflow: Workflow) -> list[WorkflowStageResponse]:
         # correctly linked and will show up via `matched_run.status` instead.
         stage_status = matched_run.status if matched_run is not None else "pending"
 
-        stages.append(WorkflowStageResponse(
-            stage=stage,
-            label=workflow_service.STAGE_LABELS[stage],
-            status=stage_status,
-            run_id=str(matched_run.id) if matched_run is not None else None,
-        ))
+        stages.append(
+            WorkflowStageResponse(
+                stage=stage,
+                label=workflow_service.STAGE_LABELS[stage],
+                status=stage_status,
+                run_id=str(matched_run.id) if matched_run is not None else None,
+            )
+        )
     return stages
 
 
@@ -181,21 +195,23 @@ def _build_run_responses(workflow: Workflow) -> list[WorkflowRunResponse]:
     items = []
     for run in sorted(workflow.runs or [], key=lambda r: r.created_at):
         best_confidence = None
-        for step in (run.steps or []):
+        for step in run.steps or []:
             if step.confidence_score is not None:
                 if best_confidence is None or step.confidence_score > best_confidence:
                     best_confidence = step.confidence_score
 
-        items.append(WorkflowRunResponse(
-            run_id=str(run.id),
-            goal=run.goal,
-            status=run.status,
-            workflow_stage=run.workflow_stage,
-            confidence_score=best_confidence,
-            started_at=_iso(run.started_at),
-            completed_at=_iso(run.completed_at),
-            created_at=_iso(run.created_at),
-        ))
+        items.append(
+            WorkflowRunResponse(
+                run_id=str(run.id),
+                goal=run.goal,
+                status=run.status,
+                workflow_stage=run.workflow_stage,
+                confidence_score=best_confidence,
+                started_at=_iso(run.started_at),
+                completed_at=_iso(run.completed_at),
+                created_at=_iso(run.created_at),
+            )
+        )
     return items
 
 
@@ -210,13 +226,16 @@ async def create_workflow(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> ContinueWorkflowResponse:
-    """Create a new SDLC workflow and execute the first (planning) stage."""
+    """Create a new workflow and execute its first stage."""
     from app.orchestrator.run_coordinator import RunCoordinator
 
-    workflow = await workflow_service.create_workflow(db, title=body.title)
+    workflow = await workflow_service.create_workflow(
+        db, title=body.title, workflow_type=body.workflow_type
+    )
 
-    # Execute planning stage
-    stage = "planning"
+    # Execute the first stage of this workflow_type's sequence (today,
+    # "planning" either way — legacy_sdlc and planning both start there).
+    stage = workflow_service.stage_sequence(body.workflow_type)[0]
     goal = workflow_service.STAGE_GOALS[stage]
     subject = resolve_freetext(body.title)
 
@@ -260,16 +279,18 @@ async def list_workflows(
     page: int = Query(1, ge=1),
     page_size: int = Query(25, ge=1, le=100),
     status: str | None = None,
+    workflow_type: str | None = None,
 ) -> WorkflowListResponse:
     """List workflows with pagination."""
     workflows, total = await workflow_service.list_workflows(
-        db, status=status, page=page, page_size=page_size
+        db, status=status, workflow_type=workflow_type, page=page, page_size=page_size
     )
 
     items = [
         WorkflowListItem(
             workflow_id=str(w.id),
             title=w.title,
+            workflow_type=w.workflow_type,
             current_stage=w.current_stage,
             status=w.status,
             stages=_build_stages(w),
@@ -305,6 +326,7 @@ async def get_workflow(
     return WorkflowDetailResponse(
         workflow_id=str(workflow.id),
         title=workflow.title,
+        workflow_type=workflow.workflow_type,
         current_stage=workflow.current_stage,
         status=workflow.status,
         stages=_build_stages(workflow),
@@ -333,13 +355,13 @@ async def continue_workflow(
     except ValueError as exc:
         raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
 
-    workflow = await workflow_service.get_workflow(db, wid)
+    workflow = await workflow_service.get_workflow_for_update(db, wid)
 
-    if workflow.status == "completed":
+    if workflow.status in ("completed", "awaiting_approval", "approved", "rejected"):
         raise AppError(
-            "Workflow is already completed.",
+            f"Workflow is {workflow.status.replace('_', ' ')} — no further stages can run.",
             status_code=400,
-            error_code="workflow_completed",
+            error_code="workflow_terminal",
         )
 
     target_stage = workflow.current_stage
@@ -352,7 +374,11 @@ async def continue_workflow(
 
     # Check this stage hasn't already been run
     for existing_run in workflow.runs:
-        if existing_run.workflow_stage == target_stage and existing_run.status in ("queued", "running", "completed"):
+        if existing_run.workflow_stage == target_stage and existing_run.status in (
+            "queued",
+            "running",
+            "completed",
+        ):
             raise AppError(
                 f"Stage '{target_stage}' already has a run.",
                 status_code=400,
@@ -409,3 +435,55 @@ async def continue_workflow(
         stage=target_stage,
         status=run.status,
     )
+
+
+@router.post("/{workflow_id}/approve", response_model=WorkflowApprovalResponse)
+async def approve_workflow(
+    workflow_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> WorkflowApprovalResponse:
+    """Human approves a completed blueprint. Only valid once the workflow
+    has finished its last stage and is genuinely awaiting a decision —
+    mirrors continue_workflow's own guard style."""
+    try:
+        wid = uuid.UUID(workflow_id)
+    except ValueError as exc:
+        raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
+
+    workflow = await workflow_service.get_workflow_for_update(db, wid)
+    if workflow.status != "awaiting_approval":
+        raise AppError(
+            f"Workflow is not awaiting approval (status: {workflow.status}).",
+            status_code=400,
+            error_code="workflow_not_awaiting_approval",
+        )
+
+    await workflow_service.approve_workflow(db, workflow)
+    await db.commit()
+    return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)
+
+
+@router.post("/{workflow_id}/reject", response_model=WorkflowApprovalResponse)
+async def reject_workflow(
+    workflow_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> WorkflowApprovalResponse:
+    """Human rejects a completed blueprint."""
+    try:
+        wid = uuid.UUID(workflow_id)
+    except ValueError as exc:
+        raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
+
+    workflow = await workflow_service.get_workflow_for_update(db, wid)
+    if workflow.status != "awaiting_approval":
+        raise AppError(
+            f"Workflow is not awaiting approval (status: {workflow.status}).",
+            status_code=400,
+            error_code="workflow_not_awaiting_approval",
+        )
+
+    await workflow_service.reject_workflow(db, workflow)
+    await db.commit()
+    return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)

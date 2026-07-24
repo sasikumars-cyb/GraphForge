@@ -28,6 +28,7 @@ GOAL_REVIEW_PR = "review_pr"
 GOAL_PLAN_FREEFORM = "plan_freeform"
 GOAL_DEVELOP_CHANGE_PLAN = "develop_change_plan"
 GOAL_PLAN_TESTS = "plan_tests"
+GOAL_REVIEW_READINESS = "review_readiness"
 
 
 class AgentSelector:
@@ -47,15 +48,8 @@ class AgentSelector:
         for manifest in self._registry.all_manifests():
             if goal in manifest.goals:
                 return manifest.agent_id
-        known = sorted(
-            g for m in self._registry.all_manifests() for g in m.goals
-        )
-        raise NotFoundError(
-            f"No agent registered for goal '{goal}'. "
-            f"Known goals: {known}"
-        )
+        known = sorted(g for m in self._registry.all_manifests() for g in m.goals)
+        raise NotFoundError(f"No agent registered for goal '{goal}'. " f"Known goals: {known}")
 
     def known_goals(self) -> list[str]:
-        return sorted(
-            g for m in self._registry.all_manifests() for g in m.goals
-        )
+        return sorted(g for m in self._registry.all_manifests() for g in m.goals)

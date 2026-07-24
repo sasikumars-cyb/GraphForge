@@ -12,22 +12,25 @@ import type { AgentStep, Evidence, WorkflowDetail, WorkflowStageInfo } from "../
 
 type EventKind = Evidence["kind"] | "lifecycle";
 
-export const STAGE_ORDER = ["planning", "development", "testing", "review"] as const;
-
 export const STAGE_AGENT_LABEL: Record<string, string> = {
   planning: "Planning Agent",
   development: "Development Agent",
   testing: "Testing Agent",
   review: "Review Agent",
+  engineering_review: "Engineering Review Agent",
 };
 
-/** The stage that consumes this stage's output, per the real chaining
- * `workflow_service.build_stage_context()` performs on the backend — this
- * is not a UI invention, it mirrors the actual STAGES sequence. */
-export function nextStageOf(stage: string): string | null {
-  const idx = STAGE_ORDER.indexOf(stage as (typeof STAGE_ORDER)[number]);
-  if (idx === -1 || idx + 1 >= STAGE_ORDER.length) return null;
-  return STAGE_ORDER[idx + 1];
+/** Derive the next stage from the workflow's own stages array (the
+ * backend-authoritative ordering) rather than a hardcoded frontend list.
+ * Falls back to null for the last stage or unknown stages. */
+export function nextStageOf(
+  stage: string,
+  stages?: { stage: string }[],
+): string | null {
+  if (!stages || stages.length === 0) return null;
+  const idx = stages.findIndex((s) => s.stage === stage);
+  if (idx === -1 || idx + 1 >= stages.length) return null;
+  return stages[idx + 1].stage;
 }
 
 export function stageLabel(stage: string): string {
@@ -42,12 +45,13 @@ export function stageLabel(stage: string): string {
 // one function instead.
 // ---------------------------------------------------------------------------
 
-export type WorkflowPhase = "running" | "awaiting_approval" | "failed" | "completed";
+export type WorkflowPhase =
+  "running" | "awaiting_approval" | "blueprint_approval" | "failed" | "completed";
 
 export interface WorkflowUiState {
   phase: WorkflowPhase;
   /** The stage matching workflow.current_stage — null only if the backend
-   * ever reports a current_stage outside the known STAGE_ORDER. */
+   * ever reports a current_stage outside the workflow's stage list. */
   currentStageInfo: WorkflowStageInfo | null;
   lastCompletedStage: WorkflowStageInfo | null;
 }
@@ -60,6 +64,16 @@ export function deriveWorkflowState(workflow: WorkflowDetail): WorkflowUiState {
   let phase: WorkflowPhase;
   if (workflow.status === "completed") {
     phase = "completed";
+  } else if (
+    workflow.status === "awaiting_approval" ||
+    workflow.status === "approved" ||
+    workflow.status === "rejected"
+  ) {
+    // A Planning workflow gating on a *human blueprint decision*, not a
+    // per-stage continue — deliberately a distinct phase from the
+    // per-stage "awaiting_approval" below so the two banners (ApprovalGate
+    // vs WorkflowApproval) can never both think it's their turn to render.
+    phase = "blueprint_approval";
   } else if (currentStageInfo?.status === "failed") {
     phase = "failed";
   } else if (currentStageInfo?.status === "running") {
@@ -73,6 +87,36 @@ export function deriveWorkflowState(workflow: WorkflowDetail): WorkflowUiState {
 
   return { phase, currentStageInfo, lastCompletedStage };
 }
+
+/** Label/tone for a workflow's overall status badge — the one place this
+ * mapping lives, so WorkflowHeader and Run History's grouped rows never
+ * disagree. "blueprint_approval" covers three real backend statuses
+ * (awaiting_approval/approved/rejected), which is the one case where the
+ * phase alone isn't specific enough to display — so this takes the real
+ * `workflow.status` too, not just the derived phase. */
+export function workflowStatusDisplay(
+  workflow: { status: string },
+  phase: WorkflowPhase,
+): { label: string; tone: "success" | "info" | "danger" | "warning" } {
+  if (phase === "blueprint_approval") {
+    if (workflow.status === "approved") return { label: "Approved", tone: "success" };
+    if (workflow.status === "rejected") return { label: "Rejected", tone: "danger" };
+    return { label: "Awaiting Approval", tone: "warning" };
+  }
+  return STATUS_CONFIG[phase];
+}
+
+const STATUS_CONFIG: Record<WorkflowPhase, { label: string; tone: "success" | "info" | "danger" }> =
+  {
+    completed: { label: "Completed", tone: "success" },
+    failed: { label: "Failed", tone: "danger" },
+    running: { label: "In Progress", tone: "info" },
+    awaiting_approval: { label: "In Progress", tone: "info" },
+    // Never actually looked up directly — workflowStatusDisplay() always
+    // branches before reaching here for this phase — but every WorkflowPhase
+    // key must be present for the Record type to be exhaustive.
+    blueprint_approval: { label: "Awaiting Approval", tone: "info" },
+  };
 
 // ---------------------------------------------------------------------------
 // Duration / progress
@@ -302,6 +346,13 @@ const ARTIFACT_FIELDS: Record<string, ArtifactField[]> = {
     { key: "suggested_reviewers", label: "Suggested reviewers" },
     { key: "regression_tests", label: "Regression tests" },
     { key: "migration_advice", label: "Migration notes" },
+  ],
+  engineering_review: [
+    { key: "completeness_findings", label: "Completeness findings" },
+    { key: "risk_assessment", label: "Risk assessments" },
+    { key: "dependency_assessment", label: "Dependency assessments" },
+    { key: "blocking_issues", label: "Blocking issues" },
+    { key: "recommendations", label: "Recommendations" },
   ],
 };
 

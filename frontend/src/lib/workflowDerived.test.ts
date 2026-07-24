@@ -14,6 +14,7 @@ import {
   resultRepositories,
   resultSummary,
   stageLabel,
+  workflowStatusDisplay,
 } from "./workflowDerived";
 
 function makeStep(overrides: Partial<AgentStep> = {}): AgentStep {
@@ -35,18 +36,40 @@ function makeStep(overrides: Partial<AgentStep> = {}): AgentStep {
 }
 
 describe("nextStageOf", () => {
-  it("returns the next stage in sequence", () => {
-    expect(nextStageOf("planning")).toBe("development");
-    expect(nextStageOf("development")).toBe("testing");
-    expect(nextStageOf("testing")).toBe("review");
+  const legacyStages = [
+    { stage: "planning" },
+    { stage: "development" },
+    { stage: "testing" },
+    { stage: "review" },
+  ];
+  const planningStages = [
+    { stage: "planning" },
+    { stage: "development" },
+    { stage: "testing" },
+    { stage: "engineering_review" },
+  ];
+
+  it("returns the next stage in a legacy sequence", () => {
+    expect(nextStageOf("planning", legacyStages)).toBe("development");
+    expect(nextStageOf("development", legacyStages)).toBe("testing");
+    expect(nextStageOf("testing", legacyStages)).toBe("review");
+  });
+
+  it("returns the next stage in a planning sequence", () => {
+    expect(nextStageOf("testing", planningStages)).toBe("engineering_review");
   });
 
   it("returns null after the last stage", () => {
-    expect(nextStageOf("review")).toBeNull();
+    expect(nextStageOf("review", legacyStages)).toBeNull();
+    expect(nextStageOf("engineering_review", planningStages)).toBeNull();
   });
 
   it("returns null for an unknown stage", () => {
-    expect(nextStageOf("not-a-stage")).toBeNull();
+    expect(nextStageOf("not-a-stage", legacyStages)).toBeNull();
+  });
+
+  it("returns null when no stages array provided", () => {
+    expect(nextStageOf("planning")).toBeNull();
   });
 });
 
@@ -275,6 +298,7 @@ describe("deriveWorkflowState", () => {
     return {
       workflow_id: "wf-1",
       title: "Add rate limiting",
+      workflow_type: "planning",
       current_stage: "testing",
       status: "in_progress",
       stages: [
@@ -364,5 +388,65 @@ describe("deriveWorkflowState", () => {
     );
     expect(state.phase).toBe("awaiting_approval");
     expect(state.lastCompletedStage?.stage).toBe("testing");
+  });
+
+  it("is 'blueprint_approval' — never the per-stage 'awaiting_approval' — once a Planning workflow finishes its last stage", () => {
+    // The real bug this distinction exists to prevent: without a separate
+    // phase, this state would fall through to the same "awaiting_approval"
+    // a mid-sequence stage uses, and the per-stage ApprovalGateBanner would
+    // render "approve to start X" with no X left to start.
+    const state = deriveWorkflowState(
+      makeWorkflow({
+        status: "awaiting_approval",
+        current_stage: "engineering_review",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          { stage: "development", label: "Development", status: "completed", run_id: "run-2" },
+          { stage: "testing", label: "Testing", status: "completed", run_id: "run-3" },
+          {
+            stage: "engineering_review",
+            label: "Engineering Review",
+            status: "completed",
+            run_id: "run-4",
+          },
+        ],
+      }),
+    );
+    expect(state.phase).toBe("blueprint_approval");
+  });
+
+  it("stays 'blueprint_approval' for both terminal decisions (approved/rejected)", () => {
+    const approved = deriveWorkflowState(makeWorkflow({ status: "approved" }));
+    const rejected = deriveWorkflowState(makeWorkflow({ status: "rejected" }));
+    expect(approved.phase).toBe("blueprint_approval");
+    expect(rejected.phase).toBe("blueprint_approval");
+  });
+});
+
+describe("workflowStatusDisplay", () => {
+  it("distinguishes the three real statuses behind 'blueprint_approval', unlike a plain phase lookup", () => {
+    expect(workflowStatusDisplay({ status: "awaiting_approval" }, "blueprint_approval")).toEqual({
+      label: "Awaiting Approval",
+      tone: "warning",
+    });
+    expect(workflowStatusDisplay({ status: "approved" }, "blueprint_approval")).toEqual({
+      label: "Approved",
+      tone: "success",
+    });
+    expect(workflowStatusDisplay({ status: "rejected" }, "blueprint_approval")).toEqual({
+      label: "Rejected",
+      tone: "danger",
+    });
+  });
+
+  it("falls back to the plain phase lookup for every other phase", () => {
+    expect(workflowStatusDisplay({ status: "completed" }, "completed")).toEqual({
+      label: "Completed",
+      tone: "success",
+    });
+    expect(workflowStatusDisplay({ status: "in_progress" }, "failed")).toEqual({
+      label: "Failed",
+      tone: "danger",
+    });
   });
 });

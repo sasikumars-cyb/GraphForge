@@ -263,7 +263,8 @@ export interface TestPlanResult {
 // --- Workflow Types ---
 
 export type WorkflowStage = "planning" | "development" | "testing" | "review";
-export type WorkflowStatus = "in_progress" | "completed";
+export type WorkflowStatus =
+  "in_progress" | "completed" | "awaiting_approval" | "approved" | "rejected";
 
 export interface WorkflowStageInfo {
   stage: string;
@@ -286,6 +287,10 @@ export interface WorkflowRunItem {
 export interface WorkflowDetail {
   workflow_id: string;
   title: string;
+  // "planning" is the only type creatable today; typed as string (not a
+  // narrow union) since new types are added server-side over time and the
+  // UI already has fallback handling for anything it doesn't recognize.
+  workflow_type: string;
   current_stage: string;
   status: WorkflowStatus;
   stages: WorkflowStageInfo[];
@@ -297,6 +302,7 @@ export interface WorkflowDetail {
 export interface WorkflowListItem {
   workflow_id: string;
   title: string;
+  workflow_type: string;
   current_stage: string;
   status: WorkflowStatus;
   stages: WorkflowStageInfo[];
@@ -315,11 +321,17 @@ export interface WorkflowListResponse {
 export interface CreateWorkflowRequest {
   title: string;
   model?: string;
+  workflow_type?: string;
 }
 
 export interface ContinueWorkflowResponse {
   workflow_id: string;
   run_id: string;
   stage: string;
+  status: string;
+}
+
+export interface WorkflowApprovalResponse {
+  workflow_id: string;
   status: string;
 }

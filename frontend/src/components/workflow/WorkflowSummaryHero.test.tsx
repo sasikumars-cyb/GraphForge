@@ -27,6 +27,7 @@ function makeStep(overrides: Partial<AgentStep> = {}): AgentStep {
 const workflow: WorkflowDetail = {
   workflow_id: "wf-1",
   title: "Implement JWT authentication",
+  workflow_type: "legacy_sdlc",
   current_stage: "completed",
   status: "completed",
   stages: [

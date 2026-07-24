@@ -29,30 +29,37 @@ function makeStep(overrides: Partial<AgentStep> = {}): AgentStep {
 }
 
 describe("StageArtifactCard", () => {
+  const stages = [
+    { stage: "planning" },
+    { stage: "development" },
+    { stage: "testing" },
+    { stage: "review" },
+  ];
+
   it("shows the real executive summary", () => {
-    render(<StageArtifactCard stage="planning" step={makeStep()} />);
+    render(<StageArtifactCard stage="planning" step={makeStep()} stages={stages} />);
     expect(screen.getByText("A plan to add JWT auth.")).toBeInTheDocument();
   });
 
   it("shows real evidence count and execution time", () => {
-    render(<StageArtifactCard stage="planning" step={makeStep()} />);
+    render(<StageArtifactCard stage="planning" step={makeStep()} stages={stages} />);
     expect(screen.getByText("2 items")).toBeInTheDocument();
     expect(screen.getByText("4.2s")).toBeInTheDocument();
   });
 
   it("shows counted artifacts from the stage's real result fields", () => {
-    render(<StageArtifactCard stage="planning" step={makeStep()} />);
+    render(<StageArtifactCard stage="planning" step={makeStep()} stages={stages} />);
     expect(screen.getByText("1 Implementation steps")).toBeInTheDocument();
     expect(screen.getByText("1 Affected components")).toBeInTheDocument();
   });
 
   it("names the real next consumer of this stage's output", () => {
-    render(<StageArtifactCard stage="planning" step={makeStep()} />);
+    render(<StageArtifactCard stage="planning" step={makeStep()} stages={stages} />);
     expect(screen.getByText("Development")).toBeInTheDocument();
   });
 
   it("labels the last stage's output as workflow output, not a fake next agent", () => {
-    render(<StageArtifactCard stage="review" step={makeStep({ agent_id: "review" })} />);
+    render(<StageArtifactCard stage="review" step={makeStep({ agent_id: "review" })} stages={stages} />);
     expect(screen.getByText("Workflow output")).toBeInTheDocument();
   });
 });

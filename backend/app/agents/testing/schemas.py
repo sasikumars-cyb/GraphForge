@@ -76,7 +76,7 @@ class ExecutionPhase(BaseModel):
     title: str
     description: str
     test_types: list[str] = Field(default_factory=list)
-    depends_on_phases: list[int] = Field(default_factory=list)
+    depends_on_phases: list[int | str] = Field(default_factory=list)
 
 
 class TestRisk(BaseModel):

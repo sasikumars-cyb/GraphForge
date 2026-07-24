@@ -35,7 +35,7 @@ export function AgentCollaborationFlow({ stages, stepsByRunId }: AgentCollaborat
       {completedStages.map((stage, i) => {
         const step = stepsByRunId.get(stage.run_id as string) as AgentStep;
         const counts = deriveArtifactCounts(stage.stage, step.result);
-        const next = nextStageOf(stage.stage);
+        const next = nextStageOf(stage.stage, stages);
         const isLast = i === completedStages.length - 1;
 
         return (

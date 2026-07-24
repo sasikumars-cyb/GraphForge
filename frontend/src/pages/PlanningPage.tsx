@@ -6,6 +6,7 @@ import { EvidencePanel } from "../components/EvidencePanel";
 import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
+import { PlanningResultDetails } from "../components/agents/StageResultDetails";
 import { useAgentRun } from "../hooks/useAgentRun";
 import type { PlanningResult } from "../types/agent";
 
@@ -36,7 +37,8 @@ export function PlanningPage() {
     setInput("");
   };
 
-  const hasResult = run && (run.status === "completed" || run.status === "partial" || run.status === "failed");
+  const hasResult =
+    run && (run.status === "completed" || run.status === "partial" || run.status === "failed");
 
   return (
     <div className="flex flex-col gap-6">
@@ -48,7 +50,8 @@ export function PlanningPage() {
           <div>
             <h2 className="text-xl font-semibold text-slate-50">Planning Assistant</h2>
             <p className="text-sm text-slate-400">
-              Describe an engineering task. GraphForge queries your architecture graph and produces a plan backed by verifiable evidence — not hallucination.
+              Describe an engineering task. GraphForge queries your architecture graph and produces
+              a plan backed by verifiable evidence — not hallucination.
             </p>
           </div>
         </div>
@@ -150,7 +153,13 @@ export function PlanningPage() {
 // Result sub-component
 // ---------------------------------------------------------------------------
 
-function PlanningResultView({ run, onNewPlan }: { run: NonNullable<ReturnType<typeof useAgentRun>["run"]>; onNewPlan: () => void }) {
+function PlanningResultView({
+  run,
+  onNewPlan,
+}: {
+  run: NonNullable<ReturnType<typeof useAgentRun>["run"]>;
+  onNewPlan: () => void;
+}) {
   const step = run.steps[0];
   const result = step?.result as unknown as PlanningResult | undefined;
   const evidence = step?.evidence ?? [];
@@ -161,9 +170,7 @@ function PlanningResultView({ run, onNewPlan }: { run: NonNullable<ReturnType<ty
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <RunStatusBadge status={run.status} />
-          {step?.confidence && (
-            <ConfidenceBadge confidence={step.confidence} showReasoning />
-          )}
+          {step?.confidence && <ConfidenceBadge confidence={step.confidence} showReasoning />}
         </div>
         <button
           type="button"
@@ -190,7 +197,9 @@ function PlanningResultView({ run, onNewPlan }: { run: NonNullable<ReturnType<ty
           </div>
           <div>
             <dt className="text-xs text-slate-500">Status</dt>
-            <dd><RunStatusBadge status={run.status} /></dd>
+            <dd>
+              <RunStatusBadge status={run.status} />
+            </dd>
           </div>
           <div>
             <dt className="text-xs text-slate-500">Confidence</dt>
@@ -231,102 +240,7 @@ function PlanningResultView({ run, onNewPlan }: { run: NonNullable<ReturnType<ty
       )}
 
       {/* Planning result */}
-      {result && (
-        <>
-          {/* Executive Summary */}
-          {result.executive_summary && (
-            <Card title="Implementation Plan">
-              <p className="text-sm text-slate-200">{result.executive_summary}</p>
-            </Card>
-          )}
-
-          {/* Steps */}
-          {result.implementation_steps && result.implementation_steps.length > 0 && (
-            <Card
-              title="Implementation Steps"
-              description={`${result.implementation_steps.length} step${result.implementation_steps.length === 1 ? "" : "s"}`}
-            >
-              <ol className="space-y-3" role="list">
-                {result.implementation_steps.map((s, i) => (
-                  <li
-                    key={i}
-                    className="flex gap-3 rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-3"
-                  >
-                    <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-500/10 text-xs font-semibold text-sky-300 ring-1 ring-inset ring-sky-500/30">
-                      {s.order ?? i + 1}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm text-slate-200">{s.description}</p>
-                      {s.affected_component && (
-                        <p className="mt-1 text-xs text-slate-500">
-                          Component: <span className="text-slate-400">{s.affected_component}</span>
-                        </p>
-                      )}
-                      {s.risk_note && (
-                        <p className="mt-1 text-xs text-amber-400">
-                          Risk: {s.risk_note}
-                        </p>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </Card>
-          )}
-
-          {/* Architecture context */}
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {result.affected_components && result.affected_components.length > 0 && (
-              <Card title="Affected Components">
-                <ul className="space-y-1">
-                  {result.affected_components.map((c) => (
-                    <li key={c} className="text-sm text-slate-300">{c}</li>
-                  ))}
-                </ul>
-              </Card>
-            )}
-
-            {result.kafka_topics_involved && result.kafka_topics_involved.length > 0 && (
-              <Card title="Kafka Topics">
-                <ul className="space-y-1">
-                  {result.kafka_topics_involved.map((t) => (
-                    <li key={t} className="font-mono text-sm text-slate-300">{t}</li>
-                  ))}
-                </ul>
-              </Card>
-            )}
-
-            {result.repositories_consulted && result.repositories_consulted.length > 0 && (
-              <Card title="Repositories Consulted">
-                <ul className="space-y-1">
-                  {result.repositories_consulted.map((r) => (
-                    <li key={r} className="text-sm text-slate-300">{r}</li>
-                  ))}
-                </ul>
-              </Card>
-            )}
-          </div>
-
-          {/* Risk considerations */}
-          {result.risk_considerations && result.risk_considerations.length > 0 && (
-            <Card title="Risk Considerations">
-              <ul className="space-y-2">
-                {result.risk_considerations.map((risk, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-amber-200">
-                    <span className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" aria-hidden="true" />
-                    {risk}
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          )}
-
-          {/* Graph context indicator */}
-          <div className="text-xs text-slate-500">
-            Graph context: {result.graph_context_used ? "Used architecture graph data" : "No graph data available"}
-          </div>
-        </>
-      )}
+      {result && <PlanningResultDetails result={result} />}
 
       {/* Evidence */}
       <EvidencePanel evidence={evidence} />

@@ -11,12 +11,31 @@ import { AgentCollaborationFlow } from "../components/workflow/AgentCollaboratio
 import { StageArtifactCard } from "../components/workflow/StageArtifactCard";
 import { ExecutionLogPanel } from "../components/workflow/ExecutionLogPanel";
 import { ApprovalGateBanner } from "../components/workflow/ApprovalGateBanner";
+import { WorkflowApprovalBanner } from "../components/workflow/WorkflowApprovalBanner";
 import { WorkflowSummaryHero } from "../components/workflow/WorkflowSummaryHero";
 import { WorkflowReplayPanel } from "../components/workflow/WorkflowReplayPanel";
+import {
+  DevelopmentResultDetails,
+  PlanningResultDetails,
+  TestingResultDetails,
+} from "../components/agents/StageResultDetails";
 import { useAuth } from "../app/auth-context";
-import { getWorkflow, continueWorkflow, createWorkflow } from "../lib/api/workflows";
+import {
+  approveWorkflow,
+  continueWorkflow,
+  createWorkflow,
+  getWorkflow,
+  rejectWorkflow,
+} from "../lib/api/workflows";
 import { getAgentRun } from "../lib/api/agentRuns";
-import type { AgentStep, RunDetail, WorkflowDetail } from "../types/agent";
+import type {
+  AgentStep,
+  DevelopmentPlanResult,
+  PlanningResult,
+  RunDetail,
+  TestPlanResult,
+  WorkflowDetail,
+} from "../types/agent";
 import { deriveWorkflowState, STAGE_AGENT_LABEL } from "../lib/workflowDerived";
 
 const POLL_INTERVAL_MS = 2500;
@@ -89,6 +108,34 @@ export function WorkflowPage() {
       // 2.5s poll tick, which is exactly the kind of contradiction this
       // page should never show.
       await loadWorkflow(false);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleApproveWorkflow = async () => {
+    if (!token || !workflowId) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await approveWorkflow(token, workflowId);
+      await loadWorkflow(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to approve workflow.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleRejectWorkflow = async () => {
+    if (!token || !workflowId) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await rejectWorkflow(token, workflowId);
+      await loadWorkflow(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to reject workflow.");
     } finally {
       setIsSubmitting(false);
     }
@@ -207,6 +254,16 @@ export function WorkflowPage() {
         />
       )}
 
+      {phase === "blueprint_approval" && (
+        <WorkflowApprovalBanner
+          workflowTitle={workflow.title}
+          status={workflow.status}
+          isSubmitting={isSubmitting}
+          onApprove={handleApproveWorkflow}
+          onReject={handleRejectWorkflow}
+        />
+      )}
+
       <div className="grid gap-6 lg:grid-cols-[1fr_1.3fr]">
         <div className="flex flex-col gap-6">
           <Card title="Agent Activity" description="Live evidence as each agent works">
@@ -243,7 +300,7 @@ export function WorkflowPage() {
                 <div className="mb-3">
                   <RunStatusBadge status={selectedRun.status} />
                 </div>
-                <StageArtifactCard stage={selectedStage ?? ""} step={selectedStep} />
+                <StageArtifactCard stage={selectedStage ?? ""} step={selectedStep} stages={workflow.stages} />
                 {selectedRun.error_message && (
                   <details className="group mt-3">
                     <summary className="cursor-pointer text-xs font-medium text-rose-300/80 hover:text-rose-200">
@@ -261,6 +318,35 @@ export function WorkflowPage() {
               </Card>
 
               <EvidencePanel evidence={selectedStep.evidence} />
+
+              {(selectedStage === "planning" ||
+                selectedStage === "development" ||
+                selectedStage === "testing") && (
+                <Card title="Full Artifacts">
+                  <details className="group">
+                    <summary className="cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-200">
+                      View full artifacts
+                    </summary>
+                    <div className="mt-3 flex flex-col gap-4">
+                      {selectedStage === "planning" && (
+                        <PlanningResultDetails
+                          result={selectedStep.result as unknown as PlanningResult}
+                        />
+                      )}
+                      {selectedStage === "development" && (
+                        <DevelopmentResultDetails
+                          result={selectedStep.result as unknown as DevelopmentPlanResult}
+                        />
+                      )}
+                      {selectedStage === "testing" && (
+                        <TestingResultDetails
+                          result={selectedStep.result as unknown as TestPlanResult}
+                        />
+                      )}
+                    </div>
+                  </details>
+                </Card>
+              )}
 
               <Card title="Full Result">
                 <details className="group">
@@ -310,7 +396,9 @@ export function NewWorkflowPage() {
     setIsSubmitting(true);
     setError(null);
     try {
-      const response = await createWorkflow(token, { title: trimmed });
+      // "planning" is the only creatable type today — Auto Execution is
+      // shown (disabled) to preview the direction, not to be selectable.
+      const response = await createWorkflow(token, { title: trimmed, workflow_type: "planning" });
       // Navigate to workflow page
       window.location.href = `/workflows/${response.workflow_id}`;
     } catch (err) {
@@ -341,6 +429,52 @@ export function NewWorkflowPage() {
         </div>
       </div>
 
+      <fieldset className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <legend className="sr-only">Workflow type</legend>
+        <button
+          type="button"
+          aria-pressed="true"
+          className="flex flex-col items-start gap-1.5 rounded-xl border-2 border-brand-500 bg-brand-500/5 p-4 text-left"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 border-brand-400"
+              aria-hidden="true"
+            >
+              <span className="h-1.5 w-1.5 rounded-full bg-brand-400" />
+            </span>
+            <span className="text-sm font-semibold text-slate-100">Planning Workflow</span>
+            <span className="rounded-full bg-brand-500/20 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-brand-300 uppercase">
+              Recommended
+            </span>
+          </div>
+          <p className="pl-6 text-xs text-slate-400">
+            Plan, blueprint, test-strategize, and get an Engineering Review — no code is written and
+            nothing is committed. You approve the result.
+          </p>
+        </button>
+
+        <div
+          aria-disabled="true"
+          className="flex flex-col items-start gap-1.5 rounded-xl border border-slate-800 bg-slate-900/30 p-4 text-left opacity-60"
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            <span
+              className="h-4 w-4 shrink-0 rounded-full border-2 border-slate-700"
+              aria-hidden="true"
+            />
+            <span className="text-sm font-semibold text-slate-400">Auto Execution Workflow</span>
+            <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-slate-500 uppercase">
+              Coming soon
+            </span>
+          </div>
+          <p className="pl-6 text-xs text-slate-500">
+            Writes code, opens a pull request, and runs an AI review on the real diff — not
+            available yet.
+          </p>
+        </div>
+      </fieldset>
+
       <Card>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
@@ -352,7 +486,7 @@ export function NewWorkflowPage() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={isSubmitting}
-              placeholder="e.g. Add rate limiting to the payment API. GraphForge will plan it, implement it, test it, and review it — automatically."
+              placeholder="e.g. Add rate limiting to the payment API. GraphForge will plan it, generate an implementation blueprint, propose tests, and review it — automatically."
               rows={4}
               className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:opacity-50"
               aria-required="true"

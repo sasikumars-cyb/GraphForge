@@ -16,6 +16,8 @@ vi.mock("../lib/api/workflows", () => ({
   getWorkflow: vi.fn(),
   continueWorkflow: vi.fn(),
   listWorkflows: vi.fn(),
+  approveWorkflow: vi.fn(),
+  rejectWorkflow: vi.fn(),
 }));
 
 vi.mock("../lib/api/agentRuns", () => ({
@@ -121,6 +123,41 @@ describe("NewWorkflowPage", () => {
     expect(screen.getByText("Describe what you want built")).toBeInTheDocument();
   });
 
+  it("shows Planning Workflow as selected/recommended and Auto Execution as disabled", () => {
+    renderWithAuth(<NewWorkflowPage />);
+    const planningOption = screen.getByRole("button", { name: /Planning Workflow/ });
+    expect(planningOption).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Recommended")).toBeInTheDocument();
+
+    const executionOption = screen.getByText("Auto Execution Workflow").closest("[aria-disabled]");
+    expect(executionOption).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByText("Coming soon")).toBeInTheDocument();
+  });
+
+  it("creates the workflow with workflow_type 'planning'", async () => {
+    const user = userEvent.setup();
+    vi.mocked(workflowsApi.createWorkflow).mockResolvedValue({
+      workflow_id: "wf-new",
+      run_id: "run-new",
+      stage: "planning",
+      status: "completed",
+    });
+    renderWithAuth(<NewWorkflowPage />);
+
+    await user.type(
+      screen.getByLabelText("What's the engineering objective?"),
+      "Add rate limiting",
+    );
+    await user.click(screen.getByRole("button", { name: "Start SDLC workflow" }));
+
+    await waitFor(() =>
+      expect(workflowsApi.createWorkflow).toHaveBeenCalledWith("test-token", {
+        title: "Add rate limiting",
+        workflow_type: "planning",
+      }),
+    );
+  });
+
   it("renders the text input", () => {
     renderWithAuth(<NewWorkflowPage />);
     expect(screen.getByLabelText("What's the engineering objective?")).toBeInTheDocument();
@@ -224,6 +261,7 @@ describe("WorkflowPage", () => {
     return {
       workflow_id: "wf-1",
       title: "Implement JWT auth",
+      workflow_type: "planning",
       current_stage: "development",
       status: "in_progress",
       stages: [
@@ -261,6 +299,55 @@ describe("WorkflowPage", () => {
     // The same real evidence line legitimately appears in both the
     // Activity Feed and the Evidence Trail panel.
     expect(screen.getAllByText("Found 3 repositories.").length).toBeGreaterThan(0);
+  });
+
+  it("exposes the selected stage's real artifacts behind a 'View full artifacts' disclosure", async () => {
+    const user = userEvent.setup();
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(makeWorkflow());
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
+
+    renderWorkflowPage();
+
+    const toggle = await screen.findByText("View full artifacts");
+    // Closed by default — the real step description sits inside a closed
+    // <details>, not overwhelming the default view.
+    expect(screen.getByText("x").closest("details")).toHaveProperty("open", false);
+
+    await user.click(toggle);
+    expect(screen.getByText("x").closest("details")).toHaveProperty("open", true);
+    expect(screen.getByText("Implementation Steps")).toBeInTheDocument();
+  });
+
+  it("does not offer 'View full artifacts' for the review stage", async () => {
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
+      makeWorkflow({
+        current_stage: "review",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          { stage: "review", label: "Review", status: "completed", run_id: "run-4" },
+        ],
+        runs: [
+          {
+            run_id: "run-4",
+            goal: "review_pr",
+            status: "completed",
+            workflow_stage: "review",
+            confidence_score: 0.8,
+            started_at: "2026-01-01T10:00:00Z",
+            completed_at: "2026-01-01T10:00:02Z",
+            created_at: "2026-01-01T10:00:00Z",
+          },
+        ],
+      }),
+    );
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(
+      makeRun({ run_id: "run-4", workflow_stage: "review" }),
+    );
+
+    renderWorkflowPage();
+
+    await screen.findByText("Implement JWT auth");
+    expect(screen.queryByText("View full artifacts")).not.toBeInTheDocument();
   });
 
   it("reveals the Workflow Replay panel only after the toggle is clicked", async () => {
@@ -385,6 +472,81 @@ describe("WorkflowPage", () => {
 
     await waitFor(() =>
       expect(workflowsApi.continueWorkflow).toHaveBeenCalledWith("test-token", "wf-1"),
+    );
+  });
+
+  it("shows the WorkflowApprovalBanner once Engineering Review completes and calls approveWorkflow on Approve", async () => {
+    const user = userEvent.setup();
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
+      makeWorkflow({
+        status: "awaiting_approval",
+        current_stage: "engineering_review",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          { stage: "development", label: "Development", status: "completed", run_id: "run-2" },
+          { stage: "testing", label: "Testing", status: "completed", run_id: "run-3" },
+          {
+            stage: "engineering_review",
+            label: "Engineering Review",
+            status: "completed",
+            run_id: "run-4",
+          },
+        ],
+      }),
+    );
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(
+      makeRun({ run_id: "run-4", workflow_stage: "engineering_review" }),
+    );
+    vi.mocked(workflowsApi.approveWorkflow).mockResolvedValue({
+      workflow_id: "wf-1",
+      status: "approved",
+    });
+
+    renderWorkflowPage();
+
+    expect(await screen.findByText(/Engineering Review is complete/)).toBeInTheDocument();
+    const approveButton = screen.getByRole("button", { name: /Approve Blueprint/ });
+    expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
+
+    await user.click(approveButton);
+
+    await waitFor(() =>
+      expect(workflowsApi.approveWorkflow).toHaveBeenCalledWith("test-token", "wf-1"),
+    );
+  });
+
+  it("calls rejectWorkflow when Reject is clicked on the WorkflowApprovalBanner", async () => {
+    const user = userEvent.setup();
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
+      makeWorkflow({
+        status: "awaiting_approval",
+        current_stage: "engineering_review",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          {
+            stage: "engineering_review",
+            label: "Engineering Review",
+            status: "completed",
+            run_id: "run-4",
+          },
+        ],
+      }),
+    );
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(
+      makeRun({ run_id: "run-4", workflow_stage: "engineering_review" }),
+    );
+    vi.mocked(workflowsApi.rejectWorkflow).mockResolvedValue({
+      workflow_id: "wf-1",
+      status: "rejected",
+    });
+
+    renderWorkflowPage();
+
+    const rejectButton = await screen.findByRole("button", { name: "Reject" });
+    await user.click(rejectButton);
+
+    await waitFor(() =>
+      expect(workflowsApi.rejectWorkflow).toHaveBeenCalledWith("test-token", "wf-1"),
     );
   });
 

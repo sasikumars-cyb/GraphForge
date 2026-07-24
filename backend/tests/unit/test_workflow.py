@@ -22,11 +22,12 @@ from app.services.workflow_service import (
     STAGES,
     STAGE_GOALS,
     STAGE_LABELS,
+    WORKFLOW_TYPE_STAGES,
     _summarize_previous_output,
     build_stage_context,
     next_stage,
+    stage_sequence,
 )
-
 
 # ---------------------------------------------------------------------------
 # Stage definitions tests
@@ -77,6 +78,49 @@ def test_next_stage_unknown() -> None:
 
 
 # ---------------------------------------------------------------------------
+# workflow_type-aware stage registry tests (shared-engine design)
+# ---------------------------------------------------------------------------
+
+
+def test_legacy_sdlc_sequence_is_exactly_stages() -> None:
+    """Backward compatibility: the pre-existing 4-stage sequence is never
+    reinterpreted — legacy_sdlc is byte-for-byte the old STAGES tuple."""
+    assert WORKFLOW_TYPE_STAGES["legacy_sdlc"] == STAGES
+    assert stage_sequence("legacy_sdlc") == ("planning", "development", "testing", "review")
+
+
+def test_planning_sequence_ends_in_engineering_review_not_review() -> None:
+    assert stage_sequence("planning") == (
+        "planning",
+        "development",
+        "testing",
+        "engineering_review",
+    )
+    assert "review" not in stage_sequence("planning")
+
+
+def test_stage_sequence_unknown_type_falls_back_to_legacy() -> None:
+    """A workflow with a not-yet-known workflow_type (or None) is never
+    reinterpreted onto the new "planning" stages — falls back to the
+    frozen default."""
+    assert stage_sequence("some_future_type") == STAGES
+    assert stage_sequence(None) == STAGES  # type: ignore[arg-type]
+
+
+def test_next_stage_respects_workflow_type() -> None:
+    assert next_stage("testing", "planning") == "engineering_review"
+    assert next_stage("engineering_review", "planning") is None
+    # legacy_sdlc (the default) is unaffected — proves the two sequences
+    # are genuinely independent, not one leaking into the other.
+    assert next_stage("testing", "legacy_sdlc") == "review"
+
+
+def test_engineering_review_stage_metadata_registered() -> None:
+    assert STAGE_GOALS["engineering_review"] == "review_readiness"
+    assert STAGE_LABELS["engineering_review"] == "Engineering Review"
+
+
+# ---------------------------------------------------------------------------
 # Context summarization tests
 # ---------------------------------------------------------------------------
 
@@ -104,22 +148,26 @@ def test_summarize_previous_output_empty() -> None:
 
 
 def test_summarize_previous_output_with_summary() -> None:
-    run = _make_run(result={
-        "executive_summary": "Implement JWT auth across all services.",
-        "affected_components": ["OrderController", "PaymentService"],
-    })
+    run = _make_run(
+        result={
+            "executive_summary": "Implement JWT auth across all services.",
+            "affected_components": ["OrderController", "PaymentService"],
+        }
+    )
     summary = _summarize_previous_output(run)
     assert "JWT auth" in summary
     assert "OrderController" in summary
 
 
 def test_summarize_previous_output_multiple_fields() -> None:
-    run = _make_run(result={
-        "executive_summary": "Plan complete.",
-        "affected_repositories": ["order-service", "payment-service"],
-        "kafka_topics_involved": ["order.created"],
-        "risk_considerations": ["Token expiry"],
-    })
+    run = _make_run(
+        result={
+            "executive_summary": "Plan complete.",
+            "affected_repositories": ["order-service", "payment-service"],
+            "kafka_topics_involved": ["order.created"],
+            "risk_considerations": ["Token expiry"],
+        }
+    )
     summary = _summarize_previous_output(run)
     assert "order-service" in summary
     assert "order.created" in summary
@@ -341,6 +389,153 @@ async def test_advance_workflow_to_completed() -> None:
 
 
 @pytest.mark.asyncio
+async def test_create_workflow_defaults_to_planning_type() -> None:
+    from app.services.workflow_service import create_workflow
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.flush = AsyncMock()
+
+    workflow = await create_workflow(mock_db, title="Add rate limiting")
+
+    assert workflow.workflow_type == "planning"
+    assert workflow.current_stage == "planning"
+
+
+@pytest.mark.asyncio
+async def test_create_workflow_rejects_legacy_sdlc_type() -> None:
+    """legacy_sdlc is not creatable — it exists only for pre-existing rows."""
+    from app.core.exceptions import AppError
+    from app.services.workflow_service import create_workflow
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.flush = AsyncMock()
+
+    with pytest.raises(AppError) as exc_info:
+        await create_workflow(mock_db, title="Old-style run", workflow_type="legacy_sdlc")
+    assert exc_info.value.status_code == 400
+    assert "invalid_workflow_type" in str(exc_info.value.error_code)
+
+
+@pytest.mark.asyncio
+async def test_create_workflow_rejects_unknown_type() -> None:
+    """Arbitrary workflow_type values must be rejected, not silently accepted."""
+    from app.core.exceptions import AppError
+    from app.services.workflow_service import create_workflow
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.flush = AsyncMock()
+
+    with pytest.raises(AppError) as exc_info:
+        await create_workflow(mock_db, title="Bad type", workflow_type="foobar")
+    assert exc_info.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_advance_planning_workflow_to_awaiting_approval_at_last_stage() -> None:
+    """The real bug this exists to fix: a Planning workflow must not
+    silently become "completed" the way legacy_sdlc does — it gates on a
+    human decision, and current_stage stays put (nothing to advance to)."""
+    from app.services.workflow_service import advance_workflow
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Test",
+        current_stage="engineering_review",
+        status="in_progress",
+        workflow_type="planning",
+    )
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:test",
+        subject_type="freetext",
+        display_name="Test",
+        goal="review_readiness",
+        status="completed",
+        workflow_stage="engineering_review",
+    )
+
+    await advance_workflow(mock_db, workflow, run)
+
+    assert workflow.status == "awaiting_approval"
+    assert workflow.current_stage == "engineering_review"  # unchanged, not "completed"
+
+
+@pytest.mark.asyncio
+async def test_advance_planning_workflow_mid_sequence_still_advances_normally() -> None:
+    from app.services.workflow_service import advance_workflow
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Test",
+        current_stage="testing",
+        status="in_progress",
+        workflow_type="planning",
+    )
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:test",
+        subject_type="freetext",
+        display_name="Test",
+        goal="plan_tests",
+        status="completed",
+        workflow_stage="testing",
+    )
+
+    await advance_workflow(mock_db, workflow, run)
+
+    assert workflow.current_stage == "engineering_review"
+    assert workflow.status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_approve_workflow_sets_terminal_status() -> None:
+    from app.services.workflow_service import approve_workflow
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Test",
+        current_stage="engineering_review",
+        status="awaiting_approval",
+        workflow_type="planning",
+    )
+
+    await approve_workflow(mock_db, workflow)
+
+    assert workflow.status == "approved"
+    mock_db.flush.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_reject_workflow_sets_terminal_status() -> None:
+    from app.services.workflow_service import reject_workflow
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Test",
+        current_stage="engineering_review",
+        status="awaiting_approval",
+        workflow_type="planning",
+    )
+
+    await reject_workflow(mock_db, workflow)
+
+    assert workflow.status == "rejected"
+
+
+@pytest.mark.asyncio
 async def test_advance_workflow_no_advance_on_failure() -> None:
     from app.services.workflow_service import advance_workflow
 
@@ -391,7 +586,11 @@ def test_workflow_api_continue_request_validation() -> None:
 
 
 def test_workflow_api_detail_response_shape() -> None:
-    from app.api.v1.routers.workflows import WorkflowDetailResponse, WorkflowStageResponse, WorkflowRunResponse
+    from app.api.v1.routers.workflows import (
+        WorkflowDetailResponse,
+        WorkflowStageResponse,
+        WorkflowRunResponse,
+    )
 
     stage = WorkflowStageResponse(
         stage="planning",
@@ -412,6 +611,7 @@ def test_workflow_api_detail_response_shape() -> None:
     detail = WorkflowDetailResponse(
         workflow_id="wf-uuid",
         title="JWT auth",
+        workflow_type="planning",
         current_stage="development",
         status="in_progress",
         stages=[stage],
@@ -420,8 +620,24 @@ def test_workflow_api_detail_response_shape() -> None:
         updated_at="2026-07-23T10:01:00Z",
     )
     assert detail.workflow_id == "wf-uuid"
+    assert detail.workflow_type == "planning"
     assert detail.stages[0].stage == "planning"
     assert detail.runs[0].confidence_score == 0.85
+
+
+def test_workflow_api_create_request_defaults_to_planning() -> None:
+    from app.api.v1.routers.workflows import CreateWorkflowRequest
+
+    req = CreateWorkflowRequest(title="JWT auth")
+    assert req.workflow_type == "planning"
+
+
+def test_workflow_api_approval_response_shape() -> None:
+    from app.api.v1.routers.workflows import WorkflowApprovalResponse
+
+    resp = WorkflowApprovalResponse(workflow_id="wf-uuid", status="approved")
+    assert resp.workflow_id == "wf-uuid"
+    assert resp.status == "approved"
 
 
 # ---------------------------------------------------------------------------
@@ -436,7 +652,9 @@ def test_run_detail_response_includes_workflow_fields() -> None:
         run_id="run-uuid",
         goal="plan_freeform",
         status="completed",
-        subject=SubjectResponse(subject_id="freetext:test", subject_type="freetext", display_name="Test"),
+        subject=SubjectResponse(
+            subject_id="freetext:test", subject_type="freetext", display_name="Test"
+        ),
         model=None,
         error_message=None,
         started_at="2026-07-23T10:00:00Z",
@@ -459,7 +677,9 @@ def test_run_list_item_includes_workflow_fields() -> None:
         run_id="run-uuid",
         goal="plan_freeform",
         status="completed",
-        subject=SubjectResponse(subject_id="freetext:test", subject_type="freetext", display_name="Test"),
+        subject=SubjectResponse(
+            subject_id="freetext:test", subject_type="freetext", display_name="Test"
+        ),
         started_at=None,
         completed_at=None,
         created_at="2026-07-23T10:00:00Z",
@@ -477,7 +697,9 @@ def test_run_list_item_workflow_fields_optional() -> None:
         run_id="run-uuid",
         goal="plan_freeform",
         status="completed",
-        subject=SubjectResponse(subject_id="freetext:test", subject_type="freetext", display_name="Test"),
+        subject=SubjectResponse(
+            subject_id="freetext:test", subject_type="freetext", display_name="Test"
+        ),
         started_at=None,
         completed_at=None,
         created_at="2026-07-23T10:00:00Z",

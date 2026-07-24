@@ -22,6 +22,12 @@ export function DashboardPage() {
       });
   }, [token]);
 
+  // "Execution" (Auto Execution workflows) has no workflow_type of its own
+  // yet — Phases 5-10 aren't implemented — so this count is honestly always
+  // 0 today rather than approximated from an unrelated type.
+  const planningCount = workflows.filter((w) => w.workflow_type === "planning").length;
+  const executionCount = workflows.filter((w) => w.workflow_type === "auto_execution").length;
+
   return (
     <div className="flex flex-col gap-6">
       <div>
@@ -42,7 +48,7 @@ export function DashboardPage() {
       {workflows.length > 0 && (
         <Card
           title="Active SDLC Workflows"
-          description="Engineering tasks progressing through the lifecycle"
+          description={`Engineering tasks progressing through the lifecycle · ${planningCount} Planning · ${executionCount} Execution`}
           action={
             <Link
               to="/workflows/new"

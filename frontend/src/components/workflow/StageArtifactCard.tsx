@@ -12,16 +12,17 @@ import {
 interface StageArtifactCardProps {
   stage: string;
   step: AgentStep;
+  stages?: { stage: string }[];
 }
 
 /** Feature 4 — everything a completed stage produced, at a glance: the
  * summary, its evidence count, confidence, execution time, a count of
  * real artifacts by type, and exactly which stage consumes this output
  * next (mirrors the real backend chaining in workflow_service.py). */
-export function StageArtifactCard({ stage, step }: StageArtifactCardProps) {
+export function StageArtifactCard({ stage, step, stages }: StageArtifactCardProps) {
   const summary = resultSummary(step.result);
   const counts = deriveArtifactCounts(stage, step.result);
-  const next = nextStageOf(stage);
+  const next = nextStageOf(stage, stages);
 
   return (
     <div className="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-900/40 p-4">

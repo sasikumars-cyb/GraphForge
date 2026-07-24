@@ -6,6 +6,7 @@ import { apiFetch } from "./client";
 import type {
   ContinueWorkflowResponse,
   CreateWorkflowRequest,
+  WorkflowApprovalResponse,
   WorkflowDetail,
   WorkflowListResponse,
 } from "../../types/agent";
@@ -29,6 +30,7 @@ export interface ListWorkflowsParams {
   page?: number;
   page_size?: number;
   status?: string;
+  workflow_type?: string;
 }
 
 export function listWorkflows(
@@ -39,6 +41,7 @@ export function listWorkflows(
   if (params.page) searchParams.set("page", String(params.page));
   if (params.page_size) searchParams.set("page_size", String(params.page_size));
   if (params.status) searchParams.set("status", params.status);
+  if (params.workflow_type) searchParams.set("workflow_type", params.workflow_type);
 
   const qs = searchParams.toString();
   return apiFetch<WorkflowListResponse>(`/workflows${qs ? `?${qs}` : ""}`, { token });
@@ -57,4 +60,24 @@ export function continueWorkflow(
       body: { model: model ?? null },
     },
   );
+}
+
+export function approveWorkflow(
+  token: string,
+  workflowId: string,
+): Promise<WorkflowApprovalResponse> {
+  return apiFetch<WorkflowApprovalResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/approve`,
+    { method: "POST", token },
+  );
+}
+
+export function rejectWorkflow(
+  token: string,
+  workflowId: string,
+): Promise<WorkflowApprovalResponse> {
+  return apiFetch<WorkflowApprovalResponse>(`/workflows/${encodeURIComponent(workflowId)}/reject`, {
+    method: "POST",
+    token,
+  });
 }
