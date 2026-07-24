@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None)
     groq_model: str = Field(default="llama-3.3-70b-versatile")
 
+    # --- Gemini (Google Generative Language API) ---
+    gemini_api_key: str | None = Field(default=None)
+    gemini_model: str = Field(default="gemini-3.6-flash")
+
     # --- Future integrations (unused until their adapters are implemented) ---
     jira_base_url: str | None = Field(default=None)
     jira_api_token: str | None = Field(default=None)

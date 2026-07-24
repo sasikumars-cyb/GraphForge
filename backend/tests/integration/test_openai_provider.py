@@ -13,6 +13,7 @@ from app.ai.providers.factory import (
     UnsupportedProviderError,
     create_llm_provider,
 )
+from app.ai.providers.gemini_provider import GeminiProvider
 from app.ai.providers.openai_provider import (
     AIProviderAuthError,
     AIProviderError,
@@ -124,6 +125,31 @@ def _openai_response(content: dict[str, Any] | str, status: int = 200) -> httpx.
     return httpx.Response(status_code=200, json=body)
 
 
+def _gemini_response(
+    text: str,
+    *,
+    status: int = 200,
+    finish_reason: str = "STOP",
+    model_version: str = "gemini-3.6-flash",
+    usage: dict[str, Any] | None = None,
+) -> httpx.Response:
+    if status != 200:
+        return httpx.Response(status_code=status, text=text)
+
+    body: dict[str, Any] = {
+        "candidates": [
+            {
+                "content": {"parts": [{"text": text}]},
+                "finishReason": finish_reason,
+            }
+        ],
+        "modelVersion": model_version,
+    }
+    if usage is not None:
+        body["usageMetadata"] = usage
+    return httpx.Response(status_code=200, json=body)
+
+
 # -- Tests: OpenAI Provider -------------------------------------------------
 
 
@@ -201,6 +227,24 @@ async def test_analyze_server_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_analyze_rate_limit_preserves_provider_message() -> None:
+    """429 preserves provider's own message when available."""
+    body = {
+        "error": {
+            "message": "Rate limit reached for this project. Please retry in 15s.",
+            "type": "rate_limit_error",
+            "code": "rate_limit_exceeded",
+        }
+    }
+    transport = httpx.MockTransport(lambda request: httpx.Response(status_code=429, json=body))
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    with pytest.raises(AIProviderRateLimitError, match="Rate limit reached for this project"):
+        await provider.analyze(_sample_context())
+
+
+@pytest.mark.asyncio
 async def test_analyze_malformed_json() -> None:
     """Provider raises AIProviderResponseError when OpenAI returns non-JSON."""
     body = {"choices": [{"message": {"content": "not valid json {"}}]}
@@ -273,6 +317,117 @@ async def test_analyze_clears_single_repository_deployment_order() -> None:
     assert parsed.release_coordination_plan.deployment_order == []
 
 
+# -- Tests: Gemini Provider -------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_gemini_analyze_success() -> None:
+    payload = json.dumps(_valid_ai_result())
+    transport = httpx.MockTransport(lambda request: _gemini_response(payload))
+    client = httpx.AsyncClient(transport=transport)
+    provider = GeminiProvider(api_key="gk-test-key", http_client=client)
+
+    result = await provider.analyze(_sample_context())
+
+    assert isinstance(result, AIAnalysisResult)
+    assert result.executive_summary == "Minor payment flow fix with no breaking changes."
+    assert result.prompt_version == "1.4"
+
+
+@pytest.mark.asyncio
+async def test_gemini_invalid_api_key() -> None:
+    body = {
+        "error": {
+            "code": 401,
+            "message": "API key not valid. Please pass a valid API key.",
+            "status": "UNAUTHENTICATED",
+        }
+    }
+    transport = httpx.MockTransport(lambda request: httpx.Response(status_code=401, json=body))
+    client = httpx.AsyncClient(transport=transport)
+    provider = GeminiProvider(api_key="bad-key", http_client=client)
+
+    with pytest.raises(AIProviderAuthError, match="API key not valid"):
+        await provider.analyze(_sample_context())
+
+
+@pytest.mark.asyncio
+async def test_gemini_rate_limit_preserves_provider_message() -> None:
+    body = {
+        "error": {
+            "code": 429,
+            "message": "Rate limit reached for model gemini-3.6-flash. Try again later.",
+            "status": "RESOURCE_EXHAUSTED",
+        }
+    }
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(status_code=429, json=body, headers={"retry-after": "8"})
+    )
+    client = httpx.AsyncClient(transport=transport)
+    provider = GeminiProvider(api_key="gk-test", http_client=client)
+
+    with pytest.raises(AIProviderRateLimitError, match="Rate limit reached for model") as exc_info:
+        await provider.analyze(_sample_context())
+
+    provider_error = exc_info.value.provider_error
+    assert provider_error["provider"] == "gemini"
+    assert provider_error["status_code"] == 429
+    assert provider_error["retry_after"] == "8"
+
+
+@pytest.mark.asyncio
+async def test_gemini_malformed_response() -> None:
+    body = {"candidates": [{"content": {"parts": [{}]}}]}
+    transport = httpx.MockTransport(lambda request: httpx.Response(status_code=200, json=body))
+    client = httpx.AsyncClient(transport=transport)
+    provider = GeminiProvider(api_key="gk-test", http_client=client)
+
+    with pytest.raises(AIProviderResponseError):
+        await provider.analyze(_sample_context())
+
+
+@pytest.mark.asyncio
+async def test_gemini_provider_error_response() -> None:
+    body = {
+        "error": {
+            "code": 500,
+            "message": "The model backend is currently unavailable.",
+            "status": "INTERNAL",
+        }
+    }
+    transport = httpx.MockTransport(lambda request: httpx.Response(status_code=500, json=body))
+    client = httpx.AsyncClient(transport=transport)
+    provider = GeminiProvider(api_key="gk-test", http_client=client)
+
+    with pytest.raises(AIProviderError, match="The model backend is currently unavailable"):
+        await provider.analyze(_sample_context())
+
+
+@pytest.mark.asyncio
+async def test_gemini_usage_metadata_parsing() -> None:
+    payload = json.dumps(_valid_ai_result())
+    transport = httpx.MockTransport(
+        lambda request: _gemini_response(
+            payload,
+            usage={
+                "promptTokenCount": 123,
+                "candidatesTokenCount": 456,
+                "totalTokenCount": 579,
+            },
+        )
+    )
+    client = httpx.AsyncClient(transport=transport)
+    provider = GeminiProvider(api_key="gk-test", http_client=client)
+
+    llm_response = await provider._request_completion("raw prompt")  # noqa: SLF001
+
+    assert llm_response.prompt_tokens == 123
+    assert llm_response.completion_tokens == 456
+    assert llm_response.total_tokens == 579
+    assert llm_response.model_name == "gemini-3.6-flash"
+    assert llm_response.finish_reason == "STOP"
+
+
 # -- Tests: Factory ---------------------------------------------------------
 
 
@@ -294,10 +449,13 @@ def test_factory_claude_not_implemented() -> None:
         create_llm_provider(settings)
 
 
-def test_factory_gemini_not_implemented() -> None:
-    settings = Settings(ai_provider="gemini", openai_api_key="sk-test")
-    with pytest.raises(UnsupportedProviderError):
-        create_llm_provider(settings)
+def test_factory_creates_gemini_provider() -> None:
+    settings = Settings(
+        ai_provider="gemini", gemini_api_key="gk-test", gemini_model="gemini-3.6-flash"
+    )
+    provider = create_llm_provider(settings)
+    assert isinstance(provider, GeminiProvider)
+    assert provider._model == "gemini-3.6-flash"  # noqa: SLF001
 
 
 def test_factory_ollama_not_implemented() -> None:
@@ -343,4 +501,10 @@ def test_factory_creates_groq_provider_pointed_at_groq_url() -> None:
 def test_factory_groq_missing_api_key_raises() -> None:
     settings = Settings(ai_provider="groq", groq_api_key=None)
     with pytest.raises(Exception, match="GROQ_API_KEY"):
+        create_llm_provider(settings)
+
+
+def test_factory_gemini_missing_api_key_raises() -> None:
+    settings = Settings(ai_provider="gemini", gemini_api_key=None)
+    with pytest.raises(Exception, match="GEMINI_API_KEY"):
         create_llm_provider(settings)

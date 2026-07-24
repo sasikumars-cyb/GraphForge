@@ -1,13 +1,14 @@
 """Factory for creating LLM provider instances.
 
-Supports multiple provider backends.  OpenAI and Groq (a free-tier,
-OpenAI-compatible alternative requiring no billing) are implemented;
-others raise ``UnsupportedProviderError`` until their adapters are built.
+Supports multiple provider backends. OpenAI, Groq (OpenAI-compatible),
+and Gemini are implemented; others raise ``UnsupportedProviderError``
+until their adapters are built.
 """
 
 from __future__ import annotations
 
 from app.ai.interfaces.llm_provider import ILLMProvider
+from app.ai.providers.gemini_provider import GeminiProvider
 from app.ai.providers.openai_provider import OpenAIProvider
 from app.core.config import Settings, get_settings
 from app.core.exceptions import AppError
@@ -80,13 +81,25 @@ def create_llm_provider(settings: Settings | None = None, model: str | None = No
             temperature=cfg.openai_temperature,
             max_tokens=cfg.openai_max_tokens,
             base_url=_GROQ_CHAT_URL,
+            provider_name="groq",
+        )
+
+    if provider_name == "gemini":
+        if not cfg.gemini_api_key:
+            raise AppError(
+                "GEMINI_API_KEY is not configured.",
+                status_code=503,
+                error_code="ai_provider_not_configured",
+            )
+        return GeminiProvider(
+            api_key=cfg.gemini_api_key,
+            model=cfg.gemini_model,
+            temperature=cfg.openai_temperature,
+            max_tokens=cfg.openai_max_tokens,
         )
 
     if provider_name in ("claude", "anthropic"):
         raise UnsupportedProviderError("Claude/Anthropic provider is not yet implemented.")
-
-    if provider_name == "gemini":
-        raise UnsupportedProviderError("Gemini provider is not yet implemented.")
 
     if provider_name == "ollama":
         raise UnsupportedProviderError("Ollama provider is not yet implemented.")

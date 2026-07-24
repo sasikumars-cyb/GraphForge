@@ -1,28 +1,20 @@
-"""OpenAI-compatible implementation of ILLMProvider.
-
-Supports OpenAI and vendors that implement the same Chat Completions shape.
-"""
+"""Google Gemini implementation of ILLMProvider."""
 
 from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
 from app.ai.providers.base import BaseAnalysisProvider, LLMResponse
-from app.ai.providers.errors import (
-    AIProviderAuthError,
-    AIProviderError,
-    AIProviderRateLimitError,
-    AIProviderResponseError,
-    AIProviderTimeoutError,
-)
+from app.ai.providers.errors import AIProviderError, AIProviderResponseError, AIProviderTimeoutError
 from app.ai.providers.http_utils import raise_for_error_response
 
 logger = logging.getLogger(__name__)
 
-_OPENAI_CHAT_URL = "https://api.openai.com/v1/chat/completions"
+_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 
 _SYSTEM_PROMPT = (
     "You are a senior software architect performing AI-enriched impact analysis. "
@@ -31,19 +23,19 @@ _SYSTEM_PROMPT = (
 )
 
 
-class OpenAIProvider(BaseAnalysisProvider):
-    """Chat Completions provider for OpenAI-compatible APIs."""
+class GeminiProvider(BaseAnalysisProvider):
+    """Provider adapter for Gemini's generateContent REST API."""
 
     def __init__(
         self,
         *,
         api_key: str,
-        model: str = "gpt-4o",
+        model: str = "gemini-3.6-flash",
         temperature: float = 0.2,
         max_tokens: int = 4096,
         timeout: float = 60.0,
-        base_url: str = _OPENAI_CHAT_URL,
-        provider_name: str = "openai",
+        base_url: str = _GEMINI_BASE_URL,
+        provider_name: str = "gemini",
         http_client: httpx.AsyncClient | None = None,
     ) -> None:
         super().__init__()
@@ -57,25 +49,36 @@ class OpenAIProvider(BaseAnalysisProvider):
         self._http_client = http_client
 
     async def _request_completion(self, user_prompt: str) -> LLMResponse:
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
+        messages = self.build_messages(_SYSTEM_PROMPT, user_prompt)
+        text_prompt = self.messages_to_text(messages)
         payload: dict[str, Any] = {
-            "model": self._model,
-            "temperature": self._temperature,
-            "max_tokens": self._max_tokens,
-            "response_format": {"type": "json_object"},
-            "messages": self.build_messages(_SYSTEM_PROMPT, user_prompt),
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": text_prompt,
+                        }
+                    ]
+                }
+            ],
+            "generationConfig": {
+                "temperature": self._temperature,
+                "maxOutputTokens": self._max_tokens,
+            },
         }
+
+        endpoint = (
+            f"{self._base_url}/{self._model}:generateContent?"
+            f"{urlencode({'key': self._api_key})}"
+        )
 
         client = self._http_client or httpx.AsyncClient()
         should_close = self._http_client is None
 
         try:
             response = await client.post(
-                self._base_url,
-                headers=headers,
+                endpoint,
+                headers={"Content-Type": "application/json"},
                 json=payload,
                 timeout=self._timeout,
             )
@@ -116,43 +119,47 @@ class OpenAIProvider(BaseAnalysisProvider):
         return self._extract_response(response)
 
     def _extract_response(self, response: httpx.Response) -> LLMResponse:
-        """Extract completion text + metadata from Chat Completions JSON."""
+        """Extract completion text + metadata from Gemini JSON."""
         try:
             body = response.json()
-            choice = body["choices"][0]
-            text = str(choice["message"]["content"])
-            usage = body.get("usage", {}) if isinstance(body, dict) else {}
+            candidates = body["candidates"]
+            first = candidates[0]
+            content = first["content"]
+            parts = content["parts"]
+
+            texts: list[str] = []
+            for part in parts:
+                text = part.get("text")
+                if isinstance(text, str) and text:
+                    texts.append(text)
+            if not texts:
+                raise KeyError("No text in candidate parts")
+
+            usage = body.get("usageMetadata", {}) if isinstance(body, dict) else {}
             if not isinstance(usage, dict):
                 usage = {}
+
+            prompt_tokens = usage.get("promptTokenCount")
+            completion_tokens = usage.get("candidatesTokenCount")
+            total_tokens = usage.get("totalTokenCount")
+
             return LLMResponse(
-                text=text,
-                model_name=str(body.get("model")) if body.get("model") else self._model,
+                text="\n".join(texts),
+                model_name=(
+                    str(body.get("modelVersion")) if body.get("modelVersion") else self._model
+                ),
                 finish_reason=(
-                    str(choice.get("finish_reason")) if choice.get("finish_reason") else None
-                ),
-                prompt_tokens=(
-                    int(usage["prompt_tokens"]) if usage.get("prompt_tokens") is not None else None
-                ),
-                completion_tokens=(
-                    int(usage["completion_tokens"])
-                    if usage.get("completion_tokens") is not None
+                    str(first.get("finishReason"))
+                    if first.get("finishReason") is not None
                     else None
                 ),
-                total_tokens=(
-                    int(usage["total_tokens"]) if usage.get("total_tokens") is not None else None
+                prompt_tokens=int(prompt_tokens) if prompt_tokens is not None else None,
+                completion_tokens=(
+                    int(completion_tokens) if completion_tokens is not None else None
                 ),
+                total_tokens=int(total_tokens) if total_tokens is not None else None,
             )
         except (KeyError, IndexError, TypeError, ValueError) as exc:
             raise AIProviderResponseError(
                 "AI provider returned an unexpected response structure."
             ) from exc
-
-
-__all__ = [
-    "AIProviderAuthError",
-    "AIProviderError",
-    "AIProviderRateLimitError",
-    "AIProviderResponseError",
-    "AIProviderTimeoutError",
-    "OpenAIProvider",
-]

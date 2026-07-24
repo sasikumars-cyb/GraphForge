@@ -16,7 +16,6 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm.attributes import NO_VALUE
 from sqlalchemy import inspect
 
 from app.agents._contract import Subject
@@ -215,9 +214,9 @@ async def _link_failed_run(
 
     # Keep already-loaded in-memory collections coherent without issuing a
     # relationship refresh query (and without triggering lazy-loading).
-    runs_state = inspect(workflow).attrs.runs
-    if runs_state.loaded_value is not NO_VALUE:
-        loaded_runs = runs_state.loaded_value
+    workflow_state = inspect(workflow)
+    if "runs" not in workflow_state.unloaded:
+        loaded_runs = workflow.runs
         if failed_run not in loaded_runs:
             loaded_runs.append(failed_run)
 
