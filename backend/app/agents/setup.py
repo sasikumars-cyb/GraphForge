@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 
+from app.agents.code_generation.agent import CodeGenerationAgent
+from app.agents.code_generation.manifest import CODE_GENERATION_MANIFEST
 from app.agents.development.agent import DevelopmentAgent
 from app.agents.development.manifest import DEVELOPMENT_MANIFEST
 from app.agents.engineering_review.agent import EngineeringReviewAgent
@@ -54,3 +56,7 @@ def register_agents() -> None:
     if "engineering_review" not in existing_ids:
         global_registry.register(ENGINEERING_REVIEW_MANIFEST, EngineeringReviewAgent())
         logger.info("registered_engineering_review_agent")
+
+    if "code_generation" not in existing_ids:
+        global_registry.register(CODE_GENERATION_MANIFEST, CodeGenerationAgent())
+        logger.info("registered_code_generation_agent")
