@@ -296,3 +296,176 @@ class GitHubVersionControlProvider(IVersionControlProvider):
             )
         data = response.json()
         return PostedComment(id=data["id"], html_url=data["html_url"])
+
+    # ------------------------------------------------------------------
+    # Write methods — NOT part of IVersionControlProvider. Used by the
+    # create_branch and commit_changes execution agents (Phase 5 PR #4).
+    # ------------------------------------------------------------------
+
+    async def get_branch_sha(
+        self,
+        owner: str,
+        repo: str,
+        branch: str,
+        access_token: str | None = None,
+    ) -> str:
+        """Return the HEAD SHA for a branch. Raises GitHubApiError (502)
+        on 404 or any other failure."""
+        data = await _github_get(
+            f"/repos/{owner}/{repo}/git/ref/heads/{branch}",
+            access_token,
+        )
+        return str(data["object"]["sha"])
+
+    async def get_branch_sha_or_none(
+        self,
+        owner: str,
+        repo: str,
+        branch: str,
+        access_token: str | None = None,
+    ) -> str | None:
+        """Like get_branch_sha but returns None on 404 instead of raising."""
+        headers = dict(_API_HEADERS)
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{_API_BASE}/repos/{owner}/{repo}/git/ref/heads/{branch}",
+                headers=headers,
+            )
+        if response.status_code == 404:
+            return None
+        if response.is_error:
+            raise GitHubApiError(
+                f"GitHub ref lookup for {owner}/{repo} heads/{branch} failed "
+                f"with status {response.status_code}: {response.text}"
+            )
+        return str(response.json()["object"]["sha"])
+
+    async def create_branch(
+        self,
+        owner: str,
+        repo: str,
+        branch_name: str,
+        from_sha: str,
+        access_token: str | None = None,
+    ) -> str:
+        """Create a new branch ref. Returns the SHA of the new ref.
+        Uses POST /repos/{owner}/{repo}/git/refs."""
+        headers = dict(_API_HEADERS)
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{_API_BASE}/repos/{owner}/{repo}/git/refs",
+                headers=headers,
+                json={"ref": f"refs/heads/{branch_name}", "sha": from_sha},
+            )
+        if response.is_error:
+            raise GitHubApiError(
+                f"GitHub branch creation for {owner}/{repo} '{branch_name}' failed "
+                f"with status {response.status_code}: {response.text}"
+            )
+        return str(response.json()["object"]["sha"])
+
+    async def create_commit(
+        self,
+        owner: str,
+        repo: str,
+        branch: str,
+        files: list[dict[str, str]],
+        message: str,
+        access_token: str | None = None,
+    ) -> str:
+        """Create a single commit on `branch` with all `files` atomically
+        via the Git Data API (trees + commits + ref update).
+
+        Each file in `files` is {"path": "...", "content": "..."} for
+        create/modify, or {"path": "...", "content": None} for delete.
+
+        Returns the new commit SHA.
+        """
+        headers = dict(_API_HEADERS)
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        # 1. Get the current branch HEAD commit + its tree SHA
+        branch_sha = await self.get_branch_sha(owner, repo, branch, access_token)
+        commit_data = await _github_get(
+            f"/repos/{owner}/{repo}/git/commits/{branch_sha}", access_token
+        )
+        base_tree_sha = commit_data["tree"]["sha"]
+
+        # 2. Build tree entries
+        tree_entries = []
+        for f in files:
+            if f.get("content") is None:
+                # Delete: mode "100644", sha null
+                tree_entries.append(
+                    {"path": f["path"], "mode": "100644", "type": "blob", "sha": None}
+                )
+            else:
+                tree_entries.append(
+                    {"path": f["path"], "mode": "100644", "type": "blob", "content": f["content"]}
+                )
+
+        # 3. Create new tree
+        async with httpx.AsyncClient() as client:
+            tree_response = await client.post(
+                f"{_API_BASE}/repos/{owner}/{repo}/git/trees",
+                headers=headers,
+                json={"base_tree": base_tree_sha, "tree": tree_entries},
+            )
+        if tree_response.is_error:
+            raise GitHubApiError(
+                f"GitHub tree creation failed with status "
+                f"{tree_response.status_code}: {tree_response.text}"
+            )
+        new_tree_sha = tree_response.json()["sha"]
+
+        # 4. Create commit
+        async with httpx.AsyncClient() as client:
+            commit_response = await client.post(
+                f"{_API_BASE}/repos/{owner}/{repo}/git/commits",
+                headers=headers,
+                json={
+                    "message": message,
+                    "tree": new_tree_sha,
+                    "parents": [branch_sha],
+                },
+            )
+        if commit_response.is_error:
+            raise GitHubApiError(
+                f"GitHub commit creation failed with status "
+                f"{commit_response.status_code}: {commit_response.text}"
+            )
+        new_commit_sha = commit_response.json()["sha"]
+
+        # 5. Update branch ref to point to new commit
+        async with httpx.AsyncClient() as client:
+            ref_response = await client.patch(
+                f"{_API_BASE}/repos/{owner}/{repo}/git/refs/heads/{branch}",
+                headers=headers,
+                json={"sha": new_commit_sha},
+            )
+        if ref_response.is_error:
+            raise GitHubApiError(
+                f"GitHub ref update failed with status "
+                f"{ref_response.status_code}: {ref_response.text}"
+            )
+
+        return str(new_commit_sha)
+
+    async def get_commit(
+        self,
+        owner: str,
+        repo: str,
+        sha: str,
+        access_token: str | None = None,
+    ) -> dict:
+        """Fetch a commit by SHA. Used for idempotency checks."""
+        return await _github_get(
+            f"/repos/{owner}/{repo}/git/commits/{sha}", access_token
+        )

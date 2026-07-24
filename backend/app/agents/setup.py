@@ -16,6 +16,9 @@ from app.agents.code_generation.agent import CodeGenerationAgent
 from app.agents.code_generation.manifest import CODE_GENERATION_MANIFEST
 from app.agents.development.agent import DevelopmentAgent
 from app.agents.development.manifest import DEVELOPMENT_MANIFEST
+from app.agents.git_ops.commit_changes_agent import CommitChangesAgent
+from app.agents.git_ops.create_branch_agent import CreateBranchAgent
+from app.agents.git_ops.manifests import COMMIT_CHANGES_MANIFEST, CREATE_BRANCH_MANIFEST
 from app.agents.engineering_review.agent import EngineeringReviewAgent
 from app.agents.engineering_review.manifest import ENGINEERING_REVIEW_MANIFEST
 from app.agents.planning.agent import PlanningAgent
@@ -60,3 +63,11 @@ def register_agents() -> None:
     if "code_generation" not in existing_ids:
         global_registry.register(CODE_GENERATION_MANIFEST, CodeGenerationAgent())
         logger.info("registered_code_generation_agent")
+
+    if "create_branch" not in existing_ids:
+        global_registry.register(CREATE_BRANCH_MANIFEST, CreateBranchAgent())
+        logger.info("registered_create_branch_agent")
+
+    if "commit_changes" not in existing_ids:
+        global_registry.register(COMMIT_CHANGES_MANIFEST, CommitChangesAgent())
+        logger.info("registered_commit_changes_agent")

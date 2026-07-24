@@ -273,8 +273,11 @@ async def create_workflow(
     selector = AgentSelector(global_registry)
     coordinator = RunCoordinator(db=db, registry=global_registry, selector=selector)
 
+    agent_extras = {"workflow": workflow, "user_id": user.id}
     try:
-        run = await coordinator.execute(subject=subject, goal=goal, model=body.model)
+        run = await coordinator.execute(
+            subject=subject, goal=goal, model=body.model, extras=agent_extras,
+        )
     except NotFoundError:
         await _link_failed_run(db, workflow, subject.subject_id, goal, stage)
         raise
@@ -442,8 +445,11 @@ async def continue_workflow(
     selector = AgentSelector(global_registry)
     coordinator = RunCoordinator(db=db, registry=global_registry, selector=selector)
 
+    agent_extras = {"workflow": workflow, "user_id": user.id}
     try:
-        run = await coordinator.execute(subject=subject, goal=goal, model=body.model)
+        run = await coordinator.execute(
+            subject=subject, goal=goal, model=body.model, extras=agent_extras,
+        )
     except NotFoundError:
         await _link_failed_run(db, workflow, subject.subject_id, goal, target_stage)
         raise

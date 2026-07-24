@@ -50,9 +50,14 @@ class RunCoordinator:
         subject: Subject,
         goal: str,
         model: str | None = None,
+        extras: dict | None = None,
     ) -> Run:
         """Select the agent for `goal`, run it against `subject`, and
         persist a Run + AgentStep. Returns the completed Run row.
+
+        `extras` are merged into the AgentContext.extras dict (alongside
+        the always-present 'db' key). Used by the workflow router to pass
+        workflow and user_id to deterministic execution agents.
 
         Raises NotFoundError if `goal` has no registered agent.
         Never swallows exceptions — errors are persisted as
@@ -105,7 +110,10 @@ class RunCoordinator:
 
         # Inject db session via extras so agents can do Postgres queries
         # per-run without holding a session reference at construction time.
-        context = AgentContext(subject=subject, goal=goal, model=model, extras={"db": self._db})
+        ctx_extras: dict = {"db": self._db}
+        if extras:
+            ctx_extras.update(extras)
+        context = AgentContext(subject=subject, goal=goal, model=model, extras=ctx_extras)
         start_ms = time.monotonic()
 
         try:
