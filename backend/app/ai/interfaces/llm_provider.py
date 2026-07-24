@@ -5,10 +5,16 @@ The services layer depends only on this port, never on a specific vendor
 SDK directly.
 """
 
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING
 
 from app.ai.schemas.analysis_result import AIAnalysisResult
 from app.ai.services.context_builder import AIContext
+
+if TYPE_CHECKING:
+    from app.ai.providers.base import LLMRequestOptions, LLMResponse
 
 
 class ILLMProvider(ABC):
@@ -18,14 +24,32 @@ class ILLMProvider(ABC):
     Implementations live in ``app.ai.providers``.  The orchestration
     services in ``app.ai.services`` depend on this interface so that
     swapping providers requires no changes outside the providers package.
-
-    A single call to :meth:`analyze` returns the complete AI-enriched
-    analysis for a pull request — breaking changes, reviewers, regression
-    tests, and migration advice — in one structured response.
     """
 
     @abstractmethod
+    async def complete(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        options: "LLMRequestOptions | None" = None,
+    ) -> "LLMResponse":
+        """Transport-only: send caller-supplied prompts to the LLM and
+        return a normalized response.
+
+        The provider does NOT build prompts, parse domain-specific JSON,
+        or apply any business logic.  Callers own prompt construction,
+        response parsing, and error mapping.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def analyze(self, context: AIContext) -> AIAnalysisResult:
-        """Given bounded deterministic analysis context, return a complete
-        AI-enriched analysis result."""
+        """(Transitional) Given bounded deterministic analysis context,
+        return a complete AI-enriched analysis result.
+
+        This method combines prompt building, transport, and response
+        parsing inside the provider.  It will be migrated to use
+        :meth:`complete` externally in a future phase.
+        """
         raise NotImplementedError

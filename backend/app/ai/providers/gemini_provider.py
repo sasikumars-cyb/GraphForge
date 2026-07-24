@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 
 import httpx
 
-from app.ai.providers.base import BaseAnalysisProvider, LLMResponse
+from app.ai.providers.base import BaseAnalysisProvider, LLMRequestOptions, LLMResponse
 from app.ai.providers.errors import AIProviderError, AIProviderResponseError, AIProviderTimeoutError
 from app.ai.providers.http_utils import raise_for_error_response
 
@@ -48,8 +48,17 @@ class GeminiProvider(BaseAnalysisProvider):
         self._provider_name = provider_name
         self._http_client = http_client
 
-    async def _request_completion(self, user_prompt: str) -> LLMResponse:
-        messages = self.build_messages(_SYSTEM_PROMPT, user_prompt)
+    async def _send_completion(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        options: LLMRequestOptions,
+    ) -> LLMResponse:
+        """Transport-only: send caller-supplied prompts via Gemini generateContent."""
+        # options.response_format is accepted for API symmetry but not
+        # mapped — Gemini’s generateContent API has no equivalent param.
+        messages = self.build_messages(system_prompt, user_prompt)
         text_prompt = self.messages_to_text(messages)
         payload: dict[str, Any] = {
             "contents": [
@@ -117,6 +126,15 @@ class GeminiProvider(BaseAnalysisProvider):
             model=self._model,
         )
         return self._extract_response(response)
+
+    async def _request_completion(self, user_prompt: str) -> LLMResponse:
+        """Transitional: delegates to _send_completion with the built-in
+        AI-analysis system prompt.  Used only by analyze()."""
+        return await self._send_completion(
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            options=LLMRequestOptions(),
+        )
 
     def _extract_response(self, response: httpx.Response) -> LLMResponse:
         """Extract completion text + metadata from Gemini JSON."""

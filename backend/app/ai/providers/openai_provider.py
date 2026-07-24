@@ -10,7 +10,7 @@ from typing import Any
 
 import httpx
 
-from app.ai.providers.base import BaseAnalysisProvider, LLMResponse
+from app.ai.providers.base import BaseAnalysisProvider, LLMRequestOptions, LLMResponse, ResponseFormat
 from app.ai.providers.errors import (
     AIProviderAuthError,
     AIProviderError,
@@ -56,7 +56,14 @@ class OpenAIProvider(BaseAnalysisProvider):
         self._provider_name = provider_name
         self._http_client = http_client
 
-    async def _request_completion(self, user_prompt: str) -> LLMResponse:
+    async def _send_completion(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        options: LLMRequestOptions,
+    ) -> LLMResponse:
+        """Transport-only: send caller-supplied prompts via Chat Completions."""
         headers = {
             "Authorization": f"Bearer {self._api_key}",
             "Content-Type": "application/json",
@@ -65,9 +72,10 @@ class OpenAIProvider(BaseAnalysisProvider):
             "model": self._model,
             "temperature": self._temperature,
             "max_tokens": self._max_tokens,
-            "response_format": {"type": "json_object"},
-            "messages": self.build_messages(_SYSTEM_PROMPT, user_prompt),
+            "messages": self.build_messages(system_prompt, user_prompt),
         }
+        if options.response_format == ResponseFormat.JSON:
+            payload["response_format"] = {"type": "json_object"}
 
         client = self._http_client or httpx.AsyncClient()
         should_close = self._http_client is None
@@ -114,6 +122,15 @@ class OpenAIProvider(BaseAnalysisProvider):
             model=self._model,
         )
         return self._extract_response(response)
+
+    async def _request_completion(self, user_prompt: str) -> LLMResponse:
+        """Transitional: delegates to _send_completion with the built-in
+        AI-analysis system prompt.  Used only by analyze()."""
+        return await self._send_completion(
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            options=LLMRequestOptions(),
+        )
 
     def _extract_response(self, response: httpx.Response) -> LLMResponse:
         """Extract completion text + metadata from Chat Completions JSON."""

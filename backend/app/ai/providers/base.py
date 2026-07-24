@@ -7,7 +7,8 @@ providers requires only request/response mapping code.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any
 
 from app.ai.interfaces.llm_provider import ILLMProvider
@@ -15,6 +16,34 @@ from app.ai.providers.errors import AIProviderResponseError
 from app.ai.schemas.analysis_result import AIAnalysisResult
 from app.ai.services.context_builder import AIContext
 from app.ai.services.prompt_builder import PromptBuilder
+
+
+# ------------------------------------------------------------------
+# Transport-level data types
+# ------------------------------------------------------------------
+
+
+class ResponseFormat(Enum):
+    """Output format the caller expects from the LLM."""
+
+    JSON = "json"
+    TEXT = "text"
+
+
+@dataclass(frozen=True)
+class LLMRequestOptions:
+    """Caller-controlled transport options for a completion request.
+
+    Providers map these to vendor-specific parameters.  Fields that a
+    provider does not support are silently ignored, keeping the API
+    symmetric across backends.
+
+    Extensible — future transport capabilities (JSON-schema validation,
+    tool/function calling, streaming, provider-specific flags) are added
+    as new fields with backwards-compatible defaults.
+    """
+
+    response_format: ResponseFormat = ResponseFormat.JSON
 
 
 @dataclass(frozen=True)
@@ -32,12 +61,53 @@ class LLMResponse:
 class BaseAnalysisProvider(ILLMProvider):
     """Provider-agnostic analyze pipeline.
 
-    Subclasses only implement provider-specific request/response mapping
-    in ``_request_completion``.
+    Subclasses implement provider-specific transport in
+    ``_send_completion``.  The public ``complete()`` method is the
+    transport-only entry point for callers that own their own prompts and
+    response parsing.  The transitional ``analyze()`` method retains the
+    existing domain-coupled behavior until all callers are migrated.
     """
 
     def __init__(self) -> None:
         self._prompt_builder = PromptBuilder()
+
+    # ------------------------------------------------------------------
+    # Transport-only public API (new — used by migrated agents)
+    # ------------------------------------------------------------------
+
+    async def complete(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        options: LLMRequestOptions | None = None,
+    ) -> LLMResponse:
+        """Send caller-supplied prompts and return a normalized response.
+
+        Does not build prompts, parse domain-specific JSON, or apply
+        business logic.  Raises provider-level exceptions on transport
+        errors (timeout, auth, rate-limit, malformed response).
+        """
+        resolved = options if options is not None else LLMRequestOptions()
+        return await self._send_completion(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            options=resolved,
+        )
+
+    async def _send_completion(
+        self,
+        *,
+        system_prompt: str,
+        user_prompt: str,
+        options: LLMRequestOptions,
+    ) -> LLMResponse:
+        """Provider-specific transport.  Subclasses MUST override."""
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Transitional domain-coupled API (existing — used by AI Analysis)
+    # ------------------------------------------------------------------
 
     async def analyze(self, context: AIContext) -> AIAnalysisResult:
         prompt = self._build_prompt(context)
