@@ -55,15 +55,15 @@ describe("WorkflowTimeline", () => {
     expect(screen.getByText("Review")).toBeInTheDocument();
   });
 
-  it("renders completed stage as a link", () => {
+  it("renders stage icons as decorative status readouts, not links", () => {
+    // Regression test: a completed stage icon used to be its own nested
+    // <Link to="/runs/:runId">, which — when this component is wrapped in
+    // the Dashboard's own workflow-card <Link> — silently hijacked clicks
+    // away from the workflow page. Stage icons carry no navigation now.
     renderWithAuth(<WorkflowTimeline stages={stages} currentStage="development" />);
-    const link = screen.getByRole("link", { name: "Planning: completed" });
-    expect(link).toHaveAttribute("href", "/runs/run-1");
-  });
-
-  it("renders pending stage without a link", () => {
-    renderWithAuth(<WorkflowTimeline stages={stages} currentStage="development" />);
-    expect(screen.queryByRole("link", { name: "Testing: pending" })).not.toBeInTheDocument();
+    expect(screen.queryAllByRole("link")).toHaveLength(0);
+    expect(screen.getByRole("img", { name: "Planning: completed" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Testing: pending" })).toBeInTheDocument();
   });
 });
 
@@ -118,14 +118,12 @@ describe("StageNavigation", () => {
 describe("NewWorkflowPage", () => {
   it("renders the page heading", () => {
     renderWithAuth(<NewWorkflowPage />);
-    expect(screen.getByText("New SDLC Workflow")).toBeInTheDocument();
+    expect(screen.getByText("Describe what you want built")).toBeInTheDocument();
   });
 
   it("renders the text input", () => {
     renderWithAuth(<NewWorkflowPage />);
-    expect(
-      screen.getByLabelText("What engineering task do you want to deliver?"),
-    ).toBeInTheDocument();
+    expect(screen.getByLabelText("What's the engineering objective?")).toBeInTheDocument();
   });
 
   it("renders example buttons", () => {
@@ -144,7 +142,7 @@ describe("NewWorkflowPage", () => {
   it("enables start button when input has text", async () => {
     const user = userEvent.setup();
     renderWithAuth(<NewWorkflowPage />);
-    const textarea = screen.getByLabelText("What engineering task do you want to deliver?");
+    const textarea = screen.getByLabelText("What's the engineering objective?");
     await user.type(textarea, "Test task");
     const button = screen.getByRole("button", { name: "Start SDLC workflow" });
     expect(button).toBeEnabled();
@@ -156,7 +154,7 @@ describe("NewWorkflowPage", () => {
     const example = screen.getByText("Implement JWT authentication across all microservices");
     await user.click(example);
     const textarea = screen.getByLabelText(
-      "What engineering task do you want to deliver?",
+      "What's the engineering objective?",
     ) as HTMLTextAreaElement;
     expect(textarea.value).toBe("Implement JWT authentication across all microservices");
   });
@@ -303,6 +301,87 @@ describe("WorkflowPage", () => {
     renderWorkflowPage();
     await screen.findByRole("button", { name: /Approve & Continue/ });
     await user.click(screen.getByRole("button", { name: /Approve & Continue/ }));
+
+    await waitFor(() =>
+      expect(workflowsApi.continueWorkflow).toHaveBeenCalledWith("test-token", "wf-1"),
+    );
+  });
+
+  it("shows the failure banner (not the approval banner) when the current stage failed", async () => {
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
+      makeWorkflow({
+        current_stage: "testing",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          { stage: "development", label: "Development", status: "completed", run_id: "run-2" },
+          { stage: "testing", label: "Testing", status: "failed", run_id: "run-3" },
+          { stage: "review", label: "Review", status: "pending", run_id: null },
+        ],
+        runs: [
+          {
+            run_id: "run-3",
+            goal: "plan_tests",
+            status: "failed",
+            workflow_stage: "testing",
+            confidence_score: null,
+            started_at: "2026-01-01T10:00:00Z",
+            completed_at: "2026-01-01T10:00:02Z",
+            created_at: "2026-01-01T10:00:00Z",
+          },
+        ],
+      }),
+    );
+    vi.mocked(agentRunsApi.getAgentRun).mockImplementation((_token, runId) =>
+      Promise.resolve(
+        makeRun({
+          run_id: runId,
+          workflow_stage: "testing",
+          status: "failed",
+          error_message: "Neo4j connection refused",
+        }),
+      ),
+    );
+
+    renderWorkflowPage();
+
+    expect(await screen.findByText(/agent hit an error/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Retry Stage/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Approve & Continue/ })).not.toBeInTheDocument();
+    // The raw error appears in the failure banner and in the Artifacts
+    // card's own error disclosure — both must sit behind a "View error
+    // details" toggle, never shown as part of the main message.
+    const rawErrors = screen.getAllByText("Neo4j connection refused");
+    expect(rawErrors.length).toBeGreaterThan(0);
+    for (const el of rawErrors) {
+      expect(el.closest("details")).not.toBeNull();
+    }
+    expect(screen.getAllByText("View error details").length).toBe(rawErrors.length);
+  });
+
+  it("retries by calling continueWorkflow again when Retry Stage is clicked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
+      makeWorkflow({
+        current_stage: "testing",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          { stage: "testing", label: "Testing", status: "failed", run_id: "run-3" },
+        ],
+      }),
+    );
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(
+      makeRun({ status: "failed", error_message: "boom" }),
+    );
+    vi.mocked(workflowsApi.continueWorkflow).mockResolvedValue({
+      workflow_id: "wf-1",
+      run_id: "run-3b",
+      stage: "testing",
+      status: "completed",
+    });
+
+    renderWorkflowPage();
+    await screen.findByRole("button", { name: /Retry Stage/ });
+    await user.click(screen.getByRole("button", { name: /Retry Stage/ }));
 
     await waitFor(() =>
       expect(workflowsApi.continueWorkflow).toHaveBeenCalledWith("test-token", "wf-1"),

@@ -8,7 +8,7 @@
  * that approximation is called out in the function's doc comment.
  */
 
-import type { AgentStep, Evidence, WorkflowStageInfo } from "../types/agent";
+import type { AgentStep, Evidence, WorkflowDetail, WorkflowStageInfo } from "../types/agent";
 
 type EventKind = Evidence["kind"] | "lifecycle";
 
@@ -32,6 +32,46 @@ export function nextStageOf(stage: string): string | null {
 
 export function stageLabel(stage: string): string {
   return STAGE_AGENT_LABEL[stage]?.replace(" Agent", "") ?? stage;
+}
+
+// ---------------------------------------------------------------------------
+// Single source of truth for "what is currently true about this workflow" —
+// every component that used to read workflow.status / current_stage /
+// stages[] independently (and could disagree with each other, e.g. a failed
+// stage still showing an "approve to continue" banner) now derives from this
+// one function instead.
+// ---------------------------------------------------------------------------
+
+export type WorkflowPhase = "running" | "awaiting_approval" | "failed" | "completed";
+
+export interface WorkflowUiState {
+  phase: WorkflowPhase;
+  /** The stage matching workflow.current_stage — null only if the backend
+   * ever reports a current_stage outside the known STAGE_ORDER. */
+  currentStageInfo: WorkflowStageInfo | null;
+  lastCompletedStage: WorkflowStageInfo | null;
+}
+
+export function deriveWorkflowState(workflow: WorkflowDetail): WorkflowUiState {
+  const currentStageInfo = workflow.stages.find((s) => s.stage === workflow.current_stage) ?? null;
+  const lastCompletedStage =
+    [...workflow.stages].reverse().find((s) => s.status === "completed") ?? null;
+
+  let phase: WorkflowPhase;
+  if (workflow.status === "completed") {
+    phase = "completed";
+  } else if (currentStageInfo?.status === "failed") {
+    phase = "failed";
+  } else if (currentStageInfo?.status === "running") {
+    phase = "running";
+  } else {
+    // current stage exists but hasn't been attempted yet ("pending") —
+    // awaiting an explicit approve/continue action, the only way any stage
+    // ever starts in this workflow engine.
+    phase = "awaiting_approval";
+  }
+
+  return { phase, currentStageInfo, lastCompletedStage };
 }
 
 // ---------------------------------------------------------------------------

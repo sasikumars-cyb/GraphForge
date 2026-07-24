@@ -17,7 +17,7 @@ import { useAuth } from "../app/auth-context";
 import { getWorkflow, continueWorkflow, createWorkflow } from "../lib/api/workflows";
 import { getAgentRun } from "../lib/api/agentRuns";
 import type { AgentStep, RunDetail, WorkflowDetail } from "../types/agent";
-import { STAGE_AGENT_LABEL } from "../lib/workflowDerived";
+import { deriveWorkflowState, STAGE_AGENT_LABEL } from "../lib/workflowDerived";
 
 const POLL_INTERVAL_MS = 2500;
 
@@ -83,6 +83,12 @@ export function WorkflowPage() {
       setSelectedRunId(runDetail.run_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to continue workflow.");
+      // The backend already persisted a failed Run and left current_stage
+      // pointed at it before this request threw — without this, the header/
+      // pipeline/banner would show stale pre-attempt state until the next
+      // 2.5s poll tick, which is exactly the kind of contradiction this
+      // page should never show.
+      await loadWorkflow(false);
     } finally {
       setIsSubmitting(false);
     }
@@ -116,12 +122,9 @@ export function WorkflowPage() {
   });
 
   const completedSteps = [...stepsByRunId.values()].filter((s) => s.status === "completed");
-  const lastCompletedStage = [...workflow.stages].reverse().find((s) => s.status === "completed");
-  const canContinue =
-    workflow.status === "in_progress" &&
-    !!lastCompletedStage &&
-    workflow.current_stage !== "completed" &&
-    workflow.stages.some((s) => s.stage === workflow.current_stage);
+  const { phase, lastCompletedStage, currentStageInfo } = deriveWorkflowState(workflow);
+  const canContinue = phase === "awaiting_approval";
+  const failedRun = currentStageInfo?.run_id ? runsById.get(currentStageInfo.run_id) : undefined;
 
   const selectedRun = selectedRunId ? runsById.get(selectedRunId) : undefined;
   const selectedStage = selectedRun?.workflow_stage ?? null;
@@ -132,7 +135,7 @@ export function WorkflowPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <WorkflowHeader workflow={workflow} completedSteps={completedSteps} />
+      <WorkflowHeader workflow={workflow} completedSteps={completedSteps} phase={phase} />
 
       {workflow.status === "completed" && (
         <WorkflowSummaryHero workflow={workflow} steps={[...stepsByRunId.values()]} />
@@ -174,7 +177,7 @@ export function WorkflowPage() {
         </Card>
       )}
 
-      {error && (
+      {error && phase !== "failed" && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
           {error}
         </div>
@@ -187,6 +190,20 @@ export function WorkflowPage() {
           workflowTitle={workflow.title}
           isSubmitting={isSubmitting}
           onApprove={handleApprove}
+        />
+      )}
+
+      {phase === "failed" && currentStageInfo && (
+        <ApprovalGateBanner
+          completedStage={lastCompletedStage?.stage ?? currentStageInfo.stage}
+          nextStage={currentStageInfo.stage}
+          workflowTitle={workflow.title}
+          isSubmitting={isSubmitting}
+          onApprove={handleApprove}
+          failure={{
+            stage: currentStageInfo.stage,
+            errorMessage: failedRun?.error_message ?? null,
+          }}
         />
       )}
 
@@ -228,7 +245,14 @@ export function WorkflowPage() {
                 </div>
                 <StageArtifactCard stage={selectedStage ?? ""} step={selectedStep} />
                 {selectedRun.error_message && (
-                  <p className="mt-3 text-sm text-rose-300">{selectedRun.error_message}</p>
+                  <details className="group mt-3">
+                    <summary className="cursor-pointer text-xs font-medium text-rose-300/80 hover:text-rose-200">
+                      View error details
+                    </summary>
+                    <p className="mt-2 rounded-lg bg-slate-950 p-3 font-mono text-xs whitespace-pre-wrap text-rose-300">
+                      {selectedRun.error_message}
+                    </p>
+                  </details>
                 )}
               </Card>
 
@@ -309,9 +333,10 @@ export function NewWorkflowPage() {
           <GitMerge className="h-5 w-5 text-brand-400" aria-hidden="true" />
         </div>
         <div>
-          <h2 className="text-xl font-semibold text-slate-50">New SDLC Workflow</h2>
+          <h2 className="text-xl font-semibold text-slate-50">Describe what you want built</h2>
           <p className="text-sm text-slate-400">
-            Start a guided engineering lifecycle. Each phase feeds the next automatically.
+            GraphForge turns this into an AI workflow — Planning → Development → Testing → Review —
+            and runs each stage for you.
           </p>
         </div>
       </div>
@@ -320,14 +345,14 @@ export function NewWorkflowPage() {
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div>
             <label htmlFor="workflow-input" className="block text-sm font-medium text-slate-200">
-              What engineering task do you want to deliver?
+              What's the engineering objective?
             </label>
             <textarea
               id="workflow-input"
               value={input}
               onChange={(e) => setInput(e.target.value)}
               disabled={isSubmitting}
-              placeholder="Describe the engineering objective. GraphForge will guide you through Planning → Development → Testing → Review."
+              placeholder="e.g. Add rate limiting to the payment API. GraphForge will plan it, implement it, test it, and review it — automatically."
               rows={4}
               className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:opacity-50"
               aria-required="true"

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Card } from "../components/Card";
+import { StatCard } from "../components/StatCard";
 import { Table, type TableColumn } from "../components/Table";
 import { StatusBadge } from "../components/StatusBadge";
 import { useAuth } from "../app/auth-context";
@@ -9,6 +10,7 @@ import { getLatestIndexingJob, triggerIndexing } from "../lib/api/repositories";
 import { repositoryHealthPresentation } from "../lib/statusPresentation";
 import { formatRelativeTime } from "../lib/formatDate";
 import type { IndexingJob } from "../types/graph";
+import { FolderGit2, GitPullRequest, LayoutDashboard, Clock } from "lucide-react";
 
 type IndexingFilter = "all" | "indexed" | "not_indexed" | "failed";
 
@@ -21,13 +23,11 @@ function indexingStatusOf(job: IndexingJob | null | undefined): IndexingFilter {
 
 export function RepositoriesPage() {
   const { token } = useAuth();
-  const { repositories, isLoading, error } = useDashboardData();
+  const { stats, repositories, isLoading, error } = useDashboardData();
   const [jobsByRepoId, setJobsByRepoId] = useState<Record<string, IndexingJob | null>>({});
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<IndexingFilter>("all");
-  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(
-    null,
-  );
+  const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const [bulkResult, setBulkResult] = useState<{ success: number; failed: number } | null>(null);
 
   // Reuses the same GET .../index (latest job) endpoint the repository
@@ -119,7 +119,9 @@ export function RepositoriesPage() {
       header: (
         <input
           type="checkbox"
-          checked={filteredRepositories.length > 0 && selectedIds.size === filteredRepositories.length}
+          checked={
+            filteredRepositories.length > 0 && selectedIds.size === filteredRepositories.length
+          }
           onChange={toggleAll}
           aria-label="Select all repositories"
         />
@@ -158,8 +160,7 @@ export function RepositoriesPage() {
         const job = jobsByRepoId[repo.id];
         if (job === undefined) return <span className="text-xs text-slate-500">Loading…</span>;
         if (!job) return <StatusBadge label="Not indexed" tone="neutral" />;
-        if (job.status === "completed")
-          return <StatusBadge label="Indexed" tone="success" />;
+        if (job.status === "completed") return <StatusBadge label="Indexed" tone="success" />;
         if (job.status === "failed") return <StatusBadge label="Index failed" tone="danger" />;
         return <StatusBadge label="Indexing…" tone="info" />;
       },
@@ -181,6 +182,36 @@ export function RepositoriesPage() {
         <p className="mt-1 text-sm text-slate-400">
           Repositories tracked and indexed by GraphForge.
         </p>
+      </div>
+
+      {/* Operational snapshot — moved here from the Dashboard, which now
+          only answers "what am I working on / what's next / what
+          happened", not ambient repository/PR metrics. */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatCard
+          label="Repositories monitored"
+          value={isLoading ? "—" : String(stats.repositoriesMonitored)}
+          hint={`across ${stats.organizationCount} organization${stats.organizationCount === 1 ? "" : "s"}`}
+          icon={FolderGit2}
+        />
+        <StatCard
+          label="Open pull requests"
+          value={isLoading ? "—" : String(stats.openPullRequestCount)}
+          hint={`${stats.awaitingAnalysisCount} awaiting analysis`}
+          icon={GitPullRequest}
+        />
+        <StatCard
+          label="High risk changes"
+          value={isLoading ? "—" : String(stats.highRiskThisWeekCount)}
+          hint="critical or high this week"
+          icon={LayoutDashboard}
+        />
+        <StatCard
+          label="Avg. indexing time"
+          value={isLoading ? "—" : stats.avgIndexingTimeLabel}
+          hint="per repository"
+          icon={Clock}
+        />
       </div>
 
       {error && (

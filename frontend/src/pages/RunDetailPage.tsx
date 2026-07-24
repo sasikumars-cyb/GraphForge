@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, GitMerge } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
 import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
@@ -8,6 +8,7 @@ import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { useAuth } from "../app/auth-context";
 import { getAgentRun } from "../lib/api/agentRuns";
+import { stageLabel } from "../lib/workflowDerived";
 import type { RunDetail } from "../types/agent";
 
 export function RunDetailPage() {
@@ -37,7 +38,10 @@ export function RunDetailPage() {
   if (error || !run) {
     return (
       <div className="flex flex-col gap-6">
-        <Link to="/runs" className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200">
+        <Link
+          to="/runs"
+          className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
+        >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           Back to history
         </Link>
@@ -53,10 +57,37 @@ export function RunDetailPage() {
 
   return (
     <div className="flex flex-col gap-6">
-      <Link to="/runs" className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200">
+      <Link
+        to="/runs"
+        className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
+      >
         <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         Back to history
       </Link>
+
+      {/* This run's Stage produced it as part of a larger Workflow — say so
+          up front, since reaching a run directly (rather than through the
+          Workflow page) otherwise reads as an isolated, archived record. */}
+      {run.workflow_id && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand-500/30 bg-brand-500/10 px-4 py-3 text-sm">
+          <span className="flex items-center gap-2 text-brand-200">
+            <GitMerge className="h-4 w-4 shrink-0" aria-hidden="true" />
+            Part of workflow:{" "}
+            <strong className="text-brand-100">
+              {run.subject.display_name || run.subject.subject_id}
+            </strong>
+            {run.workflow_stage && (
+              <span className="text-brand-300"> — {stageLabel(run.workflow_stage)} stage</span>
+            )}
+          </span>
+          <Link
+            to={`/workflows/${run.workflow_id}`}
+            className="shrink-0 rounded-md bg-brand-500/20 px-3 py-1.5 text-xs font-medium text-brand-200 ring-1 ring-inset ring-brand-500/40 transition-colors hover:bg-brand-500/30"
+          >
+            Open full workflow →
+          </Link>
+        </div>
+      )}
 
       {/* Progress for in-flight runs */}
       {(run.status === "queued" || run.status === "running") && (
@@ -76,7 +107,9 @@ export function RunDetailPage() {
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
           <div>
             <dt className="text-xs text-slate-500">Run ID</dt>
-            <dd className="truncate font-mono text-xs text-slate-300" title={run.run_id}>{run.run_id}</dd>
+            <dd className="truncate font-mono text-xs text-slate-300" title={run.run_id}>
+              {run.run_id}
+            </dd>
           </div>
           <div>
             <dt className="text-xs text-slate-500">Goal</dt>
@@ -94,7 +127,9 @@ export function RunDetailPage() {
           </div>
           <div>
             <dt className="text-xs text-slate-500">Status</dt>
-            <dd><RunStatusBadge status={run.status} /></dd>
+            <dd>
+              <RunStatusBadge status={run.status} />
+            </dd>
           </div>
           <div>
             <dt className="text-xs text-slate-500">Confidence</dt>

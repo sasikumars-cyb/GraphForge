@@ -1,5 +1,4 @@
 import { CheckCircle2, Circle, Loader2, XCircle } from "lucide-react";
-import { Link } from "react-router-dom";
 import type { WorkflowStageInfo } from "../../types/agent";
 
 interface WorkflowTimelineProps {
@@ -30,7 +29,12 @@ const STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string; bgColo
   },
 };
 
-/** Horizontal workflow timeline showing SDLC stage progression. */
+/** Horizontal workflow timeline showing SDLC stage progression. Purely a
+ * status readout — stage icons are not links. On the Dashboard this used to
+ * nest a per-stage <Link to="/runs/:runId"> inside the card's own
+ * <Link to="/workflows/:id">, so a click on a completed stage silently
+ * skipped the workflow page (invalid nested anchors resolve to whichever
+ * is innermost). A workflow card now has exactly one destination. */
 export function WorkflowTimeline({ stages, currentStage }: WorkflowTimelineProps) {
   return (
     <nav aria-label="Workflow stages" className="w-full">
@@ -73,17 +77,9 @@ export function WorkflowTimeline({ stages, currentStage }: WorkflowTimelineProps
 
           return (
             <li key={stage.stage} className="flex items-center">
-              {stage.run_id ? (
-                <Link
-                  to={`/runs/${stage.run_id}`}
-                  className="transition-opacity hover:opacity-80"
-                  aria-label={`${stage.label}: ${stage.status}`}
-                >
-                  {content}
-                </Link>
-              ) : (
-                <div aria-label={`${stage.label}: ${stage.status}`}>{content}</div>
-              )}
+              <div role="img" aria-label={`${stage.label}: ${stage.status}`}>
+                {content}
+              </div>
               {!isLast && (
                 <div
                   className={`mx-2 h-0.5 w-8 sm:w-12 ${

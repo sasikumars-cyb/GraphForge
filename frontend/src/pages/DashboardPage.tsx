@@ -1,84 +1,14 @@
 import { Link } from "react-router-dom";
 import { useEffect, useState } from "react";
-import { StatCard } from "../components/StatCard";
 import { Card } from "../components/Card";
-import { Table, type TableColumn } from "../components/Table";
-import { RiskBadge } from "../components/RiskBadge";
 import { StatusBadge } from "../components/StatusBadge";
 import { WorkflowTimeline } from "../components/workflow/WorkflowTimeline";
-import { repositoryHealthPresentation } from "../lib/statusPresentation";
-import { formatRelativeTime } from "../lib/formatDate";
-import {
-  useDashboardData,
-  type DashboardPullRequestRow,
-  type DashboardRepositoryRow,
-} from "../hooks/useDashboardData";
 import { useAuth } from "../app/auth-context";
 import { listWorkflows } from "../lib/api/workflows";
 import type { WorkflowListItem } from "../types/agent";
-import {
-  LayoutDashboard,
-  FolderGit2,
-  GitPullRequest,
-  Clock,
-  Lightbulb,
-  Search,
-  GitMerge,
-} from "lucide-react";
-
-const recentPullRequestColumns: TableColumn<DashboardPullRequestRow>[] = [
-  {
-    key: "title",
-    header: "Pull request",
-    render: (pr) => (
-      <Link to={`/pull-requests/${pr.id}`} className="block hover:underline">
-        <p className="font-medium text-slate-100">{pr.title}</p>
-        <p className="text-xs text-slate-500">{pr.repositoryFullName}</p>
-      </Link>
-    ),
-  },
-  {
-    key: "risk",
-    header: "Risk",
-    render: (pr) =>
-      pr.risk ? <RiskBadge level={pr.risk} /> : <StatusBadge label="Not analyzed" tone="neutral" />,
-  },
-  {
-    key: "status",
-    header: "Status",
-    render: (pr) => (
-      <StatusBadge
-        label={pr.isDraft ? "Draft" : pr.state === "open" ? "Open" : pr.state}
-        tone={pr.state === "open" ? (pr.isDraft ? "neutral" : "info") : "success"}
-      />
-    ),
-  },
-  { key: "updated", header: "Updated", render: (pr) => formatRelativeTime(pr.updatedAt) },
-];
-
-const repositoryColumns: TableColumn<DashboardRepositoryRow>[] = [
-  {
-    key: "name",
-    header: "Repository",
-    render: (repo) => (
-      <Link to={`/repositories/${repo.id}`} className="hover:underline">
-        {repo.name}
-      </Link>
-    ),
-  },
-  {
-    key: "health",
-    header: "Health",
-    render: (repo) => {
-      const { label, tone } = repositoryHealthPresentation(repo.health);
-      return <StatusBadge label={label} tone={tone} />;
-    },
-  },
-  { key: "openPrs", header: "Open PRs", render: (repo) => repo.openPullRequests },
-];
+import { Lightbulb, Search, GitMerge } from "lucide-react";
 
 export function DashboardPage() {
-  const { stats, recentPullRequests, repositories, isLoading, error } = useDashboardData();
   const { token } = useAuth();
   const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
   const [workflowsError, setWorkflowsError] = useState<string | null>(null);
@@ -99,18 +29,11 @@ export function DashboardPage() {
           Welcome back to <span className="text-brand-400">GraphForge</span>
         </h2>
         <p className="mt-1.5 max-w-2xl text-sm text-slate-400">
-          AI engineering intelligence — every claim grounded in your Knowledge Graph, every decision
-          backed by evidence.
+          What you're working on, what to do next, and what just happened.
         </p>
       </div>
 
-      {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
-          {error}
-        </div>
-      )}
-
-      {/* Active Workflows */}
+      {/* What am I working on? */}
       {workflowsError && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
           {workflowsError}
@@ -150,7 +73,7 @@ export function DashboardPage() {
         </Card>
       )}
 
-      {/* Agent Actions */}
+      {/* What should I do next? */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Link
           to="/workflows/new"
@@ -208,57 +131,6 @@ export function DashboardPage() {
             </p>
           </div>
         </Link>
-      </div>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label="Repositories monitored"
-          value={isLoading ? "—" : String(stats.repositoriesMonitored)}
-          hint={`across ${stats.organizationCount} organization${stats.organizationCount === 1 ? "" : "s"}`}
-          icon={FolderGit2}
-        />
-        <StatCard
-          label="Open pull requests"
-          value={isLoading ? "—" : String(stats.openPullRequestCount)}
-          hint={`${stats.awaitingAnalysisCount} awaiting analysis`}
-          icon={GitPullRequest}
-        />
-        <StatCard
-          label="High risk changes"
-          value={isLoading ? "—" : String(stats.highRiskThisWeekCount)}
-          hint="critical or high this week"
-          icon={LayoutDashboard}
-        />
-        <StatCard
-          label="Avg. indexing time"
-          value={isLoading ? "—" : stats.avgIndexingTimeLabel}
-          hint="per repository"
-          icon={Clock}
-        />
-      </div>
-
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        <Card
-          title="Recent pull requests"
-          description="Latest changes analyzed across all repositories"
-          className="lg:col-span-2"
-        >
-          <Table
-            columns={recentPullRequestColumns}
-            data={recentPullRequests.slice(0, 5)}
-            getRowKey={(pr) => pr.id}
-            emptyMessage={isLoading ? "Loading…" : "No pull requests yet."}
-          />
-        </Card>
-
-        <Card title="Repositories at a glance" description="Current health status">
-          <Table
-            columns={repositoryColumns}
-            data={repositories}
-            getRowKey={(repo) => repo.id}
-            emptyMessage={isLoading ? "Loading…" : "No repositories tracked yet."}
-          />
-        </Card>
       </div>
     </div>
   );

@@ -9,18 +9,31 @@ import {
   formatDuration,
   progressFraction,
   stageLabel,
+  type WorkflowPhase,
 } from "../../lib/workflowDerived";
 
 interface WorkflowHeaderProps {
   workflow: WorkflowDetail;
   completedSteps: AgentStep[];
+  /** Derived once in WorkflowPage via deriveWorkflowState() — the header
+   * never re-derives its own opinion of workflow status from raw fields,
+   * so it can't disagree with the pipeline or the approval/failure banner. */
+  phase: WorkflowPhase;
 }
+
+const STATUS_CONFIG: Record<WorkflowPhase, { label: string; tone: "success" | "info" | "danger" }> =
+  {
+    completed: { label: "Completed", tone: "success" },
+    failed: { label: "Failed", tone: "danger" },
+    running: { label: "In Progress", tone: "info" },
+    awaiting_approval: { label: "In Progress", tone: "info" },
+  };
 
 /** Feature 1 — Workflow Command Center header: title, status, progress,
  * live-ticking duration, current stage, and a rough remaining-time
  * estimate. Every number here is computed from real workflow/run data —
  * nothing is a placeholder. */
-export function WorkflowHeader({ workflow, completedSteps }: WorkflowHeaderProps) {
+export function WorkflowHeader({ workflow, completedSteps, phase }: WorkflowHeaderProps) {
   const isDone = workflow.status === "completed";
   const [now, setNow] = useState(() => Date.now());
 
@@ -35,7 +48,12 @@ export function WorkflowHeader({ workflow, completedSteps }: WorkflowHeaderProps
   const completedCount = workflow.stages.filter((s) => s.status === "completed").length;
   const remainingCount = workflow.stages.length - completedCount;
   const remainingMs = isDone ? null : estimateRemainingMs(completedSteps, remainingCount);
-  const currentLabel = isDone ? "Complete" : stageLabel(workflow.current_stage);
+  const currentLabel = isDone
+    ? "Complete"
+    : phase === "failed"
+      ? `${stageLabel(workflow.current_stage)} (failed)`
+      : stageLabel(workflow.current_stage);
+  const status = STATUS_CONFIG[phase];
 
   return (
     <div className="flex flex-col gap-5 rounded-2xl border border-slate-800 bg-gradient-to-br from-slate-900 to-slate-900/40 p-6 shadow-sm shadow-black/20">
@@ -58,16 +76,13 @@ export function WorkflowHeader({ workflow, completedSteps }: WorkflowHeaderProps
           className="flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 hover:text-slate-200"
         >
           <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
-          Run History
+          All Runs
         </Link>
       </div>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
         <Metric label="Status">
-          <StatusBadge
-            label={isDone ? "Completed" : "In Progress"}
-            tone={isDone ? "success" : "info"}
-          />
+          <StatusBadge label={status.label} tone={status.tone} />
         </Metric>
         <Metric label="Current stage" value={currentLabel} />
         <Metric label="Duration" value={formatDuration(elapsedMs)} mono />

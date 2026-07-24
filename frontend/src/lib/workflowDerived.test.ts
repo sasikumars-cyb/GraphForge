@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import type { AgentStep, Evidence, WorkflowStageInfo } from "../types/agent";
+import type { AgentStep, Evidence, WorkflowDetail, WorkflowStageInfo } from "../types/agent";
 import {
   buildExecutionLog,
   buildWorkflowTimeline,
   computeElapsedMs,
   deriveArtifactCounts,
+  deriveWorkflowState,
   estimateRemainingMs,
   evidenceToActivityLines,
   formatDuration,
@@ -266,5 +267,102 @@ describe("buildWorkflowTimeline", () => {
     const timeline = buildWorkflowTimeline(stages, stepsByRunId);
     const planningEvent = timeline.find((e) => e.stage === "planning");
     expect(planningEvent?.agentLabel).toBe("Planning Agent");
+  });
+});
+
+describe("deriveWorkflowState", () => {
+  function makeWorkflow(overrides: Partial<WorkflowDetail> = {}): WorkflowDetail {
+    return {
+      workflow_id: "wf-1",
+      title: "Add rate limiting",
+      current_stage: "testing",
+      status: "in_progress",
+      stages: [
+        { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+        { stage: "development", label: "Development", status: "completed", run_id: "run-2" },
+        { stage: "testing", label: "Testing", status: "pending", run_id: null },
+        { stage: "review", label: "Review", status: "pending", run_id: null },
+      ],
+      runs: [],
+      created_at: "2026-01-01T10:00:00Z",
+      updated_at: "2026-01-01T10:00:00Z",
+      ...overrides,
+    };
+  }
+
+  it("is 'awaiting_approval' when the current stage hasn't been attempted yet", () => {
+    const state = deriveWorkflowState(makeWorkflow());
+    expect(state.phase).toBe("awaiting_approval");
+    expect(state.currentStageInfo?.stage).toBe("testing");
+    expect(state.lastCompletedStage?.stage).toBe("development");
+  });
+
+  it("is 'running' when the current stage's run is in flight", () => {
+    const state = deriveWorkflowState(
+      makeWorkflow({
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          { stage: "development", label: "Development", status: "completed", run_id: "run-2" },
+          { stage: "testing", label: "Testing", status: "running", run_id: "run-3" },
+          { stage: "review", label: "Review", status: "pending", run_id: null },
+        ],
+      }),
+    );
+    expect(state.phase).toBe("running");
+  });
+
+  it("is 'failed' when the current stage's run failed — never 'awaiting_approval'", () => {
+    // Regression case: current_stage does NOT advance past a failed stage
+    // (advance_workflow only moves forward on a completed run), so the
+    // approval banner used to keep saying "approve to start Testing" even
+    // though Testing had already failed.
+    const state = deriveWorkflowState(
+      makeWorkflow({
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          { stage: "development", label: "Development", status: "completed", run_id: "run-2" },
+          { stage: "testing", label: "Testing", status: "failed", run_id: "run-3" },
+          { stage: "review", label: "Review", status: "pending", run_id: null },
+        ],
+      }),
+    );
+    expect(state.phase).toBe("failed");
+    expect(state.currentStageInfo?.status).toBe("failed");
+  });
+
+  it("is 'completed' once the workflow itself is marked completed, regardless of stage status", () => {
+    const state = deriveWorkflowState(
+      makeWorkflow({
+        status: "completed",
+        current_stage: "completed",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          { stage: "development", label: "Development", status: "completed", run_id: "run-2" },
+          { stage: "testing", label: "Testing", status: "completed", run_id: "run-3" },
+          { stage: "review", label: "Review", status: "completed", run_id: "run-4" },
+        ],
+      }),
+    );
+    expect(state.phase).toBe("completed");
+  });
+
+  it("finds the failed stage's currentStageInfo even after a later successful retry re-ran it", () => {
+    // A retry creates a *second* run for the same stage; _build_stages on the
+    // backend keeps only the latest run per stage, so by the time the
+    // frontend sees it, a successfully retried stage looks "completed" again
+    // — this just documents that deriveWorkflowState trusts stages[] as-is.
+    const state = deriveWorkflowState(
+      makeWorkflow({
+        current_stage: "review",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          { stage: "development", label: "Development", status: "completed", run_id: "run-2" },
+          { stage: "testing", label: "Testing", status: "completed", run_id: "run-3b" },
+          { stage: "review", label: "Review", status: "pending", run_id: null },
+        ],
+      }),
+    );
+    expect(state.phase).toBe("awaiting_approval");
+    expect(state.lastCompletedStage?.stage).toBe("testing");
   });
 });

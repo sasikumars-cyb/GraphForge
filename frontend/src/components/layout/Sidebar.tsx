@@ -1,6 +1,6 @@
 import { NavLink } from "react-router-dom";
 import { X, LogOut } from "lucide-react";
-import { NAV_ITEMS } from "./nav-items";
+import { NAV_SECTIONS } from "./nav-items";
 import { Logomark } from "./Logomark";
 import { useAuth } from "../../app/auth-context";
 
@@ -46,23 +46,32 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         <nav className="flex-1 space-y-1 px-3">
-          {NAV_ITEMS.map((item) => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              end={item.path === "/"}
-              onClick={onClose}
-              className={({ isActive }) =>
-                `relative flex items-center gap-3 rounded-lg py-2 pl-3 pr-3 text-sm font-medium transition-colors ${
-                  isActive
-                    ? "bg-brand-500/10 text-brand-200 before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-brand-400"
-                    : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
-                }`
-              }
-            >
-              <item.icon className="h-4 w-4" aria-hidden="true" />
-              {item.label}
-            </NavLink>
+          {NAV_SECTIONS.map((group) => (
+            <div key={group.section ?? "root"} className="pb-1">
+              {group.section && (
+                <p className="px-3 pt-4 pb-1 text-[11px] font-semibold tracking-wide text-slate-600 uppercase">
+                  {group.section}
+                </p>
+              )}
+              {group.items.map((item) => (
+                <NavLink
+                  key={item.path}
+                  to={item.path}
+                  end={item.path === "/"}
+                  onClick={onClose}
+                  className={({ isActive }) =>
+                    `relative flex items-center gap-3 rounded-lg py-2 pl-3 pr-3 text-sm font-medium transition-colors ${
+                      isActive
+                        ? "bg-brand-500/10 text-brand-200 before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-brand-400"
+                        : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+                    }`
+                  }
+                >
+                  <item.icon className="h-4 w-4" aria-hidden="true" />
+                  {item.label}
+                </NavLink>
+              ))}
+            </div>
           ))}
         </nav>
 
