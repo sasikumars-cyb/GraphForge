@@ -9,7 +9,12 @@ graph-grounded outputs), so those fields would be misleading here.
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+
+def _none_to_empty(v: str | None) -> str:
+    """Coerce ``null`` from LLM JSON into an empty string."""
+    return v if v is not None else ""
 
 
 class CompletenessFinding(BaseModel):
@@ -19,6 +24,11 @@ class CompletenessFinding(BaseModel):
     status: str = ""  # "complete" | "incomplete" | "missing"
     detail: str = ""
 
+    @field_validator("status", "detail", mode="before")
+    @classmethod
+    def _coerce_none(cls, v: str | None) -> str:
+        return _none_to_empty(v)
+
 
 class RiskAssessment(BaseModel):
     """Whether a risk raised in an earlier stage is adequately mitigated."""
@@ -27,6 +37,11 @@ class RiskAssessment(BaseModel):
     adequately_mitigated: bool = False
     concern: str = ""
 
+    @field_validator("concern", mode="before")
+    @classmethod
+    def _coerce_none(cls, v: str | None) -> str:
+        return _none_to_empty(v)
+
 
 class DependencyAssessment(BaseModel):
     """Whether a dependency raised in an earlier stage is accounted for."""
@@ -34,6 +49,11 @@ class DependencyAssessment(BaseModel):
     description: str
     validated: bool = False
     concern: str = ""
+
+    @field_validator("concern", mode="before")
+    @classmethod
+    def _coerce_none(cls, v: str | None) -> str:
+        return _none_to_empty(v)
 
 
 class EngineeringReadinessReport(BaseModel):
