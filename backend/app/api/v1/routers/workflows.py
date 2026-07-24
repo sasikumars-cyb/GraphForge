@@ -78,6 +78,11 @@ class WorkflowStageResponse(BaseModel):
 class WorkflowDetailResponse(BaseModel):
     workflow_id: str
     title: str
+    # The complete, unmodified objective the user submitted — `title` is
+    # the AI-generated short version of this. Only on the detail response
+    # (not the list item): list rows show the short title, this is for a
+    # single workflow's "view original prompt" disclosure.
+    original_prompt: str
     workflow_type: str
     current_stage: str
     status: str
@@ -424,6 +429,7 @@ async def get_workflow(
     return WorkflowDetailResponse(
         workflow_id=str(workflow.id),
         title=workflow.title,
+        original_prompt=workflow.original_prompt,
         workflow_type=workflow.workflow_type,
         current_stage=workflow.current_stage,
         status=workflow.status,

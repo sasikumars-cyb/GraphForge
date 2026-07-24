@@ -25,10 +25,20 @@ class Workflow(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
 
-    # TEXT, not VARCHAR(512): the objective this holds is routinely a full
-    # multi-paragraph brief (NewWorkflowPage's textarea), not a short title.
-    # The real ceiling is CreateWorkflowRequest.title's max_length.
+    # AI-generated, concise (5-10 word) title — see
+    # app.agents.title_generation.generate_title(). Generated once at
+    # creation time from `original_prompt` and persisted; never
+    # regenerated. Falls back to a truncated version of the prompt if
+    # generation fails, so this is always short even when it isn't a
+    # real AI title.
     title: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # The complete, unmodified engineering objective the user submitted —
+    # what `title` used to hold before AI title generation existed. TEXT,
+    # not VARCHAR(512): routinely a full multi-paragraph brief
+    # (NewWorkflowPage's textarea). The real ceiling is
+    # CreateWorkflowRequest.title's max_length.
+    original_prompt: Mapped[str] = mapped_column(Text, nullable=False)
 
     # "planning" | "development" | "testing" | "review" | "completed" — meaning
     # depends on workflow_type (see WORKFLOW_TYPE_STAGES in workflow_service.py)

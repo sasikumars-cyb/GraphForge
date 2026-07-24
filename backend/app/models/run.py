@@ -33,8 +33,29 @@ class Run(Base):
     subject_type: Mapped[str] = mapped_column(String(64), nullable=False)
     display_name: Mapped[str] = mapped_column(String(512), nullable=False, default="")
 
+    # AI-generated concise title for a *standalone* run (workflow_id is
+    # NULL) — see app.agents.title_generation.generate_title(). Runs
+    # dispatched as part of a workflow don't get one: the workflow itself
+    # already carries the one title that matters, and each stage is
+    # already labeled by its own stage name, not by re-titling the same
+    # objective four times over. Nullable because of that, and because
+    # rows created before this column existed have no title to show.
+    title: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     goal: Mapped[str] = mapped_column(String(128), nullable=False)
     model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # The AI provider (openai/groq/gemini/...) that actually served this
+    # run — read once from settings at Run-creation time, alongside
+    # `model`, so Run History can show what really answered even after
+    # the global default provider setting later changes.
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    # Who triggered this run — nullable because workflow-stage runs are
+    # attributed to the workflow's own creator/approver trail instead,
+    # and because rows created before this column existed have no answer.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
 
     # "queued" | "running" | "completed" | "partial" | "failed"
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")

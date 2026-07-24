@@ -8,7 +8,7 @@
  * that approximation is called out in the function's doc comment.
  */
 
-import type { AgentStep, Evidence, WorkflowDetail, WorkflowStageInfo } from "../types/agent";
+import type { AgentStep, Evidence, WorkflowStageInfo } from "../types/agent";
 
 type EventKind = Evidence["kind"] | "lifecycle";
 
@@ -67,7 +67,20 @@ export interface WorkflowUiState {
   lastCompletedStage: WorkflowStageInfo | null;
 }
 
-export function deriveWorkflowState(workflow: WorkflowDetail): WorkflowUiState {
+/** The minimal shape deriveWorkflowState actually reads — deliberately
+ * narrower than WorkflowDetail so WorkflowListItem (Dashboard's list
+ * data, which has no `runs`) satisfies it too. Both real response types
+ * are structurally assignable; this is the one function every place that
+ * shows a workflow's status (Dashboard, Run History, WorkflowHeader)
+ * must go through, so a workflow with a failed stage can never show
+ * "In Progress" in one place and "Failed" in another. */
+export interface WorkflowStateInput {
+  stages: WorkflowStageInfo[];
+  current_stage: string;
+  status: string;
+}
+
+export function deriveWorkflowState(workflow: WorkflowStateInput): WorkflowUiState {
   const currentStageInfo = workflow.stages.find((s) => s.stage === workflow.current_stage) ?? null;
   const lastCompletedStage =
     [...workflow.stages].reverse().find((s) => s.status === "completed") ?? null;

@@ -47,17 +47,30 @@ function DurationCell({ row }: { row: RunListItem }) {
   return <span className="text-sm text-slate-400">{(ms / 1000).toFixed(1)}s</span>;
 }
 
+function ProviderCell({ row }: { row: RunListItem }) {
+  return row.provider ? (
+    <span className="text-sm text-slate-300">{row.provider}</span>
+  ) : (
+    <span className="text-xs text-slate-500">—</span>
+  );
+}
+
 // Standalone (non-workflow) runs — unchanged from before grouping was added.
 const standaloneColumns: TableColumn<RunListItem>[] = [
   {
     key: "subject",
-    header: "Subject",
+    header: "Title",
     render: (row) => (
       <Link to={`/runs/${row.run_id}`} className="block hover:underline">
-        <p className="truncate font-medium text-slate-100" title={row.subject.display_name}>
-          {row.subject.display_name || row.subject.subject_id}
+        <p
+          className="truncate font-medium text-slate-100"
+          title={row.title ?? row.subject.display_name}
+        >
+          {row.title ?? row.subject.display_name ?? row.subject.subject_id}
         </p>
-        <p className="text-xs text-slate-500">{row.subject.subject_type}</p>
+        <p className="truncate text-xs text-slate-500">
+          {row.repository ?? row.subject.subject_type}
+        </p>
       </Link>
     ),
   },
@@ -69,6 +82,7 @@ const standaloneColumns: TableColumn<RunListItem>[] = [
     ),
   },
   { key: "status", header: "Status", render: (row) => <StatusCell row={row} /> },
+  { key: "provider", header: "Provider", render: (row) => <ProviderCell row={row} /> },
   { key: "confidence", header: "Confidence", render: (row) => <ConfidenceCell row={row} /> },
   { key: "started", header: "Started", render: (row) => <StartedCell row={row} /> },
   { key: "duration", header: "Duration", render: (row) => <DurationCell row={row} /> },

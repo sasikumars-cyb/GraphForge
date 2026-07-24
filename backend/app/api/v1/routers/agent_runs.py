@@ -10,12 +10,14 @@ import uuid
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.agents.title_generation import generate_title
 from app.api.v1.dependencies import get_current_user
 from app.context.resolvers.freetext import resolve as resolve_freetext
+from app.core.config import get_settings
 from app.core.exceptions import AppError, NotFoundError
 from app.database.session import get_db_session
 from app.models.agent_step import AgentStep
@@ -82,6 +84,10 @@ class RunDetailResponse(BaseModel):
     goal: str
     status: str
     subject: SubjectResponse
+    title: str | None = None
+    provider: str | None = None
+    user: str | None = None
+    repository: str | None = None
     model: str | None
     error_message: str | None
     started_at: str | None
@@ -98,6 +104,11 @@ class RunListItem(BaseModel):
     goal: str
     status: str
     subject: SubjectResponse
+    title: str | None = None
+    provider: str | None = None
+    user: str | None = None
+    repository: str | None = None
+    model: str | None = None
     started_at: str | None
     completed_at: str | None
     created_at: str
@@ -138,6 +149,30 @@ def _iso(dt: object) -> str | None:
     if dt is None:
         return None
     return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+
+
+def _repository_from_run(run: Run) -> str | None:
+    """Derive the repository(ies) consulted by a run from its steps' results.
+
+    Not a stored column — computed from the same `repositories_consulted`
+    field the freeform agents (Planning/Development/Testing) already emit,
+    matching this codebase's established derived-not-stored pattern.
+    """
+    repos: list[str] = []
+    for step in run.steps:
+        for repo in (step.result or {}).get("repositories_consulted") or []:
+            if repo not in repos:
+                repos.append(repo)
+    return ", ".join(repos) if repos else None
+
+
+async def _resolve_user_names(db: AsyncSession, runs: list[Run]) -> dict[uuid.UUID, str]:
+    """Batch-lookup User.full_name for every distinct user_id present in `runs`."""
+    ids = {r.user_id for r in runs if r.user_id is not None}
+    if not ids:
+        return {}
+    result = await db.execute(select(User.id, User.full_name).where(User.id.in_(ids)))
+    return {row.id: row.full_name for row in result.all()}
 
 
 def _step_response(step: AgentStep) -> StepResponse:
@@ -206,7 +241,9 @@ async def create_run(
     # Resolve subject
     ref = body.subject_reference.strip()
     if ref.startswith("freetext:") or not ref.startswith(("pr:", "jira:", "http")):
-        subject = resolve_freetext(ref.removeprefix("freetext:") if ref.startswith("freetext:") else ref)
+        subject = resolve_freetext(
+            ref.removeprefix("freetext:") if ref.startswith("freetext:") else ref
+        )
     else:
         # Future: resolve PR URLs, Jira keys, etc.
         subject = resolve_freetext(ref)
@@ -226,6 +263,11 @@ async def create_run(
             status_code=500,
             error_code="agent_execution_error",
         ) from exc
+
+    run.title = await generate_title(subject.display_name)
+    run.provider = get_settings().ai_provider
+    run.user_id = user.id
+    await db.commit()
 
     return CreateRunResponse(
         run_id=str(run.id),
@@ -247,18 +289,22 @@ async def get_run(
     except ValueError as exc:
         raise NotFoundError(f"Invalid run_id: {run_id}") from exc
 
-    result = await db.execute(
-        select(Run).options(selectinload(Run.steps)).where(Run.id == rid)
-    )
+    result = await db.execute(select(Run).options(selectinload(Run.steps)).where(Run.id == rid))
     run = result.scalar_one_or_none()
     if run is None:
         raise NotFoundError(f"Run '{run_id}' not found.")
+
+    user_names = await _resolve_user_names(db, [run])
 
     return RunDetailResponse(
         run_id=str(run.id),
         goal=run.goal,
         status=run.status,
         subject=_subject_from_run(run),
+        title=run.title,
+        provider=run.provider,
+        user=user_names.get(run.user_id) if run.user_id else None,
+        repository=_repository_from_run(run),
         model=run.model,
         error_message=run.error_message,
         started_at=_iso(run.started_at),
@@ -309,6 +355,8 @@ async def list_runs(
     result = await db.execute(query)
     runs = result.scalars().all()
 
+    user_names = await _resolve_user_names(db, list(runs))
+
     items = []
     for run in runs:
         # Get the best confidence score from steps
@@ -318,18 +366,25 @@ async def list_runs(
                 if best_confidence is None or step.confidence_score > best_confidence:
                     best_confidence = step.confidence_score
 
-        items.append(RunListItem(
-            run_id=str(run.id),
-            goal=run.goal,
-            status=run.status,
-            subject=_subject_from_run(run),
-            started_at=_iso(run.started_at),
-            completed_at=_iso(run.completed_at),
-            created_at=_iso(run.created_at),
-            confidence_score=best_confidence,
-            workflow_id=str(run.workflow_id) if run.workflow_id else None,
-            workflow_stage=run.workflow_stage,
-        ))
+        items.append(
+            RunListItem(
+                run_id=str(run.id),
+                goal=run.goal,
+                status=run.status,
+                subject=_subject_from_run(run),
+                title=run.title,
+                provider=run.provider,
+                user=user_names.get(run.user_id) if run.user_id else None,
+                repository=_repository_from_run(run),
+                model=run.model,
+                started_at=_iso(run.started_at),
+                completed_at=_iso(run.completed_at),
+                created_at=_iso(run.created_at),
+                confidence_score=best_confidence,
+                workflow_id=str(run.workflow_id) if run.workflow_id else None,
+                workflow_stage=run.workflow_stage,
+            )
+        )
 
     return RunListResponse(
         items=items,

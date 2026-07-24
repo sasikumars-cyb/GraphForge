@@ -46,6 +46,10 @@ export interface RunDetail {
   goal: string;
   status: RunStatus;
   subject: Subject;
+  title: string | null;
+  provider: string | null;
+  user: string | null;
+  repository: string | null;
   model: string | null;
   error_message: string | null;
   started_at: string | null;
@@ -62,6 +66,11 @@ export interface RunListItem {
   goal: string;
   status: RunStatus;
   subject: Subject;
+  title: string | null;
+  provider: string | null;
+  user: string | null;
+  repository: string | null;
+  model: string | null;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;

@@ -97,9 +97,14 @@ export function RunDetailPage() {
       )}
 
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <RunStatusBadge status={run.status} />
-        {step?.confidence && <ConfidenceBadge confidence={step.confidence} />}
+      <div>
+        <h2 className="text-xl font-semibold text-slate-50">
+          {run.title ?? run.subject.display_name ?? run.subject.subject_id}
+        </h2>
+        <div className="mt-2 flex items-center gap-3">
+          <RunStatusBadge status={run.status} />
+          {step?.confidence && <ConfidenceBadge confidence={step.confidence} />}
+        </div>
       </div>
 
       {/* Run metadata */}
@@ -163,6 +168,26 @@ export function RunDetailPage() {
             <div>
               <dt className="text-xs text-slate-500">Model</dt>
               <dd className="text-slate-200">{run.model}</dd>
+            </div>
+          )}
+          {run.provider && (
+            <div>
+              <dt className="text-xs text-slate-500">Provider</dt>
+              <dd className="text-slate-200">{run.provider}</dd>
+            </div>
+          )}
+          {run.user && (
+            <div>
+              <dt className="text-xs text-slate-500">User</dt>
+              <dd className="text-slate-200">{run.user}</dd>
+            </div>
+          )}
+          {run.repository && (
+            <div>
+              <dt className="text-xs text-slate-500">Repository</dt>
+              <dd className="truncate text-slate-200" title={run.repository}>
+                {run.repository}
+              </dd>
             </div>
           )}
         </dl>

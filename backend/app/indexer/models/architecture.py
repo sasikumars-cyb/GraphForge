@@ -93,6 +93,62 @@ class MavenDependency:
     scope: str | None = None
 
 
+@dataclass(frozen=True)
+class PythonImport:
+    """`from module import a, b as c` / `import module`.
+
+    `imported_names` is empty for a bare `import module` statement -
+    the module itself is what's imported, not a name from it.
+    """
+
+    module: str
+    location: SourceLocation
+    imported_names: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PythonFunction:
+    """A function or method. `calls` records the literal callee text as
+    written (`helper`, `self.baz`, `app.route`) - never resolved to a
+    fully-qualified target, matching this codebase's deterministic,
+    no-guessing precedent for cross-reference extraction (see ADR 0007).
+    """
+
+    name: str
+    location: SourceLocation
+    decorators: list[str] = field(default_factory=list)
+    calls: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PythonClass:
+    name: str
+    location: SourceLocation
+    bases: list[str] = field(default_factory=list)
+    decorators: list[str] = field(default_factory=list)
+    methods: list[PythonFunction] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PythonModule:
+    """One `.py` file. `name` is its dotted module path from the repo root
+    (e.g. `app.services.workflow_service`); `package` is that path minus
+    the module's own segment (e.g. `app.services`)."""
+
+    name: str
+    package: str
+    location: SourceLocation
+    imports: list[PythonImport] = field(default_factory=list)
+    classes: list[PythonClass] = field(default_factory=list)
+    functions: list[PythonFunction] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class PythonDependency:
+    name: str
+    version: str | None = None
+
+
 @dataclass
 class ArchitectureModel:
     """The aggregate result of parsing one repository."""
@@ -105,3 +161,5 @@ class ArchitectureModel:
     kafka_producers: list[KafkaProducerUsage] = field(default_factory=list)
     kafka_consumers: list[KafkaConsumerUsage] = field(default_factory=list)
     maven_dependencies: list[MavenDependency] = field(default_factory=list)
+    python_modules: list[PythonModule] = field(default_factory=list)
+    python_dependencies: list[PythonDependency] = field(default_factory=list)

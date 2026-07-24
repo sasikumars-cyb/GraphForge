@@ -42,6 +42,21 @@ _DEVELOPMENT_LLM_RESPONSE = (
 )
 
 
+@pytest.fixture(autouse=True)
+def _mock_title_generation():
+    """Title generation makes a real LLM call via create_llm_provider(); this
+    dev environment's .env has real GROQ/OPENAI keys, so leaving this
+    unmocked hits the live API on every workflow/run creation in this file
+    (confirmed: caused real 429 rate-limit failures). Identity fallback
+    keeps assertions on workflow/run titles predictable."""
+    identity = AsyncMock(side_effect=lambda objective, **_kwargs: objective)
+    with (
+        patch("app.services.workflow_service.generate_title", identity),
+        patch("app.api.v1.routers.agent_runs.generate_title", identity),
+    ):
+        yield
+
+
 async def _register_and_get_token(db_client: AsyncClient) -> str:
     await db_client.post("/api/v1/auth/register", json=REGISTER_PAYLOAD)
     login_response = await db_client.post(

@@ -20,16 +20,16 @@ import json
 import logging
 from pathlib import Path
 
-import httpx
-
 from app.agents._contract import (
     AgentContext,
     AgentOutput,
     Confidence,
     Evidence,
 )
-from app.agents._llm import call_chat_completion_json, render_prompt_template
 from app.agents.code_generation.schemas import GeneratedCodeResult, GeneratedFile
+from app.agents.prompt_utils import render_prompt_template
+from app.ai.providers.base import LLMRequestOptions, ResponseFormat
+from app.ai.providers.factory import create_llm_provider
 from app.core.exceptions import AppError
 
 logger = logging.getLogger(__name__)
@@ -59,18 +59,19 @@ class CodeGenerationValidationError(AppError):
     error_code = "code_generation_validation_error"
 
 
-async def _call_llm(
-    user_prompt: str,
-    model: str | None = None,
-    http_client: httpx.AsyncClient | None = None,
-) -> str:
-    return await call_chat_completion_json(
-        system_prompt=_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
-        error_cls=CodeGenerationLLMError,
-        model=model,
-        http_client=http_client,
-    )
+async def _call_llm(user_prompt: str, model: str | None = None) -> str:
+    try:
+        provider = create_llm_provider(model=model)
+        response = await provider.complete(
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            options=LLMRequestOptions(response_format=ResponseFormat.JSON),
+        )
+    except AppError as exc:
+        error = CodeGenerationLLMError(exc.message)
+        error.provider_error = getattr(exc, "provider_error", None)  # type: ignore[attr-defined]
+        raise error from exc
+    return response.text
 
 
 def _render_prompt(blueprint_context: str) -> str:

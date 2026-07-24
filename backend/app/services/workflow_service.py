@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.agents.title_generation import generate_title
 from app.core.exceptions import NotFoundError
 from app.models.run import Run
 from app.models.workflow import Workflow
@@ -162,6 +163,11 @@ async def create_workflow(
 ) -> Workflow:
     """Create a new workflow starting at its type's first stage.
 
+    `title` here is the user's full engineering objective (the parameter
+    name is kept for API-contract stability) — stored verbatim as
+    `Workflow.original_prompt`, while `Workflow.title` becomes a real,
+    AI-generated short title derived from it.
+
     For auto_execution workflows, `source_workflow_id` must reference an
     existing, approved Planning workflow (the blueprint being executed).
     """
@@ -204,9 +210,12 @@ async def create_workflow(
                 error_code="source_workflow_not_approved",
             )
 
+    generated_title = await generate_title(title)
+
     workflow = Workflow(
         id=uuid.uuid4(),
-        title=title,
+        title=generated_title,
+        original_prompt=title,
         current_stage=stage_sequence(workflow_type)[0],
         status="in_progress",
         workflow_type=workflow_type,
@@ -215,7 +224,9 @@ async def create_workflow(
     db.add(workflow)
     await db.flush()
 
-    logger.info("workflow_created id=%s title=%s type=%s", str(workflow.id), title, workflow_type)
+    logger.info(
+        "workflow_created id=%s title=%s type=%s", str(workflow.id), generated_title, workflow_type
+    )
     return workflow
 
 

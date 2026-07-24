@@ -317,6 +317,84 @@ async def test_analyze_clears_single_repository_deployment_order() -> None:
     assert parsed.release_coordination_plan.deployment_order == []
 
 
+@pytest.mark.asyncio
+async def test_complete_returns_normalized_response_with_usage() -> None:
+    """complete() — the transport-only entry point migrated agents use —
+    returns raw text plus normalized usage metadata, not a parsed
+    AIAnalysisResult (that's analyze()'s job, not complete()'s)."""
+    body = {
+        "choices": [{"message": {"content": "hello world"}, "finish_reason": "stop"}],
+        "model": "gpt-5.5",
+        "usage": {"prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13},
+    }
+    transport = httpx.MockTransport(lambda request: httpx.Response(status_code=200, json=body))
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    from app.ai.providers.base import LLMRequestOptions, ResponseFormat
+
+    response = await provider.complete(
+        system_prompt="You are helpful.",
+        user_prompt="Say hello.",
+        options=LLMRequestOptions(response_format=ResponseFormat.JSON),
+    )
+
+    assert response.text == "hello world"
+    assert response.model_name == "gpt-5.5"
+    assert response.finish_reason == "stop"
+    assert response.prompt_tokens == 10
+    assert response.completion_tokens == 3
+    assert response.total_tokens == 13
+
+
+@pytest.mark.asyncio
+async def test_complete_sends_response_format_json_when_requested() -> None:
+    """ResponseFormat.JSON must actually translate to OpenAI's
+    response_format param; ResponseFormat.TEXT must omit it."""
+    from app.ai.providers.base import LLMRequestOptions, ResponseFormat
+
+    captured: dict[str, Any] = {}
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return _openai_response("plain text reply")
+
+    transport = httpx.MockTransport(capture)
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    await provider.complete(
+        system_prompt="sys",
+        user_prompt="usr",
+        options=LLMRequestOptions(response_format=ResponseFormat.JSON),
+    )
+    assert captured["body"]["response_format"] == {"type": "json_object"}
+
+    await provider.complete(
+        system_prompt="sys",
+        user_prompt="usr",
+        options=LLMRequestOptions(response_format=ResponseFormat.TEXT),
+    )
+    assert "response_format" not in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_complete_propagates_rate_limit_error() -> None:
+    """Transport-level error mapping is shared with analyze() via
+    _send_completion — this just confirms complete() itself surfaces it,
+    not only the transitional analyze() path."""
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            status_code=429, json={"error": {"message": "Too many requests."}}
+        )
+    )
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    with pytest.raises(AIProviderRateLimitError, match="Too many requests."):
+        await provider.complete(system_prompt="sys", user_prompt="usr")
+
+
 # -- Tests: Gemini Provider -------------------------------------------------
 
 
@@ -426,6 +504,26 @@ async def test_gemini_usage_metadata_parsing() -> None:
     assert llm_response.total_tokens == 579
     assert llm_response.model_name == "gemini-3.6-flash"
     assert llm_response.finish_reason == "STOP"
+
+
+@pytest.mark.asyncio
+async def test_gemini_complete_accepts_but_ignores_response_format() -> None:
+    """Gemini's generateContent API has no JSON-mode param — complete()
+    must still accept LLMRequestOptions(response_format=...) without
+    erroring, silently ignoring what it can't honor."""
+    from app.ai.providers.base import LLMRequestOptions, ResponseFormat
+
+    transport = httpx.MockTransport(lambda request: _gemini_response("plain reply"))
+    client = httpx.AsyncClient(transport=transport)
+    provider = GeminiProvider(api_key="gk-test", http_client=client)
+
+    response = await provider.complete(
+        system_prompt="sys",
+        user_prompt="usr",
+        options=LLMRequestOptions(response_format=ResponseFormat.JSON),
+    )
+
+    assert response.text == "plain reply"
 
 
 # -- Tests: Factory ---------------------------------------------------------

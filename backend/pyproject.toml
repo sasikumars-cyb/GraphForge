@@ -24,6 +24,7 @@ dependencies = [
     "neo4j>=5.24",
     "tree-sitter>=0.23",
     "tree-sitter-java>=0.23",
+    "tree-sitter-python (>=0.25.0,<0.26.0)",
 ]
 
 [project.optional-dependencies]

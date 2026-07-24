@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 
 FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "spring_boot_sample"
+PYTHON_FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "python_sample"
 
 _GIT_AUTHOR = ["-c", "user.email=test@example.com", "-c", "user.name=Test"]
 
@@ -31,6 +32,16 @@ def spring_boot_git_repo(tmp_path: Path) -> Path:
     `clone_repository`/`index_repository`, not a mock."""
     repo_path = tmp_path / "spring-boot-repo"
     shutil.copytree(FIXTURE_ROOT, repo_path)
+    _init_git_repo(repo_path)
+    return repo_path
+
+
+@pytest.fixture
+def python_git_repo(tmp_path: Path) -> Path:
+    """A real local git repository whose working tree is a copy of the
+    `python_sample` fixture."""
+    repo_path = tmp_path / "python-repo"
+    shutil.copytree(PYTHON_FIXTURE_ROOT, repo_path)
     _init_git_repo(repo_path)
     return repo_path
 

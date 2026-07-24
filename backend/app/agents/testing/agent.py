@@ -18,7 +18,6 @@ import json
 import logging
 from pathlib import Path
 
-import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import (
@@ -27,7 +26,7 @@ from app.agents._contract import (
     Confidence,
     Evidence,
 )
-from app.agents._llm import call_chat_completion_json, render_prompt_template
+from app.agents.prompt_utils import render_prompt_template
 from app.agents.testing.schemas import (
     AutomationCandidate,
     EdgeCase,
@@ -47,6 +46,8 @@ from app.agents.testing.tools import (
     format_graph_context,
     to_evidence,
 )
+from app.ai.providers.base import LLMRequestOptions, ResponseFormat
+from app.ai.providers.factory import create_llm_provider
 from app.core.exceptions import AppError
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
@@ -74,25 +75,22 @@ class TestingLLMError(AppError):
     error_code = "testing_llm_error"
 
 
-async def _call_llm(
-    user_prompt: str,
-    model: str | None = None,
-    http_client: httpx.AsyncClient | None = None,
-) -> str:
-    """Make a single Chat Completions request and return the content string.
-
-    Thin wrapper around the shared `app.agents._llm` mechanics (identical
-    across Planning/Development/Testing) — kept as a module-level function
-    here so existing test seams (`patch("...agent._call_llm", ...)`) and
-    the `TestingLLMError` error_code stay stable.
-    """
-    return await call_chat_completion_json(
-        system_prompt=_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
-        error_cls=TestingLLMError,
-        model=model,
-        http_client=http_client,
-    )
+async def _call_llm(user_prompt: str, model: str | None = None) -> str:
+    """Send a single JSON-mode completion through the configured AI
+    provider and return the raw content string. See planning/agent.py's
+    `_call_llm` for the full rationale — identical shape."""
+    try:
+        provider = create_llm_provider(model=model)
+        response = await provider.complete(
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            options=LLMRequestOptions(response_format=ResponseFormat.JSON),
+        )
+    except AppError as exc:
+        error = TestingLLMError(exc.message)
+        error.provider_error = getattr(exc, "provider_error", None)  # type: ignore[attr-defined]
+        raise error from exc
+    return response.text
 
 
 # ---------------------------------------------------------------------------

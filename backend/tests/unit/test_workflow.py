@@ -29,6 +29,22 @@ from app.services.workflow_service import (
     stage_sequence,
 )
 
+
+@pytest.fixture(autouse=True)
+def _mock_title_generation():
+    """create_workflow() now calls generate_title() (a real LLM call) —
+    every test in this file that exercises create_workflow() must never
+    hit a real provider. Returns the objective unchanged so existing
+    exact-match assertions on `.title` keep working without modification;
+    title-generation itself is covered separately in
+    tests/unit/ai/test_title_generation.py."""
+    with patch(
+        "app.services.workflow_service.generate_title",
+        new=AsyncMock(side_effect=lambda objective, **_kwargs: objective),
+    ):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # Stage definitions tests
 # ---------------------------------------------------------------------------
@@ -673,6 +689,7 @@ def test_workflow_api_detail_response_shape() -> None:
     detail = WorkflowDetailResponse(
         workflow_id="wf-uuid",
         title="JWT auth",
+        original_prompt="Implement JWT authentication across all microservices.",
         workflow_type="planning",
         current_stage="development",
         status="in_progress",
@@ -691,6 +708,7 @@ def test_workflow_api_detail_response_shape() -> None:
     approved_detail = WorkflowDetailResponse(
         workflow_id="wf-uuid",
         title="JWT auth",
+        original_prompt="Implement JWT authentication across all microservices.",
         workflow_type="planning",
         current_stage="engineering_review",
         status="approved",

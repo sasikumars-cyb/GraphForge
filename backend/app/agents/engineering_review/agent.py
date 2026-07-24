@@ -31,15 +31,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-import httpx
-
 from app.agents._contract import (
     AgentContext,
     AgentOutput,
     Confidence,
     Evidence,
 )
-from app.agents._llm import call_chat_completion_json, render_prompt_template
 from app.agents.engineering_review.schemas import (
     CompletenessFinding,
     DependencyAssessment,
@@ -47,6 +44,9 @@ from app.agents.engineering_review.schemas import (
     RiskAssessment,
 )
 from app.agents.git_ops._artifact_reader import get_stage_result
+from app.agents.prompt_utils import render_prompt_template
+from app.ai.providers.base import LLMRequestOptions, ResponseFormat
+from app.ai.providers.factory import create_llm_provider
 from app.core.exceptions import AppError
 
 logger = logging.getLogger(__name__)
@@ -299,8 +299,8 @@ def _build_blueprint_context(
 
 # ---------------------------------------------------------------------------
 # LLM call — engineering-review-specific, same mechanics as Planning/
-# Development/Testing (app.agents._llm), separate error class per the
-# existing per-agent convention.
+# Development/Testing/Code Generation (via create_llm_provider()), separate
+# error class per the existing per-agent convention.
 # ---------------------------------------------------------------------------
 
 _SYSTEM_PROMPT = (
@@ -315,18 +315,19 @@ class EngineeringReviewLLMError(AppError):
     error_code = "engineering_review_llm_error"
 
 
-async def _call_llm(
-    user_prompt: str,
-    model: str | None = None,
-    http_client: httpx.AsyncClient | None = None,
-) -> str:
-    return await call_chat_completion_json(
-        system_prompt=_SYSTEM_PROMPT,
-        user_prompt=user_prompt,
-        error_cls=EngineeringReviewLLMError,
-        model=model,
-        http_client=http_client,
-    )
+async def _call_llm(user_prompt: str, model: str | None = None) -> str:
+    try:
+        provider = create_llm_provider(model=model)
+        response = await provider.complete(
+            system_prompt=_SYSTEM_PROMPT,
+            user_prompt=user_prompt,
+            options=LLMRequestOptions(response_format=ResponseFormat.JSON),
+        )
+    except AppError as exc:
+        error = EngineeringReviewLLMError(exc.message)
+        error.provider_error = getattr(exc, "provider_error", None)  # type: ignore[attr-defined]
+        raise error from exc
+    return response.text
 
 
 def _render_prompt(blueprint_context: str) -> str:

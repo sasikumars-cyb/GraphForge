@@ -5,6 +5,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { WorkflowTimeline } from "../components/workflow/WorkflowTimeline";
 import { useAuth } from "../app/auth-context";
 import { listWorkflows } from "../lib/api/workflows";
+import { deriveWorkflowState, workflowStatusDisplay } from "../lib/workflowDerived";
 import type { WorkflowListItem } from "../types/agent";
 import { Lightbulb, Search, GitMerge } from "lucide-react";
 
@@ -75,22 +76,26 @@ export function DashboardPage() {
           }
         >
           <div className="space-y-4">
-            {workflows.map((w) => (
-              <Link
-                key={w.workflow_id}
-                to={`/workflows/${w.workflow_id}`}
-                className="block rounded-lg border border-slate-800 bg-slate-900/40 p-4 transition-colors hover:border-indigo-500/40 hover:bg-slate-900/60"
-              >
-                <div className="mb-3 flex items-center justify-between">
-                  <h4 className="text-sm font-medium text-slate-100 truncate">{w.title}</h4>
-                  <StatusBadge
-                    label={w.status === "completed" ? "Complete" : "In Progress"}
-                    tone={w.status === "completed" ? "success" : "info"}
-                  />
-                </div>
-                <WorkflowTimeline stages={w.stages} currentStage={w.current_stage} />
-              </Link>
-            ))}
+            {workflows.map((w) => {
+              // Same derivation Run History and the workflow page itself
+              // use — a workflow with a failed stage must never read
+              // "In Progress" here while reading "Failed" everywhere else.
+              const { phase } = deriveWorkflowState(w);
+              const status = workflowStatusDisplay(w, phase);
+              return (
+                <Link
+                  key={w.workflow_id}
+                  to={`/workflows/${w.workflow_id}`}
+                  className="block rounded-lg border border-slate-800 bg-slate-900/40 p-4 transition-colors hover:border-indigo-500/40 hover:bg-slate-900/60"
+                >
+                  <div className="mb-3 flex items-center justify-between">
+                    <h4 className="text-sm font-medium text-slate-100 truncate">{w.title}</h4>
+                    <StatusBadge label={status.label} tone={status.tone} />
+                  </div>
+                  <WorkflowTimeline stages={w.stages} currentStage={w.current_stage} />
+                </Link>
+              );
+            })}
           </div>
         </Card>
       )}

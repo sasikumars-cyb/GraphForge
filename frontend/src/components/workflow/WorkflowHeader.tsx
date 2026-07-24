@@ -28,7 +28,18 @@ interface WorkflowHeaderProps {
  * estimate. Every number here is computed from real workflow/run data —
  * nothing is a placeholder. */
 export function WorkflowHeader({ workflow, completedSteps, phase }: WorkflowHeaderProps) {
-  const isDone = workflow.status === "completed";
+  // Every state nothing further will run in automatically — not just
+  // workflow.status === "completed" (legacy_sdlc/auto_execution). A
+  // Planning blueprint's own terminal decision (approved/rejected) and a
+  // failed stage (workflow.status stays "in_progress", only the current
+  // stage's own status flips) are equally "done": duration must stop
+  // ticking and "Est. remaining" must stop claiming to still be
+  // calculating once nothing is actually in flight.
+  const isDone =
+    workflow.status === "completed" ||
+    workflow.status === "approved" ||
+    workflow.status === "rejected" ||
+    phase === "failed";
   const [now, setNow] = useState(() => Date.now());
 
   useEffect(() => {
@@ -42,11 +53,15 @@ export function WorkflowHeader({ workflow, completedSteps, phase }: WorkflowHead
   const completedCount = workflow.stages.filter((s) => s.status === "completed").length;
   const remainingCount = workflow.stages.length - completedCount;
   const remainingMs = isDone ? null : estimateRemainingMs(completedSteps, remainingCount);
-  const currentLabel = isDone
-    ? "Complete"
-    : phase === "failed"
+  // Checked ahead of the generic isDone branch — isDone is already true
+  // whenever phase is "failed", so "Complete" would otherwise shadow the
+  // more specific "(failed)" label a failed workflow needs to show.
+  const currentLabel =
+    phase === "failed"
       ? `${stageLabel(workflow.current_stage)} (failed)`
-      : stageLabel(workflow.current_stage);
+      : isDone
+        ? "Complete"
+        : stageLabel(workflow.current_stage);
   const status = workflowStatusDisplay(workflow, phase);
 
   return (

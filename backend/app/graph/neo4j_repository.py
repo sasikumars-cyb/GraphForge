@@ -29,6 +29,10 @@ _ALLOWED_LABELS = frozenset(
         "Endpoint",
         "KafkaTopic",
         "MavenDependency",
+        "Module",
+        "Class",
+        "Function",
+        "PythonDependency",
     }
 )
 _ALLOWED_REL_TYPES = frozenset(
@@ -39,6 +43,8 @@ _ALLOWED_REL_TYPES = frozenset(
         "PRODUCES_TO",
         "CONSUMES_FROM",
         "DEPENDS_ON",
+        "IMPORTS",
+        "INHERITS_FROM",
     }
 )
 

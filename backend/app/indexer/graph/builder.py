@@ -8,7 +8,7 @@ upserts in place) and ids never collide across repositories.
 """
 
 from app.graph.models import GraphEdge, GraphNode, GraphPayload
-from app.indexer.models.architecture import ArchitectureModel
+from app.indexer.models.architecture import ArchitectureModel, PythonFunction
 
 
 def _repository_node_id(repository_id: str) -> str:
@@ -41,6 +41,140 @@ def _kafka_topic_node_id(repository_id: str, topic: str) -> str:
 
 def _dependency_node_id(repository_id: str, group_id: str, artifact_id: str) -> str:
     return f"{repository_id}:dependency:{group_id}:{artifact_id}"
+
+
+def _module_node_id(repository_id: str, module_name: str) -> str:
+    return f"{repository_id}:module:{module_name}"
+
+
+def _class_node_id(repository_id: str, module_name: str, class_name: str) -> str:
+    return f"{repository_id}:class:{module_name}.{class_name}"
+
+
+def _function_node_id(repository_id: str, qualified_name: str) -> str:
+    return f"{repository_id}:function:{qualified_name}"
+
+
+def _python_dependency_node_id(repository_id: str, name: str) -> str:
+    return f"{repository_id}:python-dependency:{name}"
+
+
+def _build_python_graph(
+    repository_id: str,
+    repo_id: str,
+    model: ArchitectureModel,
+    nodes: list[GraphNode],
+    edges: list[GraphEdge],
+) -> None:
+    """Python modules/classes/functions map onto the exact same `Component`
+    label the Java parser already uses (plus a specific secondary label,
+    same pattern as `Controller`/`Service`/`FeignClient`) - so a Python
+    Component and a Java Component are indistinguishable to callers of the
+    graph, e.g. Planning's queries, once indexed.
+    """
+    module_node_id_by_name = {
+        m.name: _module_node_id(repository_id, m.name) for m in model.python_modules
+    }
+
+    # Bare function/method name -> node id, but only when the name is
+    # unambiguous across the whole repository. An ambiguous bare name (the
+    # same method name on two unrelated classes) is deliberately left
+    # unresolved rather than guessed at - matching this codebase's ADR 0007
+    # deterministic, no-guessing precedent (see Kafka topic resolution).
+    function_node_id_by_bare_name: dict[str, str | None] = {}
+    pending_calls: list[tuple[str, list[str]]] = []
+
+    def register_function(
+        function: PythonFunction, qualified_name: str, class_name: str | None
+    ) -> str:
+        node_id = _function_node_id(repository_id, qualified_name)
+        properties: dict[str, object] = {
+            "name": function.name,
+            "file_path": function.location.file_path,
+            "decorators": list(function.decorators),
+        }
+        if class_name is not None:
+            properties["class_name"] = class_name
+        nodes.append(GraphNode(id=node_id, labels=["Component", "Function"], properties=properties))
+        if function.name in function_node_id_by_bare_name:
+            function_node_id_by_bare_name[function.name] = None
+        else:
+            function_node_id_by_bare_name[function.name] = node_id
+        pending_calls.append((node_id, function.calls))
+        return node_id
+
+    for module in model.python_modules:
+        module_id = module_node_id_by_name[module.name]
+        nodes.append(
+            GraphNode(
+                id=module_id,
+                labels=["Component", "Module"],
+                properties={
+                    "name": module.name,
+                    "package": module.package,
+                    "file_path": module.location.file_path,
+                },
+            )
+        )
+        edges.append(GraphEdge(source_id=repo_id, target_id=module_id, type="CONTAINS"))
+
+        for imp in module.imports:
+            target_module_id = module_node_id_by_name.get(imp.module)
+            if target_module_id is not None and target_module_id != module_id:
+                edges.append(
+                    GraphEdge(source_id=module_id, target_id=target_module_id, type="IMPORTS")
+                )
+
+        for function in module.functions:
+            function_id = register_function(function, f"{module.name}.{function.name}", None)
+            edges.append(GraphEdge(source_id=module_id, target_id=function_id, type="CONTAINS"))
+
+        for python_class in module.classes:
+            class_id = _class_node_id(repository_id, module.name, python_class.name)
+            nodes.append(
+                GraphNode(
+                    id=class_id,
+                    labels=["Component", "Class"],
+                    properties={
+                        "name": python_class.name,
+                        "package": module.package,
+                        "file_path": python_class.location.file_path,
+                        "bases": list(python_class.bases),
+                        "decorators": list(python_class.decorators),
+                    },
+                )
+            )
+            edges.append(GraphEdge(source_id=module_id, target_id=class_id, type="CONTAINS"))
+
+            for base_name in python_class.bases:
+                # Resolved only against classes discovered in this same
+                # repository, by simple name - cross-module inheritance is
+                # common in Python, and fully-qualifying the base would
+                # require import resolution (out of scope, see above).
+                for other_module in model.python_modules:
+                    for candidate in other_module.classes:
+                        if candidate.name == base_name:
+                            base_id = _class_node_id(
+                                repository_id, other_module.name, candidate.name
+                            )
+                            edges.append(
+                                GraphEdge(
+                                    source_id=class_id, target_id=base_id, type="INHERITS_FROM"
+                                )
+                            )
+
+            for method in python_class.methods:
+                method_id = register_function(
+                    method, f"{module.name}.{python_class.name}.{method.name}", python_class.name
+                )
+                edges.append(GraphEdge(source_id=class_id, target_id=method_id, type="CONTAINS"))
+
+    for source_id, calls in pending_calls:
+        for raw_call in calls:
+            bare_name = raw_call.rsplit(".", 1)[-1]
+            target_id = function_node_id_by_bare_name.get(bare_name)
+            if target_id is not None and target_id != source_id:
+                edges.append(GraphEdge(source_id=source_id, target_id=target_id, type="CALLS"))
 
 
 def build_graph(repository_id: str, model: ArchitectureModel) -> GraphPayload:
@@ -211,6 +345,22 @@ def build_graph(repository_id: str, model: ArchitectureModel) -> GraphPayload:
                     "artifact_id": dependency.artifact_id,
                     "version": dependency.version or "",
                     "scope": dependency.scope or "",
+                },
+            )
+        )
+        edges.append(GraphEdge(source_id=repo_id, target_id=node_id, type="DEPENDS_ON"))
+
+    _build_python_graph(repository_id, repo_id, model, nodes, edges)
+
+    for python_dependency in model.python_dependencies:
+        node_id = _python_dependency_node_id(repository_id, python_dependency.name)
+        nodes.append(
+            GraphNode(
+                id=node_id,
+                labels=["PythonDependency"],
+                properties={
+                    "name": python_dependency.name,
+                    "version": python_dependency.version or "",
                 },
             )
         )

@@ -5,10 +5,12 @@ change to the scanner, the indexing service, or the API routers.
 
 from app.indexer.parsers.base import ILanguageParser
 from app.indexer.parsers.java.spring_boot_parser import SpringBootJavaParser
+from app.indexer.parsers.python.python_parser import PythonParser
 from app.indexer.scanner.language_detector import DetectedLanguage
 
 _REGISTRY: dict[DetectedLanguage, ILanguageParser] = {
     DetectedLanguage.JAVA_SPRING_BOOT: SpringBootJavaParser(),
+    DetectedLanguage.PYTHON: PythonParser(),
 }
 
 

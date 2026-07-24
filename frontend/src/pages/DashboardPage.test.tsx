@@ -64,6 +64,53 @@ describe("DashboardPage", () => {
     expect(await screen.findByText(/2 Planning/)).toBeInTheDocument();
   });
 
+  it("shows Failed, not In Progress, for a workflow whose current stage failed", async () => {
+    vi.mocked(workflowsApi.listWorkflows).mockImplementation((_token, params) => {
+      if (params?.status === "approved") return Promise.resolve(listResponse([], 0));
+      return Promise.resolve(
+        listResponse([
+          makeWorkflowItem({
+            workflow_id: "wf-failed",
+            title: "Add caching layer",
+            status: "in_progress", // workflow.status never becomes "failed" — only the stage does
+            current_stage: "development",
+            stages: [
+              { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+              { stage: "development", label: "Development", status: "failed", run_id: "run-2" },
+            ],
+          }),
+        ]),
+      );
+    });
+
+    renderWithAuth();
+
+    await screen.findByText("Add caching layer");
+    expect(screen.getByText("Failed")).toBeInTheDocument();
+    expect(screen.queryByText("In Progress")).not.toBeInTheDocument();
+  });
+
+  it("shows Approved, not In Progress, for an approved blueprint", async () => {
+    vi.mocked(workflowsApi.listWorkflows).mockImplementation((_token, params) => {
+      if (params?.status === "approved") return Promise.resolve(listResponse([], 1));
+      return Promise.resolve(
+        listResponse([
+          makeWorkflowItem({
+            workflow_id: "wf-approved",
+            title: "Add rate limiting",
+            status: "approved",
+            current_stage: "engineering_review",
+          }),
+        ]),
+      );
+    });
+
+    renderWithAuth();
+
+    await screen.findByText("Add rate limiting");
+    expect(screen.getByText("Approved")).toBeInTheDocument();
+  });
+
   it("fetches and displays the real approved total from a separate status=approved call", async () => {
     vi.mocked(workflowsApi.listWorkflows).mockImplementation((_token, params) => {
       if (params?.status === "approved") return Promise.resolve(listResponse([], 12));

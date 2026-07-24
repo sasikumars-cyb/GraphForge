@@ -41,6 +41,12 @@ def _summarize(model: ArchitectureModel) -> IndexingSummary:
         "kafka_producers": len(model.kafka_producers),
         "kafka_consumers": len(model.kafka_consumers),
         "maven_dependencies": len(model.maven_dependencies),
+        "python_modules": len(model.python_modules),
+        "python_classes": sum(len(m.classes) for m in model.python_modules),
+        "python_functions": sum(
+            len(m.functions) + sum(len(c.methods) for c in m.classes) for m in model.python_modules
+        ),
+        "python_dependencies": len(model.python_dependencies),
     }
 
 
@@ -61,8 +67,8 @@ async def index_repository(
         if parser is None:
             raise UnsupportedRepositoryError(
                 f"Repository language/framework is not supported yet "
-                f"(detected: {language}). Only Java + Spring Boot (Maven) is "
-                f"supported in this phase."
+                f"(detected: {language}). Java + Spring Boot (Maven) and "
+                f"Python are supported in this phase."
             )
 
         model = parser.parse(repo_path)

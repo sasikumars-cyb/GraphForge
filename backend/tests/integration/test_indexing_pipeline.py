@@ -43,6 +43,10 @@ async def test_indexes_spring_boot_repository_into_neo4j(
         "kafka_producers": 2,
         "kafka_consumers": 2,
         "maven_dependencies": 4,
+        "python_modules": 0,
+        "python_classes": 0,
+        "python_functions": 0,
+        "python_dependencies": 0,
     }
 
     assert await graph_repository.has_graph(repository_id)
@@ -62,6 +66,30 @@ async def test_indexes_spring_boot_repository_into_neo4j(
         "CONSUMES_FROM",
         "DEPENDS_ON",
     } <= edge_types
+
+
+async def test_indexes_python_repository_into_neo4j(
+    python_git_repo: Path, repository_id: str, graph_repository: Neo4jGraphRepository
+) -> None:
+    summary = await index_repository(
+        repository_id=repository_id, html_url=str(python_git_repo), ref="main"
+    )
+
+    assert summary["python_modules"] > 0
+    assert summary["python_classes"] > 0
+    assert summary["python_functions"] > 0
+    assert summary["python_dependencies"] == 2
+
+    assert await graph_repository.has_graph(repository_id)
+
+    graph = await graph_repository.get_full_graph(repository_id)
+    node_label_sets = {tuple(sorted(node.labels)) for node in graph.nodes}
+    assert ("Component", "GraphNode", "Module") in node_label_sets
+    assert ("Class", "Component", "GraphNode") in node_label_sets
+    assert ("Component", "Function", "GraphNode") in node_label_sets
+
+    edge_types = {edge.type for edge in graph.edges}
+    assert {"CONTAINS", "IMPORTS", "INHERITS_FROM", "CALLS", "DEPENDS_ON"} <= edge_types
 
 
 async def test_reindexing_replaces_the_previous_graph(
