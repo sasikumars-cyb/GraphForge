@@ -469,3 +469,77 @@ class GitHubVersionControlProvider(IVersionControlProvider):
         return await _github_get(
             f"/repos/{owner}/{repo}/git/commits/{sha}", access_token
         )
+
+    async def get_check_runs(
+        self,
+        owner: str,
+        repo: str,
+        ref: str,
+        access_token: str | None = None,
+    ) -> list[dict]:
+        """Return check runs for a Git ref (SHA or branch name).
+
+        Uses GET /repos/{owner}/{repo}/commits/{ref}/check-runs.
+        Returns the list of check_run dicts from the response. An empty
+        list means no CI is configured or hasn't started yet.
+        """
+        data = await _github_get(
+            f"/repos/{owner}/{repo}/commits/{ref}/check-runs",
+            access_token,
+        )
+        return list(data.get("check_runs", []))
+
+    async def create_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        head: str,
+        base: str,
+        title: str,
+        body: str,
+        access_token: str | None = None,
+    ) -> dict[str, Any]:
+        """Open a pull request via POST /repos/{owner}/{repo}/pulls.
+
+        Returns the raw GitHub PR object. Raises GitHubApiError on any
+        failure — including GitHub's 422 "A pull request already exists
+        for {owner}:{head}", which the caller (create_pull_request_agent)
+        is responsible for treating as an idempotent-reuse signal via
+        get_pull_request_by_head, the same "catch the race, fall back to
+        a lookup" pattern create_branch already uses for its own 422.
+        """
+        headers = dict(_API_HEADERS)
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{_API_BASE}/repos/{owner}/{repo}/pulls",
+                headers=headers,
+                json={"title": title, "head": head, "base": base, "body": body},
+            )
+        if response.is_error:
+            raise GitHubApiError(
+                f"GitHub pull request creation for {owner}/{repo} '{head}' -> '{base}' "
+                f"failed with status {response.status_code}: {response.text}"
+            )
+        return dict(response.json())
+
+    async def get_pull_request_by_head(
+        self,
+        owner: str,
+        repo: str,
+        head_branch: str,
+        access_token: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Find an existing PR for `head_branch`, or None if there isn't
+        one. Uses GET /repos/{owner}/{repo}/pulls?head={owner}:{branch}
+        with state=all so a previously-opened PR is found even if it was
+        since closed — idempotency should reuse the same PR record, not
+        silently open a second one because the first was closed."""
+        data = await _github_get(
+            f"/repos/{owner}/{repo}/pulls",
+            access_token,
+            params={"head": f"{owner}:{head_branch}", "state": "all", "per_page": 1},
+        )
+        return dict(data[0]) if data else None

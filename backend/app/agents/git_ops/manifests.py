@@ -27,3 +27,29 @@ COMMIT_CHANGES_MANIFEST = AgentManifest(
     max_graph_hops=0,
     output_schema_name="CommitInfo",
 )
+
+RUN_TESTS_MANIFEST = AgentManifest(
+    agent_id="run_tests",
+    purpose=(
+        "Observe repository CI status for a commit. Polls GitHub Check Runs "
+        "with exponential backoff. Deterministic, idempotent, no LLM."
+    ),
+    goals=frozenset({"run_tests"}),
+    accepted_subject_types=frozenset({"freetext"}),
+    cost_class="cheap",
+    max_graph_hops=0,
+    output_schema_name="TestRunInfo",
+)
+
+CREATE_PULL_REQUEST_MANIFEST = AgentManifest(
+    agent_id="create_pull_request",
+    purpose=(
+        "Open a GitHub pull request for the execution branch and persist "
+        "it as a PullRequest record. Deterministic, idempotent, no LLM."
+    ),
+    goals=frozenset({"create_pull_request"}),
+    accepted_subject_types=frozenset({"freetext"}),
+    cost_class="cheap",
+    max_graph_hops=0,
+    output_schema_name="PullRequestInfo",
+)

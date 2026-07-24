@@ -1032,3 +1032,71 @@ def test_run_list_item_workflow_fields_optional() -> None:
     )
     assert item.workflow_id is None
     assert item.workflow_stage is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 PR #6 — router subject resolution for ai_pr_review
+# ---------------------------------------------------------------------------
+
+
+def _workflow_with_runs(runs: list, title: str = "Add caching layer") -> object:
+    # A plain SimpleNamespace, not a real Workflow model instance:
+    # `_resolve_stage_subject` (via get_stage_result) only ever reads
+    # `.title` and iterates `.runs` — assigning fake Run objects to a real
+    # Workflow.runs relationship trips SQLAlchemy's ORM backref machinery,
+    # which fakes lacking `_sa_instance_state` can't satisfy.
+    from types import SimpleNamespace
+
+    return SimpleNamespace(id=uuid.uuid4(), title=title, runs=runs)
+
+
+def _pr_result_run(pull_request_id: str, title: str = "feat: add caching") -> object:
+    from types import SimpleNamespace
+
+    step = SimpleNamespace(
+        result={
+            "goal": "create_pull_request",
+            "pull_request_id": pull_request_id,
+            "github_pr_number": 7,
+            "title": title,
+        }
+    )
+    return SimpleNamespace(
+        workflow_stage="create_pull_request",
+        status="completed",
+        steps=[step],
+        created_at=datetime.now(timezone.utc),
+    )
+
+
+def test_resolve_stage_subject_uses_freetext_for_non_review_stages() -> None:
+    from app.api.v1.routers.workflows import _resolve_stage_subject
+
+    workflow = _workflow_with_runs([])
+    subject = _resolve_stage_subject(workflow, "run_tests", "some enriched context")
+
+    assert subject.subject_type == "freetext"
+
+
+def test_resolve_stage_subject_builds_pr_subject_for_ai_pr_review() -> None:
+    from app.api.v1.routers.workflows import _resolve_stage_subject
+
+    pr_id = str(uuid.uuid4())
+    workflow = _workflow_with_runs([_pr_result_run(pr_id)])
+    subject = _resolve_stage_subject(workflow, "ai_pr_review", "unused")
+
+    assert subject.subject_type == "pull_request"
+    assert subject.subject_id == f"pr:{pr_id}"
+    assert subject.display_name == "feat: add caching"
+
+
+def test_resolve_stage_subject_ai_pr_review_without_pr_result_raises() -> None:
+    from app.api.v1.routers.workflows import _resolve_stage_subject
+    from app.core.exceptions import AppError
+
+    workflow = _workflow_with_runs([])
+
+    with pytest.raises(AppError) as exc_info:
+        _resolve_stage_subject(workflow, "ai_pr_review", "unused")
+
+    assert exc_info.value.error_code == "missing_pull_request"

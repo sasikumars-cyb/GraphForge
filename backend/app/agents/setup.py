@@ -18,7 +18,14 @@ from app.agents.development.agent import DevelopmentAgent
 from app.agents.development.manifest import DEVELOPMENT_MANIFEST
 from app.agents.git_ops.commit_changes_agent import CommitChangesAgent
 from app.agents.git_ops.create_branch_agent import CreateBranchAgent
-from app.agents.git_ops.manifests import COMMIT_CHANGES_MANIFEST, CREATE_BRANCH_MANIFEST
+from app.agents.git_ops.create_pull_request_agent import CreatePullRequestAgent
+from app.agents.git_ops.manifests import (
+    COMMIT_CHANGES_MANIFEST,
+    CREATE_BRANCH_MANIFEST,
+    CREATE_PULL_REQUEST_MANIFEST,
+    RUN_TESTS_MANIFEST,
+)
+from app.agents.git_ops.run_tests_agent import TestRunnerAgent
 from app.agents.engineering_review.agent import EngineeringReviewAgent
 from app.agents.engineering_review.manifest import ENGINEERING_REVIEW_MANIFEST
 from app.agents.planning.agent import PlanningAgent
@@ -71,3 +78,11 @@ def register_agents() -> None:
     if "commit_changes" not in existing_ids:
         global_registry.register(COMMIT_CHANGES_MANIFEST, CommitChangesAgent())
         logger.info("registered_commit_changes_agent")
+
+    if "run_tests" not in existing_ids:
+        global_registry.register(RUN_TESTS_MANIFEST, TestRunnerAgent())
+        logger.info("registered_run_tests_agent")
+
+    if "create_pull_request" not in existing_ids:
+        global_registry.register(CREATE_PULL_REQUEST_MANIFEST, CreatePullRequestAgent())
+        logger.info("registered_create_pull_request_agent")

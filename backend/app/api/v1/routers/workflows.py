@@ -17,6 +17,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents._contract import Subject
+from app.agents.git_ops._artifact_reader import get_stage_result
+from app.agents.review_adapter import resolve_pr_subject
 from app.api.v1.dependencies import get_current_user
 from app.context.resolvers.freetext import resolve as resolve_freetext
 from app.core.exceptions import AppError, NotFoundError
@@ -191,6 +194,37 @@ async def _link_failed_run(
     await db.commit()
     if failed_run not in workflow.runs:
         workflow.runs.append(failed_run)
+
+
+def _resolve_stage_subject(workflow: Workflow, target_stage: str, enriched_ref: str) -> Subject:
+    """Resolve the Subject a stage's agent should run against.
+
+    Every stage but one resolves via the freetext chain built by
+    `build_stage_context` — that's the mechanism every existing agent
+    (Planning, Development, Testing, Engineering Review, and all of
+    Auto Execution's deterministic stages) already expects.
+
+    ai_pr_review is the one exception: it reuses the existing, untouched
+    ReviewAgentAdapter, which requires subject_type="pull_request" /
+    subject_id="pr:<uuid>" (see `review_adapter._extract_pr_uuid`). That
+    uuid is the `pull_requests.id` the create_pull_request stage just
+    persisted, read back the same structured way every other execution
+    agent reads its prior stage's output — not parsed out of freetext.
+    """
+    if target_stage != "ai_pr_review":
+        return resolve_freetext(enriched_ref)
+
+    pr_result = get_stage_result(workflow, "create_pull_request")
+    if not pr_result or not pr_result.get("pull_request_id"):
+        raise AppError(
+            "No completed create_pull_request result found in workflow.",
+            status_code=400,
+            error_code="missing_pull_request",
+        )
+    return resolve_pr_subject(
+        uuid.UUID(pr_result["pull_request_id"]),
+        display_name=pr_result.get("title", workflow.title),
+    )
 
 
 def _build_run_responses(workflow: Workflow) -> list[WorkflowRunResponse]:
@@ -440,7 +474,7 @@ async def continue_workflow(
         target_stage=target_stage,
         source_workflow=source_workflow,
     )
-    subject = resolve_freetext(enriched_ref)
+    subject = _resolve_stage_subject(workflow, target_stage, enriched_ref)
 
     selector = AgentSelector(global_registry)
     coordinator = RunCoordinator(db=db, registry=global_registry, selector=selector)
