@@ -42,6 +42,8 @@ class CreateWorkflowRequest(BaseModel):
     # "planning" is the only type NewWorkflowPage lets a user create today —
     # also the module-level default in workflow_service.create_workflow().
     workflow_type: str = "planning"
+    # Required for auto_execution — references the approved Planning blueprint.
+    source_workflow_id: str | None = None
 
 
 class ContinueWorkflowRequest(BaseModel):
@@ -229,15 +231,44 @@ async def create_workflow(
     """Create a new workflow and execute its first stage."""
     from app.orchestrator.run_coordinator import RunCoordinator
 
+    # Parse source_workflow_id if provided
+    source_wf_id: uuid.UUID | None = None
+    if body.source_workflow_id:
+        try:
+            source_wf_id = uuid.UUID(body.source_workflow_id)
+        except ValueError as exc:
+            raise AppError(
+                f"Invalid source_workflow_id: {body.source_workflow_id}",
+                status_code=400,
+                error_code="invalid_source_workflow_id",
+            ) from exc
+
     workflow = await workflow_service.create_workflow(
-        db, title=body.title, workflow_type=body.workflow_type
+        db,
+        title=body.title,
+        workflow_type=body.workflow_type,
+        source_workflow_id=source_wf_id,
     )
 
     # Execute the first stage of this workflow_type's sequence (today,
     # "planning" either way — legacy_sdlc and planning both start there).
     stage = workflow_service.stage_sequence(body.workflow_type)[0]
     goal = workflow_service.STAGE_GOALS[stage]
-    subject = resolve_freetext(body.title)
+
+    # For auto_execution, enrich the first-stage context with the source
+    # blueprint's outputs. For planning (no source), the title suffices.
+    if workflow.source_workflow_id:
+        source_workflow = await workflow_service.get_workflow(db, workflow.source_workflow_id)
+        workflow.runs = []  # freshly created, no lazy-load needed
+        enriched_ref = workflow_service.build_stage_context(
+            workflow,
+            original_request=body.title,
+            target_stage=stage,
+            source_workflow=source_workflow,
+        )
+        subject = resolve_freetext(enriched_ref)
+    else:
+        subject = resolve_freetext(body.title)
 
     selector = AgentSelector(global_registry)
     coordinator = RunCoordinator(db=db, registry=global_registry, selector=selector)
@@ -394,10 +425,17 @@ async def continue_workflow(
 
     # Build enriched context from previous stages
     goal = workflow_service.STAGE_GOALS[target_stage]
+
+    # Load source workflow for cross-workflow context (auto_execution)
+    source_workflow = None
+    if workflow.source_workflow_id:
+        source_workflow = await workflow_service.get_workflow(db, workflow.source_workflow_id)
+
     enriched_ref = workflow_service.build_stage_context(
         workflow,
         original_request=workflow.title,
         target_stage=target_stage,
+        source_workflow=source_workflow,
     )
     subject = resolve_freetext(enriched_ref)
 

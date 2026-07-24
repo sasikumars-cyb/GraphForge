@@ -42,6 +42,22 @@ STAGES = ("planning", "development", "testing", "review")
 WORKFLOW_TYPE_STAGES: dict[str, tuple[str, ...]] = {
     "legacy_sdlc": STAGES,
     "planning": ("planning", "development", "testing", "engineering_review"),
+    "auto_execution": (
+        "generate_code",
+        "create_branch",
+        "commit_changes",
+        "run_tests",
+        "create_pull_request",
+        "ai_pr_review",
+    ),
+}
+
+# What status the workflow transitions to when its last stage completes.
+# "awaiting_approval" gates on human decision; "completed" is terminal.
+TERMINAL_BEHAVIOR: dict[str, str] = {
+    "planning": "awaiting_approval",
+    "auto_execution": "completed",
+    "legacy_sdlc": "completed",
 }
 
 STAGE_GOALS: dict[str, str] = {
@@ -50,6 +66,12 @@ STAGE_GOALS: dict[str, str] = {
     "testing": "plan_tests",
     "review": "review_pr",
     "engineering_review": "review_readiness",
+    "generate_code": "generate_code",
+    "create_branch": "create_branch",
+    "commit_changes": "commit_changes",
+    "run_tests": "run_tests",
+    "create_pull_request": "create_pull_request",
+    "ai_pr_review": "review_pr",
 }
 
 STAGE_LABELS: dict[str, str] = {
@@ -58,6 +80,12 @@ STAGE_LABELS: dict[str, str] = {
     "testing": "Testing",
     "review": "Review",
     "engineering_review": "Engineering Review",
+    "generate_code": "Generate Code",
+    "create_branch": "Create Branch",
+    "commit_changes": "Commit Changes",
+    "run_tests": "Run Tests",
+    "create_pull_request": "Create Pull Request",
+    "ai_pr_review": "AI PR Review",
 }
 
 
@@ -128,25 +156,59 @@ async def create_workflow(
     db: AsyncSession,
     title: str,
     workflow_type: str = "planning",
+    source_workflow_id: uuid.UUID | None = None,
 ) -> Workflow:
-    """Create a new workflow starting at its type's first stage. Planning
-    is the default per the approved design — it's the only type
-    NewWorkflowPage lets a user pick today."""
-    if workflow_type not in CREATABLE_WORKFLOW_TYPES:
-        from app.core.exceptions import AppError
+    """Create a new workflow starting at its type's first stage.
 
+    For auto_execution workflows, `source_workflow_id` must reference an
+    existing, approved Planning workflow (the blueprint being executed).
+    """
+    from app.core.exceptions import AppError
+
+    if workflow_type not in CREATABLE_WORKFLOW_TYPES:
         raise AppError(
             f"Invalid workflow_type '{workflow_type}'. "
             f"Allowed: {sorted(CREATABLE_WORKFLOW_TYPES)}.",
             status_code=400,
             error_code="invalid_workflow_type",
         )
+
+    # --- auto_execution-specific validation ---
+    if workflow_type == "auto_execution":
+        if source_workflow_id is None:
+            raise AppError(
+                "auto_execution workflows require a source_workflow_id "
+                "referencing an approved Planning blueprint.",
+                status_code=400,
+                error_code="missing_source_workflow",
+            )
+        source = await db.get(Workflow, source_workflow_id)
+        if source is None:
+            raise AppError(
+                f"Source workflow '{source_workflow_id}' not found.",
+                status_code=400,
+                error_code="source_workflow_not_found",
+            )
+        if source.workflow_type != "planning":
+            raise AppError(
+                f"Source workflow must be a Planning workflow, got '{source.workflow_type}'.",
+                status_code=400,
+                error_code="source_workflow_wrong_type",
+            )
+        if source.status != "approved":
+            raise AppError(
+                f"Source workflow must be approved, current status is '{source.status}'.",
+                status_code=400,
+                error_code="source_workflow_not_approved",
+            )
+
     workflow = Workflow(
         id=uuid.uuid4(),
         title=title,
         current_stage=stage_sequence(workflow_type)[0],
         status="in_progress",
         workflow_type=workflow_type,
+        source_workflow_id=source_workflow_id,
     )
     db.add(workflow)
     await db.flush()
@@ -233,13 +295,28 @@ def build_stage_context(
     workflow: Workflow,
     original_request: str,
     target_stage: str,
+    source_workflow: Workflow | None = None,
 ) -> str:
     """Build enriched subject_reference for the next stage.
 
     Prepends summaries from all completed previous stages to the
     original engineering request so the next agent has full context.
+
+    If `source_workflow` is provided (auto_execution workflows), its
+    completed runs are included as upstream blueprint context before the
+    current workflow's own runs.
     """
     parts: list[str] = [original_request]
+
+    # Include context from source blueprint (if any)
+    if source_workflow is not None:
+        for run in sorted(source_workflow.runs, key=lambda r: r.created_at):
+            if run.status == "completed":
+                summary = _summarize_previous_output(run)
+                if summary:
+                    parts.append(
+                        f"\n--- Blueprint context from {STAGE_LABELS.get(run.workflow_stage or '', run.workflow_stage or '')} stage (source workflow) ---\n{summary}"
+                    )
 
     # Find all completed runs in this workflow, ordered by creation
     for run in sorted(workflow.runs, key=lambda r: r.created_at):
@@ -275,10 +352,9 @@ async def advance_workflow(
 
     nxt = next_stage(current, workflow.workflow_type)
     if nxt is None:
-        if workflow.workflow_type == "planning":
-            workflow.status = "awaiting_approval"
-        else:
-            workflow.status = "completed"
+        terminal_status = TERMINAL_BEHAVIOR.get(workflow.workflow_type, "completed")
+        workflow.status = terminal_status
+        if terminal_status == "completed":
             workflow.current_stage = "completed"
     else:
         workflow.current_stage = nxt

@@ -641,6 +641,331 @@ def test_workflow_api_approval_response_shape() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Phase 5 — auto_execution workflow registration & terminal behavior
+# ---------------------------------------------------------------------------
+
+
+def test_auto_execution_stage_sequence() -> None:
+    """auto_execution is registered with the approved 6-stage sequence."""
+    assert stage_sequence("auto_execution") == (
+        "generate_code",
+        "create_branch",
+        "commit_changes",
+        "run_tests",
+        "create_pull_request",
+        "ai_pr_review",
+    )
+
+
+def test_auto_execution_stage_goals_registered() -> None:
+    assert STAGE_GOALS["generate_code"] == "generate_code"
+    assert STAGE_GOALS["create_branch"] == "create_branch"
+    assert STAGE_GOALS["commit_changes"] == "commit_changes"
+    assert STAGE_GOALS["run_tests"] == "run_tests"
+    assert STAGE_GOALS["create_pull_request"] == "create_pull_request"
+    # ai_pr_review reuses the existing Review Agent goal
+    assert STAGE_GOALS["ai_pr_review"] == "review_pr"
+
+
+def test_auto_execution_stage_labels_registered() -> None:
+    assert STAGE_LABELS["generate_code"] == "Generate Code"
+    assert STAGE_LABELS["create_branch"] == "Create Branch"
+    assert STAGE_LABELS["commit_changes"] == "Commit Changes"
+    assert STAGE_LABELS["run_tests"] == "Run Tests"
+    assert STAGE_LABELS["create_pull_request"] == "Create Pull Request"
+    assert STAGE_LABELS["ai_pr_review"] == "AI PR Review"
+
+
+def test_auto_execution_is_creatable() -> None:
+    from app.services.workflow_service import CREATABLE_WORKFLOW_TYPES
+
+    assert "auto_execution" in CREATABLE_WORKFLOW_TYPES
+
+
+def test_auto_execution_next_stage_sequence() -> None:
+    assert next_stage("generate_code", "auto_execution") == "create_branch"
+    assert next_stage("create_branch", "auto_execution") == "commit_changes"
+    assert next_stage("commit_changes", "auto_execution") == "run_tests"
+    assert next_stage("run_tests", "auto_execution") == "create_pull_request"
+    assert next_stage("create_pull_request", "auto_execution") == "ai_pr_review"
+    assert next_stage("ai_pr_review", "auto_execution") is None
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — TERMINAL_BEHAVIOR data-driven registry
+# ---------------------------------------------------------------------------
+
+
+def test_terminal_behavior_registry_values() -> None:
+    from app.services.workflow_service import TERMINAL_BEHAVIOR
+
+    assert TERMINAL_BEHAVIOR["planning"] == "awaiting_approval"
+    assert TERMINAL_BEHAVIOR["auto_execution"] == "completed"
+    assert TERMINAL_BEHAVIOR["legacy_sdlc"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_advance_auto_execution_workflow_last_stage_completes() -> None:
+    """auto_execution completes (not awaiting_approval) at its last stage."""
+    from app.services.workflow_service import advance_workflow
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Execute blueprint",
+        current_stage="ai_pr_review",
+        status="in_progress",
+        workflow_type="auto_execution",
+    )
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:test",
+        subject_type="freetext",
+        display_name="Test",
+        goal="review_pr",
+        status="completed",
+        workflow_stage="ai_pr_review",
+    )
+
+    await advance_workflow(mock_db, workflow, run)
+
+    assert workflow.status == "completed"
+    assert workflow.current_stage == "completed"
+
+
+@pytest.mark.asyncio
+async def test_advance_auto_execution_workflow_mid_sequence() -> None:
+    """auto_execution advances normally between stages."""
+    from app.services.workflow_service import advance_workflow
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Execute blueprint",
+        current_stage="create_branch",
+        status="in_progress",
+        workflow_type="auto_execution",
+    )
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:test",
+        subject_type="freetext",
+        display_name="Test",
+        goal="create_branch",
+        status="completed",
+        workflow_stage="create_branch",
+    )
+
+    await advance_workflow(mock_db, workflow, run)
+
+    assert workflow.current_stage == "commit_changes"
+    assert workflow.status == "in_progress"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — create_workflow source_workflow_id validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_auto_execution_requires_source_workflow_id() -> None:
+    from app.core.exceptions import AppError
+    from app.services.workflow_service import create_workflow
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.flush = AsyncMock()
+
+    with pytest.raises(AppError) as exc_info:
+        await create_workflow(
+            mock_db, title="Auto exec", workflow_type="auto_execution"
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_code == "missing_source_workflow"
+
+
+@pytest.mark.asyncio
+async def test_create_auto_execution_rejects_nonexistent_source() -> None:
+    from app.core.exceptions import AppError
+    from app.services.workflow_service import create_workflow
+
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.flush = AsyncMock()
+    mock_db.get = AsyncMock(return_value=None)
+
+    with pytest.raises(AppError) as exc_info:
+        await create_workflow(
+            mock_db,
+            title="Auto exec",
+            workflow_type="auto_execution",
+            source_workflow_id=uuid.uuid4(),
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_code == "source_workflow_not_found"
+
+
+@pytest.mark.asyncio
+async def test_create_auto_execution_rejects_non_planning_source() -> None:
+    from app.core.exceptions import AppError
+    from app.services.workflow_service import create_workflow
+
+    source = Workflow(
+        id=uuid.uuid4(),
+        title="Source",
+        current_stage="completed",
+        status="approved",
+        workflow_type="legacy_sdlc",
+    )
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.flush = AsyncMock()
+    mock_db.get = AsyncMock(return_value=source)
+
+    with pytest.raises(AppError) as exc_info:
+        await create_workflow(
+            mock_db,
+            title="Auto exec",
+            workflow_type="auto_execution",
+            source_workflow_id=source.id,
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_code == "source_workflow_wrong_type"
+
+
+@pytest.mark.asyncio
+async def test_create_auto_execution_rejects_unapproved_source() -> None:
+    from app.core.exceptions import AppError
+    from app.services.workflow_service import create_workflow
+
+    source = Workflow(
+        id=uuid.uuid4(),
+        title="Source",
+        current_stage="engineering_review",
+        status="awaiting_approval",
+        workflow_type="planning",
+    )
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.flush = AsyncMock()
+    mock_db.get = AsyncMock(return_value=source)
+
+    with pytest.raises(AppError) as exc_info:
+        await create_workflow(
+            mock_db,
+            title="Auto exec",
+            workflow_type="auto_execution",
+            source_workflow_id=source.id,
+        )
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.error_code == "source_workflow_not_approved"
+
+
+@pytest.mark.asyncio
+async def test_create_auto_execution_succeeds_with_approved_planning_source() -> None:
+    from app.services.workflow_service import create_workflow
+
+    source = Workflow(
+        id=uuid.uuid4(),
+        title="Blueprint",
+        current_stage="engineering_review",
+        status="approved",
+        workflow_type="planning",
+    )
+    mock_db = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.flush = AsyncMock()
+    mock_db.get = AsyncMock(return_value=source)
+
+    workflow = await create_workflow(
+        mock_db,
+        title="Execute blueprint",
+        workflow_type="auto_execution",
+        source_workflow_id=source.id,
+    )
+    assert workflow.workflow_type == "auto_execution"
+    assert workflow.source_workflow_id == source.id
+    assert workflow.current_stage == "generate_code"
+    assert workflow.status == "in_progress"
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 — cross-workflow context (build_stage_context with source)
+# ---------------------------------------------------------------------------
+
+
+def test_build_stage_context_with_source_workflow() -> None:
+    """auto_execution gets context from source blueprint runs."""
+    source = Workflow(
+        id=uuid.uuid4(),
+        title="Blueprint",
+        current_stage="engineering_review",
+        status="approved",
+        workflow_type="planning",
+    )
+    dev_run = _make_run(
+        result={
+            "executive_summary": "Implement rate limiter in 3 phases.",
+            "affected_repositories": ["api-gateway"],
+        },
+        goal="develop_change_plan",
+    )
+    dev_run.workflow_stage = "development"
+    dev_run.workflow_id = source.id
+    dev_run.created_at = datetime(2026, 7, 23, 10, 0, tzinfo=timezone.utc)
+    source.runs = [dev_run]
+
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Execute blueprint",
+        current_stage="generate_code",
+        status="in_progress",
+        workflow_type="auto_execution",
+        source_workflow_id=source.id,
+    )
+    workflow.runs = []
+
+    ctx = build_stage_context(
+        workflow,
+        original_request="Execute blueprint",
+        target_stage="generate_code",
+        source_workflow=source,
+    )
+    assert "Execute blueprint" in ctx
+    assert "rate limiter in 3 phases" in ctx
+    assert "Blueprint context from Development stage" in ctx
+    assert "api-gateway" in ctx
+
+
+def test_build_stage_context_without_source_unchanged() -> None:
+    """Planning workflows (no source) work exactly as before."""
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="JWT auth",
+        current_stage="development",
+        status="in_progress",
+        workflow_type="planning",
+    )
+    planning_run = _make_run(
+        result={"executive_summary": "Plan: implement JWT."},
+        goal="plan_freeform",
+    )
+    planning_run.workflow_stage = "planning"
+    planning_run.workflow_id = workflow.id
+    workflow.runs = [planning_run]
+
+    ctx = build_stage_context(workflow, "JWT auth", "development")
+    assert "JWT auth" in ctx
+    assert "implement JWT" in ctx
+    # No "Blueprint context" header — no source workflow
+    assert "Blueprint context" not in ctx
+
+
+# ---------------------------------------------------------------------------
 # Run API DTO with workflow fields
 # ---------------------------------------------------------------------------
 
