@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     # --- Gemini (Google Generative Language API) ---
     gemini_api_key: str | None = Field(default=None)
     gemini_model: str = Field(default="gemini-3.6-flash")
+    # Higher than openai_max_tokens: structured JSON responses (e.g. the
+    # Testing agent's test plan) were getting cut off mid-string at 4096,
+    # producing invalid JSON - see the truncation this default now avoids.
+    gemini_max_tokens: int = Field(default=8192)
 
     # --- Future integrations (unused until their adapters are implemented) ---
     jira_base_url: str | None = Field(default=None)

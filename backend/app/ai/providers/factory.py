@@ -95,7 +95,7 @@ def create_llm_provider(settings: Settings | None = None, model: str | None = No
             api_key=cfg.gemini_api_key,
             model=cfg.gemini_model,
             temperature=cfg.openai_temperature,
-            max_tokens=cfg.openai_max_tokens,
+            max_tokens=cfg.gemini_max_tokens,
         )
 
     if provider_name in ("claude", "anthropic"):
