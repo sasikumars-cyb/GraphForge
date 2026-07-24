@@ -16,6 +16,8 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import NO_VALUE
+from sqlalchemy import inspect
 
 from app.agents._contract import Subject
 from app.agents.git_ops._artifact_reader import get_stage_result
@@ -192,14 +194,11 @@ async def _link_failed_run(
     below, after the original exception has already propagated past
     RunCoordinator (so the failed Run is guaranteed to exist and be committed).
 
-    `workflow` here is the same Python object `continue_workflow`/
-    `create_workflow` already loaded (with `.runs` eagerly populated
-    *before* this failed run existed) — setting the FK column on the Run
-    row alone doesn't retroactively add it to that already-loaded
-    in-memory collection, so callers reading `workflow.runs` right after
-    this (including a subsequent request that reuses the same
-    identity-mapped object) would still see it as missing. Appending it
-    explicitly keeps that collection consistent with what's now in Postgres.
+    Important for AsyncSession: do not touch `workflow.runs` via direct
+    attribute access here. In the create-workflow failure path this
+    relationship is not eagerly loaded, and lazy-loading can raise
+    MissingGreenlet. Link via explicit FK updates, then sync in-memory
+    state only when `runs` is already loaded.
     """
     result = await db.execute(
         select(Run)
@@ -213,8 +212,14 @@ async def _link_failed_run(
     failed_run.workflow_id = workflow.id
     failed_run.workflow_stage = stage
     await db.commit()
-    if failed_run not in workflow.runs:
-        workflow.runs.append(failed_run)
+
+    # Keep already-loaded in-memory collections coherent without issuing a
+    # relationship refresh query (and without triggering lazy-loading).
+    runs_state = inspect(workflow).attrs.runs
+    if runs_state.loaded_value is not NO_VALUE:
+        loaded_runs = runs_state.loaded_value
+        if failed_run not in loaded_runs:
+            loaded_runs.append(failed_run)
 
 
 def _resolve_stage_subject(workflow: Workflow, target_stage: str, enriched_ref: str) -> Subject:

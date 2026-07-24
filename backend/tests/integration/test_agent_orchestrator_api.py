@@ -22,6 +22,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from httpx import AsyncClient
 
+from app.agents.planning.agent import PlanningLLMError
+
 pytestmark = pytest.mark.asyncio
 
 REGISTER_PAYLOAD = {
@@ -249,6 +251,61 @@ async def test_continue_workflow_failed_stage_is_linked_to_workflow(db_client: A
     assert run_detail["status"] == "failed"
     assert run_detail["workflow_id"] == workflow_id
     assert "LLM provider unavailable" in (run_detail["error_message"] or "")
+
+
+async def test_create_workflow_planning_failure_returns_original_app_error(
+    db_client: AsyncClient,
+) -> None:
+    """Regression: Planning failures must surface their original AppError
+    (e.g. provider 429) instead of crashing with MissingGreenlet inside
+    _link_failed_run()."""
+    token = await _register_and_get_token(db_client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    rate_limit_message = (
+        "Rate limit reached for model llama-3.3-70b-versatile on tokens per day (TPD)."
+    )
+
+    with (
+        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
+        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=MagicMock()),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(side_effect=PlanningLLMError(rate_limit_message)),
+        ),
+    ):
+        response = await db_client.post(
+            "/api/v1/workflows",
+            json={"title": "Planning should fail but still link failed run"},
+            headers=headers,
+        )
+
+    # Original AppError is preserved (not wrapped into workflow_execution_error)
+    assert response.status_code == 502
+    body = response.json()
+    assert body["error"]["code"] == "planning_llm_error"
+    assert body["error"]["message"] == rate_limit_message
+
+    # The failed planning run is still linked to the workflow and visible
+    # in stage history (no MissingGreenlet crash during linking).
+    workflows_response = await db_client.get("/api/v1/workflows", headers=headers)
+    assert workflows_response.status_code == 200
+    target = next(
+        w
+        for w in workflows_response.json()["items"]
+        if w["title"] == "Planning should fail but still link failed run"
+    )
+
+    detail_response = await db_client.get(
+        f"/api/v1/workflows/{target['workflow_id']}",
+        headers=headers,
+    )
+    assert detail_response.status_code == 200
+    detail = detail_response.json()
+    stages_by_name = {s["stage"]: s for s in detail["stages"]}
+
+    assert stages_by_name["planning"]["status"] == "failed"
+    assert stages_by_name["planning"]["run_id"] is not None
 
 
 async def test_get_workflow_not_found_returns_404(db_client: AsyncClient) -> None:
