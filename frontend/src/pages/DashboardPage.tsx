@@ -12,6 +12,7 @@ export function DashboardPage() {
   const { token } = useAuth();
   const [workflows, setWorkflows] = useState<WorkflowListItem[]>([]);
   const [workflowsError, setWorkflowsError] = useState<string | null>(null);
+  const [approvedTotal, setApprovedTotal] = useState<number | null>(null);
 
   useEffect(() => {
     if (!token) return;
@@ -22,11 +23,16 @@ export function DashboardPage() {
       });
   }, [token]);
 
-  // "Execution" (Auto Execution workflows) has no workflow_type of its own
-  // yet — Phases 5-10 aren't implemented — so this count is honestly always
-  // 0 today rather than approximated from an unrelated type.
+  useEffect(() => {
+    if (!token) return;
+    // page_size: 1 — we only need `.total` (a real COUNT), not the rows
+    // themselves. Fails soft: the subtitle just omits the count.
+    listWorkflows(token, { status: "approved", page_size: 1 })
+      .then((res) => setApprovedTotal(res.total))
+      .catch(() => setApprovedTotal(null));
+  }, [token]);
+
   const planningCount = workflows.filter((w) => w.workflow_type === "planning").length;
-  const executionCount = workflows.filter((w) => w.workflow_type === "auto_execution").length;
 
   return (
     <div className="flex flex-col gap-6">
@@ -48,14 +54,24 @@ export function DashboardPage() {
       {workflows.length > 0 && (
         <Card
           title="Active SDLC Workflows"
-          description={`Engineering tasks progressing through the lifecycle · ${planningCount} Planning · ${executionCount} Execution`}
+          description={`Engineering tasks progressing through the lifecycle · ${planningCount} Planning${
+            approvedTotal !== null ? ` · ${approvedTotal} Approved` : ""
+          }`}
           action={
-            <Link
-              to="/workflows/new"
-              className="text-xs font-medium text-indigo-400 hover:text-indigo-300"
-            >
-              + New Workflow
-            </Link>
+            <div className="flex items-center gap-4">
+              <Link
+                to="/workflows/approved"
+                className="text-xs font-medium text-emerald-400 hover:text-emerald-300"
+              >
+                View Approved Queue{approvedTotal !== null ? ` (${approvedTotal})` : ""} →
+              </Link>
+              <Link
+                to="/workflows/new"
+                className="text-xs font-medium text-indigo-400 hover:text-indigo-300"
+              >
+                + New Workflow
+              </Link>
+            </div>
           }
         >
           <div className="space-y-4">

@@ -509,10 +509,12 @@ async def test_approve_workflow_sets_terminal_status() -> None:
         status="awaiting_approval",
         workflow_type="planning",
     )
+    user_id = uuid.uuid4()
 
-    await approve_workflow(mock_db, workflow)
+    await approve_workflow(mock_db, workflow, user_id)
 
     assert workflow.status == "approved"
+    assert workflow.approved_by_user_id == user_id
     mock_db.flush.assert_awaited_once()
 
 
@@ -533,6 +535,27 @@ async def test_reject_workflow_sets_terminal_status() -> None:
     await reject_workflow(mock_db, workflow)
 
     assert workflow.status == "rejected"
+
+
+@pytest.mark.asyncio
+async def test_reject_workflow_does_not_set_approver() -> None:
+    """Regression guard: rejection has no 'approved by' concept — a future
+    change to reject_workflow must not accidentally start setting it."""
+    from app.services.workflow_service import reject_workflow
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Test",
+        current_stage="engineering_review",
+        status="awaiting_approval",
+        workflow_type="planning",
+    )
+
+    await reject_workflow(mock_db, workflow)
+
+    assert workflow.approved_by_user_id is None
 
 
 @pytest.mark.asyncio
@@ -576,6 +599,45 @@ def test_workflow_api_create_request_validation() -> None:
     req = CreateWorkflowRequest(title="JWT auth")
     assert req.title == "JWT auth"
     assert req.model is None
+
+
+def test_workflow_api_create_request_accepts_multi_paragraph_brief() -> None:
+    """Regression: NewWorkflowPage's textarea invites a full engineering
+    brief, not a short title — a real ~700 char multi-paragraph objective
+    (requirements list, output schema, constraints) used to fail with a
+    generic "Request validation failed." at the old 512-char cap."""
+    from app.api.v1.routers.workflows import CreateWorkflowRequest
+
+    brief = (
+        "Project: etl-customer-orders\n\n"
+        "We receive daily customer and order CSV files.\n\n"
+        "Add a new report that calculates the Top 10 customers by total "
+        "purchase amount for each month.\n\n"
+        "Requirements\n"
+        "- Use existing customer and orders datasets.\n"
+        "- Ignore cancelled orders.\n"
+        "- Ignore refunded orders.\n"
+        "- Aggregate by calendar month.\n"
+        "- Output should contain: customer_id, customer_name, month, "
+        "total_sales, rank.\n\n"
+        "Store the output as Parquet. Use the existing ETL architecture. "
+        "Reuse existing transformations whenever possible. Maintain "
+        "backward compatibility.\n\n"
+        "Generate an implementation plan only. Do not generate code."
+    )
+    assert len(brief) > 512
+
+    req = CreateWorkflowRequest(title=brief)
+    assert req.title == brief
+
+
+def test_workflow_api_create_request_rejects_title_over_8000_chars() -> None:
+    from pydantic import ValidationError
+
+    from app.api.v1.routers.workflows import CreateWorkflowRequest
+
+    with pytest.raises(ValidationError):
+        CreateWorkflowRequest(title="x" * 8001)
 
 
 def test_workflow_api_continue_request_validation() -> None:
@@ -623,6 +685,22 @@ def test_workflow_api_detail_response_shape() -> None:
     assert detail.workflow_type == "planning"
     assert detail.stages[0].stage == "planning"
     assert detail.runs[0].confidence_score == 0.85
+    # Never approved — defaults to None, not required at construction.
+    assert detail.approved_by is None
+
+    approved_detail = WorkflowDetailResponse(
+        workflow_id="wf-uuid",
+        title="JWT auth",
+        workflow_type="planning",
+        current_stage="engineering_review",
+        status="approved",
+        stages=[stage],
+        runs=[run_item],
+        created_at="2026-07-23T10:00:00Z",
+        updated_at="2026-07-23T10:01:00Z",
+        approved_by="Jane Doe",
+    )
+    assert approved_detail.approved_by == "Jane Doe"
 
 
 def test_workflow_api_create_request_defaults_to_planning() -> None:
@@ -1100,3 +1178,83 @@ def test_resolve_stage_subject_ai_pr_review_without_pr_result_raises() -> None:
         _resolve_stage_subject(workflow, "ai_pr_review", "unused")
 
     assert exc_info.value.error_code == "missing_pull_request"
+
+
+# ---------------------------------------------------------------------------
+# approved_by — batch approver-name resolution
+# ---------------------------------------------------------------------------
+
+
+def test_workflow_list_item_approved_by_defaults_to_none() -> None:
+    from app.api.v1.routers.workflows import WorkflowListItem
+
+    item = WorkflowListItem(
+        workflow_id="wf-uuid",
+        title="JWT auth",
+        workflow_type="planning",
+        current_stage="engineering_review",
+        status="awaiting_approval",
+        stages=[],
+        created_at="2026-07-23T10:00:00Z",
+        updated_at="2026-07-23T10:01:00Z",
+    )
+    assert item.approved_by is None
+
+    approved_item = WorkflowListItem(
+        workflow_id="wf-uuid",
+        title="JWT auth",
+        workflow_type="planning",
+        current_stage="engineering_review",
+        status="approved",
+        stages=[],
+        created_at="2026-07-23T10:00:00Z",
+        updated_at="2026-07-23T10:01:00Z",
+        approved_by="Jane Doe",
+    )
+    assert approved_item.approved_by == "Jane Doe"
+
+
+@pytest.mark.asyncio
+async def test_resolve_approver_names_batches_single_query() -> None:
+    from types import SimpleNamespace
+
+    from app.api.v1.routers.workflows import _resolve_approver_names
+
+    user_a = uuid.uuid4()
+    user_b = uuid.uuid4()
+    workflows = [
+        Workflow(id=uuid.uuid4(), title="X", workflow_type="planning", approved_by_user_id=user_a),
+        Workflow(id=uuid.uuid4(), title="Y", workflow_type="planning", approved_by_user_id=user_b),
+        # Same approver twice — must not appear twice in the query's IN clause.
+        Workflow(id=uuid.uuid4(), title="Z", workflow_type="planning", approved_by_user_id=user_a),
+        # Never approved — excluded from the lookup entirely.
+        Workflow(id=uuid.uuid4(), title="W", workflow_type="planning"),
+    ]
+
+    rows = [
+        SimpleNamespace(id=user_a, full_name="Jane Doe"),
+        SimpleNamespace(id=user_b, full_name="John Smith"),
+    ]
+    mock_result = MagicMock()
+    mock_result.all.return_value = rows
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock(return_value=mock_result)
+
+    names = await _resolve_approver_names(mock_db, workflows)
+
+    assert mock_db.execute.await_count == 1
+    assert names == {user_a: "Jane Doe", user_b: "John Smith"}
+
+
+@pytest.mark.asyncio
+async def test_resolve_approver_names_skips_query_when_none_approved() -> None:
+    from app.api.v1.routers.workflows import _resolve_approver_names
+
+    workflows = [Workflow(id=uuid.uuid4(), title="X", workflow_type="planning")]
+    mock_db = AsyncMock()
+    mock_db.execute = AsyncMock()
+
+    names = await _resolve_approver_names(mock_db, workflows)
+
+    assert names == {}
+    mock_db.execute.assert_not_awaited()

@@ -17,6 +17,7 @@ import { ArchitecturePage } from "../pages/ArchitecturePage";
 import { ReportsPage } from "../pages/ReportsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WorkflowPage, NewWorkflowPage } from "../pages/WorkflowPage";
+import { ApprovedQueuePage } from "../pages/ApprovedQueuePage";
 
 // Exported as plain data (not just the created router) so tests can build a
 // createMemoryRouter from the exact same route tree instead of duplicating
@@ -31,6 +32,7 @@ export const routes: RouteObject[] = [
         children: [
           { path: "/", element: <DashboardPage /> },
           { path: "/workflows/new", element: <NewWorkflowPage /> },
+          { path: "/workflows/approved", element: <ApprovedQueuePage /> },
           { path: "/workflows/:workflowId", element: <WorkflowPage /> },
           { path: "/planning", element: <PlanningPage /> },
           { path: "/development", element: <DevelopmentPage /> },

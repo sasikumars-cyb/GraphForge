@@ -59,6 +59,12 @@ describe("WorkflowApprovalBanner — terminal states", () => {
     expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
   });
 
+  it("never leaks backend implementation terminology in the approved copy", () => {
+    renderBanner({ status: "approved" });
+    expect(screen.queryByText(/Auto Execution/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/this build/)).not.toBeInTheDocument();
+  });
+
   it("shows a read-only confirmation once rejected, no action buttons", () => {
     renderBanner({ status: "rejected" });
     expect(screen.getByText(/was rejected/)).toBeInTheDocument();

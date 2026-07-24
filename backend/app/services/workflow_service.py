@@ -119,11 +119,13 @@ def _summarize_previous_output(run: Run) -> str:
     if summary := result.get("executive_summary"):
         parts.append(f"Previous stage ({run.goal}) summary: {summary}")
 
-    # Key fields that provide useful context. Extended (not replaced) for
-    # Engineering Review, which needs to validate risks/dependencies/test
-    # coverage — it reuses this exact same summarization mechanism every
-    # other stage already relies on, just benefiting from a richer field
-    # list, rather than a special-cased raw-JSON context path of its own.
+    # Key fields that provide useful context for the freetext chain other
+    # stages read via context.subject.display_name. Engineering Review no
+    # longer depends on this function — it reads full structured results
+    # directly via get_stage_result() instead (see engineering_review/
+    # agent.py), since this summary's field list and its 256-char
+    # downstream truncation in resolve_freetext() were too lossy for a
+    # stage whose whole job is judging completeness of prior stages.
     for key in (
         "affected_components",
         "affected_repositories",
@@ -371,14 +373,17 @@ async def advance_workflow(
     )
 
 
-async def approve_workflow(db: AsyncSession, workflow: Workflow) -> None:
+async def approve_workflow(db: AsyncSession, workflow: Workflow, user_id: uuid.UUID) -> None:
     """Human approves a completed blueprint — terminal, no further stages
     run automatically (matches Auto Execution being a separate, explicit
-    workflow the user creates from this one, not an auto-continuation)."""
+    workflow the user creates from this one, not an auto-continuation).
+    Records who approved it so the Approved Queue can show a real
+    approver, not a guess."""
     workflow.status = "approved"
+    workflow.approved_by_user_id = user_id
     workflow.updated_at = datetime.now(timezone.utc)
     await db.flush()
-    logger.info("workflow_approved id=%s", str(workflow.id))
+    logger.info("workflow_approved id=%s approved_by=%s", str(workflow.id), str(user_id))
 
 
 async def reject_workflow(db: AsyncSession, workflow: Workflow) -> None:

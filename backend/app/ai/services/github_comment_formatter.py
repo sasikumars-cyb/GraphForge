@@ -29,7 +29,7 @@ def _impacted_service_names(nodes: list[dict[str, str]]) -> str:
 
 def _breaking_changes_section(result: AIAnalysisResult) -> list[str]:
     if not result.breaking_changes:
-        return ["## Breaking Changes", "", "No breaking changes identified.", ""]
+        return ["## Breaking Changes", "", _NONE, ""]
     lines = ["## Breaking Changes", ""]
     for bc in result.breaking_changes:
         lines.append(
@@ -42,7 +42,7 @@ def _breaking_changes_section(result: AIAnalysisResult) -> list[str]:
 
 def _migration_advice_section(result: AIAnalysisResult) -> list[str]:
     if not result.migration_advice:
-        return ["## Migration Advice", "", "No migration advice provided.", ""]
+        return ["## Migration Advice", "", _NONE, ""]
     lines = ["## Migration Advice", ""]
     for advice in result.migration_advice:
         lines.append(f"- **{advice.component}** ({advice.priority} priority): {advice.advice}")
@@ -66,7 +66,7 @@ def _impacted_services_section(
 
 def _suggested_reviewers_section(result: AIAnalysisResult) -> list[str]:
     if not result.suggested_reviewers:
-        return ["## Suggested Reviewers", "", "No reviewers suggested.", ""]
+        return ["## Suggested Reviewers", "", _NONE, ""]
     lines = ["## Suggested Reviewers", ""]
     for reviewer in result.suggested_reviewers:
         lines.append(
@@ -79,7 +79,7 @@ def _suggested_reviewers_section(result: AIAnalysisResult) -> list[str]:
 
 def _regression_tests_section(result: AIAnalysisResult) -> list[str]:
     if not result.regression_tests:
-        return ["## Recommended Regression Tests", "", "No regression tests suggested.", ""]
+        return ["## Recommended Regression Tests", "", _NONE, ""]
     lines = ["## Recommended Regression Tests", ""]
     for test in result.regression_tests:
         lines.append(f"- **{test.component}** ({test.priority} priority): {test.test_description}")
@@ -89,14 +89,14 @@ def _regression_tests_section(result: AIAnalysisResult) -> list[str]:
 
 def _release_plan_section(result: AIAnalysisResult) -> list[str]:
     plan = result.release_coordination_plan
-    lines = ["## Release Plan", ""]
+    lines = ["## Release Coordination Plan", ""]
 
     lines.append("**Deployment order:**")
     if plan.deployment_order:
         for step in plan.deployment_order:
             lines.append(f"{step.order}. **{step.repository}** — {step.action} _({step.reason})_")
     else:
-        lines.append("No deployment order needed - single repository change.")
+        lines.append(_NONE)
     lines.append("")
 
     lines.append("**Repositories to notify:**")
@@ -119,7 +119,7 @@ def _release_plan_section(result: AIAnalysisResult) -> list[str]:
     if plan.rollout_risks:
         lines.extend(f"- {risk}" for risk in plan.rollout_risks)
     else:
-        lines.append("None identified.")
+        lines.append(_NONE)
     lines.append("")
 
     return lines
@@ -136,12 +136,12 @@ def format_review_comment(
     persisted analysis; `risk`/the impacted-service lists come from the
     deterministic engine's own persisted result (or `"UNKNOWN"`/empty
     lists when no deterministic analysis has been run yet)."""
-    lines = ["# 🤖 GraphForge AI Review", "", "## Summary", ""]
-    lines += [ai_result.executive_summary or _NONE, ""]
+    lines = ["# 🤖 GraphForge AI Review", ""]
     lines += ["## Risk", "", f"**{risk}**", ""]
+    lines += _impacted_services_section(directly_impacted_services, indirectly_impacted_services)
+    lines += ["## Executive Summary", "", ai_result.executive_summary or _NONE, ""]
     lines += _breaking_changes_section(ai_result)
     lines += _migration_advice_section(ai_result)
-    lines += _impacted_services_section(directly_impacted_services, indirectly_impacted_services)
     lines += _suggested_reviewers_section(ai_result)
     lines += _regression_tests_section(ai_result)
     lines += _release_plan_section(ai_result)

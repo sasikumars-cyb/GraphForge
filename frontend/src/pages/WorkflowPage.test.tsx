@@ -123,15 +123,17 @@ describe("NewWorkflowPage", () => {
     expect(screen.getByText("Describe what you want built")).toBeInTheDocument();
   });
 
-  it("shows Planning Workflow as selected/recommended and Auto Execution as disabled", () => {
+  it("shows Planning Workflow as selected/recommended and Implementation as disabled", () => {
     renderWithAuth(<NewWorkflowPage />);
     const planningOption = screen.getByRole("button", { name: /Planning Workflow/ });
     expect(planningOption).toHaveAttribute("aria-pressed", "true");
     expect(screen.getByText("Recommended")).toBeInTheDocument();
 
-    const executionOption = screen.getByText("Auto Execution Workflow").closest("[aria-disabled]");
+    const executionOption = screen.getByText("Implementation Workflow").closest("[aria-disabled]");
     expect(executionOption).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByText("Coming soon")).toBeInTheDocument();
+    // No leaked backend terminology anywhere on this page.
+    expect(screen.queryByText(/Auto Execution/)).not.toBeInTheDocument();
   });
 
   it("creates the workflow with workflow_type 'planning'", async () => {
@@ -284,6 +286,7 @@ describe("WorkflowPage", () => {
       ],
       created_at: "2026-01-01T10:00:00Z",
       updated_at: "2026-01-01T10:00:02Z",
+      approved_by: null,
       ...overrides,
     };
   }
@@ -565,6 +568,58 @@ describe("WorkflowPage", () => {
     expect(await screen.findByText("Workflow Complete")).toBeInTheDocument();
     // The approval gate must not appear once the workflow has finished.
     expect(screen.queryByRole("button", { name: /Approve & Continue/ })).not.toBeInTheDocument();
+  });
+
+  it("shows the workflow summary hero, worded for approval, once the blueprint is approved", async () => {
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
+      makeWorkflow({
+        status: "approved",
+        current_stage: "engineering_review",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          {
+            stage: "engineering_review",
+            label: "Engineering Review",
+            status: "completed",
+            run_id: "run-4",
+          },
+        ],
+      }),
+    );
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(
+      makeRun({ run_id: "run-4", workflow_stage: "engineering_review" }),
+    );
+
+    renderWorkflowPage();
+
+    expect(await screen.findByText("Blueprint Approved")).toBeInTheDocument();
+    expect(screen.queryByText("Workflow Complete")).not.toBeInTheDocument();
+  });
+
+  it("does not show the summary hero while still awaiting a blueprint decision", async () => {
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
+      makeWorkflow({
+        status: "awaiting_approval",
+        current_stage: "engineering_review",
+        stages: [
+          {
+            stage: "engineering_review",
+            label: "Engineering Review",
+            status: "completed",
+            run_id: "run-4",
+          },
+        ],
+      }),
+    );
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(
+      makeRun({ run_id: "run-4", workflow_stage: "engineering_review" }),
+    );
+
+    renderWorkflowPage();
+
+    await screen.findByText(/Engineering Review is complete/);
+    expect(screen.queryByText("Blueprint Approved")).not.toBeInTheDocument();
+    expect(screen.queryByText("Workflow Complete")).not.toBeInTheDocument();
   });
 
   it("shows an error state when the workflow fails to load", async () => {

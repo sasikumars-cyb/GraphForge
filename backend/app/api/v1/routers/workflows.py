@@ -40,7 +40,10 @@ router = APIRouter(prefix="/workflows", tags=["workflows"])
 
 
 class CreateWorkflowRequest(BaseModel):
-    title: str = Field(..., min_length=1, max_length=512)
+    # 8000 chars comfortably fits a full multi-paragraph engineering brief
+    # (NewWorkflowPage's textarea invites exactly that) while still
+    # bounding request size; the DB column itself is unbounded TEXT.
+    title: str = Field(..., min_length=1, max_length=8000)
     model: str | None = None
     # "planning" is the only type NewWorkflowPage lets a user create today —
     # also the module-level default in workflow_service.create_workflow().
@@ -81,6 +84,9 @@ class WorkflowDetailResponse(BaseModel):
     runs: list[WorkflowRunResponse]
     created_at: str
     updated_at: str
+    # Resolved display name (not the raw user id) — None if never approved,
+    # or approved before this field existed.
+    approved_by: str | None = None
 
 
 class WorkflowListItem(BaseModel):
@@ -92,6 +98,7 @@ class WorkflowListItem(BaseModel):
     stages: list[WorkflowStageResponse]
     created_at: str
     updated_at: str
+    approved_by: str | None = None
 
 
 class WorkflowListResponse(BaseModel):
@@ -151,6 +158,20 @@ def _build_stages(workflow: Workflow) -> list[WorkflowStageResponse]:
             )
         )
     return stages
+
+
+async def _resolve_approver_names(
+    db: AsyncSession, workflows: list[Workflow]
+) -> dict[uuid.UUID, str]:
+    """Batch-lookup User.full_name for every distinct approved_by_user_id
+    present in `workflows` — one query regardless of list size, matching
+    this codebase's explicit-query-over-relationship style for this kind
+    of cross-reference (no new ORM relationship added to Workflow/User)."""
+    ids = {w.approved_by_user_id for w in workflows if w.approved_by_user_id is not None}
+    if not ids:
+        return {}
+    result = await db.execute(select(User.id, User.full_name).where(User.id.in_(ids)))
+    return {row.id: row.full_name for row in result.all()}
 
 
 async def _link_failed_run(
@@ -353,6 +374,7 @@ async def list_workflows(
     workflows, total = await workflow_service.list_workflows(
         db, status=status, workflow_type=workflow_type, page=page, page_size=page_size
     )
+    approver_names = await _resolve_approver_names(db, workflows)
 
     items = [
         WorkflowListItem(
@@ -364,6 +386,9 @@ async def list_workflows(
             stages=_build_stages(w),
             created_at=_iso(w.created_at),
             updated_at=_iso(w.updated_at),
+            approved_by=(
+                approver_names.get(w.approved_by_user_id) if w.approved_by_user_id else None
+            ),
         )
         for w in workflows
     ]
@@ -390,6 +415,7 @@ async def get_workflow(
         raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
 
     workflow = await workflow_service.get_workflow(db, wid)
+    approver_names = await _resolve_approver_names(db, [workflow])
 
     return WorkflowDetailResponse(
         workflow_id=str(workflow.id),
@@ -401,6 +427,11 @@ async def get_workflow(
         runs=_build_run_responses(workflow),
         created_at=_iso(workflow.created_at),
         updated_at=_iso(workflow.updated_at),
+        approved_by=(
+            approver_names.get(workflow.approved_by_user_id)
+            if workflow.approved_by_user_id
+            else None
+        ),
     )
 
 
@@ -537,7 +568,7 @@ async def approve_workflow(
             error_code="workflow_not_awaiting_approval",
         )
 
-    await workflow_service.approve_workflow(db, workflow)
+    await workflow_service.approve_workflow(db, workflow, user.id)
     await db.commit()
     return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)
 

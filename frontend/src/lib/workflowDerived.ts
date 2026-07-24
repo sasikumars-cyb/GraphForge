@@ -23,10 +23,7 @@ export const STAGE_AGENT_LABEL: Record<string, string> = {
 /** Derive the next stage from the workflow's own stages array (the
  * backend-authoritative ordering) rather than a hardcoded frontend list.
  * Falls back to null for the last stage or unknown stages. */
-export function nextStageOf(
-  stage: string,
-  stages?: { stage: string }[],
-): string | null {
+export function nextStageOf(stage: string, stages?: { stage: string }[]): string | null {
   if (!stages || stages.length === 0) return null;
   const idx = stages.findIndex((s) => s.stage === stage);
   if (idx === -1 || idx + 1 >= stages.length) return null;
@@ -35,6 +32,20 @@ export function nextStageOf(
 
 export function stageLabel(stage: string): string {
   return STAGE_AGENT_LABEL[stage]?.replace(" Agent", "") ?? stage;
+}
+
+const WORKFLOW_TYPE_LABEL: Record<string, string> = {
+  planning: "Planning Workflow",
+  legacy_sdlc: "SDLC Workflow",
+  auto_execution: "Implementation Workflow",
+};
+
+/** Business-friendly label for workflow.workflow_type — the one place
+ * this mapping lives, so nothing branches on the raw backend type string
+ * inline. Falls back to "Agentic Workflow" for any future/unrecognized
+ * type. */
+export function workflowTypeLabel(workflowType: string): string {
+  return WORKFLOW_TYPE_LABEL[workflowType] ?? "Agentic Workflow";
 }
 
 // ---------------------------------------------------------------------------

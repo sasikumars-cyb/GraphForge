@@ -15,6 +15,7 @@ import {
   resultSummary,
   stageLabel,
   workflowStatusDisplay,
+  workflowTypeLabel,
 } from "./workflowDerived";
 
 function makeStep(overrides: Partial<AgentStep> = {}): AgentStep {
@@ -81,6 +82,18 @@ describe("stageLabel", () => {
 
   it("falls back to the raw stage id for unknown stages", () => {
     expect(stageLabel("mystery")).toBe("mystery");
+  });
+});
+
+describe("workflowTypeLabel", () => {
+  it("maps known workflow types to business-friendly labels", () => {
+    expect(workflowTypeLabel("planning")).toBe("Planning Workflow");
+    expect(workflowTypeLabel("legacy_sdlc")).toBe("SDLC Workflow");
+    expect(workflowTypeLabel("auto_execution")).toBe("Implementation Workflow");
+  });
+
+  it("never renders the raw backend type name for an unrecognized type", () => {
+    expect(workflowTypeLabel("some_future_type")).toBe("Agentic Workflow");
   });
 });
 
@@ -310,6 +323,7 @@ describe("deriveWorkflowState", () => {
       runs: [],
       created_at: "2026-01-01T10:00:00Z",
       updated_at: "2026-01-01T10:00:00Z",
+      approved_by: null,
       ...overrides,
     };
   }

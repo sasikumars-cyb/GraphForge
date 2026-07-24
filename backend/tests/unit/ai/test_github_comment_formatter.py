@@ -96,10 +96,14 @@ def test_full_result_renders_every_section() -> None:
     )
 
     assert comment.startswith("# 🤖 GraphForge AI Review")
-    assert "## Summary" in comment
+    assert "## Executive Summary" in comment
     assert "Renames the order.cancelled Kafka topic." in comment
     assert "## Risk" in comment
     assert "**HIGH**" in comment
+    # Required section order from claude-plan.
+    assert comment.index("## Risk") < comment.index("## Impacted Services")
+    assert comment.index("## Impacted Services") < comment.index("## Executive Summary")
+    assert comment.index("## Executive Summary") < comment.index("## Breaking Changes")
     assert "## Breaking Changes" in comment
     assert "**OrderEventProducer** (high): Kafka topic name changed" in comment
     assert "confidence: 90%" in comment
@@ -113,7 +117,7 @@ def test_full_result_renders_every_section() -> None:
     assert "confidence: 85%" in comment
     assert "## Recommended Regression Tests" in comment
     assert "Verify event delivery on the new topic" in comment
-    assert "## Release Plan" in comment
+    assert "## Release Coordination Plan" in comment
     assert "1. **order-service** — Deploy first" in comment
     assert "2. **payment-service** — Deploy second" in comment
     assert "🔴 blocking" in comment
@@ -136,7 +140,7 @@ def test_empty_breaking_changes_renders_none() -> None:
         directly_impacted_services=[],
         indirectly_impacted_services=[],
     )
-    assert "No breaking changes identified." in comment
+    assert "## Breaking Changes\n\nNone." in comment
 
 
 def test_empty_migration_advice_renders_placeholder() -> None:
@@ -147,7 +151,7 @@ def test_empty_migration_advice_renders_placeholder() -> None:
         directly_impacted_services=[],
         indirectly_impacted_services=[],
     )
-    assert "No migration advice provided." in comment
+    assert "## Migration Advice\n\nNone." in comment
 
 
 def test_empty_suggested_reviewers_renders_placeholder() -> None:
@@ -158,7 +162,7 @@ def test_empty_suggested_reviewers_renders_placeholder() -> None:
         directly_impacted_services=[],
         indirectly_impacted_services=[],
     )
-    assert "No reviewers suggested." in comment
+    assert "## Suggested Reviewers\n\nNone." in comment
 
 
 def test_empty_regression_tests_renders_placeholder() -> None:
@@ -169,7 +173,7 @@ def test_empty_regression_tests_renders_placeholder() -> None:
         directly_impacted_services=[],
         indirectly_impacted_services=[],
     )
-    assert "No regression tests suggested." in comment
+    assert "## Recommended Regression Tests\n\nNone." in comment
 
 
 def test_empty_impacted_services_render_none() -> None:
@@ -193,10 +197,11 @@ def test_default_release_plan_renders_none_placeholders() -> None:
         directly_impacted_services=[],
         indirectly_impacted_services=[],
     )
-    assert "No deployment order needed - single repository change." in comment
-    assert "None." in comment
+    assert "## Release Coordination Plan" in comment
+    assert "**Deployment order:**\nNone." in comment
+    assert "**Repositories to notify:**\nNone." in comment
     assert "Not specified." in comment
-    assert "None identified." in comment
+    assert "**Rollout risks:**\nNone." in comment
 
 
 def test_unknown_risk_and_empty_impacted_services_for_no_deterministic_analysis() -> None:

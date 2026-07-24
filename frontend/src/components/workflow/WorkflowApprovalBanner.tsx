@@ -34,9 +34,9 @@ export function WorkflowApprovalBanner({
       <div className="flex items-start gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-5 py-4">
         <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" aria-hidden="true" />
         <p className="text-sm text-emerald-200">
-          <strong className="text-emerald-100">Blueprint approved.</strong> Auto Execution workflows
-          aren't available in this build yet — this blueprint is ready and waiting for when they
-          are.
+          <strong className="text-emerald-100">Blueprint approved.</strong> Planning is complete and
+          this blueprint is ready for implementation. Turning an approved blueprint into code isn't
+          available yet — this workflow stays here as your approved plan of record.
         </p>
       </div>
     );

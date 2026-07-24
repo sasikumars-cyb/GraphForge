@@ -11,6 +11,7 @@ import {
   FlaskConical,
   Search,
   History,
+  CheckCircle2,
   type LucideIcon,
 } from "lucide-react";
 
@@ -51,10 +52,10 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     section: "Workflows",
-    // Only ever starts a new workflow — there's no workflow-list route yet,
-    // so the label says exactly what it does rather than implying a browsable
-    // index (existing workflows are on the Dashboard or reachable via a run).
-    items: [{ label: "New Workflow", path: "/workflows/new", icon: GitMerge }],
+    items: [
+      { label: "New Workflow", path: "/workflows/new", icon: GitMerge },
+      { label: "Approved Queue", path: "/workflows/approved", icon: CheckCircle2 },
+    ],
   },
   {
     section: "History",

@@ -184,8 +184,12 @@ export function WorkflowPage() {
     <div className="flex flex-col gap-6">
       <WorkflowHeader workflow={workflow} completedSteps={completedSteps} phase={phase} />
 
-      {workflow.status === "completed" && (
-        <WorkflowSummaryHero workflow={workflow} steps={[...stepsByRunId.values()]} />
+      {(workflow.status === "completed" || workflow.status === "approved") && (
+        <WorkflowSummaryHero
+          workflow={workflow}
+          steps={[...stepsByRunId.values()]}
+          variant={workflow.status === "approved" ? "approved" : "completed"}
+        />
       )}
 
       <Card
@@ -300,7 +304,11 @@ export function WorkflowPage() {
                 <div className="mb-3">
                   <RunStatusBadge status={selectedRun.status} />
                 </div>
-                <StageArtifactCard stage={selectedStage ?? ""} step={selectedStep} stages={workflow.stages} />
+                <StageArtifactCard
+                  stage={selectedStage ?? ""}
+                  step={selectedStep}
+                  stages={workflow.stages}
+                />
                 {selectedRun.error_message && (
                   <details className="group mt-3">
                     <summary className="cursor-pointer text-xs font-medium text-rose-300/80 hover:text-rose-200">
@@ -380,6 +388,12 @@ function WorkflowPageSkeleton() {
 }
 
 // --- New Workflow creation page ---
+
+// Matches CreateWorkflowRequest.title's max_length on the backend — kept
+// in sync manually since there's no shared schema between the two. A full
+// multi-paragraph brief (requirements list, output schema, constraints)
+// fits comfortably; this just stops an accidental paste of something huge.
+const MAX_OBJECTIVE_LENGTH = 8000;
 
 export function NewWorkflowPage() {
   const { token } = useAuth();
@@ -463,7 +477,7 @@ export function NewWorkflowPage() {
               className="h-4 w-4 shrink-0 rounded-full border-2 border-slate-700"
               aria-hidden="true"
             />
-            <span className="text-sm font-semibold text-slate-400">Auto Execution Workflow</span>
+            <span className="text-sm font-semibold text-slate-400">Implementation Workflow</span>
             <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-slate-500 uppercase">
               Coming soon
             </span>
@@ -488,9 +502,23 @@ export function NewWorkflowPage() {
               disabled={isSubmitting}
               placeholder="e.g. Add rate limiting to the payment API. GraphForge will plan it, generate an implementation blueprint, propose tests, and review it — automatically."
               rows={4}
+              maxLength={MAX_OBJECTIVE_LENGTH}
               className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:opacity-50"
               aria-required="true"
+              aria-describedby="workflow-input-count"
             />
+            <p
+              id="workflow-input-count"
+              className={`mt-1 text-right text-xs ${
+                input.length >= MAX_OBJECTIVE_LENGTH
+                  ? "text-rose-400"
+                  : input.length >= MAX_OBJECTIVE_LENGTH * 0.9
+                    ? "text-amber-400"
+                    : "text-slate-500"
+              }`}
+            >
+              {input.length.toLocaleString()} / {MAX_OBJECTIVE_LENGTH.toLocaleString()}
+            </p>
           </div>
 
           {!isSubmitting && (

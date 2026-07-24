@@ -10,6 +10,7 @@ import {
   progressFraction,
   stageLabel,
   workflowStatusDisplay,
+  workflowTypeLabel,
   type WorkflowPhase,
 } from "../../lib/workflowDerived";
 
@@ -57,7 +58,7 @@ export function WorkflowHeader({ workflow, completedSteps, phase }: WorkflowHead
           </div>
           <div>
             <p className="text-xs font-semibold uppercase tracking-wide text-brand-400">
-              {workflow.workflow_type === "planning" ? "Planning Workflow" : "Agentic Workflow"}
+              {workflowTypeLabel(workflow.workflow_type)}
             </p>
             <h1 className="font-display text-xl font-bold tracking-tight text-slate-50 sm:text-2xl">
               {workflow.title}

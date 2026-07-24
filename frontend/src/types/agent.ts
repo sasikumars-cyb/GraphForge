@@ -297,6 +297,9 @@ export interface WorkflowDetail {
   runs: WorkflowRunItem[];
   created_at: string;
   updated_at: string;
+  // Resolved display name of whoever approved this blueprint — null if
+  // never approved, or approved before this field existed.
+  approved_by: string | null;
 }
 
 export interface WorkflowListItem {
@@ -308,6 +311,7 @@ export interface WorkflowListItem {
   stages: WorkflowStageInfo[];
   created_at: string;
   updated_at: string;
+  approved_by: string | null;
 }
 
 export interface WorkflowListResponse {

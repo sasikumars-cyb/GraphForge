@@ -5,14 +5,24 @@ import { computeElapsedMs, formatDuration, resultRepositories } from "../../lib/
 interface WorkflowSummaryHeroProps {
   workflow: WorkflowDetail;
   steps: AgentStep[];
+  /** "completed" (legacy_sdlc/auto_execution terminal state) vs "approved"
+   * (a Planning blueprint the human approved). Same stat layout for both —
+   * only the heading changes, so a Planning approval never claims a
+   * "complete" SDLC run that never wrote any code. */
+  variant?: "completed" | "approved";
 }
 
-/** Feature 8 — the executive summary shown once a workflow completes.
- * Every number here is a real aggregate over the workflow's own runs:
- * duration from real timestamps, evidence counted directly, repositories
- * deduped from repositories_consulted, confidence averaged across steps
- * that reported one. Nothing is a fixed/sample value. */
-export function WorkflowSummaryHero({ workflow, steps }: WorkflowSummaryHeroProps) {
+/** Feature 8 — the executive summary shown once a workflow reaches a
+ * positive terminal state. Every number here is a real aggregate over the
+ * workflow's own runs: duration from real timestamps, evidence counted
+ * directly, repositories deduped from repositories_consulted, confidence
+ * averaged across steps that reported one. Nothing is a fixed/sample
+ * value. */
+export function WorkflowSummaryHero({
+  workflow,
+  steps,
+  variant = "completed",
+}: WorkflowSummaryHeroProps) {
   const elapsedMs = computeElapsedMs(workflow.created_at, workflow.updated_at, true, Date.now());
   const evidenceCount = steps.reduce((sum, s) => sum + s.evidence.length, 0);
   const repoSet = new Set<string>();
@@ -30,7 +40,7 @@ export function WorkflowSummaryHero({ workflow, steps }: WorkflowSummaryHeroProp
           <CheckCircle2 className="h-6 w-6 text-emerald-400" aria-hidden="true" />
         </div>
         <p className="text-xs font-semibold uppercase tracking-wide text-emerald-400">
-          Workflow Complete
+          {variant === "approved" ? "Blueprint Approved" : "Workflow Complete"}
         </p>
         <h2 className="font-display text-2xl font-bold tracking-tight text-slate-50">
           {workflow.title}

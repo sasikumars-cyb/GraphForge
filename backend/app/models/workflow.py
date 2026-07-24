@@ -25,7 +25,10 @@ class Workflow(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
 
-    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    # TEXT, not VARCHAR(512): the objective this holds is routinely a full
+    # multi-paragraph brief (NewWorkflowPage's textarea), not a short title.
+    # The real ceiling is CreateWorkflowRequest.title's max_length.
+    title: Mapped[str] = mapped_column(Text, nullable=False)
 
     # "planning" | "development" | "testing" | "review" | "completed" — meaning
     # depends on workflow_type (see WORKFLOW_TYPE_STAGES in workflow_service.py)
@@ -50,6 +53,16 @@ class Workflow(Base):
     # type exists; present now so the column ships with this migration.
     source_workflow_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Set only when a human has approved this blueprint via /approve — the
+    # User whose decision moved this workflow to "approved". Nullable
+    # because workflows approved before this column existed, and workflows
+    # never approved at all, both have no answer here; SET NULL on user
+    # deletion (mirrors source_workflow_id's FK behavior) since losing the
+    # User row should never retroactively hide that an approval happened.
+    approved_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
     created_at: Mapped[datetime] = mapped_column(
