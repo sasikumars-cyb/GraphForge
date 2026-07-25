@@ -1,8 +1,9 @@
-import { createBrowserRouter, type RouteObject } from "react-router-dom";
+import { createBrowserRouter, Navigate, type RouteObject } from "react-router-dom";
 import { AppLayout } from "../components/layout/AppLayout";
 import { RequireAuth } from "../components/layout/RequireAuth";
 import { LoginPage } from "../pages/LoginPage";
-import { DashboardPage } from "../pages/DashboardPage";
+import { ControlCenterPage } from "../pages/ControlCenterPage";
+import { WorkspacePage } from "../pages/WorkspacePage";
 import { PlanningPage } from "../pages/PlanningPage";
 import { DevelopmentPage } from "../pages/DevelopmentPage";
 import { TestingPage } from "../pages/TestingPage";
@@ -30,23 +31,41 @@ export const routes: RouteObject[] = [
       {
         element: <AppLayout />,
         children: [
-          { path: "/", element: <DashboardPage /> },
+          { path: "/", element: <ControlCenterPage /> },
+
+          // ── Build: AI Workspace ──────────────────────────────────
+          { path: "/workspace", element: <WorkspacePage /> },
+          { path: "/workspace/planning", element: <PlanningPage /> },
+          { path: "/workspace/development", element: <DevelopmentPage /> },
+          { path: "/workspace/testing", element: <TestingPage /> },
+          { path: "/workspace/pr-review", element: <ReviewPage /> },
+
+          // ── Build: Workflows ─────────────────────────────────────
           { path: "/workflows/new", element: <NewWorkflowPage /> },
           { path: "/workflows/approved", element: <ApprovedQueuePage /> },
           { path: "/workflows/:workflowId", element: <WorkflowPage /> },
-          { path: "/planning", element: <PlanningPage /> },
-          { path: "/development", element: <DevelopmentPage /> },
-          { path: "/testing", element: <TestingPage /> },
-          { path: "/review", element: <ReviewPage /> },
+
+          // ── Monitor ──────────────────────────────────────────────
           { path: "/runs", element: <RunHistoryPage /> },
           { path: "/runs/:runId", element: <RunDetailPage /> },
-          { path: "/pull-requests", element: <PullRequestsPage /> },
-          { path: "/pull-requests/:id", element: <PullRequestDetailPage /> },
+
+          // ── Knowledge ────────────────────────────────────────────
           { path: "/repositories", element: <RepositoriesPage /> },
           { path: "/repositories/:id", element: <RepositoryDetailPage /> },
           { path: "/architecture", element: <ArchitecturePage /> },
+
+          // ── Administration ───────────────────────────────────────
+          { path: "/pull-requests", element: <PullRequestsPage /> },
+          { path: "/pull-requests/:id", element: <PullRequestDetailPage /> },
           { path: "/reports", element: <ReportsPage /> },
           { path: "/settings", element: <SettingsPage /> },
+
+          // ── Backward-compatible redirects ────────────────────────
+          // Preserve existing bookmarks and deep links.
+          { path: "/planning", element: <Navigate to="/workspace/planning" replace /> },
+          { path: "/development", element: <Navigate to="/workspace/development" replace /> },
+          { path: "/testing", element: <Navigate to="/workspace/testing" replace /> },
+          { path: "/review", element: <Navigate to="/workspace/pr-review" replace /> },
         ],
       },
     ],

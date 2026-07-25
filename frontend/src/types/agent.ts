@@ -126,6 +126,7 @@ export interface PlanningResult {
   risk_considerations: string[];
   graph_context_used: boolean;
   repositories_consulted?: string[];
+  blueprint?: import("./blueprint").BlueprintArtifact | null;
 }
 
 // --- Development Plan Result (agent-specific payload inside step.result) ---
@@ -185,6 +186,7 @@ export interface DevelopmentPlanResult {
   recommendations: string[];
   graph_context_used: boolean;
   repositories_consulted?: string[];
+  blueprint?: import("./blueprint").BlueprintArtifact | null;
 }
 
 // --- Test Plan Result (agent-specific payload inside step.result) ---

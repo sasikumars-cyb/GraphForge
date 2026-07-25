@@ -7,6 +7,7 @@ import { AiModelProvider } from "./AiModelContext";
 import { AuthProvider } from "./AuthContext";
 import * as authApi from "../lib/api/auth";
 import * as githubApi from "../lib/api/github";
+import * as systemApi from "../lib/api/system";
 import * as repositoriesApi from "../lib/api/repositories";
 import * as analysisApi from "../lib/api/analysis";
 import { ApiError } from "../lib/api/client";
@@ -84,6 +85,24 @@ describe("App navigation (authenticated)", () => {
   beforeEach(() => {
     localStorage.setItem("graphforge.token", "fake-token");
     vi.spyOn(authApi, "fetchCurrentUser").mockResolvedValue(FAKE_USER);
+    vi.spyOn(systemApi, "getSystemStatus").mockResolvedValue({
+      platform_status: "healthy",
+      environment: "development",
+      version: "0.1.0",
+      ai_provider: { name: "openai", configured: true, active: true, model: "gpt-4o" },
+      ai_providers: [
+        { name: "openai", configured: true, active: true, model: "gpt-4o" },
+      ],
+      connections: [
+        { name: "PostgreSQL", status: "connected", detail: null },
+      ],
+      knowledge_base: { repositories_tracked: 0, repositories_indexed: 0, repositories_pending: 0 },
+    });
+    vi.spyOn(githubApi, "getConnectionStatus").mockResolvedValue({
+      connected: false,
+      github_username: null,
+      connected_at: null,
+    });
   });
 
   afterEach(() => {
@@ -97,8 +116,10 @@ describe("App navigation (authenticated)", () => {
     const nav = await screen.findByRole("navigation");
 
     for (const label of [
-      "Dashboard",
-      "Pull Requests",
+      "Control Center",
+      "AI Workspace",
+      "New Workflow",
+      "Runs",
       "Repositories",
       "Architecture",
       "Reports",
@@ -108,23 +129,24 @@ describe("App navigation (authenticated)", () => {
     }
   });
 
-  it("defaults to the Dashboard page", async () => {
+  it("defaults to the Control Center page", async () => {
     renderApp();
     // Both the Topbar (h1) and the page itself (h2) show the label, so
     // assert on the page-level heading specifically.
     expect(
-      await screen.findByRole("heading", { level: 2, name: "Welcome back to GraphForge" }),
+      await screen.findByRole("heading", { level: 2, name: "Control Center" }),
     ).toBeInTheDocument();
   });
 
-  it("navigates to Pull Requests when its sidebar link is clicked", async () => {
+  it("navigates to AI Workspace when its sidebar link is clicked", async () => {
     const user = userEvent.setup();
     renderApp();
 
-    await user.click(await screen.findByRole("link", { name: "Pull Requests" }));
+    const nav = await screen.findByRole("navigation");
+    await user.click(within(nav).getByRole("link", { name: "AI Workspace" }));
 
     expect(
-      await screen.findByRole("heading", { level: 2, name: "Pull Requests" }),
+      await screen.findByRole("heading", { level: 2, name: "AI Workspace" }),
     ).toBeInTheDocument();
   });
 

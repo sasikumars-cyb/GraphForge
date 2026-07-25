@@ -1,0 +1,515 @@
+"""Capability analysis for the Planning Agent.
+
+Why this exists
+---------------
+The Planning Agent used to hand the LLM a repository inventory and then ask
+for a plan. Because LLMs generate sequentially and anchor on whatever context
+came first, an ETL brief reliably came back as "order-service + Kafka +
+inventory-service" — the plan was shaped by what happened to be indexed
+rather than by the business problem.
+
+An earlier fix classified each brief into exactly one project type. That was
+too rigid: real briefs are hybrids ("batch ingest, then publish an event"),
+and one label forces a single architecture onto a mixed problem.
+
+So this module detects *capabilities* instead — the things the solution has
+to be able to do (file ingestion, validation, streaming, monitoring, ...).
+Capabilities are multi-label, so a hybrid brief keeps all of its parts. The
+dominant capabilities then imply an architecture pattern, and the pattern
+supplies the layer backbone while the capabilities add cross-cutting layers.
+
+The pipeline is: problem -> capabilities -> pattern -> architecture ->
+required components -> repository search. Repository data enters only at the
+last step, which is what keeps it from defining the architecture.
+
+Cost
+----
+Pure Python: no LLM call, no network, no tokens. The playbook injected into
+the prompt is *composed from the detected capabilities only*, so a simple
+brief produces a shorter playbook than a complex one — typically smaller
+than the fixed per-type playbook it replaces.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class Capability:
+    """One thing the solution must be able to do."""
+
+    key: str
+    label: str
+    keywords: tuple[str, ...]
+    # Repository-search terms: what a repo would contain if it already
+    # implements this capability. Drives capability-driven reuse ranking.
+    search_terms: tuple[str, ...] = ()
+    # Cross-cutting architecture layer this capability adds, if any.
+    layer: str = ""
+    # Risk focus this capability introduces.
+    risk: str = ""
+
+
+@dataclass(frozen=True)
+class ArchitecturePattern:
+    """The structural shape implied by a set of capabilities."""
+
+    key: str
+    label: str
+    layers: tuple[str, ...]
+    flow: str
+
+
+@dataclass(frozen=True)
+class PlanningProfile:
+    """Result of capability analysis — everything the prompt needs."""
+
+    pattern: ArchitecturePattern
+    capabilities: tuple[Capability, ...] = ()
+
+    @property
+    def key(self) -> str:
+        return self.pattern.key
+
+    @property
+    def label(self) -> str:
+        return self.pattern.label
+
+    @property
+    def capability_labels(self) -> list[str]:
+        return [c.label for c in self.capabilities]
+
+    @property
+    def search_terms(self) -> list[str]:
+        """Flat list of repository-search terms across detected capabilities.
+
+        Used to rank repositories by what the architecture actually needs,
+        rather than searching for the project type as a single blunt term.
+        """
+        terms: list[str] = []
+        for cap in self.capabilities:
+            for t in cap.search_terms:
+                if t not in terms:
+                    terms.append(t)
+        return terms
+
+    def playbook(self) -> str:
+        """Compose the minimum architecture guidance for this brief.
+
+        Only detected capabilities contribute, so the injected text scales
+        with the complexity of the request instead of being a fixed block.
+        """
+        lines = [f"Architecture layers: {' -> '.join(self.pattern.layers)}."]
+
+        cross = [c.layer for c in self.capabilities if c.layer]
+        if cross:
+            # dict.fromkeys preserves order while removing duplicates
+            lines.append(f"Also model: {', '.join(dict.fromkeys(cross))}.")
+
+        lines.append(f"Data flow: {self.pattern.flow}.")
+
+        risks = [c.risk for c in self.capabilities if c.risk]
+        if risks:
+            lines.append(f"Risk focus: {'; '.join(dict.fromkeys(risks))}.")
+
+        # The single most important anti-bias instruction: without it the
+        # model reaches for whatever messaging/service vocabulary it saw in
+        # the repository inventory.
+        lines.append(
+            "Use only the layers above. Do not introduce messaging, "
+            "microservices, or ETL zones that these capabilities do not imply."
+        )
+        return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Capability registry
+# ---------------------------------------------------------------------------
+
+_CAPABILITIES: tuple[Capability, ...] = (
+    Capability(
+        key="file_ingestion",
+        label="File Ingestion",
+        keywords=("csv", "file", "vendor file", "sftp", "parquet", "upload", "flat file"),
+        search_terms=("reader", "loader", "parser", "ingest"),
+        layer="a Landing Zone for raw arrivals",
+        risk="late, duplicate, or partial file delivery",
+    ),
+    Capability(
+        key="batch_processing",
+        label="Batch Processing",
+        keywords=(
+            "batch",
+            "nightly",
+            "scheduled",
+            "cron",
+            "bulk",
+            "spark",
+            "airflow",
+            "etl",
+            "elt",
+        ),
+        search_terms=("job", "scheduler", "pipeline", "spark"),
+        risk="idempotency on retry and partial-failure recovery",
+    ),
+    Capability(
+        key="streaming",
+        label="Streaming",
+        keywords=(
+            "streaming",
+            "real-time",
+            "realtime",
+            "kafka",
+            "event-driven",
+            "event driven",
+            "pubsub",
+            "pub/sub",
+            "kinesis",
+            "consumer",
+        ),
+        search_terms=("consumer", "producer", "listener", "topic"),
+        layer="a Dead Letter Queue for unprocessable events",
+        risk="message ordering, consumer lag, and poison messages",
+    ),
+    Capability(
+        key="validation",
+        label="Validation",
+        keywords=("validat", "schema check", "data quality", "cleanse", "quarantine", "verify"),
+        search_terms=("validator", "validation", "schema", "constraint"),
+        layer="a Validation & Quarantine step",
+        risk="silent rejection of valid records",
+    ),
+    Capability(
+        key="schema_evolution",
+        label="Schema Evolution",
+        keywords=(
+            "schema evolution",
+            "schema change",
+            "schema registry",
+            "backward compat",
+            "versioned schema",
+        ),
+        search_terms=("schema", "registry", "migration", "avro"),
+        risk="upstream schema drift breaking downstream consumers",
+    ),
+    Capability(
+        key="warehouse_load",
+        label="Warehouse Loading",
+        keywords=("warehouse", "bigquery", "snowflake", "redshift", "curated", "data lake", "dbt"),
+        search_terms=("writer", "sink", "loader", "warehouse"),
+        layer="Raw and Curated zones ahead of the warehouse",
+        risk="load cost and partition skew at volume",
+    ),
+    Capability(
+        key="analytics",
+        label="Analytics & Reporting",
+        keywords=(
+            "report",
+            "dashboard",
+            "analytics",
+            "kpi",
+            "metric",
+            "looker",
+            "tableau",
+            "aggregat",
+        ),
+        search_terms=("aggregat", "metric", "report"),
+        layer="an Analytics & Reporting layer",
+        risk="metric definition drift and refresh latency",
+    ),
+    Capability(
+        key="api",
+        label="API Surface",
+        keywords=("api", "endpoint", "rest", "openapi", "graphql", "crud", "grpc"),
+        search_terms=("controller", "resource", "endpoint", "handler"),
+        layer="an API edge with authentication",
+        risk="versioning and backward compatibility for existing clients",
+    ),
+    Capability(
+        key="service_topology",
+        label="Service Topology",
+        keywords=(
+            "microservice",
+            "bounded context",
+            "service mesh",
+            "saga",
+            "domain-driven",
+            "inter-service",
+        ),
+        search_terms=("service", "client", "gateway"),
+        risk="distributed transactions and cascading failure",
+    ),
+    Capability(
+        key="persistence",
+        label="Persistence",
+        keywords=("database", "postgres", "mysql", "mongo", "store", "persist", "repository layer"),
+        search_terms=("repository", "entity", "dao", "store"),
+        layer="a persistence layer",
+        risk="data model migration and referential integrity",
+    ),
+    Capability(
+        key="frontend",
+        label="User Interface",
+        keywords=(
+            "frontend",
+            "ui",
+            "web app",
+            "react",
+            "angular",
+            "vue",
+            "page",
+            "screen",
+            "dashboard ui",
+        ),
+        search_terms=("component", "page", "view"),
+        layer="a frontend served via CDN/cache",
+        risk="load performance and deployment rollback",
+    ),
+    Capability(
+        key="model_training",
+        label="Model Training",
+        keywords=(
+            "machine learning",
+            "model training",
+            "feature store",
+            "inference",
+            "mlops",
+            "model registry",
+        ),
+        search_terms=("model", "feature", "training"),
+        layer="a Feature Store and Model Registry",
+        risk="train/serve skew and data drift",
+    ),
+    Capability(
+        key="notifications",
+        label="Notifications",
+        keywords=("notification", "alert", "email", "sms", "notify", "push"),
+        search_terms=("notification", "mailer", "alert"),
+        layer="a notification dispatch path",
+        risk="duplicate or missed notifications on retry",
+    ),
+    Capability(
+        key="monitoring",
+        label="Monitoring",
+        keywords=("monitor", "observab", "metrics", "logging", "audit", "trace", "sla"),
+        search_terms=("monitor", "metric", "audit", "log"),
+        layer="an observability and audit layer",
+        risk="blind spots in failure detection",
+    ),
+    Capability(
+        key="migration",
+        label="Data Migration",
+        keywords=(
+            "migrat",
+            "cutover",
+            "legacy",
+            "backfill",
+            "reconcil",
+            "decommission",
+            "dual write",
+        ),
+        search_terms=("migration", "backfill", "reconcil"),
+        layer="a reconciliation and rollback path",
+        risk="data loss and reconciliation gaps at cutover",
+    ),
+    Capability(
+        key="security",
+        label="Security & Access",
+        keywords=("auth", "oauth", "permission", "rbac", "encrypt", "pii", "gdpr", "sensitive"),
+        search_terms=("auth", "security", "token", "permission"),
+        risk="unauthorised access to sensitive data",
+    ),
+)
+
+# ---------------------------------------------------------------------------
+# Architecture patterns — the layer backbone a capability mix implies
+# ---------------------------------------------------------------------------
+
+_PATTERNS: dict[str, ArchitecturePattern] = {
+    "etl_batch": ArchitecturePattern(
+        key="etl_batch",
+        label="Batch ETL / Data Platform",
+        layers=(
+            "Source Systems",
+            "Landing",
+            "Validation",
+            "Raw",
+            "Transformation",
+            "Curated",
+            "Warehouse",
+            "Analytics",
+        ),
+        flow=(
+            "file arrival -> object storage -> orchestrator -> compute "
+            "-> validation -> transformation -> warehouse -> BI"
+        ),
+    ),
+    "streaming": ArchitecturePattern(
+        key="streaming",
+        label="Streaming / Event-Driven",
+        layers=("Producers", "Topics", "Stream Processing", "State Store", "Sinks", "Consumers"),
+        flow="producer -> topic -> consumer group -> processor -> state/sink -> downstream",
+    ),
+    "microservices": ArchitecturePattern(
+        key="microservices",
+        label="Microservices Platform",
+        layers=(
+            "API Gateway",
+            "Services",
+            "Integration",
+            "Per-Service Data Stores",
+            "Observability",
+        ),
+        flow="client -> gateway -> owning service -> datastore -> async events",
+    ),
+    "api_service": ArchitecturePattern(
+        key="api_service",
+        label="API Service",
+        layers=("Client", "API Edge", "Controller", "Service", "Persistence"),
+        flow="request -> auth -> validation -> handler -> data access -> response",
+    ),
+    "web_app": ArchitecturePattern(
+        key="web_app",
+        label="Web Application",
+        layers=("Frontend", "API / BFF", "Application Services", "Data Store", "Cache / CDN"),
+        flow="browser -> edge -> API -> service -> datastore -> response",
+    ),
+    "ml_pipeline": ArchitecturePattern(
+        key="ml_pipeline",
+        label="ML Pipeline",
+        layers=(
+            "Data Sources",
+            "Feature Engineering",
+            "Feature Store",
+            "Training",
+            "Model Registry",
+            "Serving",
+            "Monitoring",
+        ),
+        flow=(
+            "raw data -> features -> training -> evaluation -> registry "
+            "-> inference -> drift monitoring"
+        ),
+    ),
+    "analytics": ArchitecturePattern(
+        key="analytics",
+        label="Analytics / Reporting",
+        layers=("Source Data", "Modeling", "Semantic Layer", "Aggregations", "Dashboards"),
+        flow="warehouse tables -> transformations -> metric definitions -> aggregates -> BI tool",
+    ),
+    "migration": ArchitecturePattern(
+        key="migration",
+        label="Data Migration",
+        layers=(
+            "Source System",
+            "Extraction",
+            "Staging",
+            "Mapping & Reconciliation",
+            "Target System",
+            "Cutover",
+        ),
+        flow="snapshot -> extract -> stage -> map -> load -> reconcile -> cutover",
+    ),
+    "generic": ArchitecturePattern(
+        key="generic",
+        label="General Software Solution",
+        layers=("Entry Point", "Processing", "Storage", "Consumption"),
+        flow="derive the operational steps directly from the brief",
+    ),
+}
+
+# Which capabilities vote for which pattern. Ordered most-specific first so a
+# tie resolves toward the more opinionated architecture.
+_PATTERN_VOTES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("ml_pipeline", ("model_training",)),
+    ("migration", ("migration",)),
+    ("etl_batch", ("file_ingestion", "batch_processing", "warehouse_load", "schema_evolution")),
+    ("streaming", ("streaming",)),
+    ("web_app", ("frontend",)),
+    ("microservices", ("service_topology",)),
+    ("analytics", ("analytics",)),
+    ("api_service", ("api", "persistence")),
+)
+
+_MULTIWORD_WEIGHT = 3
+_SINGLEWORD_WEIGHT = 1
+# A capability needs real support in the text, not one incidental word.
+_DETECTION_THRESHOLD = 1
+
+
+def _matches(keyword: str, text: str) -> bool:
+    """Word-boundary-anchored keyword match.
+
+    Anchoring the *start* only is deliberate: several keywords are stems
+    ("validat", "migrat", "aggregat") that must still match "validation" or
+    "migrated". Without the leading boundary, short keywords match inside
+    unrelated words — "ui" fires on "build", "api" on "rapid" — which
+    silently attaches capabilities the brief never asked for.
+    """
+    return re.search(r"\b" + re.escape(keyword), text) is not None
+
+
+def detect_capabilities(task_description: str) -> tuple[Capability, ...]:
+    """Detect every capability the brief calls for — multi-label by design.
+
+    A hybrid brief ("batch ingest then publish an event") keeps both its
+    batch and streaming capabilities rather than being forced into one box.
+    """
+    text = (task_description or "").lower()
+    if not text.strip():
+        return ()
+
+    found: list[tuple[int, Capability]] = []
+    for cap in _CAPABILITIES:
+        score = 0
+        for kw in cap.keywords:
+            if _matches(kw, text):
+                score += _MULTIWORD_WEIGHT if " " in kw else _SINGLEWORD_WEIGHT
+        if score >= _DETECTION_THRESHOLD:
+            found.append((score, cap))
+
+    # Strongest signal first so the playbook leads with what matters most.
+    found.sort(key=lambda pair: pair[0], reverse=True)
+    return tuple(cap for _, cap in found)
+
+
+def derive_pattern(capabilities: tuple[Capability, ...]) -> ArchitecturePattern:
+    """Pick the architecture backbone implied by the detected capabilities."""
+    if not capabilities:
+        return _PATTERNS["generic"]
+
+    keys = {c.key for c in capabilities}
+    best_key = "generic"
+    best_score = 0
+    for pattern_key, voters in _PATTERN_VOTES:
+        score = len(keys & set(voters))
+        # Strictly greater keeps the earlier (more specific) pattern on ties.
+        if score > best_score:
+            best_score = score
+            best_key = pattern_key
+
+    return _PATTERNS[best_key]
+
+
+def analyse(task_description: str) -> PlanningProfile:
+    """Full capability analysis for one brief.
+
+    This is the entry point the agent uses: problem in, capabilities and
+    architecture pattern out, before any repository data is touched.
+    """
+    capabilities = detect_capabilities(task_description)
+    return PlanningProfile(pattern=derive_pattern(capabilities), capabilities=capabilities)
+
+
+def pattern_for_key(key: str) -> ArchitecturePattern:
+    """Resolve a pattern key back to its definition — used to honour the
+    `architecture_pattern` the LLM echoes back. Unknown keys fall back to
+    generic rather than inventing a shape."""
+    return _PATTERNS.get(key, _PATTERNS["generic"])
+
+
+def known_pattern_keys() -> list[str]:
+    """All valid architecture_pattern values, for the prompt's enum hint."""
+    return list(_PATTERNS)

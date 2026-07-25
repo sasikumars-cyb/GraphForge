@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
-import { GitMerge, Send, Clapperboard } from "lucide-react";
+import { GitMerge, Send, Clapperboard, LayoutDashboard, AlignLeft, FlaskConical, Code } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
@@ -19,6 +19,7 @@ import {
   PlanningResultDetails,
   TestingResultDetails,
 } from "../components/agents/StageResultDetails";
+import { BlueprintExplorer } from "../components/blueprint/BlueprintExplorer";
 import { useAuth } from "../app/auth-context";
 import {
   approveWorkflow,
@@ -36,6 +37,7 @@ import type {
   TestPlanResult,
   WorkflowDetail,
 } from "../types/agent";
+import type { BlueprintArtifact } from "../types/blueprint";
 import { deriveWorkflowState, STAGE_AGENT_LABEL } from "../lib/workflowDerived";
 
 const POLL_INTERVAL_MS = 2500;
@@ -278,7 +280,7 @@ export function WorkflowPage() {
           </Card>
         </div>
 
-        <div className="flex flex-col gap-4">
+        <div className="flex min-w-0 flex-col gap-4">
           {workflow.runs.length > 1 && (
             <div className="flex flex-wrap gap-2">
               {workflow.runs.map((r) => (
@@ -321,54 +323,141 @@ export function WorkflowPage() {
                 )}
               </Card>
 
-              <Card title="Execution Log">
-                <ExecutionLogPanel step={selectedStep} agentLabel={selectedLabel ?? "Agent"} />
-              </Card>
-
-              <EvidencePanel evidence={selectedStep.evidence} />
-
-              {(selectedStage === "planning" ||
-                selectedStage === "development" ||
-                selectedStage === "testing") && (
-                <Card title="Full Artifacts">
-                  <details className="group">
-                    <summary className="cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-200">
-                      View full artifacts
-                    </summary>
-                    <div className="mt-3 flex flex-col gap-4">
-                      {selectedStage === "planning" && (
-                        <PlanningResultDetails
-                          result={selectedStep.result as unknown as PlanningResult}
-                        />
-                      )}
-                      {selectedStage === "development" && (
-                        <DevelopmentResultDetails
-                          result={selectedStep.result as unknown as DevelopmentPlanResult}
-                        />
-                      )}
-                      {selectedStage === "testing" && (
-                        <TestingResultDetails
-                          result={selectedStep.result as unknown as TestPlanResult}
-                        />
-                      )}
-                    </div>
-                  </details>
-                </Card>
-              )}
-
-              <Card title="Full Result">
-                <details className="group">
-                  <summary className="cursor-pointer text-xs font-medium text-slate-400 hover:text-slate-200">
-                    View result JSON
-                  </summary>
-                  <pre className="mt-2 max-h-64 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs text-slate-300">
-                    {JSON.stringify(selectedStep.result, null, 2)}
-                  </pre>
-                </details>
-              </Card>
+              <StageResultPanel
+                stage={selectedStage}
+                step={selectedStep}
+                agentLabel={selectedLabel ?? "Agent"}
+                evidence={selectedStep.evidence}
+              />
             </>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// StageResultPanel — tabbed result view (Visual Blueprint | Summary | Evidence | Log | JSON)
+// ---------------------------------------------------------------------------
+
+type ResultTab = "blueprint" | "summary" | "evidence" | "log" | "json";
+
+const TAB_CONFIG: {
+  id: ResultTab;
+  label: string;
+  icon: typeof LayoutDashboard;
+  always?: boolean;
+}[] = [
+  { id: "blueprint", label: "Visual Blueprint", icon: LayoutDashboard },
+  { id: "summary", label: "Summary", icon: AlignLeft },
+  { id: "evidence", label: "Evidence", icon: FlaskConical },
+  { id: "log", label: "Log", icon: Code },
+  { id: "json", label: "JSON", icon: Code, always: true },
+];
+
+function StageResultPanel({
+  stage,
+  step,
+  agentLabel,
+  evidence,
+}: {
+  stage: string | null;
+  step: AgentStep;
+  agentLabel: string;
+  evidence: AgentStep["evidence"];
+}) {
+  const blueprint =
+    stage === "planning"
+      ? ((step.result as unknown as PlanningResult).blueprint as BlueprintArtifact | null | undefined)
+      : stage === "development"
+      ? ((step.result as unknown as DevelopmentPlanResult).blueprint as BlueprintArtifact | null | undefined)
+      : null;
+
+  const hasBlueprint = Boolean(blueprint && blueprint.diagrams.length > 0);
+  const hasSummary = stage === "planning" || stage === "development" || stage === "testing";
+
+  const defaultTab: ResultTab = hasBlueprint ? "blueprint" : hasSummary ? "summary" : "evidence";
+  const [activeTab, setActiveTab] = useState<ResultTab>(defaultTab);
+
+  // Reset to best default when the stage changes
+  const stageRef = useRef(stage);
+  if (stageRef.current !== stage) {
+    stageRef.current = stage;
+    setActiveTab(hasBlueprint ? "blueprint" : hasSummary ? "summary" : "evidence");
+  }
+
+  const visibleTabs = TAB_CONFIG.filter((t) => {
+    if (t.id === "blueprint") return hasBlueprint;
+    if (t.id === "summary") return hasSummary;
+    return true;
+  });
+
+  return (
+    <div className="flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+      {/* Tab bar */}
+      <div className="flex items-center gap-0.5 border-b border-slate-800 px-2 pt-2">
+        {visibleTabs.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setActiveTab(tab.id)}
+              className={`flex items-center gap-1.5 rounded-t px-3 py-2 text-xs font-medium transition-colors ${
+                isActive
+                  ? "border-b-2 border-brand-500 text-brand-300"
+                  : "text-slate-500 hover:text-slate-300"
+              }`}
+              aria-selected={isActive}
+              role="tab"
+            >
+              <Icon className="h-3 w-3" aria-hidden="true" />
+              {tab.label}
+              {tab.id === "blueprint" && hasBlueprint && (
+                <span className="rounded-full bg-brand-500/20 px-1.5 py-0.5 text-[9px] font-semibold text-brand-300">
+                  NEW
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Tab panels */}
+      <div className="min-h-[300px] p-4">
+        {activeTab === "blueprint" && blueprint && (
+          <BlueprintExplorer blueprint={blueprint} />
+        )}
+
+        {activeTab === "summary" && (
+          <div className="flex flex-col gap-4">
+            {stage === "planning" && (
+              <PlanningResultDetails result={step.result as unknown as PlanningResult} />
+            )}
+            {stage === "development" && (
+              <DevelopmentResultDetails result={step.result as unknown as DevelopmentPlanResult} />
+            )}
+            {stage === "testing" && (
+              <TestingResultDetails result={step.result as unknown as TestPlanResult} />
+            )}
+          </div>
+        )}
+
+        {activeTab === "evidence" && (
+          <EvidencePanel evidence={evidence} />
+        )}
+
+        {activeTab === "log" && (
+          <ExecutionLogPanel step={step} agentLabel={agentLabel} />
+        )}
+
+        {activeTab === "json" && (
+          <pre className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs text-slate-300">
+            {JSON.stringify(step.result, null, 2)}
+          </pre>
+        )}
       </div>
     </div>
   );

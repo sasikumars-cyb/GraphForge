@@ -308,24 +308,18 @@ describe("WorkflowPage", () => {
     expect(screen.getAllByText("Found 3 repositories.").length).toBeGreaterThan(0);
   });
 
-  it("exposes the selected stage's real artifacts behind a 'View full artifacts' disclosure", async () => {
-    const user = userEvent.setup();
+  it("shows the planning stage's artifacts in the Summary tab (active by default)", async () => {
     vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(makeWorkflow());
     vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
 
     renderWorkflowPage();
 
-    const toggle = await screen.findByText("View full artifacts");
-    // Closed by default — the real step description sits inside a closed
-    // <details>, not overwhelming the default view.
-    expect(screen.getByText("x").closest("details")).toHaveProperty("open", false);
-
-    await user.click(toggle);
-    expect(screen.getByText("x").closest("details")).toHaveProperty("open", true);
-    expect(screen.getByText("Implementation Steps")).toBeInTheDocument();
+    // Summary tab is default when no blueprint is present — content is immediately visible.
+    expect(await screen.findByRole("tab", { name: /Summary/ })).toBeInTheDocument();
+    expect(await screen.findByText("Implementation Steps")).toBeInTheDocument();
   });
 
-  it("does not offer 'View full artifacts' for the review stage", async () => {
+  it("does not show a Summary tab for the review stage", async () => {
     vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
       makeWorkflow({
         current_stage: "review",
@@ -354,7 +348,7 @@ describe("WorkflowPage", () => {
     renderWorkflowPage();
 
     await screen.findByText("Implement JWT auth");
-    expect(screen.queryByText("View full artifacts")).not.toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /Summary/ })).not.toBeInTheDocument();
   });
 
   it("reveals the Workflow Replay panel only after the toggle is clicked", async () => {

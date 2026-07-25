@@ -1,6 +1,7 @@
 import { useLocation } from "react-router-dom";
 import { Menu } from "lucide-react";
 import { NAV_ITEMS } from "./nav-items";
+import { WORKSPACE_CAPABILITIES } from "../../config/workspace-capabilities";
 import { StatusBadge } from "../StatusBadge";
 
 interface TopbarProps {
@@ -9,9 +10,23 @@ interface TopbarProps {
 
 export function Topbar({ onMenuClick }: TopbarProps) {
   const location = useLocation();
-  const currentItem = NAV_ITEMS.find((item) =>
-    item.path === "/" ? location.pathname === "/" : location.pathname.startsWith(item.path),
-  );
+
+  // Resolve page title: first check workspace capabilities (nested routes),
+  // then fall back to top-level nav items.
+  let pageTitle: string | undefined;
+
+  if (location.pathname.startsWith("/workspace/")) {
+    const slug = location.pathname.replace("/workspace/", "").split("/")[0];
+    const cap = WORKSPACE_CAPABILITIES.find((c) => c.slug === slug);
+    pageTitle = cap?.name;
+  }
+
+  if (!pageTitle) {
+    const navItem = NAV_ITEMS.find((item) =>
+      item.path === "/" ? location.pathname === "/" : location.pathname.startsWith(item.path),
+    );
+    pageTitle = navItem?.label;
+  }
 
   return (
     <header className="flex items-center justify-between border-b border-slate-800 bg-slate-950/80 px-4 py-3 backdrop-blur md:px-8">
@@ -25,7 +40,7 @@ export function Topbar({ onMenuClick }: TopbarProps) {
           <Menu className="h-5 w-5" />
         </button>
         <h1 className="font-display text-base font-semibold tracking-tight text-slate-100">
-          {currentItem?.label ?? "GraphForge"}
+          {pageTitle ?? "GraphForge"}
         </h1>
       </div>
 

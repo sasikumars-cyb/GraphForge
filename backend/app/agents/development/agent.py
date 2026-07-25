@@ -25,6 +25,7 @@ from app.agents._contract import (
     Confidence,
     Evidence,
 )
+from app.agents.blueprint.factory import BlueprintFactory
 from app.agents.development.schemas import (
     AffectedComponent,
     AffectedRepository,
@@ -301,6 +302,14 @@ class DevelopmentAgent:
         # Never trust the LLM's self-reported graph_context_used — derive it
         # from what the tools actually returned.
         plan.graph_context_used = has_graph_data
+
+        # Generate visual blueprint from structured plan fields
+        try:
+            blueprint = BlueprintFactory.from_development_result(plan)
+            plan.blueprint = blueprint.model_dump()
+        except Exception:
+            logger.warning("development_agent_blueprint_generation_failed", exc_info=True)
+            plan.blueprint = None
 
         # LLM synthesis evidence
         evidence.append(

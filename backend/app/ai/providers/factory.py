@@ -1,107 +1,81 @@
 """Factory for creating LLM provider instances.
 
-Supports multiple provider backends. OpenAI, Groq (OpenAI-compatible),
-and Gemini are implemented; others raise ``UnsupportedProviderError``
-until their adapters are built.
+This is the seam between callers and provider construction. It kept its
+signature when the configuration layer was introduced, so the ~20 call sites
+across the agents did not have to change.
+
+What changed underneath: provider selection used to be an if/elif chain over
+one process-wide env var. It now delegates to
+
+  app.ai.config.resolver    — decides provider/model/params (stage-aware)
+  app.ai.providers.registry — declares providers and builds them
+
+Adding a provider is a `ProviderSpec` in the registry; nothing here changes.
 """
 
 from __future__ import annotations
 
+from app.ai.config.resolver import resolve
 from app.ai.interfaces.llm_provider import ILLMProvider
-from app.ai.providers.gemini_provider import GeminiProvider
-from app.ai.providers.openai_provider import OpenAIProvider
-from app.core.config import Settings, get_settings
+from app.ai.providers.registry import (
+    UnsupportedProviderError,
+    get_provider_spec,
+    is_known_model,
+)
+from app.core.config import Settings
 from app.core.exceptions import AppError
 
-# The only models the UI is allowed to select (see frontend
-# `src/types/aiModel.ts`, which mirrors this list for display). Closed
-# vocabulary - never accept an arbitrary model string from a request body.
-# Only meaningful when `ai_provider` is "openai" - Groq has its own model
-# (`settings.groq_model`), not user-selectable from this UI yet.
-SUPPORTED_OPENAI_MODELS = ("gpt-5.5", "gpt-5", "gpt-5-mini")
+__all__ = [
+    "SUPPORTED_OPENAI_MODELS",
+    "UnsupportedModelError",
+    "UnsupportedProviderError",
+    "create_llm_provider",
+]
 
-_GROQ_CHAT_URL = "https://api.groq.com/openai/v1/chat/completions"
-
-
-class UnsupportedProviderError(AppError):
-    """Raised when the configured AI provider is not yet implemented."""
-
-    status_code = 501
-    error_code = "unsupported_ai_provider"
+# Retained for backward compatibility: existing imports and tests reference
+# this name. The authoritative catalogue now lives in the registry, which the
+# API serves to the UI so the model list is no longer duplicated by hand.
+SUPPORTED_OPENAI_MODELS = tuple(spec.model_ids() if (spec := get_provider_spec("openai")) else ())
 
 
 class UnsupportedModelError(AppError):
-    """Raised when a request asks for a model outside the supported set."""
+    """Raised when a request asks for a model the provider does not offer."""
 
     status_code = 422
     error_code = "unsupported_ai_model"
 
 
-def create_llm_provider(settings: Settings | None = None, model: str | None = None) -> ILLMProvider:
-    """Instantiate the configured LLM provider.
+def create_llm_provider(
+    settings: Settings | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+    stage: str | None = None,
+) -> ILLMProvider:
+    """Instantiate a provider for this request.
 
-    Reads ``ai_provider`` from settings and returns the matching concrete
-    implementation.  Raises :class:`UnsupportedProviderError` for providers
-    that are not yet implemented.
+    ``model``/``provider`` are per-call overrides and never mutate stored
+    configuration. ``stage`` ("planning", "development", ...) lets the
+    configuration layer apply a per-stage override when one is configured.
 
-    ``model`` optionally overrides ``settings.openai_model`` for this call
-    only (e.g. a per-request model chosen in the UI) - it never mutates
-    the process-wide settings object. Must be one of
-    :data:`SUPPORTED_OPENAI_MODELS`.
+    With nothing configured in the database, resolution falls through to the
+    environment variables and behaves exactly as it did before.
     """
-    cfg = settings or get_settings()
-    provider_name = cfg.ai_provider.lower()
+    resolved = resolve(provider=provider, model=model, stage=stage, settings=settings)
 
-    if provider_name == "openai":
-        if not cfg.openai_api_key:
-            raise AppError(
-                "OPENAI_API_KEY is not configured.",
-                status_code=503,
-                error_code="ai_provider_not_configured",
-            )
-        if model is not None and model not in SUPPORTED_OPENAI_MODELS:
-            raise UnsupportedModelError(f"Unsupported AI model: '{model}'.")
-        return OpenAIProvider(
-            api_key=cfg.openai_api_key,
-            model=model or cfg.openai_model,
-            temperature=cfg.openai_temperature,
-            max_tokens=cfg.openai_max_tokens,
+    if not resolved.spec.implemented:
+        raise UnsupportedProviderError(f"{resolved.spec.label} provider is not yet implemented.")
+
+    # Only validate an explicitly requested model. A configured or default
+    # model is trusted — an operator who typed a brand-new model ID into
+    # settings should not be blocked by our catalogue being a release behind.
+    if model is not None and not is_known_model(resolved.key, model):
+        raise UnsupportedModelError(f"Unsupported AI model: '{model}'.")
+
+    if resolved.spec.requires_api_key and not resolved.config.api_key:
+        raise AppError(
+            f"No API key configured for provider '{resolved.key}'.",
+            status_code=503,
+            error_code="ai_provider_not_configured",
         )
 
-    if provider_name == "groq":
-        if not cfg.groq_api_key:
-            raise AppError(
-                "GROQ_API_KEY is not configured.",
-                status_code=503,
-                error_code="ai_provider_not_configured",
-            )
-        return OpenAIProvider(
-            api_key=cfg.groq_api_key,
-            model=cfg.groq_model,
-            temperature=cfg.openai_temperature,
-            max_tokens=cfg.openai_max_tokens,
-            base_url=_GROQ_CHAT_URL,
-            provider_name="groq",
-        )
-
-    if provider_name == "gemini":
-        if not cfg.gemini_api_key:
-            raise AppError(
-                "GEMINI_API_KEY is not configured.",
-                status_code=503,
-                error_code="ai_provider_not_configured",
-            )
-        return GeminiProvider(
-            api_key=cfg.gemini_api_key,
-            model=cfg.gemini_model,
-            temperature=cfg.openai_temperature,
-            max_tokens=cfg.gemini_max_tokens,
-        )
-
-    if provider_name in ("claude", "anthropic"):
-        raise UnsupportedProviderError("Claude/Anthropic provider is not yet implemented.")
-
-    if provider_name == "ollama":
-        raise UnsupportedProviderError("Ollama provider is not yet implemented.")
-
-    raise UnsupportedProviderError(f"Unknown AI provider: '{cfg.ai_provider}'.")
+    return resolved.spec.build(resolved.config)

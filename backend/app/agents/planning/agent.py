@@ -40,7 +40,18 @@ from app.ai.providers.factory import create_llm_provider
 
 logger = logging.getLogger(__name__)
 
-from app.agents.planning.schemas import ImplementationStep, PlanningResult
+from app.agents.blueprint.factory import BlueprintFactory
+from app.agents.planning.classifier import PlanningProfile, analyse, pattern_for_key
+from app.agents.planning.schemas import (
+    ArchitectureLayer,
+    DataEntity,
+    DataFlowStep,
+    ImplementationPhase,
+    ImplementationStep,
+    PlanningResult,
+    RepositoryUsage,
+    RiskItem,
+)
 from app.agents.planning.tools import (
     GetIndexedRepositoriesTool,
     PlanningObservation,
@@ -54,7 +65,11 @@ from app.graph.session import get_driver
 
 _PROMPT_VERSION = "1.0"
 _PROMPT_DIR = Path(__file__).parent / "prompts"
-_MAX_GRAPH_CONTEXT_CHARS = 6_000  # keep prompt budget under control
+# Deliberately tight. A large repository dump ahead of the design
+# instruction is what caused the LLM to anchor on existing services and
+# produce repository-first plans; capping it both saves tokens and keeps
+# the architecture driven by the business brief.
+_MAX_GRAPH_CONTEXT_CHARS = 3_500
 
 # ---------------------------------------------------------------------------
 # LLM call — minimal, planning-specific, not shared with the Review Agent
@@ -103,11 +118,25 @@ async def _call_llm(user_prompt: str, model: str | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _render_prompt(task_description: str, graph_context: str) -> str:
-    """Render the planning.md template with the given variables."""
-    return render_prompt_template(
+def _render_prompt(
+    task_description: str, graph_context: str, profile: PlanningProfile
+) -> str:
+    """Render the planning.md template with the given variables.
+
+    The capability placeholders are substituted here rather than in
+    `render_prompt_template` because that helper is shared by five agents and
+    only Planning does capability analysis. The playbook is composed from the
+    detected capabilities alone, so its size scales with the brief instead of
+    being a fixed block per project type.
+    """
+    body = render_prompt_template(
         _PROMPT_DIR / "planning.md", task_description, graph_context, _MAX_GRAPH_CONTEXT_CHARS
     )
+    capabilities = ", ".join(profile.capability_labels) or "none detected — derive from the brief"
+    body = body.replace("{{ architecture_pattern }}", profile.label)
+    body = body.replace("{{ detected_capabilities }}", capabilities)
+    body = body.replace("{{ architecture_playbook }}", profile.playbook())
+    return body
 
 
 # ---------------------------------------------------------------------------
@@ -115,16 +144,58 @@ def _render_prompt(task_description: str, graph_context: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _parse_llm_response(raw: str, task_description: str) -> PlanningResult:
+def _safe_list(raw_data: object, model_cls: type) -> list:
+    """Parse a list of dicts from LLM output into model instances.
+
+    Silently skips items that are not dicts or fail model validation —
+    LLM output may contain extra keys or null values; extra="ignore" on the
+    models handles schema mismatches; this handles structural mismatches.
+    """
+    if not isinstance(raw_data, list):
+        return []
+    result = []
+    for item in raw_data:
+        if not isinstance(item, dict):
+            continue
+        try:
+            result.append(model_cls(**item))
+        except Exception:
+            pass
+    return result
+
+
+def _parse_llm_response(
+    raw: str, task_description: str, profile: PlanningProfile | None = None
+) -> PlanningResult:
     """Parse the LLM's JSON response into a PlanningResult.
 
     Never silently ignores a malformed response — raises PlanningLLMError
     if the JSON can't be parsed. Fills in defaults for missing optional fields.
+
+    `profile` is the capability analysis that shaped the prompt. The LLM
+    echoes an `architecture_pattern` back; when it names a pattern we
+    recognise, its answer wins (it read the whole brief, the analyser only
+    matched keywords). Anything unrecognised keeps the derived pattern.
     """
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
         raise PlanningLLMError(f"LLM response is not valid JSON: {exc}") from exc
+
+    analysis = profile or analyse("")
+    pattern = analysis.pattern
+    llm_pattern = data.get("architecture_pattern")
+    if isinstance(llm_pattern, str) and llm_pattern.strip():
+        key = llm_pattern.strip().lower()
+        resolved = pattern_for_key(key)
+        # pattern_for_key returns generic for unknown keys — only trust the
+        # LLM when it actually named a pattern we know about.
+        if resolved.key != "generic" or key == "generic":
+            pattern = resolved
+
+    # Capabilities stay deterministic: they come from the brief, not the
+    # model, so they cannot be talked out of a requirement the brief states.
+    capability_labels = analysis.capability_labels
 
     steps = [
         ImplementationStep(
@@ -134,18 +205,29 @@ def _parse_llm_response(raw: str, task_description: str) -> PlanningResult:
             risk_note=s.get("risk_note", ""),
         )
         for i, s in enumerate(data.get("implementation_steps", []))
+        if isinstance(s, dict)
     ]
 
     return PlanningResult(
         task_description=task_description,
         executive_summary=data.get("executive_summary", ""),
         implementation_steps=steps,
-        affected_components=data.get("affected_components", []),
-        kafka_topics_involved=data.get("kafka_topics_involved", []),
-        risk_considerations=data.get("risk_considerations", []),
+        affected_components=data.get("affected_components") or [],
+        kafka_topics_involved=data.get("kafka_topics_involved") or [],
+        risk_considerations=data.get("risk_considerations") or [],
         graph_context_used=bool(data.get("graph_context_used", False)),
         repositories_consulted=[],  # filled in below by the agent
         prompt_version=_PROMPT_VERSION,
+        capabilities=capability_labels,
+        project_type=pattern.key,
+        project_type_label=pattern.label,
+        # Architect-level blueprint fields — empty when LLM doesn't produce them
+        architecture_layers=_safe_list(data.get("architecture_layers"), ArchitectureLayer),
+        data_flow=_safe_list(data.get("data_flow"), DataFlowStep),
+        repository_usage=_safe_list(data.get("repository_usage"), RepositoryUsage),
+        data_entities=_safe_list(data.get("data_entities"), DataEntity),
+        implementation_phases=_safe_list(data.get("implementation_phases"), ImplementationPhase),
+        risks=_safe_list(data.get("risks"), RiskItem),
     )
 
 
@@ -176,6 +258,21 @@ class PlanningAgent:
         graph_repo = Neo4jGraphRepository(driver)
 
         evidence: list[Evidence] = []
+
+        # ------------------------------------------------------------------
+        # Analyse the business problem FIRST — before any repository data is
+        # fetched or formatted. This ordering is the fix for repository-first
+        # planning: capabilities and the architecture pattern are derived from
+        # the brief, so an ETL request gets ETL zones even when every indexed
+        # repository is a microservice. The resulting search terms then drive
+        # which repositories are worth showing at all.
+        # Pure keyword matching — no LLM call, no tokens.
+        # ------------------------------------------------------------------
+        profile = analyse(task_description)
+        logger.info(
+            "planning_agent_analysed pattern=%s capabilities=%s",
+            profile.key, ",".join(c.key for c in profile.capabilities) or "none",
+        )
 
         # ------------------------------------------------------------------
         # Plan: the agent always runs both tools — the repository list
@@ -244,17 +341,22 @@ class PlanningAgent:
         # ------------------------------------------------------------------
         # Synthesize: LLM call with real graph context
         # ------------------------------------------------------------------
-        graph_context_text = format_graph_context(repos_obs, traverse_obs)
-        prompt = _render_prompt(task_description, graph_context_text)
+        # Repository search is capability-driven: only repositories that match
+        # the capabilities the architecture needs reach the prompt. This is the
+        # "repositories validate the architecture, never define it" step.
+        graph_context_text = format_graph_context(
+            repos_obs, traverse_obs, relevance_terms=profile.search_terms
+        )
+        prompt = _render_prompt(task_description, graph_context_text, profile)
 
         logger.info(
-            "planning_agent_synthesizing has_graph_data=%s graph_context_chars=%d",
-            has_graph_data, len(graph_context_text),
+            "planning_agent_synthesizing has_graph_data=%s graph_context_chars=%d pattern=%s",
+            has_graph_data, len(graph_context_text), profile.key,
         )
 
         try:
             raw_response = await _call_llm(user_prompt=prompt, model=context.model)
-            planning_result = _parse_llm_response(raw_response, task_description)
+            planning_result = _parse_llm_response(raw_response, task_description, profile)
         except PlanningLLMError as exc:
             # LLM failure — fail cleanly, per AGENT_FRAMEWORK.md error policy.
             logger.error("planning_agent_llm_failed error=%s", str(exc))
@@ -267,6 +369,17 @@ class PlanningAgent:
         # from what the tools actually returned. If traversal failed or the
         # graph was empty, this must be False regardless of what the model claims.
         planning_result.graph_context_used = has_graph_data
+
+        # Generate visual blueprint from the structured result. Runs after
+        # repositories_consulted and graph_context_used are finalized so
+        # factory has the complete picture. Never blocks workflow completion
+        # on failure — blueprint is a presentation layer, not core output.
+        try:
+            blueprint = BlueprintFactory.from_planning_result(planning_result)
+            planning_result.blueprint = blueprint.model_dump()
+        except Exception:
+            logger.warning("planning_agent_blueprint_generation_failed", exc_info=True)
+            planning_result.blueprint = None
 
         # LLM synthesis step is always the last evidence entry
         if graph_unavailable:

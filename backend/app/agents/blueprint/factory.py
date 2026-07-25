@@ -1,0 +1,1078 @@
+"""BlueprintFactory — transforms structured agent output into BlueprintArtifacts.
+
+Pure Python, no LLM calls. Each agent generates its structured result first;
+the factory deterministically converts those structured fields into visual
+diagram objects. This separation means:
+- Diagram data is always consistent with the structured result
+- No second LLM call required
+- Factory can be unit-tested with synthetic PlanningResult fixtures
+
+To add support for a new agent (Development, Testing, Engineering Review):
+1. Add a static method `from_X_result(result: XResult) -> BlueprintArtifact`
+2. Register it in that agent's run() after the LLM parse succeeds
+3. Add a frontend renderer for any new DiagramType it introduces
+"""
+
+from __future__ import annotations
+
+import re
+from typing import TYPE_CHECKING
+
+from app.agents.blueprint.models import (
+    BlueprintArtifact,
+    Diagram,
+    DiagramEdge,
+    DiagramLayout,
+    DiagramNode,
+    DiagramType,
+)
+
+if TYPE_CHECKING:
+    from app.agents.development.schemas import DevelopmentPlan
+    from app.agents.planning.schemas import PlanningResult
+
+
+# ---------------------------------------------------------------------------
+# Utilities
+# ---------------------------------------------------------------------------
+
+
+def _slug(text: str) -> str:
+    """Stable, filesystem-safe ID fragment from arbitrary text."""
+    return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:40]
+
+
+def _risk_level(text: str) -> str:
+    """Heuristic severity for a risk string — keyword scan, no LLM."""
+    t = text.lower()
+    if any(w in t for w in ("critical", "severe", "breach", "security", "data loss")):
+        return "critical"
+    if any(w in t for w in ("high", "major", "significant", "failure")):
+        return "high"
+    if any(w in t for w in ("medium", "moderate", "possible", "performance")):
+        return "medium"
+    return "low"
+
+
+def _stars(n: int) -> str:
+    """Return a star-rating string with filled and empty stars (1-5)."""
+    n = max(1, min(5, n))
+    return "★" * n + "☆" * (5 - n)
+
+
+def _risk_severity(likelihood: str, impact: str) -> str:
+    """Compute severity from likelihood × impact matrix."""
+    impact_score = {"low": 1, "medium": 2, "high": 3, "critical": 4}.get(impact.lower(), 2)
+    likelihood_score = {"low": 1, "medium": 2, "high": 3}.get(likelihood.lower(), 2)
+    combined = impact_score + likelihood_score
+    if combined >= 6:
+        return "critical"
+    if combined >= 5:
+        return "high"
+    if combined >= 3:
+        return "medium"
+    return "low"
+
+
+_LAYER_TYPE_TO_NODE_TYPE: dict[str, str] = {
+    "source": "input",
+    "ingestion": "input",
+    "processing": "component",
+    "transformation": "component",
+    "storage": "phase",
+    "consumption": "output",
+    "monitoring": "default",
+}
+
+_FLOW_STEP_TYPE_TO_NODE_TYPE: dict[str, str] = {
+    "source": "input",
+    "process": "component",
+    "storage": "phase",
+    "destination": "output",
+}
+
+
+# ---------------------------------------------------------------------------
+# New Principal Architect-level diagram builders
+# ---------------------------------------------------------------------------
+
+
+def _build_solution_architecture(layers: list[dict]) -> Diagram | None:
+    """Hero diagram: conceptual solution layers from source to consumption."""
+    if not layers:
+        return None
+    sorted_layers = sorted(layers, key=lambda l: int(l.get("order", 0)))
+    nodes = [
+        DiagramNode(
+            id=f"layer_{i}",
+            label=l["name"],
+            type=_LAYER_TYPE_TO_NODE_TYPE.get(l.get("layer_type", "processing"), "component"),
+            properties={"affected_component": l.get("description", "")},
+            metadata={"layer_type": l.get("layer_type", "processing"), "order": l.get("order", i + 1)},
+        )
+        for i, l in enumerate(sorted_layers)
+        if l.get("name")
+    ]
+    if not nodes:
+        return None
+    edges = [
+        DiagramEdge(id=f"layer_{i}_to_{i + 1}", source=f"layer_{i}", target=f"layer_{i + 1}")
+        for i in range(len(nodes) - 1)
+    ]
+    return Diagram(
+        id="solution_architecture",
+        title="Solution Architecture",
+        description="High-level solution layers — what we are building",
+        type=DiagramType.ARCHITECTURE,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="TB"),
+        metadata={
+            "section": "Architecture",
+            "why": "Shows the conceptual solution layers from data source to consumption",
+            "layer_count": len(nodes),
+        },
+    )
+
+
+def _build_data_flow(steps: list[dict]) -> Diagram | None:
+    """End-to-end operational flow: how data moves through the system."""
+    if not steps:
+        return None
+    sorted_steps = sorted(steps, key=lambda s: int(s.get("order", 0)))
+    nodes = [
+        DiagramNode(
+            id=f"flow_{i}",
+            label=s["name"],
+            type=_FLOW_STEP_TYPE_TO_NODE_TYPE.get(s.get("step_type", "process"), "component"),
+            properties={"affected_component": s.get("technology", "")},
+            metadata={"step_type": s.get("step_type", "process"), "order": s.get("order", i + 1)},
+        )
+        for i, s in enumerate(sorted_steps)
+        if s.get("name")
+    ]
+    if not nodes:
+        return None
+    edges = [
+        DiagramEdge(
+            id=f"flow_{i}_to_{i + 1}",
+            source=f"flow_{i}",
+            target=f"flow_{i + 1}",
+            type="data_flow",
+        )
+        for i in range(len(nodes) - 1)
+    ]
+    return Diagram(
+        id="data_flow",
+        title="End-to-End Data Flow",
+        description="Operational data movement from ingestion to consumption",
+        type=DiagramType.FLOW,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="TB"),
+        metadata={
+            "section": "Data Flow",
+            "why": "Shows how data moves through the system operationally, step by step",
+        },
+    )
+
+
+def _build_repository_reuse(repo_usage: list[dict]) -> Diagram | None:
+    """Repository Reuse Blueprint: existing repos + WHY each is recommended."""
+    if not repo_usage:
+        return None
+    valid = [r for r in repo_usage if r.get("name")]
+    if not valid:
+        return None
+
+    repo_nodes = []
+    for r in valid:
+        reuse_pct = int(r.get("estimated_reuse_pct", 0) or 0)
+        components = r.get("reusable_components", [])
+        # The sub-label carries the reuse decision at a glance: what we get
+        # back and how much of it. Falls back to the component list alone for
+        # v2 results that predate estimated_reuse_pct.
+        detail = ", ".join(components)[:70]
+        if reuse_pct > 0:
+            detail = f"{reuse_pct}% reuse · {detail}" if detail else f"{reuse_pct}% reuse"
+        repo_nodes.append(
+            DiagramNode(
+                id=f"repo_{_slug(r['name'])}",
+                label=f"{_stars(int(r.get('stars', 3)))} {r['name']}",
+                type="input",
+                properties={"affected_component": detail},
+                metadata={
+                    "stars": r.get("stars", 3),
+                    "purpose": r.get("purpose", ""),
+                    "reason": r.get("reason", ""),
+                    "relationship": r.get("relationship", "reuse"),
+                    "estimated_reuse_pct": reuse_pct,
+                    "confidence": r.get("confidence", "medium"),
+                    "reusable_components": components,
+                    "files_affected": r.get("files_affected", []),
+                    "alternatives": r.get("alternatives", []),
+                },
+            )
+        )
+    system_node = DiagramNode(id="new_system", label="New System", type="output")
+    edges = [
+        DiagramEdge(
+            id=f"repo_{_slug(r['name'])}_provides",
+            source=f"repo_{_slug(r['name'])}",
+            target="new_system",
+            label=r.get("relationship", "reuse"),
+        )
+        for r in valid
+    ]
+    return Diagram(
+        id="repository_reuse",
+        title="Repository Reuse Blueprint",
+        description="Existing repositories contributing to this solution — the GraphForge advantage",
+        type=DiagramType.DEPENDENCY,
+        nodes=[*repo_nodes, system_node],
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Repository Analysis",
+            "why": "Shows which repositories are recommended and exactly why — grounded in real graph analysis",
+            "repo_count": len(valid),
+        },
+    )
+
+
+def _build_data_model(entities: list[dict]) -> Diagram | None:
+    """ER diagram: business domain entities and their relationships."""
+    if not entities:
+        return None
+    valid = [e for e in entities if e.get("name")]
+    if not valid:
+        return None
+
+    entity_ids = {e["name"]: f"entity_{_slug(e['name'])}" for e in valid}
+    nodes = [
+        DiagramNode(
+            id=entity_ids[e["name"]],
+            label=e["name"],
+            type="entity",
+            properties={
+                "affected_component": ", ".join(e.get("key_attributes", [])[:4]),
+            },
+            metadata={"attributes": e.get("key_attributes", [])},
+        )
+        for e in valid
+    ]
+    edges: list[DiagramEdge] = []
+    seen_edge_ids: set[str] = set()
+    for e in valid:
+        source_id = entity_ids[e["name"]]
+        for rel_str in e.get("relationships", []):
+            parts = rel_str.strip().split(None, 1)
+            if len(parts) < 2:
+                continue
+            verb, target_name = parts[0], parts[1]
+            target_id = entity_ids.get(target_name)
+            if not target_id:
+                continue
+            edge_id = f"{source_id}__{target_id}__{_slug(verb)}"
+            if edge_id in seen_edge_ids:
+                continue
+            seen_edge_ids.add(edge_id)
+            edges.append(
+                DiagramEdge(
+                    id=edge_id,
+                    source=source_id,
+                    target=target_id,
+                    label=verb.replace("_", " "),
+                )
+            )
+    return Diagram(
+        id="data_model",
+        title="Data Model",
+        description="Business entities and their domain relationships",
+        type=DiagramType.ER,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Data Model",
+            "why": "Domain model — the business entities this system creates, manages, and queries",
+            "entity_count": len(valid),
+        },
+    )
+
+
+def _build_implementation_roadmap(phases: list[dict]) -> Diagram | None:
+    """Timeline: engineering phases with expandable deliverables."""
+    if not phases:
+        return None
+    valid = [p for p in phases if p.get("name")]
+    if not valid:
+        return None
+    sorted_phases = sorted(valid, key=lambda p: int(p.get("order", 0)))
+    nodes = [
+        DiagramNode(
+            id=f"phase_{p.get('order', i + 1)}",
+            label=p["name"],
+            type="phase",
+            properties={
+                "steps": [d[:80] for d in p.get("deliverables", [])],
+                "description": f"{len(p.get('deliverables', []))} deliverable(s)",
+            },
+        )
+        for i, p in enumerate(sorted_phases)
+    ]
+    edges = [
+        DiagramEdge(
+            id=f"phase_{sorted_phases[i].get('order', i + 1)}_to_{sorted_phases[i + 1].get('order', i + 2)}",
+            source=f"phase_{sorted_phases[i].get('order', i + 1)}",
+            target=f"phase_{sorted_phases[i + 1].get('order', i + 2)}",
+        )
+        for i in range(len(sorted_phases) - 1)
+    ]
+    return Diagram(
+        id="implementation_roadmap",
+        title="Implementation Roadmap",
+        description="Engineering phases from foundation to production — click a phase to expand deliverables",
+        type=DiagramType.TIMELINE,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Implementation Plan",
+            "why": "Engineering phases from foundation through to production deployment",
+            "total_phases": len(nodes),
+        },
+    )
+
+
+def _build_risk_matrix(risks: list[dict]) -> Diagram | None:
+    """Risk & Complexity Matrix: structured risks with likelihood/impact/mitigation."""
+    if not risks:
+        return None
+    valid = [r for r in risks if r.get("description")]
+    if not valid:
+        return None
+
+    nodes: list[DiagramNode] = []
+    for i, r in enumerate(valid):
+        likelihood = r.get("likelihood", "medium")
+        impact = r.get("impact", "medium")
+        mitigation = r.get("mitigation", "")
+        severity = _risk_severity(likelihood, impact)
+        category = str(r.get("category", "") or "")
+        evidence = r.get("evidence", "")
+        # Build a structured label the renderer can display in one pass.
+        # Category leads so risks read as classified rather than generic.
+        head = f"[{category.replace('_', ' ')}] {r['description']}" if category else r["description"]
+        label_parts = [head, f"Likelihood: {likelihood} | Impact: {impact}"]
+        if mitigation:
+            label_parts.append(f"Mitigation: {mitigation}")
+        if evidence:
+            label_parts.append(f"Evidence: {evidence}")
+        nodes.append(
+            DiagramNode(
+                id=f"risk_{i}",
+                label=" — ".join(label_parts),
+                type="risk",
+                metadata={
+                    "severity": severity,
+                    "likelihood": likelihood,
+                    "impact": impact,
+                    "category": category,
+                    "mitigation": mitigation,
+                    "evidence": evidence,
+                    "confidence": r.get("confidence", "medium"),
+                },
+            )
+        )
+
+    nodes_sorted = sorted(
+        nodes,
+        key=lambda n: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(
+            str(n.metadata.get("severity", "low")), 3
+        ),
+    )
+    return Diagram(
+        id="risk_matrix",
+        title="Risk & Complexity Matrix",
+        description="Architectural risks assessed by likelihood, impact, and mitigation readiness",
+        type=DiagramType.RISK_HEATMAP,
+        nodes=nodes_sorted,
+        edges=[],
+        layout=DiagramLayout(direction="TB", algorithm="grid"),
+        metadata={
+            "section": "Risks",
+            "why": "Surfaces architectural risks with evidence-backed mitigations before implementation begins",
+            "risk_count": len(valid),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Fallback builders — used when new LLM fields are absent
+# (keeps old Planning Blueprint behaviour for legacy stored results)
+# ---------------------------------------------------------------------------
+
+
+def _build_implementation_flow(steps: list[dict]) -> Diagram:
+    """Ordered linear flow of implementation steps (top-to-bottom)."""
+    nodes = [
+        DiagramNode(
+            id=f"step_{s['order']}",
+            label=s["description"][:70],
+            type="default" if 0 < s["order"] < len(steps) else ("input" if s["order"] == 1 else "output"),
+            properties={
+                "order": s["order"],
+                "affected_component": s.get("affected_component", ""),
+                "risk_note": s.get("risk_note", ""),
+            },
+        )
+        for s in steps
+    ]
+    edges = [
+        DiagramEdge(
+            id=f"step_{steps[i]['order']}_to_{steps[i + 1]['order']}",
+            source=f"step_{steps[i]['order']}",
+            target=f"step_{steps[i + 1]['order']}",
+        )
+        for i in range(len(steps) - 1)
+    ]
+    return Diagram(
+        id="implementation_flow",
+        title="Implementation Flow",
+        description="Ordered implementation steps",
+        type=DiagramType.FLOW,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="TB"),
+    )
+
+
+def _build_repository_impact(repositories: list[str], components: list[str]) -> Diagram:
+    """Dependency diagram: repositories and their affected components."""
+    repo_nodes = [
+        DiagramNode(id=f"repo_{_slug(r)}", label=r, type="input")
+        for r in repositories
+    ]
+    comp_nodes = [
+        DiagramNode(id=f"comp_{_slug(c)}", label=c, type="component")
+        for c in components[:8]
+    ]
+    edges: list[DiagramEdge] = []
+    if repositories and components:
+        for i, r in enumerate(repositories):
+            n = max(1, len(components) // len(repositories))
+            for c in components[i * n : (i + 1) * n]:
+                edges.append(
+                    DiagramEdge(
+                        id=f"repo_{_slug(r)}_has_{_slug(c)}",
+                        source=f"repo_{_slug(r)}",
+                        target=f"comp_{_slug(c)}",
+                        label="contains",
+                        type="dependency",
+                    )
+                )
+    return Diagram(
+        id="repository_impact",
+        title="Repository Impact",
+        description="Repositories and the components they contribute to this change",
+        type=DiagramType.DEPENDENCY,
+        nodes=[*repo_nodes, *comp_nodes],
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+    )
+
+
+def _build_kafka_flow(topics: list[str], components: list[str]) -> Diagram:
+    """Messaging flow: components and the Kafka topics they interact with."""
+    topic_nodes = [DiagramNode(id=f"topic_{_slug(t)}", label=t, type="topic") for t in topics[:6]]
+    comp_nodes = [DiagramNode(id=f"comp_{_slug(c)}", label=c, type="component") for c in components[:6]]
+    edges = [
+        DiagramEdge(
+            id=f"{_slug(c)}_to_{_slug(t)}",
+            source=f"comp_{_slug(c)}",
+            target=f"topic_{_slug(t)}",
+            label="interacts",
+            type="data_flow",
+        )
+        for c in components[:4]
+        for t in topics[:3]
+    ]
+    return Diagram(
+        id="kafka_flow",
+        title="Messaging Flow",
+        description="Kafka topics involved in this change",
+        type=DiagramType.DEPENDENCY,
+        nodes=[*comp_nodes, *topic_nodes],
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={"note": "Edge direction is placeholder until Development stage produces explicit producer/consumer mappings."},
+    )
+
+
+def _build_risk_heatmap(risks: list[str]) -> Diagram:
+    """Risk heatmap: one node per risk string, styled by heuristic severity."""
+    nodes = [
+        DiagramNode(
+            id=f"risk_{i}",
+            label=risk[:100],
+            type="risk",
+            metadata={"severity": _risk_level(risk), "index": i},
+        )
+        for i, risk in enumerate(risks)
+    ]
+    return Diagram(
+        id="risk_heatmap",
+        title="Risk Assessment",
+        description="Risk considerations identified during planning, ordered by severity",
+        type=DiagramType.RISK_HEATMAP,
+        nodes=sorted(
+            nodes,
+            key=lambda n: {"critical": 0, "high": 1, "medium": 2, "low": 3}[n.metadata["severity"]],
+        ),
+        edges=[],
+        layout=DiagramLayout(direction="TB", algorithm="grid"),
+        metadata={"risk_count": len(risks)},
+    )
+
+
+def _build_implementation_timeline(steps: list[dict]) -> Diagram:
+    """Horizontal timeline grouping implementation steps into phases."""
+    PHASE_SIZE = 3
+    phases = []
+    for i in range(0, len(steps), PHASE_SIZE):
+        chunk = steps[i : i + PHASE_SIZE]
+        order = i // PHASE_SIZE + 1
+        phases.append(
+            DiagramNode(
+                id=f"phase_{order}",
+                label=f"Phase {order}",
+                type="phase",
+                properties={
+                    "steps": [s.get("description", "")[:60] for s in chunk],
+                    "components": list({s.get("affected_component", "") for s in chunk if s.get("affected_component")}),
+                },
+            )
+        )
+    edges = [
+        DiagramEdge(id=f"phase_{i + 1}_to_{i + 2}", source=f"phase_{i + 1}", target=f"phase_{i + 2}")
+        for i in range(len(phases) - 1)
+    ]
+    return Diagram(
+        id="implementation_timeline",
+        title="Implementation Timeline",
+        description="Implementation phases derived from planning steps",
+        type=DiagramType.TIMELINE,
+        nodes=phases,
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={"total_steps": len(steps), "phase_count": len(phases)},
+    )
+
+
+# ---------------------------------------------------------------------------
+# Development Agent diagram builders
+# ---------------------------------------------------------------------------
+
+_COMP_TYPE_TO_LAYER: dict[str, str] = {
+    "controller": "API Layer",
+    "restcontroller": "API Layer",
+    "feignclient": "Integration",
+    "service": "Service Layer",
+    "serviceimpl": "Service Layer",
+    "repository": "Data Layer",
+    "entity": "Data Layer",
+    "listener": "Integration",
+    "producer": "Integration",
+    "consumer": "Integration",
+    "config": "Infrastructure",
+    "configuration": "Infrastructure",
+}
+
+
+def _infer_layer(component_type: str) -> str:
+    return _COMP_TYPE_TO_LAYER.get(component_type.lower().replace(" ", ""), "Service Layer")
+
+
+def _build_dev_overview(repos: list[dict], components: list[dict]) -> Diagram | None:
+    """What is changing: repositories and component types affected."""
+    if not repos and not components:
+        return None
+
+    # Infer unique layers from component types
+    layers: dict[str, list[str]] = {}
+    for c in components[:12]:
+        layer = _infer_layer(c.get("component_type", ""))
+        layers.setdefault(layer, []).append(c.get("name", ""))
+
+    repo_nodes = [
+        DiagramNode(
+            id=f"repo_{_slug(r['name'])}",
+            label=r["name"],
+            type="input",
+            properties={"affected_component": r.get("reason", "")[:60]},
+        )
+        for r in repos[:8]
+        if r.get("name")
+    ]
+    layer_nodes = [
+        DiagramNode(
+            id=f"layer_{_slug(layer)}",
+            label=layer,
+            type="component",
+            properties={"affected_component": ", ".join(comps[:3])},
+        )
+        for layer, comps in layers.items()
+    ]
+    impl_node = DiagramNode(id="implementation", label="Implementation", type="output")
+
+    edges: list[DiagramEdge] = []
+    # repo → layer (if component repo matches)
+    for r in repos[:8]:
+        if not r.get("name"):
+            continue
+        r_id = f"repo_{_slug(r['name'])}"
+        added_layers: set[str] = set()
+        for c in components:
+            if c.get("repository", "") == r.get("name", ""):
+                lyr = _infer_layer(c.get("component_type", ""))
+                lyr_id = f"layer_{_slug(lyr)}"
+                if lyr_id not in added_layers and lyr in layers:
+                    edges.append(DiagramEdge(id=f"{r_id}_to_{lyr_id}", source=r_id, target=lyr_id, label="changes"))
+                    added_layers.add(lyr_id)
+
+    # layer → implementation
+    for layer in layers:
+        lyr_id = f"layer_{_slug(layer)}"
+        edges.append(DiagramEdge(id=f"{lyr_id}_to_impl", source=lyr_id, target="implementation", label="impacts"))
+
+    return Diagram(
+        id="dev_overview",
+        title="Implementation Overview",
+        description="Repositories and code layers affected by this change",
+        type=DiagramType.ARCHITECTURE,
+        nodes=[*repo_nodes, *layer_nodes, impl_node],
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Implementation Overview",
+            "why": "Shows what is changing — which repositories and architectural layers are involved",
+        },
+    )
+
+
+def _build_file_modification_map(components: list[dict]) -> Diagram | None:
+    """Repo → component map showing what files/classes change where."""
+    if not components:
+        return None
+
+    repos: dict[str, list[dict]] = {}
+    for c in components:
+        repo = c.get("repository", "Unknown")
+        repos.setdefault(repo, []).append(c)
+
+    nodes: list[DiagramNode] = []
+    edges: list[DiagramEdge] = []
+
+    for repo, comps in repos.items():
+        repo_id = f"repo_{_slug(repo)}"
+        nodes.append(DiagramNode(id=repo_id, label=repo, type="input"))
+        for c in comps[:6]:
+            comp_id = f"comp_{_slug(c.get('name', ''))}_{_slug(repo)}"
+            subtitle = c.get("file_path", "") or c.get("component_type", "")
+            nodes.append(DiagramNode(
+                id=comp_id,
+                label=c.get("name", "")[:40],
+                type="component",
+                properties={"affected_component": subtitle[:60] if subtitle else ""},
+            ))
+            edges.append(DiagramEdge(
+                id=f"{repo_id}_to_{comp_id}",
+                source=repo_id,
+                target=comp_id,
+                label=c.get("component_type", "")[:20],
+            ))
+
+    if not nodes:
+        return None
+
+    return Diagram(
+        id="file_modification_map",
+        title="File Modification Map",
+        description="Components changing, grouped by repository",
+        type=DiagramType.DEPENDENCY,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "File Modifications",
+            "why": "Shows exactly which files/classes change and in which repositories",
+        },
+    )
+
+
+def _build_component_dependency_graph(dependencies: list[dict]) -> Diagram | None:
+    """Component dependency graph from the graph traversal results."""
+    if not dependencies:
+        return None
+
+    # Collect unique component names
+    comp_names: set[str] = set()
+    for d in dependencies:
+        if d.get("source"):
+            comp_names.add(d["source"])
+        if d.get("target"):
+            comp_names.add(d["target"])
+
+    if not comp_names:
+        return None
+
+    nodes = [
+        DiagramNode(id=f"dep_{_slug(name)}", label=name[:40], type="component")
+        for name in comp_names
+    ]
+    edges = [
+        DiagramEdge(
+            id=f"dep_{_slug(d.get('source',''))}_to_{_slug(d.get('target',''))}",
+            source=f"dep_{_slug(d['source'])}",
+            target=f"dep_{_slug(d['target'])}",
+            label=d.get("relationship", "")[:20],
+            type="dependency",
+        )
+        for d in dependencies
+        if d.get("source") and d.get("target")
+    ]
+
+    return Diagram(
+        id="component_dependency_graph",
+        title="Component Dependency Graph",
+        description="How affected components depend on each other",
+        type=DiagramType.DEPENDENCY,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Component Dependencies",
+            "why": "Shows cross-component coupling that must be managed during implementation",
+        },
+    )
+
+
+def _build_dev_implementation_flow(phases: list[dict]) -> Diagram | None:
+    """Implementation phases as a clickable timeline."""
+    if not phases:
+        return None
+    sorted_phases = sorted(phases, key=lambda p: int(p.get("order", 0)))
+    nodes = [
+        DiagramNode(
+            id=f"devphase_{p.get('order', i + 1)}",
+            label=p.get("title", f"Phase {i + 1}")[:40],
+            type="phase",
+            properties={
+                "steps": p.get("affected_components", [])[:5],
+                "description": (p.get("description", "") or "")[:60],
+            },
+            metadata={"complexity": p.get("estimated_complexity", "")},
+        )
+        for i, p in enumerate(sorted_phases)
+        if p.get("title")
+    ]
+    if not nodes:
+        return None
+    edges = [
+        DiagramEdge(
+            id=f"devphase_{sorted_phases[i].get('order', i + 1)}_to_{sorted_phases[i + 1].get('order', i + 2)}",
+            source=f"devphase_{sorted_phases[i].get('order', i + 1)}",
+            target=f"devphase_{sorted_phases[i + 1].get('order', i + 2)}",
+        )
+        for i in range(len(sorted_phases) - 1)
+    ]
+    return Diagram(
+        id="dev_implementation_flow",
+        title="Implementation Flow",
+        description="Engineering phases — click each to see affected components",
+        type=DiagramType.TIMELINE,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Implementation Flow",
+            "why": "Engineering phases from planning through to deployment",
+        },
+    )
+
+
+def _build_code_impact(components: list[dict]) -> Diagram | None:
+    """Impact across architectural layers: API, Service, Data, Integration."""
+    if not components:
+        return None
+
+    layers: dict[str, list[str]] = {}
+    for c in components:
+        layer = _infer_layer(c.get("component_type", ""))
+        layers.setdefault(layer, []).append(c.get("name", ""))
+
+    system_node = DiagramNode(id="system", label="System Impact", type="output")
+    layer_nodes = [
+        DiagramNode(
+            id=f"impact_{_slug(layer)}",
+            label=layer,
+            type="input",
+            properties={"affected_component": f"{len(comps)} component(s): " + ", ".join(comps[:2])},
+        )
+        for layer, comps in layers.items()
+    ]
+    if not layer_nodes:
+        return None
+    edges = [
+        DiagramEdge(
+            id=f"impact_{_slug(layer)}_to_system",
+            source=f"impact_{_slug(layer)}",
+            target="system",
+            label=f"{len(comps)} change(s)",
+        )
+        for layer, comps in layers.items()
+    ]
+    return Diagram(
+        id="code_impact",
+        title="Code Impact",
+        description="Impact across architectural layers",
+        type=DiagramType.ARCHITECTURE,
+        nodes=[*layer_nodes, system_node],
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Code Impact",
+            "why": "Shows which architectural layers are touched and how much",
+        },
+    )
+
+
+def _build_test_strategy(components: list[dict], dependencies: list[dict]) -> Diagram | None:
+    """Test strategy derived from component types and dependency complexity."""
+    if not components:
+        return None
+
+    unit_targets = [c.get("name", "") for c in components if _infer_layer(c.get("component_type", "")) == "Service Layer"]
+    integration_targets = [c.get("name", "") for c in components if _infer_layer(c.get("component_type", "")) in ("API Layer", "Integration")]
+    has_cross_repo = any(d.get("risk_note") for d in dependencies)
+
+    phases: list[dict] = []
+    if unit_targets:
+        phases.append({"name": "Unit Tests", "steps": unit_targets[:5], "description": f"{len(unit_targets)} service(s)"})
+    if integration_targets:
+        phases.append({"name": "Integration Tests", "steps": integration_targets[:5], "description": f"{len(integration_targets)} endpoint(s)"})
+    if has_cross_repo:
+        cross = [f"{d.get('source','')} → {d.get('target','')}" for d in dependencies if d.get("risk_note")]
+        phases.append({"name": "Contract Tests", "steps": cross[:4], "description": f"{len(cross)} cross-service flow(s)"})
+    phases.append({"name": "Regression Tests", "steps": [c.get("name", "") for c in components[:5]], "description": f"All {len(components)} changed component(s)"})
+
+    nodes = [
+        DiagramNode(
+            id=f"test_{i}",
+            label=p["name"],
+            type="phase",
+            properties={"steps": p["steps"], "description": p["description"]},
+        )
+        for i, p in enumerate(phases)
+    ]
+    edges = [
+        DiagramEdge(id=f"test_{i}_to_{i + 1}", source=f"test_{i}", target=f"test_{i + 1}")
+        for i in range(len(nodes) - 1)
+    ]
+    return Diagram(
+        id="test_strategy",
+        title="Test Strategy",
+        description="Testing approach across unit, integration, and regression layers — click a phase to expand",
+        type=DiagramType.TIMELINE,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Test Strategy",
+            "why": "Testing approach derived from the component types and cross-service dependencies involved",
+        },
+    )
+
+
+def _build_dev_risk_matrix(risks: list[dict]) -> Diagram | None:
+    """Risk matrix from Development Agent's Risk objects."""
+    if not risks:
+        return None
+    valid = [r for r in risks if r.get("description")]
+    if not valid:
+        return None
+
+    nodes: list[DiagramNode] = []
+    for i, r in enumerate(valid):
+        severity = r.get("severity", "medium").lower()
+        if severity not in ("critical", "high", "medium", "low"):
+            severity = _risk_level(r["description"])
+        mitigation = r.get("mitigation", "")
+        label_parts = [r["description"]]
+        if r.get("affected_component"):
+            label_parts.append(f"Affects: {r['affected_component']}")
+        if mitigation:
+            label_parts.append(f"Mitigation: {mitigation}")
+        nodes.append(DiagramNode(
+            id=f"devrisk_{i}",
+            label=" — ".join(label_parts),
+            type="risk",
+            metadata={"severity": severity, "mitigation": mitigation},
+        ))
+
+    nodes_sorted = sorted(
+        nodes,
+        key=lambda n: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(str(n.metadata.get("severity", "low")), 3),
+    )
+    return Diagram(
+        id="dev_risk_matrix",
+        title="Implementation Risks",
+        description="Technical risks identified during change analysis",
+        type=DiagramType.RISK_HEATMAP,
+        nodes=nodes_sorted,
+        edges=[],
+        layout=DiagramLayout(direction="TB", algorithm="grid"),
+        metadata={
+            "section": "Implementation Risks",
+            "why": "Technical debt, breaking changes, and migration risks surfaced before implementation",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public factory
+# ---------------------------------------------------------------------------
+
+
+class BlueprintFactory:
+    """Converts structured agent output into a BlueprintArtifact.
+
+    Each static method corresponds to one agent stage. Future agents add a
+    method here; nothing else in the framework changes.
+
+    Planning blueprint strategy (v2):
+    - Prefer new architect-level fields (architecture_layers, data_flow, etc.)
+      produced by the updated Planning prompt — these generate Principal
+      Architect-style diagrams.
+    - Fall back to legacy builders from existing fields so old stored results
+      and test fixtures continue to produce diagrams without a re-run.
+    """
+
+    @staticmethod
+    def from_planning_result(result: "PlanningResult") -> BlueprintArtifact:
+        diagrams: list[Diagram] = []
+        steps_raw = [s.model_dump() for s in result.implementation_steps]
+
+        # 1. Solution Architecture (hero diagram — "what are we building?")
+        arch_layers_raw = [l.model_dump() for l in result.architecture_layers]
+        if arch_layers_raw:
+            d = _build_solution_architecture(arch_layers_raw)
+            if d:
+                diagrams.append(d)
+
+        # 2. End-to-End Data Flow
+        data_flow_raw = [s.model_dump() for s in result.data_flow]
+        if data_flow_raw:
+            d = _build_data_flow(data_flow_raw)
+            if d:
+                diagrams.append(d)
+        elif result.kafka_topics_involved and result.affected_components:
+            diagrams.append(_build_kafka_flow(result.kafka_topics_involved, result.affected_components))
+        elif steps_raw:
+            diagrams.append(_build_implementation_flow(steps_raw))
+
+        # 3. Data Model / ER Diagram (business entities, no fallback)
+        entities_raw = [e.model_dump() for e in result.data_entities]
+        if entities_raw:
+            d = _build_data_model(entities_raw)
+            if d:
+                diagrams.append(d)
+
+        # 4. Repository Reuse Blueprint (GraphForge differentiator).
+        # Deliberately ordered after the architecture and data model: repository
+        # intelligence supports the design, it does not define it. Leading with
+        # it made blueprints read as dependency reports rather than solution
+        # designs.
+        repo_usage_raw = [r.model_dump() for r in result.repository_usage]
+        if repo_usage_raw:
+            d = _build_repository_reuse(repo_usage_raw)
+            if d:
+                diagrams.append(d)
+        elif result.repositories_consulted:
+            diagrams.append(_build_repository_impact(result.repositories_consulted, result.affected_components))
+
+        # 5. Implementation Roadmap
+        phases_raw = [p.model_dump() for p in result.implementation_phases]
+        if phases_raw:
+            d = _build_implementation_roadmap(phases_raw)
+            if d:
+                diagrams.append(d)
+        elif len(steps_raw) > 2:
+            diagrams.append(_build_implementation_timeline(steps_raw))
+
+        # 6. Risk & Complexity Matrix
+        risks_raw = [r.model_dump() for r in result.risks]
+        if risks_raw:
+            d = _build_risk_matrix(risks_raw)
+            if d:
+                diagrams.append(d)
+        elif result.risk_considerations:
+            diagrams.append(_build_risk_heatmap(result.risk_considerations))
+
+        return BlueprintArtifact(
+            agent_id="planning",
+            stage="planning",
+            diagrams=diagrams,
+        )
+
+    @staticmethod
+    def from_development_result(result: "DevelopmentPlan") -> BlueprintArtifact:
+        diagrams: list[Diagram] = []
+
+        repos_raw = [r.model_dump() for r in result.repositories]
+        comps_raw = [c.model_dump() for c in result.components]
+        deps_raw = [d.model_dump() for d in result.dependencies]
+        phases_raw = [p.model_dump() for p in result.implementation_phases]
+        risks_raw = [r.model_dump() for r in result.risks]
+
+        if repos_raw or comps_raw:
+            d = _build_dev_overview(repos_raw, comps_raw)
+            if d:
+                diagrams.append(d)
+
+        if comps_raw:
+            d = _build_file_modification_map(comps_raw)
+            if d:
+                diagrams.append(d)
+
+        if deps_raw:
+            d = _build_component_dependency_graph(deps_raw)
+            if d:
+                diagrams.append(d)
+
+        if phases_raw:
+            d = _build_dev_implementation_flow(phases_raw)
+            if d:
+                diagrams.append(d)
+
+        if comps_raw:
+            d = _build_code_impact(comps_raw)
+            if d:
+                diagrams.append(d)
+
+        if comps_raw:
+            d = _build_test_strategy(comps_raw, deps_raw)
+            if d:
+                diagrams.append(d)
+
+        if risks_raw:
+            d = _build_dev_risk_matrix(risks_raw)
+            if d:
+                diagrams.append(d)
+
+        return BlueprintArtifact(
+            agent_id="development",
+            stage="development",
+            diagrams=diagrams,
+        )

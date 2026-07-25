@@ -209,14 +209,37 @@ class TraverseArchitectureGraphTool:
 # ---------------------------------------------------------------------------
 
 
+def _relevance(text: str, terms: list[str]) -> int:
+    """How many capability search terms this text matches."""
+    lowered = text.lower()
+    return sum(1 for t in terms if t in lowered)
+
+
 def format_graph_context(
     repos_observation: PlanningObservation,
     traverse_observation: PlanningObservation,
+    relevance_terms: list[str] | None = None,
+    max_repos: int = 4,
+    max_components_per_repo: int = 5,
 ) -> str:
-    """Format graph tool observations into a compact, LLM-readable context
-    string. Truncated to avoid exceeding prompt budget.
+    """Format graph tool observations into a compact, LLM-readable context.
+
+    When `relevance_terms` is supplied (the search terms derived from the
+    detected capabilities), repositories and components are ranked by how well
+    they match what the architecture actually needs, and only the top matches
+    are included. This does three things at once:
+
+    - better reuse recommendations, because the model sees the repositories
+      that implement the required capabilities rather than an arbitrary slice;
+    - less repository bias, because unrelated services never reach the prompt
+      and so cannot be pattern-matched into the architecture;
+    - fewer tokens, because the inventory shrinks to what is relevant.
+
+    With no terms it degrades to the previous behaviour (first N, unranked),
+    so callers that have not done capability analysis still work.
     """
     parts: list[str] = []
+    terms = relevance_terms or []
 
     indexed_repos: list[dict[str, str]] = repos_observation.data.get(
         "indexed_repositories", []
@@ -224,28 +247,72 @@ def format_graph_context(
     if not indexed_repos:
         return "No repositories have been indexed into the Knowledge Graph yet."
 
-    repo_names = [r["name"] for r in indexed_repos]
-    parts.append(f"**Indexed repositories**: {', '.join(repo_names)}")
-
     components: list[dict[str, Any]] = traverse_observation.data.get("components", [])
+
+    # Score each repository by how many of its components match the required
+    # capabilities. Repository name counts too — a repo called
+    # "etl-customer-orders" is evidence in its own right.
+    by_repo_all: dict[str, list[dict[str, Any]]] = {}
+    for comp in components:
+        by_repo_all.setdefault(comp["repository"], []).append(comp)
+
+    def repo_score(name: str) -> int:
+        if not terms:
+            return 0
+        score = _relevance(name, terms) * 2
+        for comp in by_repo_all.get(name, []):
+            score += _relevance(f"{comp['name']} {comp['type']}", terms)
+        return score
+
+    scored = sorted(
+        ((repo_score(r["name"]), r["name"]) for r in indexed_repos),
+        key=lambda pair: (-pair[0], pair[1]),
+    )
+    if terms:
+        # Drop repositories that match no required capability at all — they
+        # are the ones that get pattern-matched into the architecture for no
+        # reason. Only when something genuinely scored, so a brief we could
+        # not score still sees an inventory rather than an empty list.
+        positive = [name for score, name in scored if score > 0]
+        shown = (positive or [name for _, name in scored])[:max_repos]
+    else:
+        shown = [name for _, name in scored]
+    omitted = len(scored) - len(shown)
+
+    header = f"**Relevant repositories**: {', '.join(shown)}"
+    if omitted > 0:
+        # Stated explicitly so the model knows the list is a filtered view and
+        # does not assume these are the only repositories that exist.
+        plural = "y" if omitted == 1 else "ies"
+        header += (
+            f" ({omitted} further indexed repositor{plural} "
+            "less relevant to these capabilities)"
+        )
+    parts.append(header)
+
     if components:
-        # Group by repository for readability; cap at 40 entries total
-        by_repo: dict[str, list[str]] = {}
-        for comp in components[:40]:
-            repo = comp["repository"]
-            comp_type = comp["type"]
-            comp_name = comp["name"]
-            by_repo.setdefault(repo, []).append(f"{comp_name} ({comp_type})")
         comp_lines = []
-        for repo, comps in by_repo.items():
-            comp_lines.append(f"  {repo}: {', '.join(comps[:10])}")
-        parts.append("**Components**:\n" + "\n".join(comp_lines))
+        for repo in shown:
+            comps = by_repo_all.get(repo, [])
+            if terms:
+                comps = sorted(
+                    comps,
+                    key=lambda c: (-_relevance(f"{c['name']} {c['type']}", terms), c["name"]),
+                )
+            listed = [f"{c['name']} ({c['type']})" for c in comps[:max_components_per_repo]]
+            if listed:
+                comp_lines.append(f"  {repo}: {', '.join(listed)}")
+        parts.append(
+            "**Components**:\n" + "\n".join(comp_lines)
+            if comp_lines
+            else "**Components**: none in the relevant repositories"
+        )
     else:
         parts.append("**Components**: none indexed yet")
 
     topics: list[dict[str, Any]] = traverse_observation.data.get("kafka_topics", [])
     if topics:
-        topic_names = list({t["name"] for t in topics})[:20]
+        topic_names = list({t["name"] for t in topics})[:12]
         parts.append(f"**Kafka topics**: {', '.join(topic_names)}")
     else:
         parts.append("**Kafka topics**: none indexed yet")
