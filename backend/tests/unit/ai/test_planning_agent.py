@@ -353,8 +353,8 @@ async def test_planning_agent_happy_path_has_graph_evidence() -> None:
     mock_db.execute.return_value = mock_result
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_make_llm_response())),
     ):
         agent = PlanningAgent()
@@ -410,8 +410,8 @@ async def test_planning_agent_no_indexed_repos_still_produces_evidence() -> None
     })
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
@@ -441,8 +441,8 @@ async def test_planning_agent_llm_failure_raises() -> None:
     mock_db.execute.return_value = mock_result
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(side_effect=PlanningLLMError("API key missing."))),
     ):
         agent = PlanningAgent()
@@ -463,8 +463,8 @@ async def test_planning_agent_output_matches_agent_output_contract() -> None:
     mock_db.execute.return_value = mock_result
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
         patch(
             "app.agents.planning.agent._call_llm",
             new=AsyncMock(return_value=json.dumps({
@@ -528,8 +528,8 @@ async def test_planning_agent_graph_unavailable_no_false_evidence() -> None:
     })
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
@@ -588,8 +588,8 @@ async def test_planning_agent_graph_context_used_overridden_when_graph_fails() -
     })
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
@@ -636,8 +636,8 @@ async def test_planning_agent_graph_context_used_true_when_graph_has_data() -> N
     })
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
@@ -682,8 +682,8 @@ async def test_planning_agent_graph_unavailable_confidence_reasoning() -> None:
     })
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
@@ -720,8 +720,8 @@ async def test_planning_agent_graph_empty_confidence_reasoning() -> None:
     })
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()

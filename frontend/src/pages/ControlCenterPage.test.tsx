@@ -18,7 +18,7 @@ vi.mock("../lib/api/github", () => ({
 
 function renderWithAuth() {
   const authValue: AuthContextValue = {
-    user: { id: "u1", email: "test@test.com", full_name: "Test User", is_active: true },
+    user: { id: "u1", email: "test@test.com", full_name: "Test User", auth_provider: "local", role: "user", created_at: "2026-01-01T00:00:00Z" },
     token: "test-token",
     isLoading: false,
     login: vi.fn(),

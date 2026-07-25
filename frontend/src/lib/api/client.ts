@@ -24,6 +24,12 @@ interface ApiFetchOptions {
   method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   body?: unknown;
   token?: string | null;
+  /** Wire an AbortController's signal through to cancel an in-flight
+   * request — used by polling loops (RunDetailPage, WorkflowPage) so a
+   * poll tick started just before unmount doesn't call setState after
+   * the component is gone, and so an unmount doesn't leave a duplicate
+   * in-flight request racing the next one. */
+  signal?: AbortSignal;
 }
 
 export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): Promise<T> {
@@ -39,6 +45,7 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
     method: options.method ?? "GET",
     headers,
     body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    signal: options.signal,
   });
 
   if (!response.ok) {

@@ -34,6 +34,23 @@ export function stageLabel(stage: string): string {
   return STAGE_AGENT_LABEL[stage]?.replace(" Agent", "") ?? stage;
 }
 
+const GOAL_TO_STAGE: Record<string, string> = {
+  plan_freeform: "planning",
+  develop_change_plan: "development",
+  plan_tests: "testing",
+  review_readiness: "engineering_review",
+};
+
+/** Map a Run's goal to the "stage" key StageResultPanel expects. Runs
+ * created as part of a workflow already carry workflow_stage; standalone
+ * runs (created from /workspace/planning etc.) don't, but the same agent
+ * produces the same result shape — including a blueprint, for Planning/
+ * Development — whether run standalone or as a stage, so this lets a
+ * standalone run's detail page render with the same panel either way. */
+export function stageFromGoal(goal: string): string | null {
+  return GOAL_TO_STAGE[goal] ?? null;
+}
+
 const WORKFLOW_TYPE_LABEL: Record<string, string> = {
   planning: "Planning Workflow",
   legacy_sdlc: "SDLC Workflow",

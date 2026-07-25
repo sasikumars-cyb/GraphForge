@@ -2,21 +2,35 @@
 
 `POST/GET /api/v1/agent-runs` and the `/api/v1/workflows` lifecycle
 (create -> continue -> get), exercised end-to-end: real routing, real auth,
-real Postgres persistence (via the transactional `db_client` fixture) —
-only the LLM call and the Neo4j driver are mocked.
+real Postgres persistence — only the LLM call and the Neo4j driver are
+mocked.
 
-Before this file, every agent/orchestrator test mocked the DB session
-itself, so nothing had ever verified these routes work against a real
-transactional session. In particular,
-`test_continue_workflow_failed_stage_is_linked_to_workflow` is a
-regression test for a confirmed bug: a failed stage run used to never get
-`workflow_id`/`workflow_stage` set (the assignment happened only after a
-successful `RunCoordinator.execute()`, which never returns on failure), so
-a failed attempt was invisible in the workflow's stage list.
+Since run/stage execution is backgrounded (RunCoordinator.execute() split
+into create_pending_run + execute_run, dispatched via
+app.orchestrator.background_execution.schedule_run_execution — see that
+module's docstring), the background task opens its own independent
+AsyncSessionLocal(), separate from whatever session served the request.
+That rules out the transactional `db_client` fixture here: its DB writes
+live in a per-test transaction that's rolled back at teardown and never
+visible to a second, real connection — confirmed by these tests failing
+with `background_run_vanished` (the background task's `db.get(Run, run_id)`
+finding nothing) when they still used `db_client`. These tests use the
+plain `client` fixture instead (a real, committed connection on both
+sides, matching test_background_execution_api.py's approach), and poll for
+a run/stage to leave "queued"/"running" instead of assuming the run is
+already terminal by the time the POST returns.
+
+In particular, `test_continue_workflow_failed_stage_is_linked_to_workflow`
+is a regression test for a confirmed bug: a failed stage run used to never
+get `workflow_id`/`workflow_stage` set (the assignment happened only after
+a successful `RunCoordinator.execute()`, which never returns on failure),
+so a failed attempt was invisible in the workflow's stage list.
 """
 
 from __future__ import annotations
 
+import asyncio
+import uuid
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -66,35 +80,84 @@ async def _register_and_get_token(db_client: AsyncClient) -> str:
     return str(login_response.json()["access_token"])
 
 
+async def _register_unique_and_get_token(client: AsyncClient) -> str:
+    """Like `_register_and_get_token`, but with a unique email — for tests
+    on the plain `client` fixture, whose writes are real and committed
+    (not rolled back), so reusing REGISTER_PAYLOAD's fixed email across
+    tests would collide."""
+    payload = {**REGISTER_PAYLOAD, "email": f"orchestrator-{uuid.uuid4()}@example.com"}
+    await client.post("/api/v1/auth/register", json=payload)
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": payload["email"], "password": payload["password"]},
+    )
+    return str(login_response.json()["access_token"])
+
+
+async def _poll_run_until_terminal(
+    client: AsyncClient, run_id: str, headers: dict, timeout_s: float = 5.0
+) -> dict:
+    """Poll GET /agent-runs/{run_id} until it leaves queued/running.
+
+    Backgrounded execution means a run is not terminal by the time the
+    creating POST returns — tests that need the final status/result must
+    poll for it instead of asserting on the immediate response body.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while True:
+        response = await client.get(f"/api/v1/agent-runs/{run_id}", headers=headers)
+        detail = response.json()
+        if detail["status"] not in ("queued", "running"):
+            return detail
+        if asyncio.get_event_loop().time() > deadline:
+            raise AssertionError(f"Run {run_id} did not reach a terminal status in time")
+        await asyncio.sleep(0.05)
+
+
+async def _poll_workflow_stage_until_terminal(
+    client: AsyncClient, workflow_id: str, stage: str, headers: dict, timeout_s: float = 5.0
+) -> dict:
+    """Poll GET /workflows/{id} until the named stage leaves pending/running."""
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while True:
+        response = await client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)
+        detail = response.json()
+        stages_by_name = {s["stage"]: s for s in detail["stages"]}
+        if stages_by_name[stage]["status"] not in ("pending", "queued", "running"):
+            return detail
+        if asyncio.get_event_loop().time() > deadline:
+            raise AssertionError(f"Workflow {workflow_id} stage {stage} did not finish in time")
+        await asyncio.sleep(0.05)
+
+
 # ---------------------------------------------------------------------------
 # POST/GET /api/v1/agent-runs
 # ---------------------------------------------------------------------------
 
 
-async def test_create_agent_run_happy_path(db_client: AsyncClient) -> None:
-    token = await _register_and_get_token(db_client)
+async def test_create_agent_run_happy_path(client: AsyncClient) -> None:
+    token = await _register_unique_and_get_token(client)
     headers = {"Authorization": f"Bearer {token}"}
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
     ):
-        response = await db_client.post(
+        response = await client.post(
             "/api/v1/agent-runs",
             json={"subject_reference": "Add JWT auth across services", "goal": "plan_freeform"},
             headers=headers,
         )
 
-    assert response.status_code == 202
-    body = response.json()
-    assert body["status"] == "completed"
-    assert body["goal"] == "plan_freeform"
-    run_id = body["run_id"]
+        assert response.status_code == 202
+        body = response.json()
+        assert body["status"] == "queued"
+        assert body["goal"] == "plan_freeform"
+        run_id = body["run_id"]
 
-    get_response = await db_client.get(f"/api/v1/agent-runs/{run_id}", headers=headers)
-    assert get_response.status_code == 200
-    detail = get_response.json()
+        detail = await _poll_run_until_terminal(client, run_id, headers)
+
     assert detail["status"] == "completed"
     assert len(detail["steps"]) == 1
     assert detail["steps"][0]["agent_id"] == "planning"
@@ -120,8 +183,8 @@ async def test_list_agent_runs_filters_by_subject_id(db_client: AsyncClient) -> 
     headers = {"Authorization": f"Bearer {token}"}
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
     ):
         first = await db_client.post(
@@ -157,27 +220,26 @@ async def test_list_agent_runs_filters_by_subject_id(db_client: AsyncClient) -> 
 # ---------------------------------------------------------------------------
 
 
-async def test_create_workflow_happy_path(db_client: AsyncClient) -> None:
-    token = await _register_and_get_token(db_client)
+async def test_create_workflow_happy_path(client: AsyncClient) -> None:
+    token = await _register_unique_and_get_token(client)
     headers = {"Authorization": f"Bearer {token}"}
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
     ):
-        response = await db_client.post(
+        response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
         )
-    assert response.status_code == 202
-    body = response.json()
-    assert body["stage"] == "planning"
-    assert body["status"] == "completed"
-    workflow_id = body["workflow_id"]
+        assert response.status_code == 202
+        body = response.json()
+        assert body["stage"] == "planning"
+        assert body["status"] == "queued"
+        workflow_id = body["workflow_id"]
 
-    detail_response = await db_client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)
-    assert detail_response.status_code == 200
-    detail = detail_response.json()
+        detail = await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
+
     assert detail["current_stage"] == "development"
     stages_by_name = {s["stage"]: s for s in detail["stages"]}
     assert stages_by_name["planning"]["status"] == "completed"
@@ -186,19 +248,20 @@ async def test_create_workflow_happy_path(db_client: AsyncClient) -> None:
     assert stages_by_name["development"]["run_id"] is None
 
 
-async def test_continue_workflow_happy_path(db_client: AsyncClient) -> None:
-    token = await _register_and_get_token(db_client)
+async def test_continue_workflow_happy_path(client: AsyncClient) -> None:
+    token = await _register_unique_and_get_token(client)
     headers = {"Authorization": f"Bearer {token}"}
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
     ):
-        create_response = await db_client.post(
+        create_response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
         )
-    workflow_id = create_response.json()["workflow_id"]
+        workflow_id = create_response.json()["workflow_id"]
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
 
     with (
         patch("app.agents.development.agent.get_driver", return_value=MagicMock()),
@@ -208,35 +271,43 @@ async def test_continue_workflow_happy_path(db_client: AsyncClient) -> None:
             new=AsyncMock(return_value=_DEVELOPMENT_LLM_RESPONSE),
         ),
     ):
-        continue_response = await db_client.post(
+        continue_response = await client.post(
             f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
         )
-    assert continue_response.status_code == 202
-    assert continue_response.json()["stage"] == "development"
+        assert continue_response.status_code == 202
+        assert continue_response.json()["stage"] == "development"
 
-    detail = (await db_client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)).json()
+        detail = await _poll_workflow_stage_until_terminal(client, workflow_id, "development", headers)
+
     assert detail["current_stage"] == "testing"
     stages_by_name = {s["stage"]: s for s in detail["stages"]}
     assert stages_by_name["development"]["status"] == "completed"
     assert len(detail["runs"]) == 2
 
 
-async def test_continue_workflow_failed_stage_is_linked_to_workflow(db_client: AsyncClient) -> None:
+async def test_continue_workflow_failed_stage_is_linked_to_workflow(client: AsyncClient) -> None:
     """Regression test for the workflow-linkage bug: a failed stage run
     must still show up in the workflow's stage list as 'failed' with its
-    run_id populated — not silently vanish as if never attempted."""
-    token = await _register_and_get_token(db_client)
+    run_id populated — not silently vanish as if never attempted.
+
+    Execution is backgrounded, so the failure no longer surfaces as an
+    HTTP error on the /continue call itself (that response is already sent
+    by the time the agent actually raises) — /continue now returns 202
+    with the stage still "running"/"queued", and the failure is only
+    observable by polling the workflow/run afterward."""
+    token = await _register_unique_and_get_token(client)
     headers = {"Authorization": f"Bearer {token}"}
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
     ):
-        create_response = await db_client.post(
+        create_response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
         )
-    workflow_id = create_response.json()["workflow_id"]
+        workflow_id = create_response.json()["workflow_id"]
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
 
     with (
         patch("app.agents.development.agent.get_driver", return_value=MagicMock()),
@@ -246,12 +317,13 @@ async def test_continue_workflow_failed_stage_is_linked_to_workflow(db_client: A
             new=AsyncMock(side_effect=RuntimeError("LLM provider unavailable")),
         ),
     ):
-        continue_response = await db_client.post(
+        continue_response = await client.post(
             f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
         )
-    assert continue_response.status_code == 500
+        assert continue_response.status_code == 202
 
-    detail = (await db_client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)).json()
+        detail = await _poll_workflow_stage_until_terminal(client, workflow_id, "development", headers)
+
     stages_by_name = {s["stage"]: s for s in detail["stages"]}
 
     # Before the fix: status stayed "pending" and run_id stayed None here,
@@ -261,20 +333,30 @@ async def test_continue_workflow_failed_stage_is_linked_to_workflow(db_client: A
 
     failed_run_id = stages_by_name["development"]["run_id"]
     run_detail = (
-        await db_client.get(f"/api/v1/agent-runs/{failed_run_id}", headers=headers)
+        await client.get(f"/api/v1/agent-runs/{failed_run_id}", headers=headers)
     ).json()
     assert run_detail["status"] == "failed"
     assert run_detail["workflow_id"] == workflow_id
     assert "LLM provider unavailable" in (run_detail["error_message"] or "")
 
 
-async def test_create_workflow_planning_failure_returns_original_app_error(
-    db_client: AsyncClient,
+async def test_create_workflow_planning_failure_is_linked_and_error_preserved(
+    client: AsyncClient,
 ) -> None:
     """Regression: Planning failures must surface their original AppError
-    (e.g. provider 429) instead of crashing with MissingGreenlet inside
-    _link_failed_run()."""
-    token = await _register_and_get_token(db_client)
+    message (e.g. provider 429) instead of crashing with MissingGreenlet
+    inside _link_failed_run(), and the failed run must still be linked to
+    the workflow (visible in stage history), not silently vanish.
+
+    Execution is backgrounded, so a downstream agent failure can no longer
+    surface as an HTTP error status on the creating POST itself — that
+    response (202, "queued") is already sent before the agent ever runs.
+    What used to be `assert response.status_code == 502` with the error in
+    the response body is now only observable by polling the run/workflow
+    afterward and checking the persisted error_message — this test now
+    verifies the message/linkage survive the trip through backgrounding
+    rather than the (no longer possible) synchronous HTTP surfacing."""
+    token = await _register_unique_and_get_token(client)
     headers = {"Authorization": f"Bearer {token}"}
 
     rate_limit_message = (
@@ -282,45 +364,38 @@ async def test_create_workflow_planning_failure_returns_original_app_error(
     )
 
     with (
-        patch("app.agents.planning.agent.get_driver", return_value=MagicMock()),
-        patch("app.agents.planning.agent.Neo4jGraphRepository", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
         patch(
             "app.agents.planning.agent._call_llm",
             new=AsyncMock(side_effect=PlanningLLMError(rate_limit_message)),
         ),
     ):
-        response = await db_client.post(
+        response = await client.post(
             "/api/v1/workflows",
             json={"title": "Planning should fail but still link failed run"},
             headers=headers,
         )
+        assert response.status_code == 202
+        workflow_id = response.json()["workflow_id"]
 
-    # Original AppError is preserved (not wrapped into workflow_execution_error)
-    assert response.status_code == 502
-    body = response.json()
-    assert body["error"]["code"] == "planning_llm_error"
-    assert body["error"]["message"] == rate_limit_message
+        detail = await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
+
+    stages_by_name = {s["stage"]: s for s in detail["stages"]}
 
     # The failed planning run is still linked to the workflow and visible
     # in stage history (no MissingGreenlet crash during linking).
-    workflows_response = await db_client.get("/api/v1/workflows", headers=headers)
-    assert workflows_response.status_code == 200
-    target = next(
-        w
-        for w in workflows_response.json()["items"]
-        if w["title"] == "Planning should fail but still link failed run"
-    )
-
-    detail_response = await db_client.get(
-        f"/api/v1/workflows/{target['workflow_id']}",
-        headers=headers,
-    )
-    assert detail_response.status_code == 200
-    detail = detail_response.json()
-    stages_by_name = {s["stage"]: s for s in detail["stages"]}
-
     assert stages_by_name["planning"]["status"] == "failed"
     assert stages_by_name["planning"]["run_id"] is not None
+
+    # Original AppError message is preserved on the run (not swallowed or
+    # replaced with a generic message).
+    failed_run_id = stages_by_name["planning"]["run_id"]
+    run_detail = (
+        await client.get(f"/api/v1/agent-runs/{failed_run_id}", headers=headers)
+    ).json()
+    assert run_detail["status"] == "failed"
+    assert run_detail["error_message"] == rate_limit_message
 
 
 async def test_get_workflow_not_found_returns_404(db_client: AsyncClient) -> None:

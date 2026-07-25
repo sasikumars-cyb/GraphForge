@@ -22,8 +22,15 @@ export function createWorkflow(
   });
 }
 
-export function getWorkflow(token: string, workflowId: string): Promise<WorkflowDetail> {
-  return apiFetch<WorkflowDetail>(`/workflows/${encodeURIComponent(workflowId)}`, { token });
+export function getWorkflow(
+  token: string,
+  workflowId: string,
+  signal?: AbortSignal,
+): Promise<WorkflowDetail> {
+  return apiFetch<WorkflowDetail>(`/workflows/${encodeURIComponent(workflowId)}`, {
+    token,
+    signal,
+  });
 }
 
 export interface ListWorkflowsParams {
@@ -77,6 +84,16 @@ export function rejectWorkflow(
   workflowId: string,
 ): Promise<WorkflowApprovalResponse> {
   return apiFetch<WorkflowApprovalResponse>(`/workflows/${encodeURIComponent(workflowId)}/reject`, {
+    method: "POST",
+    token,
+  });
+}
+
+export function cancelWorkflow(
+  token: string,
+  workflowId: string,
+): Promise<WorkflowApprovalResponse> {
+  return apiFetch<WorkflowApprovalResponse>(`/workflows/${encodeURIComponent(workflowId)}/cancel`, {
     method: "POST",
     token,
   });

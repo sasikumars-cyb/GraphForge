@@ -53,6 +53,7 @@ async def approved_planning_workflow(
     workflow = Workflow(
         id=uuid.uuid4(),
         title="Blueprint: Rate Limiter",
+        original_prompt="Add a rate limiter to the payment API.",
         current_stage="engineering_review",
         status="approved",
         workflow_type="planning",
@@ -123,6 +124,7 @@ async def test_create_auto_execution_unapproved_source_returns_400(
     source = Workflow(
         id=uuid.uuid4(),
         title="Unapproved Blueprint",
+        original_prompt="Add a rate limiter to the payment API.",
         current_stage="engineering_review",
         status="awaiting_approval",
         workflow_type="planning",
@@ -152,6 +154,7 @@ async def test_create_auto_execution_non_planning_source_returns_400(
     source = Workflow(
         id=uuid.uuid4(),
         title="Not a blueprint",
+        original_prompt="Some legacy SDLC objective.",
         current_stage="completed",
         status="approved",
         workflow_type="legacy_sdlc",

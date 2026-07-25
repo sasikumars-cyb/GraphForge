@@ -7,6 +7,7 @@ GET /api/v1/agent-runs/{run_id}, GET /api/v1/agent-runs (paginated).
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -132,6 +133,11 @@ class AgentManifestResponse(BaseModel):
     cost_class: str
 
 
+class CancelRunResponse(BaseModel):
+    run_id: str
+    status: str
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -230,12 +236,16 @@ async def create_run(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> CreateRunResponse:
-    """Create and execute an agent run.
+    """Create an agent run and schedule its execution in the background.
 
     Resolves subject_reference to a Subject, selects the agent for the
-    given goal, runs it, and persists the result. Returns 202 with the
-    run_id and initial status.
+    given goal, and commits a "queued" Run row before returning. The
+    actual agent execution is dispatched to run detached from this
+    request (see app.orchestrator.background_execution) so it survives
+    the client disconnecting, navigating away, or refreshing — poll
+    GET /agent-runs/{run_id} for progress and the eventual result.
     """
+    from app.orchestrator.background_execution import schedule_run_execution
     from app.orchestrator.run_coordinator import RunCoordinator
 
     # Resolve subject
@@ -252,7 +262,9 @@ async def create_run(
     coordinator = RunCoordinator(db=db, registry=global_registry, selector=selector)
 
     try:
-        run = await coordinator.execute(subject=subject, goal=body.goal, model=body.model)
+        run, agent_id, _agent = await coordinator.create_pending_run(
+            subject=subject, goal=body.goal, model=body.model
+        )
     except NotFoundError:
         raise
     except AppError:
@@ -269,12 +281,58 @@ async def create_run(
     run.user_id = user.id
     await db.commit()
 
+    schedule_run_execution(
+        run_id=run.id,
+        subject=subject,
+        goal=body.goal,
+        model=body.model,
+        extras=None,
+        agent_id=agent_id,
+        registry=global_registry,
+    )
+
     return CreateRunResponse(
         run_id=str(run.id),
         status=run.status,
         subject=_subject_from_run(run),
         goal=run.goal,
     )
+
+
+@router.post("/{run_id}/cancel", response_model=CancelRunResponse)
+async def cancel_run_endpoint(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> CancelRunResponse:
+    """Request cancellation of an in-flight run.
+
+    Best-effort: asyncio.Task.cancel() raises CancelledError at the run's
+    next await point, it doesn't stop it instantly. If the run has already
+    reached a terminal status, this is a no-op that just reports it.
+    """
+    from app.orchestrator.background_execution import cancel_run as cancel_background_run
+
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError as exc:
+        raise NotFoundError(f"Invalid run_id: {run_id}") from exc
+
+    result = await db.execute(select(Run).where(Run.id == rid))
+    run = result.scalar_one_or_none()
+    if run is None:
+        raise NotFoundError(f"Run '{run_id}' not found.")
+
+    if run.status in ("completed", "failed"):
+        return CancelRunResponse(run_id=str(run.id), status=run.status)
+
+    if cancel_background_run(rid):
+        run.status = "failed"
+        run.error_message = "Cancelled by user."
+        run.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    return CancelRunResponse(run_id=str(run.id), status=run.status)
 
 
 @router.get("/{run_id}", response_model=RunDetailResponse)

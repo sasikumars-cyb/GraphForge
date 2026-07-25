@@ -11,6 +11,7 @@ POST /workflows/{workflow_id}/reject   → Reject a completed Planning blueprint
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -189,14 +190,18 @@ async def _link_failed_run(
 ) -> None:
     """Link an orphaned failed Run back to its workflow.
 
-    RunCoordinator.execute() always creates and commits a Run row before
-    raising on any failure path (selector, registry, or agent error) — but
-    it has no notion of "workflow" and never sets workflow_id/workflow_stage
-    itself. Without this, a failed stage run is invisible in the workflow's
-    stage/run list: the stage looks like it was never attempted, even though
-    it consumed a real run. Called from the `except` block of both endpoints
-    below, after the original exception has already propagated past
-    RunCoordinator (so the failed Run is guaranteed to exist and be committed).
+    Only reachable now from `RunCoordinator.create_pending_run` failures
+    (goal has no registered agent, or the selector itself errors) — that
+    method still creates and commits a failed Run before raising, and has
+    no notion of "workflow" so never sets workflow_id/workflow_stage
+    itself. Once `create_pending_run` succeeds, the router sets
+    workflow_id/workflow_stage directly on the Run before it's ever
+    dispatched for background execution, so a *later* failure (inside the
+    agent itself, in the background task) already carries that linkage —
+    this retroactive lookup is no longer needed for that case. Without
+    this, a stage that fails at selection time would be invisible in the
+    workflow's stage/run list: it'd look like it was never attempted, even
+    though it consumed a real run.
 
     Important for AsyncSession: do not touch `workflow.runs` via direct
     attribute access here. In the create-workflow failure path this
@@ -257,6 +262,22 @@ def _resolve_stage_subject(workflow: Workflow, target_stage: str, enriched_ref: 
     )
 
 
+def _workflow_stage_finalizer(workflow_id: uuid.UUID):
+    """Build the on_complete callback passed to schedule_run_execution.
+
+    Runs in the background task's own DB session, after the stage's run
+    reaches a terminal status — this is where `workflow_service.
+    finalize_stage_run` (advance current_stage/status, or no-op on
+    failure) now happens, since the router itself returns before the run
+    finishes.
+    """
+
+    async def _finalize(db: AsyncSession, run: Run) -> None:
+        await workflow_service.finalize_stage_run(db, workflow_id, run)
+
+    return _finalize
+
+
 def _build_run_responses(workflow: Workflow) -> list[WorkflowRunResponse]:
     items = []
     for run in sorted(workflow.runs or [], key=lambda r: r.created_at):
@@ -292,7 +313,15 @@ async def create_workflow(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> ContinueWorkflowResponse:
-    """Create a new workflow and execute its first stage."""
+    """Create a new workflow and schedule its first stage's execution.
+
+    Commits the workflow and a "queued" first-stage Run before returning
+    — the stage's agent runs detached from this request (see
+    app.orchestrator.background_execution), so it survives the client
+    disconnecting, navigating away, or refreshing. Poll GET
+    /workflows/{workflow_id} for progress.
+    """
+    from app.orchestrator.background_execution import schedule_run_execution
     from app.orchestrator.run_coordinator import RunCoordinator
 
     # Parse source_workflow_id if provided
@@ -337,10 +366,9 @@ async def create_workflow(
     selector = AgentSelector(global_registry)
     coordinator = RunCoordinator(db=db, registry=global_registry, selector=selector)
 
-    agent_extras = {"workflow": workflow, "user_id": user.id}
     try:
-        run = await coordinator.execute(
-            subject=subject, goal=goal, model=body.model, extras=agent_extras,
+        run, agent_id, _agent = await coordinator.create_pending_run(
+            subject=subject, goal=goal, model=body.model
         )
     except NotFoundError:
         await _link_failed_run(db, workflow, subject.subject_id, goal, stage)
@@ -356,11 +384,23 @@ async def create_workflow(
             error_code="workflow_execution_error",
         ) from exc
 
-    # Link run to workflow
+    # Link run to workflow before it's ever handed to the background task,
+    # so a failure there already carries workflow_id/workflow_stage —
+    # see _link_failed_run's updated docstring.
     run.workflow_id = workflow.id
     run.workflow_stage = stage
-    await workflow_service.advance_workflow(db, workflow, run)
     await db.commit()
+
+    schedule_run_execution(
+        run_id=run.id,
+        subject=subject,
+        goal=goal,
+        model=body.model,
+        extras={"workflow": workflow, "user_id": user.id},
+        agent_id=agent_id,
+        registry=global_registry,
+        on_complete=_workflow_stage_finalizer(workflow.id),
+    )
 
     return ContinueWorkflowResponse(
         workflow_id=str(workflow.id),
@@ -455,8 +495,13 @@ async def continue_workflow(
     """Continue a workflow to its next SDLC stage.
 
     Automatically propagates context from all previous stages to the
-    next agent — no manual copy-paste required.
+    next agent — no manual copy-paste required. Commits a "queued" Run
+    for the next stage and returns immediately; the stage's agent runs
+    detached from this request (see app.orchestrator.background_execution),
+    so it survives the client disconnecting, navigating away, or
+    refreshing. Poll GET /workflows/{workflow_id} for progress.
     """
+    from app.orchestrator.background_execution import schedule_run_execution
     from app.orchestrator.run_coordinator import RunCoordinator
 
     try:
@@ -520,10 +565,9 @@ async def continue_workflow(
     selector = AgentSelector(global_registry)
     coordinator = RunCoordinator(db=db, registry=global_registry, selector=selector)
 
-    agent_extras = {"workflow": workflow, "user_id": user.id}
     try:
-        run = await coordinator.execute(
-            subject=subject, goal=goal, model=body.model, extras=agent_extras,
+        run, agent_id, _agent = await coordinator.create_pending_run(
+            subject=subject, goal=goal, model=body.model
         )
     except NotFoundError:
         await _link_failed_run(db, workflow, subject.subject_id, goal, target_stage)
@@ -539,14 +583,24 @@ async def continue_workflow(
             error_code="workflow_execution_error",
         ) from exc
 
-    # Link run to workflow and previous run
+    # Link run to workflow and previous run before it's ever handed to the
+    # background task — see _link_failed_run's updated docstring.
     run.workflow_id = workflow.id
     run.workflow_stage = target_stage
     if previous_run:
         run.previous_run_id = previous_run.id
-
-    await workflow_service.advance_workflow(db, workflow, run)
     await db.commit()
+
+    schedule_run_execution(
+        run_id=run.id,
+        subject=subject,
+        goal=goal,
+        model=body.model,
+        extras={"workflow": workflow, "user_id": user.id},
+        agent_id=agent_id,
+        registry=global_registry,
+        on_complete=_workflow_stage_finalizer(workflow.id),
+    )
 
     return ContinueWorkflowResponse(
         workflow_id=str(workflow.id),
@@ -554,6 +608,43 @@ async def continue_workflow(
         stage=target_stage,
         status=run.status,
     )
+
+
+@router.post("/{workflow_id}/cancel", response_model=WorkflowApprovalResponse)
+async def cancel_workflow_run(
+    workflow_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> WorkflowApprovalResponse:
+    """Cancel the workflow's currently in-flight stage run, if any.
+
+    Best-effort (see background_execution.cancel_run): marks the run
+    failed and leaves the workflow's current_stage where it is, so the
+    user can retry the same stage via /continue.
+    """
+    from app.orchestrator.background_execution import cancel_run as cancel_background_run
+
+    try:
+        wid = uuid.UUID(workflow_id)
+    except ValueError as exc:
+        raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
+
+    workflow = await workflow_service.get_workflow_for_update(db, wid)
+
+    in_flight_run = next(
+        (r for r in workflow.runs if r.workflow_stage == workflow.current_stage and r.status in ("queued", "running")),
+        None,
+    )
+    if in_flight_run is None:
+        return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)
+
+    if cancel_background_run(in_flight_run.id):
+        in_flight_run.status = "failed"
+        in_flight_run.error_message = "Cancelled by user."
+        in_flight_run.completed_at = datetime.now(timezone.utc)
+        await db.commit()
+
+    return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)
 
 
 @router.post("/{workflow_id}/approve", response_model=WorkflowApprovalResponse)

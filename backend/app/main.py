@@ -18,7 +18,8 @@ from app.api.v1.routers import api_router
 from app.core.config import get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import configure_logging
-from app.database.session import engine
+from app.database.session import AsyncSessionLocal, engine
+from app.orchestrator.background_execution import recover_orphaned_runs
 
 OPENAPI_TAGS = [
     {
@@ -97,6 +98,13 @@ def create_app() -> FastAPI:
                 UPDATE users SET role = 'admin'
                 WHERE email = 'admin@graphforge.dev' AND role != 'admin'
             """))
+
+        # Recover any Run left "running" by a previous process — background
+        # execution (see app.orchestrator.background_execution) runs on
+        # asyncio.create_task, which does not survive a restart.
+        async with AsyncSessionLocal() as db:
+            await recover_orphaned_runs(db)
+
         yield
 
     app = FastAPI(

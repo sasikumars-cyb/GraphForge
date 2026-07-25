@@ -384,6 +384,29 @@ async def advance_workflow(
     )
 
 
+async def finalize_stage_run(db: AsyncSession, workflow_id: uuid.UUID, run: Run) -> Workflow:
+    """Advance a workflow based on one of its stage runs, once that run has
+    reached a terminal status.
+
+    This is the callback the background-execution path (see
+    app.orchestrator.background_execution) invokes after a stage's
+    agent finishes running, in its own DB session — the router that
+    created the run has already returned a response by then, so this is
+    where `current_stage`/`status` actually get advanced now (previously
+    this ran inline in the router, right after the now-backgrounded
+    `RunCoordinator.execute()` call returned).
+
+    Delegates entirely to `advance_workflow`, which already no-ops if
+    `run.status != "completed"` — safe to call even if this fires for a
+    run that ended up failing, without the caller needing to branch on
+    status first.
+    """
+    workflow = await get_workflow(db, workflow_id)
+    await advance_workflow(db, workflow, run)
+    await db.commit()
+    return workflow
+
+
 async def approve_workflow(db: AsyncSession, workflow: Workflow, user_id: uuid.UUID) -> None:
     """Human approves a completed blueprint — terminal, no further stages
     run automatically (matches Auto Execution being a separate, explicit

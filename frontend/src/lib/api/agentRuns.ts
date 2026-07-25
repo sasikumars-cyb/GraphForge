@@ -23,8 +23,24 @@ export function createAgentRun(
   });
 }
 
-export function getAgentRun(token: string, runId: string): Promise<RunDetail> {
-  return apiFetch<RunDetail>(`/agent-runs/${encodeURIComponent(runId)}`, { token });
+export function getAgentRun(
+  token: string,
+  runId: string,
+  signal?: AbortSignal,
+): Promise<RunDetail> {
+  return apiFetch<RunDetail>(`/agent-runs/${encodeURIComponent(runId)}`, { token, signal });
+}
+
+export interface CancelRunResponse {
+  run_id: string;
+  status: string;
+}
+
+export function cancelAgentRun(token: string, runId: string): Promise<CancelRunResponse> {
+  return apiFetch<CancelRunResponse>(`/agent-runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+    token,
+  });
 }
 
 export interface ListRunsParams {

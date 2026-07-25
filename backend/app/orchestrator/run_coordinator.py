@@ -39,8 +39,13 @@ class RunCoordinator:
         self,
         db: AsyncSession,
         registry: AgentRegistry,
-        selector: AgentSelector,
+        selector: AgentSelector | None = None,
     ) -> None:
+        """`selector` is only needed for `create_pending_run`/`execute` (goal
+        -> agent_id resolution). Callers that already know the agent_id —
+        e.g. background_execution.py, resuming a run in a fresh session
+        after create_pending_run already resolved it once — may omit it and
+        call `execute_run` directly."""
         self._db = db
         self._registry = registry
         self._selector = selector
@@ -62,7 +67,34 @@ class RunCoordinator:
         Raises NotFoundError if `goal` has no registered agent.
         Never swallows exceptions — errors are persisted as
         status="failed" then re-raised so callers can surface them.
+
+        This runs both phases (see `create_pending_run`/`execute_run`)
+        back-to-back against the same session — kept for callers that want
+        the whole lifecycle synchronously (e.g. tests). API routes that
+        need to return to the client before the agent finishes should call
+        the two phases separately via `app.orchestrator.background_execution`.
         """
+        run, agent_id, agent = await self.create_pending_run(subject, goal, model)
+        return await self.execute_run(run, agent_id, agent, subject, goal, model, extras)
+
+    async def create_pending_run(
+        self,
+        subject: Subject,
+        goal: str,
+        model: str | None = None,
+    ) -> tuple[Run, str, object]:
+        """Phase 1: create the Run row (status="queued") and resolve the
+        agent for `goal`. Flushes but does not commit on the success path —
+        callers that need the queued row durable before returning to a
+        client (e.g. to hand back a run_id and dispatch background
+        execution) must `await db.commit()` themselves after this returns.
+
+        On selection/lookup failure, persists status="failed", commits,
+        and re-raises — matching `execute()`'s error behavior exactly.
+        """
+        if self._selector is None:
+            raise ValueError("create_pending_run requires a selector; construct RunCoordinator with one.")
+
         run = Run(
             id=uuid.uuid4(),
             subject_id=subject.subject_id,
@@ -89,8 +121,26 @@ class RunCoordinator:
             from app.core.exceptions import NotFoundError
             raise NotFoundError(f"Agent '{agent_id}' selected but not found in registry.")
 
-        manifest, agent = entry
+        _manifest, agent = entry
+        return run, agent_id, agent
 
+    async def execute_run(
+        self,
+        run: Run,
+        agent_id: str,
+        agent: object,
+        subject: Subject,
+        goal: str,
+        model: str | None = None,
+        extras: dict | None = None,
+    ) -> Run:
+        """Phase 2: run the resolved `agent` against `subject` and persist
+        the outcome onto `run` (status queued/failed -> running ->
+        completed/failed). `run` must already exist in this coordinator's
+        session (either freshly created by `create_pending_run` in the same
+        session, or re-fetched by id in a different session — see
+        `background_execution.py` for the latter).
+        """
         step = AgentStep(
             id=uuid.uuid4(),
             run_id=run.id,
@@ -117,7 +167,7 @@ class RunCoordinator:
         start_ms = time.monotonic()
 
         try:
-            output: AgentOutput = await agent.run(context)
+            output: AgentOutput = await agent.run(context)  # type: ignore[attr-defined]
         except Exception as exc:
             latency_ms = int((time.monotonic() - start_ms) * 1000)
             await self._fail_step(step, str(exc), latency_ms)

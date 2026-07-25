@@ -1,15 +1,24 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { ArrowLeft, GitMerge } from "lucide-react";
 import { Card } from "../components/Card";
-import { EvidencePanel } from "../components/EvidencePanel";
 import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
+import { StageResultPanel } from "../components/runs/StageResultPanel";
 import { useAuth } from "../app/auth-context";
 import { getAgentRun } from "../lib/api/agentRuns";
-import { stageLabel } from "../lib/workflowDerived";
+import { stageFromGoal, stageLabel } from "../lib/workflowDerived";
 import type { RunDetail } from "../types/agent";
+
+// Matches WorkflowPage's polling cadence — same "watch it happen" pattern,
+// reusing the same GET this page already calls on mount. Now that run
+// creation returns immediately (see app.orchestrator.background_execution
+// on the backend) rather than blocking until the agent finishes, this is
+// what actually shows progress and the eventual result — including on a
+// fresh page load after a refresh/navigation-back, since it's driven
+// entirely by re-fetching backend state, not any client-held state.
+const POLL_INTERVAL_MS = 2500;
 
 export function RunDetailPage() {
   const { runId } = useParams<{ runId: string }>();
@@ -18,14 +27,43 @@ export function RunDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const loadRun = useCallback(
+    async (isInitial: boolean, signal?: AbortSignal) => {
+      if (!token || !runId) return;
+      if (isInitial) setIsLoading(true);
+      try {
+        const detail = await getAgentRun(token, runId, signal);
+        setRun(detail);
+        setError(null);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Failed to load run.");
+      } finally {
+        if (isInitial) setIsLoading(false);
+      }
+    },
+    [token, runId],
+  );
+
   useEffect(() => {
-    if (!token || !runId) return;
-    setIsLoading(true);
-    getAgentRun(token, runId)
-      .then(setRun)
-      .catch((err) => setError(err instanceof Error ? err.message : "Failed to load run."))
-      .finally(() => setIsLoading(false));
-  }, [token, runId]);
+    const controller = new AbortController();
+    loadRun(true, controller.signal);
+    return () => controller.abort();
+  }, [loadRun]);
+
+  // Poll while the run is still in flight. Stops on unmount (route change,
+  // refresh, back/forward all just remount this page and re-fetch current
+  // backend state — there's no client-side execution state to lose).
+  const runStatus = run?.status;
+  useEffect(() => {
+    if (runStatus !== "queued" && runStatus !== "running") return;
+    const controller = new AbortController();
+    const id = window.setInterval(() => loadRun(false, controller.signal), POLL_INTERVAL_MS);
+    return () => {
+      window.clearInterval(id);
+      controller.abort();
+    };
+  }, [runStatus, loadRun]);
 
   if (isLoading) {
     return (
@@ -54,6 +92,10 @@ export function RunDetailPage() {
 
   const step = run.steps[0];
   const evidence = step?.evidence ?? [];
+  // workflow_stage is only set for stage runs; standalone runs (created
+  // from /workspace/planning etc.) fall back to deriving it from the
+  // goal so StageResultPanel still knows whether to render a blueprint.
+  const stage = run.workflow_stage ?? stageFromGoal(run.goal);
 
   return (
     <div className="flex flex-col gap-6">
@@ -200,17 +242,19 @@ export function RunDetailPage() {
         </div>
       )}
 
-      {/* Step result */}
-      {step?.result && Object.keys(step.result).length > 0 && (
-        <Card title="Agent Result">
-          <pre className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-4 text-xs text-slate-300">
-            {JSON.stringify(step.result, null, 2)}
-          </pre>
-        </Card>
+      {/* Step result — same tabbed panel WorkflowPage uses, so a run
+          reached from Run History renders its blueprint graph exactly
+          like it does inside a workflow, instead of a raw JSON dump. The
+          panel's own Evidence tab replaces what used to be a separate,
+          always-visible EvidencePanel below it. */}
+      {step && (
+        <StageResultPanel
+          stage={stage}
+          step={step}
+          agentLabel={run.subject.display_name || run.goal}
+          evidence={evidence}
+        />
       )}
-
-      {/* Evidence */}
-      <EvidencePanel evidence={evidence} />
     </div>
   );
 }

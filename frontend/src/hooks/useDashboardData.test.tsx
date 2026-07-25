@@ -16,6 +16,7 @@ const FAKE_USER = {
   email: "ada@example.com",
   full_name: "Ada Lovelace",
   auth_provider: "local",
+  role: "user",
   created_at: "2026-01-01T00:00:00Z",
 };
 

@@ -48,7 +48,7 @@ def upgrade() -> None:
             ON CONFLICT (email) DO UPDATE SET role = 'admin'
             """
         ).bindparams(
-            id=str(uuid.uuid4()),
+            sa.bindparam("id", value=uuid.uuid4(), type_=sa.Uuid()),
             email=_ADMIN_EMAIL,
             full_name=_ADMIN_NAME,
             hashed_password=_hash_password(_ADMIN_PASSWORD),
