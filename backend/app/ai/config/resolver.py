@@ -41,6 +41,7 @@ _ENV_KEY_FIELDS: dict[str, tuple[str, str]] = {
     "openai": ("openai_api_key", "openai_model"),
     "gemini": ("gemini_api_key", "gemini_model"),
     "groq": ("groq_api_key", "groq_model"),
+    "deepseek": ("deepseek_api_key", "deepseek_model"),
 }
 
 
@@ -209,7 +210,13 @@ def resolve(
                             cfg.gemini_max_tokens if spec.key == "gemini" else cfg.openai_max_tokens
                         )
                     ),
-                    base_url=(prov_cfg.base_url if prov_cfg else None) or spec.default_base_url,
+                    base_url=(prov_cfg.base_url if prov_cfg else None)
+                    or (
+                        getattr(cfg, "deepseek_base_url", None)
+                        if spec.key == "deepseek"
+                        else None
+                    )
+                    or spec.default_base_url,
                 ),
                 source=profile_source,
                 profile_slug=record.slug,
@@ -252,7 +259,11 @@ def resolve(
             model=resolved_model,
             temperature=float(temperature),
             max_tokens=int(max_tokens),
-            base_url=(record.base_url if record else None) or spec.default_base_url,
+            base_url=(record.base_url if record else None)
+            or (
+                getattr(cfg, "deepseek_base_url", None) if spec.key == "deepseek" else None
+            )
+            or spec.default_base_url,
         ),
         source=source,
     )
