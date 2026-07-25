@@ -214,7 +214,9 @@ async def create_connection(
     # activate the matching Tool Registry entry (Jira, Confluence, ...), if
     # any, immediately rather than requiring a restart. No-op for source
     # types with no corresponding tool.
-    sync_knowledge_connection_to_tool(body.source_type, body.config, body.credentials or {})
+    sync_knowledge_connection_to_tool(
+        body.source_type, body.transport, body.config, body.credentials or {}
+    )
 
     return _row_to_info(row)
 
@@ -272,7 +274,7 @@ async def update_connection(
             credentials = json.loads(decrypt_secret(row.encrypted_credentials))
         except Exception:
             credentials = {}
-    sync_knowledge_connection_to_tool(row.source_type, row.config or {}, credentials)
+    sync_knowledge_connection_to_tool(row.source_type, row.transport, row.config or {}, credentials)
 
     return _row_to_info(row)
 

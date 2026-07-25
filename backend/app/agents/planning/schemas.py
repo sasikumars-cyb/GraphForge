@@ -109,6 +109,17 @@ class RiskItem(BaseModel):
     confidence: str = "medium"  # low | medium | high
 
 
+class LLMTrace(BaseModel):
+    """The actual prompt sent to the LLM and its raw response — real
+    trace-level detail, not the one-line Evidence summary. Truncated (see
+    agent.py) to a sane cap before storage; not an unbounded dump."""
+
+    model: str = ""
+    prompt: str = ""
+    raw_response: str = ""
+    latency_ms: int | None = None
+
+
 class PlanningResult(BaseModel):
     """Structured output from the Planning Agent.
 
@@ -155,3 +166,10 @@ class PlanningResult(BaseModel):
     data_entities: list[DataEntity] = Field(default_factory=list)
     implementation_phases: list[ImplementationPhase] = Field(default_factory=list)
     risks: list[RiskItem] = Field(default_factory=list)
+
+    # The actual prompt sent and the LLM's raw response — everything the Log
+    # tab showed before this was just (tool_name, one-line summary) per
+    # Evidence entry, never what the model was actually asked or what it
+    # actually said back. None for results persisted before this field
+    # existed, or if the LLM call failed before a response was captured.
+    llm_trace: LLMTrace | None = Field(default=None)

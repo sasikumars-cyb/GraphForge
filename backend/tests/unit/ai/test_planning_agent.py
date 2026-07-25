@@ -383,6 +383,43 @@ async def test_planning_agent_happy_path_has_graph_evidence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_planning_agent_result_includes_real_llm_trace() -> None:
+    """The Log tab needs the actual prompt/response, not just a one-line
+    Evidence summary — result.llm_trace must carry the real prompt text
+    (including the task description) and the real raw model response."""
+    context = _make_planning_context()
+
+    mock_graph_repo = MagicMock()
+    mock_graph_repo.has_graph = AsyncMock(return_value=True)
+    mock_graph_repo.get_nodes_by_label = AsyncMock(return_value=[])
+
+    mock_db = context.extras["db"]
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    mock_db.execute.return_value = mock_result
+
+    llm_response = _make_llm_response()
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    trace = output.result["llm_trace"]
+    assert trace is not None
+    assert trace["raw_response"] == llm_response
+    assert context.subject.display_name in trace["prompt"]
+    assert trace["latency_ms"] is not None
+    assert trace["latency_ms"] >= 0
+
+
+@pytest.mark.asyncio
 async def test_planning_agent_no_indexed_repos_still_produces_evidence() -> None:
     """Even with no indexed repos, the agent must produce Evidence entries —
     querying the graph and finding nothing is still a graph traversal."""

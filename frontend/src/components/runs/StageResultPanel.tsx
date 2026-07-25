@@ -148,7 +148,7 @@ export function StageResultPanel({
         )}
 
         {activeTab === "log" && (
-          <ExecutionLogPanel step={step} agentLabel={agentLabel} />
+          <ExecutionLogPanel step={step} agentLabel={agentLabel} llmTrace={planningResult?.llm_trace} />
         )}
 
         {activeTab === "json" && (

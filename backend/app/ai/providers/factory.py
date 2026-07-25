@@ -72,8 +72,13 @@ def create_llm_provider(
         raise UnsupportedModelError(f"Unsupported AI model: '{model}'.")
 
     if resolved.spec.requires_api_key and not resolved.config.api_key:
+        # Named after the actual env var (e.g. "OPENAI_API_KEY") rather than
+        # just the provider key — this is the message an operator actually
+        # acts on, matching the naming Settings/.env.example already use for
+        # every api-key-requiring provider.
+        env_var = f"{resolved.key.upper()}_API_KEY"
         raise AppError(
-            f"No API key configured for provider '{resolved.key}'.",
+            f"No API key configured for provider '{resolved.key}'. Set {env_var}.",
             status_code=503,
             error_code="ai_provider_not_configured",
         )

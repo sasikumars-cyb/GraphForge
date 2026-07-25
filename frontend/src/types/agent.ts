@@ -147,6 +147,13 @@ export interface StructuredRisk {
   category?: string;
 }
 
+export interface LLMTrace {
+  model: string;
+  prompt: string;
+  raw_response: string;
+  latency_ms: number | null;
+}
+
 export interface PlanningResult {
   executive_summary: string;
   implementation_steps: PlanningStep[];
@@ -164,6 +171,7 @@ export interface PlanningResult {
   capabilities?: string[];
   project_type?: string;
   project_type_label?: string;
+  llm_trace?: LLMTrace | null;
 }
 
 // --- Development Plan Result (agent-specific payload inside step.result) ---

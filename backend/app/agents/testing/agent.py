@@ -367,9 +367,10 @@ class TestPlanningAgent:
                 "Retry when the graph service is restored."
             )
         elif has_graph_data:
+            kafka_clause = f", {topic_count} Kafka topic(s)," if topic_count else ""
             confidence_reasoning = (
-                f"Graph traversal found {component_count} component(s), "
-                f"{topic_count} Kafka topic(s), and {integration_count} "
+                f"Graph traversal found {component_count} component(s){kafka_clause} "
+                f"and {integration_count} "
                 f"integration point(s) across {len(indexed_repos)} indexed "
                 f"repositor{'y' if len(indexed_repos) == 1 else 'ies'}. "
             )

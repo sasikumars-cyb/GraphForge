@@ -157,9 +157,13 @@ class ComponentDiscoveryTool:
                     repo_name, str(exc),
                 )
 
+        # Kafka detection only exists for Java/Spring Boot (see
+        # indexer/extractors/kafka.py) — a Python repo always yields zero,
+        # not because it has no messaging, but because nothing looks for it
+        # there. Omit the clause rather than report a misleading "0".
+        kafka_clause = f" and {len(all_topics)} Kafka topic(s)" if all_topics else ""
         summary = (
-            f"Discovered {len(all_components)} component(s) and "
-            f"{len(all_topics)} Kafka topic(s) across "
+            f"Discovered {len(all_components)} component(s){kafka_clause} across "
             f"{len(repositories)} repositor{'y' if len(repositories) == 1 else 'ies'}."
         )
         if errors:
@@ -307,13 +311,13 @@ def format_graph_context(
     else:
         parts.append("**Components**: none indexed yet")
 
-    # Kafka topics
+    # Kafka topics — omitted when empty, not asserted as "none indexed yet":
+    # detection only exists for Java/Spring Boot, so an empty list from a
+    # Python repository isn't a grounded finding, just an undetected gap.
     topics = components_obs.data.get("kafka_topics", [])
     if topics:
         topic_names = list({t["name"] for t in topics})[:20]
         parts.append(f"**Kafka topics**: {', '.join(topic_names)}")
-    else:
-        parts.append("**Kafka topics**: none indexed yet")
 
     # Dependency edges (summarized)
     edges = deps_obs.data.get("edges", [])

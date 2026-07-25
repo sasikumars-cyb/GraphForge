@@ -173,10 +173,19 @@ class TraverseArchitectureGraphTool:
                     repo_name, str(exc),
                 )
 
+        # Kafka topic extraction only exists for Java/Spring Boot
+        # (@KafkaListener/KafkaTemplate) — see indexer/extractors/kafka.py.
+        # A Python repository always yields zero, not because it has no
+        # messaging, but because nothing looks for it there yet. Stating
+        # "0 Kafka topics" as a finding would misrepresent an unimplemented
+        # detector as a real absence, so the clause only appears when
+        # there's something to report.
+        found_clause = f"found {len(all_components)} component{'s' if len(all_components) != 1 else ''}"
+        if all_topics:
+            found_clause += f" and {len(all_topics)} Kafka topic{'s' if len(all_topics) != 1 else ''}"
         summary_parts = [
             f"Graph traversal across {len(repositories)} repositor{'y' if len(repositories) == 1 else 'ies'}",
-            f"found {len(all_components)} component{'s' if len(all_components) != 1 else ''}",
-            f"and {len(all_topics)} Kafka topic{'s' if len(all_topics) != 1 else ''}.",
+            found_clause + ".",
         ]
         if errors:
             summary_parts.append(f"{len(errors)} repositor{'y' if len(errors) == 1 else 'ies'} failed.")
@@ -309,12 +318,14 @@ def format_graph_context(
     else:
         parts.append("**Components**: none indexed yet")
 
+    # Omitted entirely (not "none indexed yet") when empty: Kafka detection
+    # only exists for Java/Spring Boot, so an empty list from a Python
+    # repository isn't a grounded "no messaging" finding — asserting it to
+    # the LLM would present an unimplemented detector as a real absence.
     topics: list[dict[str, Any]] = traverse_observation.data.get("kafka_topics", [])
     if topics:
         topic_names = list({t["name"] for t in topics})[:12]
         parts.append(f"**Kafka topics**: {', '.join(topic_names)}")
-    else:
-        parts.append("**Kafka topics**: none indexed yet")
 
     return "\n\n".join(parts)
 

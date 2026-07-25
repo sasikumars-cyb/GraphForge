@@ -58,6 +58,20 @@ def github_configured(monkeypatch: pytest.MonkeyPatch):
     get_settings.cache_clear()
 
 
+@pytest.fixture
+def github_not_configured(monkeypatch: pytest.MonkeyPatch):
+    """Forces GITHUB_CLIENT_ID/SECRET unset for one test, regardless of
+    whatever real values a developer's own backend/.env has (a real GitHub
+    OAuth App is expected to be configured there for local "Connect GitHub"
+    testing) - explicit env vars override .env file values in
+    pydantic-settings, so this is reliable independent of .env's contents."""
+    monkeypatch.setenv("GITHUB_CLIENT_ID", "")
+    monkeypatch.setenv("GITHUB_CLIENT_SECRET", "")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 async def _register_and_get_token(db_client: AsyncClient) -> str:
     await db_client.post("/api/v1/auth/register", json=REGISTER_PAYLOAD)
     login_response = await db_client.post(
@@ -67,7 +81,9 @@ async def _register_and_get_token(db_client: AsyncClient) -> str:
     return str(login_response.json()["access_token"])
 
 
-async def test_connect_returns_503_when_not_configured(db_client: AsyncClient) -> None:
+async def test_connect_returns_503_when_not_configured(
+    db_client: AsyncClient, github_not_configured: None
+) -> None:
     token = await _register_and_get_token(db_client)
 
     response = await db_client.get(

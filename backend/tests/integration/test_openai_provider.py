@@ -556,10 +556,14 @@ def test_factory_creates_gemini_provider() -> None:
     assert provider._model == "gemini-3.6-flash"  # noqa: SLF001
 
 
-def test_factory_ollama_not_implemented() -> None:
-    settings = Settings(ai_provider="ollama", openai_api_key="sk-test")
-    with pytest.raises(UnsupportedProviderError):
-        create_llm_provider(settings)
+def test_factory_creates_ollama_provider_with_no_api_key_required() -> None:
+    """Ollama runs locally with no auth — registry.py's ProviderSpec marks
+    it requires_api_key=False, so this must build even with no key set at
+    all (unlike openai/groq/gemini, which require one)."""
+    settings = Settings(ai_provider="ollama")
+    provider = create_llm_provider(settings)
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._base_url == "http://localhost:11434/v1/chat/completions"  # noqa: SLF001
 
 
 def test_factory_unknown_provider_raises() -> None:

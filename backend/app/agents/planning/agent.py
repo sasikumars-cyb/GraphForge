@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -48,6 +49,7 @@ from app.agents.planning.schemas import (
     DataFlowStep,
     ImplementationPhase,
     ImplementationStep,
+    LLMTrace,
     PlanningResult,
     RepositoryUsage,
     RiskItem,
@@ -64,6 +66,10 @@ _PROMPT_DIR = Path(__file__).parent / "prompts"
 # produce repository-first plans; capping it both saves tokens and keeps
 # the architecture driven by the business brief.
 _MAX_GRAPH_CONTEXT_CHARS = 3_500
+# Caps the stored LLM prompt/response trace (see LLMTrace) — generous enough
+# to hold a real prompt+plan in full, but not an unbounded dump if something
+# upstream misbehaves.
+_MAX_TRACE_CHARS = 20_000
 
 # ---------------------------------------------------------------------------
 # LLM call — minimal, planning-specific, not shared with the Review Agent
@@ -393,6 +399,7 @@ class PlanningAgent:
             has_graph_data, len(graph_context_text), profile.key,
         )
 
+        llm_started = time.monotonic()
         try:
             raw_response = await _call_llm(user_prompt=prompt, model=context.model)
             planning_result = _parse_llm_response(raw_response, original_task_description, profile)
@@ -400,6 +407,17 @@ class PlanningAgent:
             # LLM failure — fail cleanly, per AGENT_FRAMEWORK.md error policy.
             logger.error("planning_agent_llm_failed error=%s", str(exc))
             raise
+        llm_latency_ms = int((time.monotonic() - llm_started) * 1000)
+
+        # The actual prompt/response, not just a one-line Evidence summary —
+        # capped so a pathological graph-context blowup or a runaway model
+        # response can't bloat the stored Run row unboundedly.
+        planning_result.llm_trace = LLMTrace(
+            model=context.model or "default",
+            prompt=prompt[:_MAX_TRACE_CHARS],
+            raw_response=raw_response[:_MAX_TRACE_CHARS],
+            latency_ms=llm_latency_ms,
+        )
 
         # Back-fill repositories_consulted from the graph traversal
         planning_result.repositories_consulted = [r["name"] for r in indexed_repos]
@@ -428,9 +446,10 @@ class PlanningAgent:
                 "Retry when the graph service is restored."
             )
         elif has_graph_data:
+            kafka_clause = f" and {topic_count} Kafka topic(s)" if topic_count else ""
             confidence_reasoning = (
-                f"Graph traversal found {component_count} component(s) and "
-                f"{topic_count} Kafka topic(s) across {len(indexed_repos)} "
+                f"Graph traversal found {component_count} component(s){kafka_clause} "
+                f"across {len(indexed_repos)} "
                 f"indexed repositor{'y' if len(indexed_repos) == 1 else 'ies'}. "
                 "Plan is grounded in real graph data."
             )

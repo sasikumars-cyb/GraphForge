@@ -96,10 +96,23 @@ def register_all_tools() -> None:
             capabilities=["issues", "epics", "sprints", "project_management"],
             factory=lambda cfg: JiraTool(cfg),
             requires_auth=True,
-            auth_fields=["jira_base_url", "jira_email", "jira_api_token"],
+            # Either the REST fields or just jira_mcp_server_url — JiraTool
+            # picks MCP over REST when the latter is present. Listed
+            # together since this is the one admin-configuration surface
+            # (Settings -> Tool Registry) that offers both; Settings ->
+            # Integrations only ever supplies one, per whichever transport
+            # the Knowledge Connection was created with.
+            auth_fields=[
+                "jira_base_url", "jira_email", "jira_api_token",
+                "jira_mcp_server_url", "jira_mcp_api_key",
+            ],
             default_enabled=False,
             icon="📋",
-            notes="Requires a Jira API token and base URL (e.g. https://myorg.atlassian.net).",
+            notes=(
+                "REST: Jira base URL + email + API token. Or MCP: a Jira MCP "
+                "server URL (+ optional API key) - set jira_mcp_server_url to "
+                "use it instead."
+            ),
         )
     )
 
@@ -142,15 +155,24 @@ def register_all_tools() -> None:
 # updated (knowledge.py) and once at startup to pick up connections made in
 # an earlier process (see app.main's lifespan).
 
-# tool_id -> KnowledgeConnection source_type this tool corresponds to, and
-# the KnowledgeConnection field name -> this tool's own config key.
-_KNOWLEDGE_CONNECTION_TOOL_MAP: dict[str, tuple[str, dict[str, str]]] = {
-    "jira": ("jira", {
+# (source_type, transport) -> (tool_id, field map). Two entries per source
+# that supports MCP (see knowledge/registry.py's TransportSpec declarations)
+# — REST and MCP land on the *same* tool_id, since a tool's config keys are
+# how it decides which transport to actually use internally (e.g.
+# JiraTool.__init__ picks MCP over REST purely based on which keys are
+# present). Adding a new MCP-backed source is: one more entry here, plus
+# whatever the tool implementation itself needs.
+_KNOWLEDGE_CONNECTION_TOOL_MAP: dict[tuple[str, str], tuple[str, dict[str, str]]] = {
+    ("jira", "rest"): ("jira", {
         "base_url": "jira_base_url",
         "email": "jira_email",
         "api_token": "jira_api_token",
     }),
-    "confluence": ("confluence", {
+    ("jira", "mcp"): ("jira", {
+        "server_url": "jira_mcp_server_url",
+        "api_key": "jira_mcp_api_key",
+    }),
+    ("confluence", "rest"): ("confluence", {
         "base_url": "confluence_base_url",
         "email": "confluence_email",
         "api_token": "confluence_api_token",
@@ -158,29 +180,35 @@ _KNOWLEDGE_CONNECTION_TOOL_MAP: dict[str, tuple[str, dict[str, str]]] = {
 }
 
 
-def sync_knowledge_connection_to_tool(source_type: str, config: dict, credentials: dict) -> None:
+def sync_knowledge_connection_to_tool(
+    source_type: str, transport: str, config: dict, credentials: dict
+) -> None:
     """Activate the Tool Registry entry matching a Knowledge Connection, if any.
 
-    No-op for source types with no corresponding tool (e.g. neo4j, filesystem)
-    or when the required fields aren't all present yet.
+    No-op for (source_type, transport) combinations with no corresponding
+    tool config (e.g. neo4j, filesystem, or a transport not yet mapped) or
+    when the required fields aren't all present yet.
     """
-    for tool_id, (mapped_source_type, field_map) in _KNOWLEDGE_CONNECTION_TOOL_MAP.items():
-        if mapped_source_type != source_type:
-            continue
-
-        merged = {**config, **credentials}
-        tool_config = {
-            tool_key: merged[conn_key] for conn_key, tool_key in field_map.items() if merged.get(conn_key)
-        }
-        if len(tool_config) != len(field_map):
-            logger.info(
-                "tool_sync_incomplete_config tool=%s source_type=%s", tool_id, source_type
-            )
-            return
-
-        get_tool_registry().configure(tool_id, enabled=True, config=tool_config)
-        logger.info("tool_sync_configured tool=%s source_type=%s", tool_id, source_type)
+    mapping = _KNOWLEDGE_CONNECTION_TOOL_MAP.get((source_type, transport))
+    if mapping is None:
         return
+    tool_id, field_map = mapping
+
+    merged = {**config, **credentials}
+    tool_config = {
+        tool_key: merged[conn_key] for conn_key, tool_key in field_map.items() if merged.get(conn_key)
+    }
+    if len(tool_config) != len(field_map):
+        logger.info(
+            "tool_sync_incomplete_config tool=%s source_type=%s transport=%s",
+            tool_id, source_type, transport,
+        )
+        return
+
+    get_tool_registry().configure(tool_id, enabled=True, config=tool_config)
+    logger.info(
+        "tool_sync_configured tool=%s source_type=%s transport=%s", tool_id, source_type, transport
+    )
 
 
 async def sync_all_knowledge_connections_to_tools(db: "AsyncSession") -> None:
@@ -203,4 +231,4 @@ async def sync_all_knowledge_connections_to_tools(db: "AsyncSession") -> None:
                     row.id, row.source_type,
                 )
                 continue
-        sync_knowledge_connection_to_tool(row.source_type, row.config or {}, credentials)
+        sync_knowledge_connection_to_tool(row.source_type, row.transport, row.config or {}, credentials)
