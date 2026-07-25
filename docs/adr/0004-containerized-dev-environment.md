@@ -21,7 +21,7 @@ A base-file-plus-`docker-compose.override.yml` approach was considered (Compose 
 
 **Vite's dev server binds all interfaces (`server.host: true`).** Vite defaults to binding only `localhost`, which is unreachable from outside its container even with the port published. This is set in `vite.config.ts` itself (not just a Docker-only CLI flag) so native `npm run dev` and the containerized dev server behave identically.
 
-**Explicit Compose project names** (`changeguard-dev`, `changeguard-prod`) on both files. Compose derives a default project name from the containing directory, and both files live in `docker/` — without an explicit name they'd share one project, and therefore one Postgres volume and one network, letting the dev and prod stacks silently collide.
+**Explicit Compose project names** (`graphforge-dev`, `graphforge-prod`) on both files. Compose derives a default project name from the containing directory, and both files live in `docker/` — without an explicit name they'd share one project, and therefore one Postgres volume and one network, letting the dev and prod stacks silently collide.
 
 **Update (added with authentication, ADR 0005): a shared `docker-entrypoint.sh` runs `alembic upgrade head` before starting uvicorn, in both the `dev` and `runtime` stages.** Once the `users` table existed, a fresh `./scripts/docker-dev.sh` would otherwise boot successfully but fail on the first `/auth/register` call with "relation users does not exist" — the container ran, the app just had no schema yet. Auto-migrating on startup is standard for a single-instance setup like this; it would need reconsidering (a separate migration job, not baked into app startup) if this ever ran with multiple replicas racing to migrate at once.
 

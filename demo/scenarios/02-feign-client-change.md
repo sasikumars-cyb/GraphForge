@@ -40,6 +40,6 @@ interface) gains a `refund(...)` method calling payment-service's real
   designed, not a bug — the *raw* model output may try this, but the parsed
   result won't carry it through.
 
-This is a deliberately honest scenario: ChangeGuard correctly flags real risk
+This is a deliberately honest scenario: GraphForge correctly flags real risk
 to *this* repository without hallucinating a cross-repo relationship it
 cannot actually prove from the graph.

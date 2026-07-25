@@ -225,8 +225,8 @@ agent selection deterministic and debuggable while the framework is new. LLM-bas
 from free-text entry points is an explicit Phase 3 upgrade, isolated behind `ISelector` so it's a
 drop-in replacement, not a rearchitecture.
 
-`plan_freeform` maps to the Planning Agent's standalone-input variant (see
-`TEAM_IMPLEMENTATION_PLAN.md` WS3): a free-text goal resolved through a minimal Entry Resolver,
+`plan_freeform` maps to the Planning Agent's standalone-input variant: a free-text goal resolved
+through a minimal Entry Resolver,
 with no linked Story and no upstream Requirement Agent output in context. This is distinct from
 `plan_story`, which assumes the sequential-handoff Planning Agent described earlier in this
 document (§ How Agents Collaborate) — consuming a real Requirement Agent's output in the same

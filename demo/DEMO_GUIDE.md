@@ -1,6 +1,6 @@
-# ChangeGuard Local Demo Environment
+# GraphForge Local Demo Environment
 
-A complete, local, GitHub-free demonstration of ChangeGuard: repository
+A complete, local, GitHub-free demonstration of GraphForge: repository
 indexing, tree-sitter parsing, the Neo4j knowledge graph, cross-repository
 Kafka coupling, deterministic impact analysis, AI analysis, the Release
 Coordination Plan, graph visualization, and the UI — all running against
@@ -14,7 +14,7 @@ scripts/demo-up.sh                      # starts Postgres + Neo4j + backend + fr
 cd backend && uv run python scripts/seed_demo.py   # registers, indexes, and analyzes everything
 ```
 
-Then open http://localhost:5173 and sign in as `demo@changeguard.example.com` /
+Then open http://localhost:5173 and sign in as `demo@graphforge.example.com` /
 `correct-horse-battery-staple` (printed by the seed script, along with direct
 links to each repository and scenario pull request).
 
@@ -65,7 +65,7 @@ order-service --produces--> "order.cancelled" <--consumes-- inventory-service
 order-service --produces--> "order.cancelled" <--consumes-- notification-service
 ```
 
-Only the Kafka relationships are visible to ChangeGuard's cross-repository
+Only the Kafka relationships are visible to GraphForge's cross-repository
 analysis. This is a real, documented limitation of the current
 implementation (not a demo simplification): `FeignClient.target_name` is
 parsed and stored on the graph node but never matched against anything, so

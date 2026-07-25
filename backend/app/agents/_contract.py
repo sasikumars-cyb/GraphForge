@@ -133,7 +133,7 @@ class AgentContext:
 
 
 # ---------------------------------------------------------------------------
-# Protocols — frozen interface signatures (no bodies, per TEAM_EXECUTION_PLAN.md)
+# Protocols — frozen interface signatures (no bodies)
 # ---------------------------------------------------------------------------
 
 

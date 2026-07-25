@@ -29,7 +29,7 @@ class Settings(BaseSettings):
 
     # --- Database ---
     database_url: str = Field(
-        default="postgresql+asyncpg://changeguard:changeguard@localhost:5432/changeguard",
+        default="postgresql+asyncpg://graphforge:graphforge@localhost:5432/graphforge",
         description="Async SQLAlchemy connection string (asyncpg driver).",
     )
     database_echo: bool = Field(default=False)
@@ -65,12 +65,12 @@ class Settings(BaseSettings):
     # --- Neo4j (architecture graph storage — see app/graph) ---
     neo4j_uri: str = Field(default="bolt://localhost:7687")
     neo4j_user: str = Field(default="neo4j")
-    neo4j_password: str = Field(default="changeguard-dev")
+    neo4j_password: str = Field(default="graphforge-dev")
 
     # --- Indexer (Phase 6: Architecture Discovery Engine) ---
     # Where repositories are shallow-cloned for scanning; always cleaned up
     # after each indexing run, success or failure.
-    indexer_clone_root: str = Field(default="/tmp/changeguard-indexer")
+    indexer_clone_root: str = Field(default="/tmp/graphforge-indexer")
 
     # --- Version control provider (local demo support) ---
     # "github" (default, unchanged production behavior) or "local_git" - an

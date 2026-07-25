@@ -10,23 +10,23 @@
 
 # Explicit project name so this stack's volumes/network never collide with
 # docker-compose.prod.yml's, even though both files live in this directory.
-name: changeguard-dev
+name: graphforge-dev
 
 services:
   db:
     image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_USER: changeguard
-      POSTGRES_PASSWORD: changeguard
-      POSTGRES_DB: changeguard
+      POSTGRES_USER: graphforge
+      POSTGRES_PASSWORD: graphforge
+      POSTGRES_DB: graphforge
     ports:
       - "5432:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U changeguard -d changeguard"]
+      test: ["CMD-SHELL", "pg_isready -U graphforge -d graphforge"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -36,7 +36,7 @@ services:
     image: neo4j:5-community
     restart: unless-stopped
     environment:
-      NEO4J_AUTH: neo4j/changeguard-dev
+      NEO4J_AUTH: neo4j/graphforge-dev
     ports:
       - "7474:7474" # Neo4j Browser (http://localhost:7474)
       - "7687:7687" # Bolt protocol - what the app connects to
@@ -57,11 +57,11 @@ services:
     environment:
       ENVIRONMENT: development
       DEBUG: "true"
-      DATABASE_URL: postgresql+asyncpg://changeguard:changeguard@db:5432/changeguard
+      DATABASE_URL: postgresql+asyncpg://graphforge:graphforge@db:5432/graphforge
       CORS_ALLOW_ORIGINS: '["http://localhost:5173","http://localhost:5174"]'
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: neo4j
-      NEO4J_PASSWORD: changeguard-dev
+      NEO4J_PASSWORD: graphforge-dev
     ports:
       - "8000:8000"
     volumes:

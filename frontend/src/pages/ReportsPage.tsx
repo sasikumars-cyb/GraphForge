@@ -1,47 +1,5 @@
+import { FileBarChart } from "lucide-react";
 import { Card } from "../components/Card";
-import { Table, type TableColumn } from "../components/Table";
-import { RiskBadge } from "../components/RiskBadge";
-import { StatusBadge } from "../components/StatusBadge";
-import { mockReports } from "../lib/mock/reports";
-import { reportStatusPresentation } from "../lib/statusPresentation";
-import { formatRelativeTime } from "../lib/formatDate";
-import type { Report } from "../types/domain";
-import { Download } from "lucide-react";
-
-const columns: TableColumn<Report>[] = [
-  { key: "name", header: "Report", render: (report) => report.name },
-  { key: "repository", header: "Repository", render: (report) => report.repository },
-  { key: "risk", header: "Risk", render: (report) => <RiskBadge level={report.risk} /> },
-  {
-    key: "status",
-    header: "Status",
-    render: (report) => {
-      const { label, tone } = reportStatusPresentation(report.status);
-      return <StatusBadge label={label} tone={tone} />;
-    },
-  },
-  {
-    key: "generatedAt",
-    header: "Generated",
-    render: (report) => formatRelativeTime(report.generatedAt),
-  },
-  {
-    key: "actions",
-    header: "",
-    className: "text-right",
-    render: (report) => (
-      <button
-        type="button"
-        disabled={report.status !== "ready"}
-        title={report.status === "ready" ? "Download report" : "Not available yet"}
-        className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-sky-300 hover:bg-sky-500/10 disabled:cursor-not-allowed disabled:text-slate-600 disabled:hover:bg-transparent"
-      >
-        <Download className="h-3.5 w-3.5" aria-hidden="true" />
-        Download
-      </button>
-    ),
-  },
-];
 
 export function ReportsPage() {
   return (
@@ -54,7 +12,14 @@ export function ReportsPage() {
       </div>
 
       <Card>
-        <Table columns={columns} data={mockReports} getRowKey={(report) => report.id} />
+        <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
+          <FileBarChart className="mb-1 h-8 w-8 text-slate-600" aria-hidden="true" />
+          <p className="text-sm font-medium text-slate-400">No reports generated yet.</p>
+          <p className="max-w-sm text-xs text-slate-500">
+            Reports are generated automatically when the Review Agent completes an AI-enriched
+            analysis on a pull request. Run a review from the Pull Requests page to see one here.
+          </p>
+        </div>
       </Card>
     </div>
   );

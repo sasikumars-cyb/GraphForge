@@ -1,6 +1,6 @@
 # Running locally
 
-Three ways to run ChangeGuard locally, from least to most setup required. All three give you the same app; pick based on what you already have installed.
+Three ways to run GraphForge locally, from least to most setup required. All three give you the same app; pick based on what you already have installed.
 
 ## Option A — fully containerized, one command (recommended)
 
@@ -15,7 +15,7 @@ This builds and starts all four services with hot reload:
 - Frontend (Vite dev server, HMR): `http://localhost:5173`
 - Backend (uvicorn `--reload`): `http://localhost:8000`, docs at `http://localhost:8000/docs`
 - Postgres: `localhost:5432`
-- Neo4j (architecture graph store): bolt on `localhost:7687`, browser UI at `http://localhost:7474` (user `neo4j`, password `changeguard-dev` — see `docker/docker-compose.yml`)
+- Neo4j (architecture graph store): bolt on `localhost:7687`, browser UI at `http://localhost:7474` (user `neo4j`, password `graphforge-dev` — see `docker/docker-compose.yml`)
 
 Both `backend/` and `frontend/` are bind-mounted into their containers, so edits on the host take effect immediately — no rebuild, no restart. Stop with `Ctrl+C`; add `-d` inside the script (or run the underlying `docker compose ... up --build -d` directly) to run detached.
 
@@ -105,7 +105,7 @@ Closest to how this would actually be deployed: backend runs without `--reload`,
 - Postgres: `localhost:5432`
 - Neo4j: bolt on `localhost:7687`, browser UI at `http://localhost:7474`
 
-Options A and C use distinct Compose project names (`changeguard-dev` / `changeguard-prod`), so their volumes and networks never collide — you can run either one without tearing down the other first.
+Options A and C use distinct Compose project names (`graphforge-dev` / `graphforge-prod`), so their volumes and networks never collide — you can run either one without tearing down the other first.
 
 ## Logging in
 
@@ -187,7 +187,7 @@ Via Swagger UI (`http://localhost:8000/docs`), authenticated as the tracked repo
 3. `GET /api/v1/repositories/{id}/services` — just the discovered components (controllers, services, Feign clients, and any other class involved in Kafka messaging).
 4. `GET /api/v1/repositories/{id}/dependencies` — just the direct Maven dependencies.
 
-You can also inspect the graph directly in Neo4j's browser UI at `http://localhost:7474` (user `neo4j`, password `changeguard-dev` for local dev) with a query like:
+You can also inspect the graph directly in Neo4j's browser UI at `http://localhost:7474` (user `neo4j`, password `graphforge-dev` for local dev) with a query like:
 
 ```cypher
 MATCH (n {repository_id: "<repository-id-from-the-API>"}) RETURN n

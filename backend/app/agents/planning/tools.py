@@ -1,7 +1,6 @@
 """Planning Agent tools — own minimal tool-calling code.
 
-NOT shared with the Review Agent's ToolRegistry (per TEAM_EXECUTION_PLAN.md
-Section 1). These tools are specific to the planning domain: gathering a
+NOT shared with the Review Agent's ToolRegistry. These tools are specific to the planning domain: gathering a
 high-level architecture overview from the Knowledge Graph to ground an
 implementation plan.
 

@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "changeguard-backend"
+name = "graphforge-backend"
 version = "0.1.0"
-description = "ChangeGuard backend: AI-grounded change impact analysis service."
+description = "GraphForge backend: AI-powered engineering intelligence platform."
 requires-python = ">=3.12"
 
 dependencies = [

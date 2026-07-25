@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
-    branches: [main]
+    branches: [master]
 
 jobs:
   backend:
@@ -20,13 +20,13 @@ jobs:
       postgres:
         image: postgres:16-alpine
         env:
-          POSTGRES_USER: changeguard
-          POSTGRES_PASSWORD: changeguard
-          POSTGRES_DB: changeguard
+          POSTGRES_USER: graphforge
+          POSTGRES_PASSWORD: graphforge
+          POSTGRES_DB: graphforge
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U changeguard -d changeguard"
+          --health-cmd "pg_isready -U graphforge -d graphforge"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
@@ -36,7 +36,7 @@ jobs:
       neo4j:
         image: neo4j:5-community
         env:
-          NEO4J_AUTH: neo4j/changeguard-dev
+          NEO4J_AUTH: neo4j/graphforge-dev
         ports:
           - 7687:7687
         options: >-
@@ -45,10 +45,10 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql+asyncpg://changeguard:changeguard@localhost:5432/changeguard
+      DATABASE_URL: postgresql+asyncpg://graphforge:graphforge@localhost:5432/graphforge
       NEO4J_URI: bolt://localhost:7687
       NEO4J_USER: neo4j
-      NEO4J_PASSWORD: changeguard-dev
+      NEO4J_PASSWORD: graphforge-dev
     steps:
       - uses: actions/checkout@v4
 

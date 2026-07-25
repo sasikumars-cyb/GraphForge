@@ -45,7 +45,7 @@ class Scenario(TypedDict):
 
 
 API_BASE_URL = os.environ.get("DEMO_API_BASE_URL", "http://localhost:8000/api/v1")
-DEMO_EMAIL = "demo@changeguard.example.com"
+DEMO_EMAIL = "demo@graphforge.example.com"
 DEMO_PASSWORD = "correct-horse-battery-staple"  # noqa: S105
 DEMO_REPOSITORIES_CONTAINER_ROOT = "/demo/repositories"
 

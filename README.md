@@ -18,7 +18,7 @@ GraphForge turns an AI-generated development plan into a **visible, reasoned imp
 ## Project layout
 
 ```
-changeguard/
+graphforge/
   frontend/   React + TypeScript SPA
   backend/    FastAPI service (api / services / models / schemas / database / core / graph / ai / integrations / indexer / analysis)
   docs/       Architecture notes and Architecture Decision Records (ADRs)
