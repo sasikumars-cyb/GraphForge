@@ -49,6 +49,13 @@ class UnauthorizedError(AppError):
     error_code = "unauthorized"
 
 
+class ForbiddenError(AppError):
+    """Raised when a user is authenticated but lacks permission."""
+
+    status_code = 403
+    error_code = "forbidden"
+
+
 class NotImplementedYetError(AppError):
     """Raised by a prepared-but-unimplemented extension point (e.g. GitHub OAuth)."""
 

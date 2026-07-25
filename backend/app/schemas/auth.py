@@ -27,6 +27,7 @@ class UserResponse(BaseModel):
     email: EmailStr
     full_name: str
     auth_provider: str
+    role: str = "user"
     created_at: datetime
 
 

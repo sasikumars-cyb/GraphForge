@@ -2,16 +2,17 @@ import { useState } from "react";
 import {
   Building2,
   Brain,
-  Database,
+  Plug,
   Wrench,
   Shield,
   Settings2,
   type LucideIcon,
 } from "lucide-react";
 
+import { useAuth } from "../../app/auth-context";
 import { WorkspaceSection } from "./WorkspaceSection";
 import { AIWorkspaceSection } from "./AIWorkspaceSection";
-import { KnowledgeSourcesSection } from "./KnowledgeSourcesSection";
+import { IntegrationsSection } from "./IntegrationsSection";
 import { ToolRegistrySection } from "./ToolRegistrySection";
 import { SecuritySection } from "./SecuritySection";
 import { AdvancedSection } from "./AdvancedSection";
@@ -21,6 +22,7 @@ interface SettingsTab {
   label: string;
   icon: LucideIcon;
   description: string;
+  adminOnly: boolean;
 }
 
 const TABS: SettingsTab[] = [
@@ -29,36 +31,42 @@ const TABS: SettingsTab[] = [
     label: "Workspace",
     icon: Building2,
     description: "Organization, notifications, preferences",
+    adminOnly: false,
   },
   {
     id: "ai",
     label: "AI Workspace",
     icon: Brain,
     description: "Providers, profiles, models, health",
+    adminOnly: true,
   },
   {
-    id: "knowledge",
-    label: "Knowledge Sources",
-    icon: Database,
-    description: "Where GraphForge obtains information",
+    id: "integrations",
+    label: "Integrations",
+    icon: Plug,
+    description: "External systems connected to GraphForge",
+    adminOnly: false,
   },
   {
     id: "tools",
     label: "Tool Registry",
     icon: Wrench,
     description: "Capabilities available to agents",
+    adminOnly: true,
   },
   {
     id: "security",
     label: "Security",
     icon: Shield,
     description: "Credentials, secrets, access",
+    adminOnly: true,
   },
   {
     id: "advanced",
     label: "Advanced",
     icon: Settings2,
     description: "Diagnostics, logs, feature flags",
+    adminOnly: true,
   },
 ];
 
@@ -68,8 +76,8 @@ function TabContent({ tabId }: { tabId: string }) {
       return <WorkspaceSection />;
     case "ai":
       return <AIWorkspaceSection />;
-    case "knowledge":
-      return <KnowledgeSourcesSection />;
+    case "integrations":
+      return <IntegrationsSection />;
     case "tools":
       return <ToolRegistrySection />;
     case "security":
@@ -82,8 +90,14 @@ function TabContent({ tabId }: { tabId: string }) {
 }
 
 export function SettingsShell() {
-  const [activeTab, setActiveTab] = useState("workspace");
-  const current = TABS.find((t) => t.id === activeTab) ?? TABS[0];
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
+  // Filter tabs based on role.
+  const visibleTabs = TABS.filter((tab) => !tab.adminOnly || isAdmin);
+
+  const [activeTab, setActiveTab] = useState(visibleTabs[0]?.id ?? "workspace");
+  const current = visibleTabs.find((t) => t.id === activeTab) ?? visibleTabs[0];
 
   return (
     <div className="flex flex-col gap-6">
@@ -91,7 +105,7 @@ export function SettingsShell() {
       <div>
         <h2 className="text-xl font-semibold text-slate-50">Settings</h2>
         <p className="mt-1 text-sm text-slate-400">
-          Configure GraphForge platform, AI providers, knowledge sources, and integrations.
+          Configure GraphForge platform, AI providers, integrations, and preferences.
         </p>
       </div>
 
@@ -101,7 +115,7 @@ export function SettingsShell() {
           className="flex shrink-0 flex-row gap-1 overflow-x-auto lg:w-56 lg:flex-col"
           aria-label="Settings sections"
         >
-          {TABS.map((tab) => (
+          {visibleTabs.map((tab) => (
             <button
               key={tab.id}
               type="button"
@@ -126,18 +140,22 @@ export function SettingsShell() {
 
         {/* Content area */}
         <div className="min-w-0 flex-1">
-          {/* Section header */}
-          <div className="mb-5 flex items-center gap-3">
-            <div className="rounded-lg bg-brand-500/10 p-2 ring-1 ring-inset ring-brand-500/30">
-              <current.icon className="h-5 w-5 text-brand-400" aria-hidden="true" />
-            </div>
-            <div>
-              <h3 className="text-base font-semibold text-slate-100">{current.label}</h3>
-              <p className="text-xs text-slate-400">{current.description}</p>
-            </div>
-          </div>
+          {current && (
+            <>
+              {/* Section header */}
+              <div className="mb-5 flex items-center gap-3">
+                <div className="rounded-lg bg-brand-500/10 p-2 ring-1 ring-inset ring-brand-500/30">
+                  <current.icon className="h-5 w-5 text-brand-400" aria-hidden="true" />
+                </div>
+                <div>
+                  <h3 className="text-base font-semibold text-slate-100">{current.label}</h3>
+                  <p className="text-xs text-slate-400">{current.description}</p>
+                </div>
+              </div>
 
-          <TabContent tabId={activeTab} />
+              <TabContent tabId={activeTab} />
+            </>
+          )}
         </div>
       </div>
     </div>

@@ -7,6 +7,7 @@ export interface User {
   email: string;
   full_name: string;
   auth_provider: string;
+  role: string;
   created_at: string;
 }
 

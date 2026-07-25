@@ -9,7 +9,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.exceptions import UnauthorizedError
+from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import decode_access_token
 from app.database.session import get_db_session
 from app.integrations.interfaces import IOAuthProvider
@@ -59,3 +59,16 @@ def get_oauth_provider() -> IOAuthProvider | None:
     handles the `None` case by treating GitHub login as not configured.
     """
     return None
+
+
+async def require_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    """Guard that requires the authenticated user to have the 'admin' role.
+
+    Use as a dependency on routes that should only be accessible to
+    administrators (AI Workspace, Tool Registry, Security, Advanced).
+    """
+    if getattr(current_user, "role", "user") != "admin":
+        raise ForbiddenError("Administrator access required.")
+    return current_user

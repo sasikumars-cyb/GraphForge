@@ -8,6 +8,7 @@ from app.api.v1.routers.ai_workspace import router as ai_workspace_router
 from app.api.v1.routers.auth import router as auth_router
 from app.api.v1.routers.github import router as github_router
 from app.api.v1.routers.health import router as health_router
+from app.api.v1.routers.knowledge import router as knowledge_router
 from app.api.v1.routers.oauth import router as oauth_router
 from app.api.v1.routers.pull_requests import router as pull_requests_router
 from app.api.v1.routers.repositories import router as repositories_router
@@ -30,5 +31,6 @@ api_router.include_router(workflows_router)
 api_router.include_router(system_router)
 api_router.include_router(webhooks_router)
 api_router.include_router(tools_router)
+api_router.include_router(knowledge_router)
 
 __all__ = ["api_router"]

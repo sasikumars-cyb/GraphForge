@@ -22,7 +22,7 @@ from app.ai.config.resolver import resolve
 from app.ai.config.usage import all_usage
 from app.ai.config.validation import validate_provider
 from app.ai.providers.registry import all_providers, get_provider_spec, require_provider_spec
-from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import get_current_user, require_admin
 from app.core.crypto import encrypt_secret
 from app.core.exceptions import AppError, NotFoundError
 from app.database.session import get_db_session
@@ -135,7 +135,7 @@ def _build_profile_info(profile: AIProfile, configs: dict[str, AIProviderConfig]
 
 @router.get("/workspace", response_model=AIWorkspaceOverview, summary="AI Workspace overview")
 async def workspace_overview(
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> AIWorkspaceOverview:
     """Everything the AI Workspace needs, in one round trip."""
@@ -223,7 +223,7 @@ def _usage_dto(row: AIProviderUsage) -> ProviderUsage:
 
 @router.get("/providers", response_model=list[ProviderInfo], summary="List providers")
 async def list_providers(
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[ProviderInfo]:
     configs = {
@@ -239,7 +239,7 @@ async def list_providers(
 )
 async def list_models(
     provider_key: str,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
 ) -> list[ModelInfo]:
     """Models for a provider — discovered dynamically when the provider
     supports it, otherwise from the registry catalogue."""
@@ -265,7 +265,7 @@ async def list_models(
 async def upsert_provider(
     provider_key: str,
     body: ProviderUpsertRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> ProviderInfo:
     spec = require_provider_spec(provider_key)
@@ -301,7 +301,7 @@ async def upsert_provider(
 )
 async def delete_provider(
     provider_key: str,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> None:
     row = (
@@ -323,7 +323,7 @@ async def delete_provider(
 async def validate(
     provider_key: str,
     model: str | None = None,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> ValidationResponse:
     """Verify credentials, model and connectivity with a minimal live call."""
@@ -355,7 +355,7 @@ async def validate(
 
 @router.get("/profiles", response_model=list[ProfileInfo], summary="List AI profiles")
 async def list_profiles(
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[ProfileInfo]:
     await store.ensure_loaded(db)
@@ -374,7 +374,7 @@ async def list_profiles(
 )
 async def create_profile(
     body: ProfileUpsertRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> ProfileInfo:
     require_provider_spec(body.provider_key)
@@ -404,7 +404,7 @@ async def create_profile(
 async def update_profile(
     slug: str,
     body: ProfileUpsertRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> ProfileInfo:
     require_provider_spec(body.provider_key)
@@ -429,7 +429,7 @@ async def update_profile(
 )
 async def delete_profile(
     slug: str,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> None:
     row = (await db.execute(select(AIProfile).where(AIProfile.slug == slug))).scalar_one_or_none()
@@ -470,7 +470,7 @@ async def delete_profile(
 
 @router.get("/settings", response_model=AIWorkspaceSettings, summary="Get AI defaults")
 async def get_settings_endpoint(
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> AIWorkspaceSettings:
     row = await _settings_row(db)
@@ -490,7 +490,7 @@ async def get_settings_endpoint(
 @router.put("/settings", response_model=AIWorkspaceSettings, summary="Update AI defaults")
 async def update_settings_endpoint(
     body: AIWorkspaceSettingsUpdate,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> AIWorkspaceSettings:
     row = await _settings_row(db)
@@ -531,7 +531,7 @@ async def update_settings_endpoint(
 
 @router.get("/usage", response_model=list[ProviderUsage], summary="Provider usage")
 async def get_usage(
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[ProviderUsage]:
     """Observed usage only. Quota is never estimated — if a vendor does not

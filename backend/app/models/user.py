@@ -30,6 +30,10 @@ class User(Base):
     # so far, and a DB-level enum migration is cheap to do later if needed.
     auth_provider: Mapped[str] = mapped_column(String(50), nullable=False, default="local")
 
+    # Role-based access control. "user" is the default; "admin" grants access
+    # to AI Workspace, Tool Registry, Security, and Advanced settings.
+    role: Mapped[str] = mapped_column(String(32), nullable=False, default="user")
+
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     created_at: Mapped[datetime] = mapped_column(

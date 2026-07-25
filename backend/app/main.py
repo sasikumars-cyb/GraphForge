@@ -5,8 +5,12 @@ Swagger UI is served automatically at `/docs` (ReDoc at `/redoc`, the raw
 schema at `/openapi.json`) - no extra wiring needed beyond the metadata below.
 """
 
+from contextlib import asynccontextmanager
+from collections.abc import AsyncGenerator
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 
 from app.agents.setup import register_agents
 from app.tools.setup import register_all_tools
@@ -14,6 +18,7 @@ from app.api.v1.routers import api_router
 from app.core.config import get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import configure_logging
+from app.database.session import engine
 
 OPENAPI_TAGS = [
     {
@@ -50,18 +55,58 @@ def create_app() -> FastAPI:
     configure_logging()
     settings = get_settings()
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+        """Run lightweight schema migrations on startup.
+
+        This ensures new columns exist even when alembic hasn't been run
+        explicitly. Uses IF NOT EXISTS so it's safe to run repeatedly.
+        """
+        async with engine.begin() as conn:
+            # Ensure the 'role' column exists on users table.
+            await conn.execute(text(
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(32) NOT NULL DEFAULT 'user'"
+            ))
+            # Ensure knowledge_connections table exists.
+            await conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS knowledge_connections (
+                    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                    source_type VARCHAR(64) NOT NULL,
+                    name VARCHAR(128) NOT NULL,
+                    transport VARCHAR(32) NOT NULL,
+                    auth_method VARCHAR(32) NOT NULL,
+                    config JSONB NOT NULL DEFAULT '{}',
+                    encrypted_credentials VARCHAR(4096),
+                    scope JSONB NOT NULL DEFAULT '{}',
+                    enabled BOOLEAN NOT NULL DEFAULT true,
+                    status VARCHAR(32) NOT NULL DEFAULT 'unknown',
+                    status_detail TEXT,
+                    last_sync_at TIMESTAMPTZ,
+                    last_success_at TIMESTAMPTZ,
+                    latency_ms INTEGER,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                )
+            """))
+            await conn.execute(text("""
+                CREATE INDEX IF NOT EXISTS ix_knowledge_connections_source_type
+                ON knowledge_connections (source_type)
+            """))
+            # Ensure a development admin account exists.
+            await conn.execute(text("""
+                UPDATE users SET role = 'admin'
+                WHERE email = 'admin@graphforge.dev' AND role != 'admin'
+            """))
+        yield
+
     app = FastAPI(
         title=settings.app_name,
         description="AI-grounded change impact analysis: dependency graphs, "
         "UML impact views, and risk-scored evidence for every proposed change.",
         version="0.1.0",
-        # Deliberately NOT settings.debug: FastAPI/Starlette's own `debug=True`
-        # renders an HTML traceback page for unhandled exceptions and skips
-        # our registered `Exception` handler entirely, which would silently
-        # defeat the consistent JSON error contract in core.error_handlers.
-        # `settings.debug` still controls log verbosity (see core.logging).
         debug=False,
         openapi_tags=OPENAPI_TAGS,
+        lifespan=lifespan,
     )
 
     app.add_middleware(
