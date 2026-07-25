@@ -68,6 +68,23 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
 /** Cards that benefit from extra vertical space — graph-based and vertical content. */
 const TALL_TYPES = new Set<DiagramType>(["flow", "architecture", "dependency", "er", "risk_heatmap"]);
 
+/** Graph types rendered via dagre + ReactFlow — their ideal height tracks node count,
+ * not a flat constant. A 1-2 node diagram in a fixed 460px box is mostly dead space;
+ * a 12-node diagram needs more room than that to stay legible. */
+const GRAPH_TYPES = new Set<DiagramType>(["flow", "architecture", "dependency", "sequence", "er"]);
+
+function diagramHeight(diagram: Diagram, isTall: boolean): number {
+  if (GRAPH_TYPES.has(diagram.type as DiagramType)) {
+    const nodeCount = diagram.nodes?.length ?? 0;
+    const direction = diagram.layout?.direction ?? "LR";
+    // TB/BT layouts stack nodes vertically, so they need height sooner than
+    // LR layouts, which spread nodes sideways within the same box.
+    const perNode = direction === "TB" || direction === "BT" ? 55 : 30;
+    return Math.min(460, Math.max(200, 160 + nodeCount * perNode));
+  }
+  return isTall ? 460 : 380;
+}
+
 interface BlueprintSection {
   id: string;
   title: string;
@@ -114,12 +131,57 @@ function groupIntoSections(diagrams: Diagram[]): BlueprintSection[] {
 }
 
 // ---------------------------------------------------------------------------
+// Executive summary stats — the numbers a non-technical reviewer (CEO,
+// delivery manager) actually scans for before reading a single diagram.
+// Derived entirely from data already in the blueprint — no new backend field.
+// ---------------------------------------------------------------------------
+
+interface BlueprintStats {
+  implementationSteps: number | null;
+  risks: number | null;
+  affectedComponents: number | null;
+  confidencePct: number | null;
+}
+
+function computeBlueprintStats(diagrams: Diagram[]): BlueprintStats {
+  const planDiagram = diagrams.find(
+    (d) => d.metadata?.section === "Implementation Plan" || d.metadata?.section === "Implementation Flow",
+  );
+  const riskDiagram = diagrams.find((d) => d.type === "risk_heatmap");
+  const componentIds = new Set<string>();
+  for (const d of diagrams) {
+    if (d.type !== "architecture" && d.type !== "dependency") continue;
+    for (const n of d.nodes) {
+      if (n.type === "component") componentIds.add(n.id);
+    }
+  }
+
+  const scored = diagrams.filter((d) => typeof d.confidence === "number") as (Diagram & { confidence: number })[];
+  const avgConfidence =
+    scored.length > 0 ? scored.reduce((sum, d) => sum + d.confidence, 0) / scored.length : null;
+
+  return {
+    implementationSteps: planDiagram ? planDiagram.nodes.length : null,
+    risks: riskDiagram ? riskDiagram.nodes.length : null,
+    affectedComponents: componentIds.size > 0 ? componentIds.size : null,
+    confidencePct: avgConfidence != null ? Math.round(avgConfidence * 100) : null,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Diagram validation
 // ---------------------------------------------------------------------------
 
 interface ValidationResult {
   valid: boolean;
   reason: string;
+}
+
+/** Nodes the LLM emitted with no real label — these render as blank boxes
+ * with edges dangling into empty space, which reads as broken rendering
+ * even though the node/edge *counts* pass validation. */
+function hasUnlabeledNode(diagram: Diagram): boolean {
+  return diagram.nodes.some((n) => !n.label || !n.label.trim());
 }
 
 function validateDiagram(diagram: Diagram): ValidationResult {
@@ -130,11 +192,15 @@ function validateDiagram(diagram: Diagram): ValidationResult {
       if (n < 3)
         return { valid: false, reason: `Needs at least 3 architecture layers — found ${n}.` };
       if (e === 0) return { valid: false, reason: "No connections between architecture layers." };
+      if (hasUnlabeledNode(diagram))
+        return { valid: false, reason: "One or more architecture layers were generated without a label." };
       return { valid: true, reason: "" };
     case "flow":
       if (n < 3)
         return { valid: false, reason: `Needs at least 3 data flow stages — found ${n}.` };
       if (e === 0) return { valid: false, reason: "No connections between flow stages." };
+      if (hasUnlabeledNode(diagram))
+        return { valid: false, reason: "One or more flow stages were generated without a label." };
       return { valid: true, reason: "" };
     case "er":
       if (n < 2)
@@ -145,6 +211,8 @@ function validateDiagram(diagram: Diagram): ValidationResult {
       if (n < 3)
         return { valid: false, reason: `Needs at least 3 nodes to show meaningful relationships — found ${n}.` };
       if (e === 0) return { valid: false, reason: "No connections between components." };
+      if (hasUnlabeledNode(diagram))
+        return { valid: false, reason: "One or more components were generated without a label." };
       return { valid: true, reason: "" };
     case "sequence":
       if (n < 2 || e === 0)
@@ -224,9 +292,24 @@ interface BlueprintExplorerProps {
   blueprint: BlueprintArtifact;
   /** When true, all sections start expanded (e.g. Planning page hero). Default: false (collapsed). */
   defaultExpanded?: boolean;
+  /** Real counts from the step result (PlanningResult/DevelopmentPlanResult),
+   * when the caller has them. Diagram nodes are an approximation of these —
+   * e.g. an architecture diagram's "component"-typed nodes rarely match the
+   * actual affected_components list — so a caller-supplied count always
+   * wins over the derived one instead of silently showing a different,
+   * lower number elsewhere on the same page. */
+  affectedComponentsCount?: number;
+  implementationStepsCount?: number;
+  risksCount?: number;
 }
 
-export function BlueprintExplorer({ blueprint, defaultExpanded = false }: BlueprintExplorerProps) {
+export function BlueprintExplorer({
+  blueprint,
+  defaultExpanded = false,
+  affectedComponentsCount,
+  implementationStepsCount,
+  risksCount,
+}: BlueprintExplorerProps) {
   const sections = groupIntoSections(blueprint.diagrams);
   const storageKey = `graphforge.blueprint.expanded.${blueprint.agent_id}.${blueprint.stage}`;
 
@@ -404,7 +487,7 @@ export function BlueprintExplorer({ blueprint, defaultExpanded = false }: Bluepr
               <DiagramCard
                 key={diagram.id}
                 diagram={diagram}
-                minHeight={480}
+                minHeight={diagramHeight(diagram, true)}
                 index={idx}
               />
             );
@@ -414,8 +497,34 @@ export function BlueprintExplorer({ blueprint, defaultExpanded = false }: Bluepr
     );
   }
 
+  const stats = computeBlueprintStats(blueprint.diagrams);
+  const implementationSteps = implementationStepsCount ?? stats.implementationSteps;
+  const affectedComponents = affectedComponentsCount ?? stats.affectedComponents;
+  const risks = risksCount ?? stats.risks;
+  const statItems = [
+    implementationSteps != null && { label: "Implementation Steps", value: implementationSteps },
+    affectedComponents != null && { label: "Affected Components", value: affectedComponents },
+    risks != null && { label: "Risks Identified", value: risks },
+    stats.confidencePct != null && { label: "Confidence", value: `${stats.confidencePct}%` },
+  ].filter((x): x is { label: string; value: string | number } => Boolean(x));
+
   return (
     <div className="flex flex-col gap-0">
+      {/* ── Executive summary strip — the glanceable numbers, before any diagram ── */}
+      {statItems.length > 0 && (
+        <div className="mb-3 flex flex-wrap gap-2">
+          {statItems.map((s) => (
+            <div
+              key={s.label}
+              className="flex items-baseline gap-1.5 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-1.5"
+            >
+              <span className="text-sm font-semibold text-slate-100">{s.value}</span>
+              <span className="text-[10.5px] font-medium text-slate-500">{s.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       {/* ── View controls ── */}
       {sections.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
@@ -526,7 +635,7 @@ export function BlueprintExplorer({ blueprint, defaultExpanded = false }: Bluepr
                   section is later opened. Mounting on expand also means
                   closed sections cost nothing. */}
               {!isCollapsed && (
-                <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))" }}>
                   {section.diagrams.map((diagram, idx) => {
                     const v = validateDiagram(diagram);
                     if (!v.valid) {
@@ -543,7 +652,7 @@ export function BlueprintExplorer({ blueprint, defaultExpanded = false }: Bluepr
                       <DiagramCard
                         key={diagram.id}
                         diagram={diagram}
-                        minHeight={TALL_TYPES.has(diagram.type as DiagramType) ? 460 : 380}
+                        minHeight={diagramHeight(diagram, TALL_TYPES.has(diagram.type as DiagramType))}
                         index={idx}
                       />
                     );

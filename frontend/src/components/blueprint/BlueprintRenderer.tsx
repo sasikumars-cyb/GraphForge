@@ -14,7 +14,7 @@
  * graph-based diagram types — no Mermaid, no external CDN.
  */
 
-import { useMemo, useState, useCallback } from "react";
+import { useMemo, useState, useCallback, useRef, useEffect } from "react";
 import {
   ReactFlow,
   Background,
@@ -24,6 +24,7 @@ import {
   MarkerType,
   type Node,
   type Edge,
+  type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
@@ -228,6 +229,17 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
 
         const dimmed = selectedId && !isSel && !isIn && !isOut;
 
+        // Deliberately no `transform` key here. xyflow renders each node's
+        // own positioning as `style.transform: translate(Xpx, Ypx)`, then
+        // spreads this custom style object on top of that in the same
+        // object literal — so a `transform` key here, even set to
+        // `undefined`, overwrites xyflow's positioning transform outright.
+        // That was the actual cause of every node in every diagram landing
+        // on the exact same (untransformed) point, traced live via
+        // devtools: every `.react-flow__node` had `computedTransform:
+        // "none"` regardless of its distinct dagre-computed position. The
+        // hover "grow" effect lives on the boxShadow/border glow instead —
+        // no scale transform, but the graph actually renders.
         return {
           ...n,
           zIndex: glowColor ? 10 : 0,
@@ -240,7 +252,6 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
             boxShadow: glowColor
               ? `0 0 ${isSel ? "14px" : "8px"} 2px ${glowColor}66`
               : undefined,
-            transform: isHov && !selectedId ? "scale(1.03)" : undefined,
           },
         };
       }),
@@ -269,12 +280,57 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
   const onNodeMouseEnter = useCallback((_: unknown, node: Node) => setHoveredId(node.id), []);
   const onNodeMouseLeave = useCallback(() => setHoveredId(null), []);
 
+  // A minimap/zoom-controls pair is only useful once a graph is big enough
+  // to need panning — on a 1-2 node diagram it's a fixed-size dark box that
+  // dwarfs the real content and reads as broken rendering, not chrome.
+  const isSmallGraph = flowNodes.length <= 4;
+
+  const fitPadding = isSmallGraph ? 0.4 : 0.2;
+
+  // The declarative `fitView` prop, and even a one-off rAF-delayed retry,
+  // both assume the container reaches its final size within one or two
+  // frames of mount. In practice it doesn't always: CSS grid reflow, an
+  // entrance transition, a just-expanded accordion section, or plain layout
+  // thrash from sibling content loading can all settle later than that. When
+  // fitView runs against a stale/zero-size viewport it silently no-ops,
+  // leaving the default zoom/pan (0,0 @ 1x) — which is exactly the symptom
+  // seen repeatedly: one node happens to land inside the visible area while
+  // the rest of the chain sits further out, clipped by this container's
+  // `overflow-hidden`, so their edges look like they dangle into nothing.
+  // A ResizeObserver on the actual wrapper element re-fits every time its
+  // real, measured size changes — not a guessed delay — which is the only
+  // approach that's correct regardless of *why* the container was still
+  // settling.
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const instanceRef = useRef<ReactFlowInstance | null>(null);
+
+  const onInit = useCallback((instance: ReactFlowInstance) => {
+    instanceRef.current = instance;
+    instance.fitView({ padding: fitPadding, maxZoom: 1.2 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const observer = new ResizeObserver((entries) => {
+      const { width, height } = entries[0].contentRect;
+      if (width > 0 && height > 0) {
+        instanceRef.current?.fitView({ padding: fitPadding, maxZoom: 1.2 });
+      }
+    });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fitPadding]);
+
   return (
+    <div ref={wrapperRef} style={{ width: "100%", height: "100%" }}>
     <ReactFlow
       nodes={nodes}
       edges={edges}
       fitView
-      fitViewOptions={{ padding: 0.2, maxZoom: 1.2 }}
+      fitViewOptions={{ padding: fitPadding, maxZoom: 1.2 }}
+      onInit={onInit}
       minZoom={0.08}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}
@@ -285,9 +341,14 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
       onNodeMouseLeave={onNodeMouseLeave}
     >
       <Background />
-      <Controls />
-      <MiniMap pannable zoomable style={{ background: "#0f172a" }} />
+      {!isSmallGraph && (
+        <>
+          <Controls />
+          <MiniMap pannable zoomable style={{ background: "#0f172a" }} />
+        </>
+      )}
     </ReactFlow>
+    </div>
   );
 }
 

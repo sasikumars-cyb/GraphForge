@@ -66,3 +66,15 @@
     transition-duration: 0.001ms !important;
   }
 }
+
+/* @xyflow/react keeps a node's `visibility: hidden` until its internal
+ * "measured" flag flips true. In this app that flag was getting stuck
+ * (traced live via devtools) even after a real, separate positioning bug
+ * — our own hover styling was clobbering xyflow's own positioning
+ * `transform` — was fixed (see BlueprintRenderer.tsx). Node dimensions and
+ * dagre-computed positions are confirmed correct at that point; forcing
+ * visibility is what's left to make the Visual Blueprint diagrams actually
+ * render instead of sitting invisible. */
+.react-flow__node {
+  visibility: visible !important;
+}

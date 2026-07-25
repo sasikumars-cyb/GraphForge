@@ -53,12 +53,19 @@ export function StageResultPanel({
   agentLabel: string;
   evidence: AgentStep["evidence"];
 }) {
+  const planningResult = stage === "planning" ? (step.result as unknown as PlanningResult) : null;
+  const developmentResult = stage === "development" ? (step.result as unknown as DevelopmentPlanResult) : null;
+
   const blueprint =
-    stage === "planning"
-      ? ((step.result as unknown as PlanningResult).blueprint as BlueprintArtifact | null | undefined)
-      : stage === "development"
-      ? ((step.result as unknown as DevelopmentPlanResult).blueprint as BlueprintArtifact | null | undefined)
-      : null;
+    (planningResult?.blueprint ?? developmentResult?.blueprint) as BlueprintArtifact | null | undefined;
+
+  // The real counts, not a diagram-node-count approximation — see the
+  // matching comment on BlueprintExplorerProps for why these must win.
+  const implementationStepsCount =
+    planningResult?.implementation_steps.length ?? developmentResult?.implementation_phases.length;
+  const affectedComponentsCount =
+    planningResult?.affected_components.length ?? developmentResult?.components.length;
+  const risksCount = planningResult?.risk_considerations.length ?? developmentResult?.risks.length;
 
   const hasBlueprint = Boolean(blueprint && blueprint.diagrams.length > 0);
   const hasSummary = stage === "planning" || stage === "development" || stage === "testing";
@@ -114,7 +121,12 @@ export function StageResultPanel({
       {/* Tab panels */}
       <div className="min-h-[300px] p-4">
         {activeTab === "blueprint" && blueprint && (
-          <BlueprintExplorer blueprint={blueprint} />
+          <BlueprintExplorer
+            blueprint={blueprint}
+            implementationStepsCount={implementationStepsCount}
+            affectedComponentsCount={affectedComponentsCount}
+            risksCount={risksCount}
+          />
         )}
 
         {activeTab === "summary" && (
