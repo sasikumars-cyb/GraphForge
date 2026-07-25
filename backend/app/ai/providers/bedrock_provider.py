@@ -24,6 +24,19 @@ from app.ai.providers.errors import (
     AIProviderTimeoutError,
 )
 
+try:
+    import boto3
+    from botocore.config import Config as BotoConfig
+    from botocore.exceptions import (
+        ClientError,
+        EndpointConnectionError,
+        ReadTimeoutError,
+    )
+except ImportError:  # pragma: no cover - boto3 is a required dependency
+    boto3 = None  # type: ignore[assignment]
+    BotoConfig = None  # type: ignore[assignment, misc]
+    ClientError = EndpointConnectionError = ReadTimeoutError = Exception  # type: ignore[assignment, misc]
+
 logger = logging.getLogger(__name__)
 
 _SYSTEM_PROMPT = (
@@ -74,20 +87,18 @@ class BedrockProvider(BaseAnalysisProvider):
     def _get_client(self) -> Any:
         """Lazily initialize the Bedrock runtime client.
 
-        Deferred so the import cost of boto3 is only paid when Bedrock is
-        actually used, and so tests can inject a mock client.
+        Deferred so client construction (and its network/credential setup)
+        only happens when Bedrock is actually used, and so tests can inject
+        a mock client.
         """
         if self._client is not None:
             return self._client
 
-        try:
-            import boto3
-            from botocore.config import Config as BotoConfig
-        except ImportError as exc:
+        if boto3 is None:
             raise AIProviderError(
                 "boto3 is required for the Bedrock provider. "
                 "Install it with: pip install boto3"
-            ) from exc
+            )
 
         boto_config = BotoConfig(
             region_name=self._region,
@@ -207,14 +218,7 @@ class BedrockProvider(BaseAnalysisProvider):
         This ensures agents receive the same error types regardless of whether
         the response came from OpenAI, Gemini, or Bedrock.
         """
-        # Import botocore exceptions lazily — same pattern as client init.
-        try:
-            from botocore.exceptions import (
-                ClientError,
-                EndpointConnectionError,
-                ReadTimeoutError,
-            )
-        except ImportError:
+        if boto3 is None:
             raise AIProviderError("boto3/botocore is required for the Bedrock provider.") from exc
 
         error_meta = {
