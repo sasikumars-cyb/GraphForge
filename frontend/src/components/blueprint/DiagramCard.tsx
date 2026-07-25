@@ -198,7 +198,7 @@ export function DiagramCard({ diagram, minHeight = 320, index = 0 }: DiagramCard
     >
       {renderHeader(false)}
 
-      <div className="flex-1 overflow-hidden" style={{ minHeight }}>
+      <div className="overflow-hidden" style={{ height: minHeight }}>
         <BlueprintRenderer diagram={diagram} />
       </div>
 

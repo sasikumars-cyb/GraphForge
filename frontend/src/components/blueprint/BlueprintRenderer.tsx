@@ -54,32 +54,69 @@ const RISK_SEVERITY_COLORS: Record<string, { bg: string; border: string; text: s
   low:      { bg: "#052e16", border: "#22c55e", text: "#bbf7d0", badge: "#22c55e" },
 };
 
-const NODE_W = 190;
-const NODE_H = 54;
+const NODE_W = 200;
+const NODE_H = 60;
 
 // ---------------------------------------------------------------------------
-// dagre layout helper
+// dagre layout helper — with grid fallback and collision detection
 // ---------------------------------------------------------------------------
+
+function gridFallbackLayout(
+  nodes: DiagramNode[],
+  direction: string,
+): Map<string, { x: number; y: number }> {
+  const positions = new Map<string, { x: number; y: number }>();
+  const isVertical = direction === "TB" || direction === "BT";
+  const perRow = isVertical ? 1 : Math.max(1, Math.ceil(Math.sqrt(nodes.length)));
+  const gapX = NODE_W + 90;
+  const gapY = NODE_H + 110;
+  nodes.forEach((n, i) => {
+    const col = isVertical ? 0 : i % perRow;
+    const row = isVertical ? i : Math.floor(i / perRow);
+    positions.set(n.id, { x: col * gapX, y: row * gapY });
+  });
+  return positions;
+}
 
 function layoutDiagram(
   nodes: DiagramNode[],
   edges: Diagram["edges"],
   direction: string = "LR",
 ): Map<string, { x: number; y: number }> {
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({ rankdir: direction, nodesep: 36, ranksep: 100 });
-  g.setDefaultEdgeLabel(() => ({}));
+  const nodeIds = new Set(nodes.map((n) => n.id));
+  // Strip edges that reference non-existent nodes before handing to dagre
+  const validEdges = edges.filter((e) => nodeIds.has(e.source) && nodeIds.has(e.target));
 
-  for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
-  for (const e of edges) g.setEdge(e.source, e.target);
-  dagre.layout(g);
+  try {
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: direction, nodesep: 60, ranksep: 140 });
+    g.setDefaultEdgeLabel(() => ({}));
+    for (const n of nodes) g.setNode(n.id, { width: NODE_W, height: NODE_H });
+    for (const e of validEdges) g.setEdge(e.source, e.target);
+    dagre.layout(g);
 
-  const positions = new Map<string, { x: number; y: number }>();
-  for (const n of nodes) {
-    const pos = g.node(n.id);
-    positions.set(n.id, { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 });
+    const positions = new Map<string, { x: number; y: number }>();
+    for (const n of nodes) {
+      const pos = g.node(n.id);
+      if (!pos) continue;
+      positions.set(n.id, { x: pos.x - NODE_W / 2, y: pos.y - NODE_H / 2 });
+    }
+
+    // If dagre missed any node, fall through to grid
+    if (positions.size < nodes.length) return gridFallbackLayout(nodes, direction);
+
+    // Detect coordinate collisions (dagre anomaly on some graph topologies)
+    const occupied = new Map<string, string>();
+    for (const [id, pos] of positions) {
+      const key = `${Math.round(pos.x / 8)},${Math.round(pos.y / 8)}`;
+      if (occupied.has(key)) return gridFallbackLayout(nodes, direction);
+      occupied.set(key, id);
+    }
+
+    return positions;
+  } catch {
+    return gridFallbackLayout(nodes, direction);
   }
-  return positions;
 }
 
 // ---------------------------------------------------------------------------
@@ -90,9 +127,22 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
   const direction = diagram.layout?.direction ?? "LR";
 
   const { flowNodes, flowEdges } = useMemo(() => {
-    const positions = layoutDiagram(diagram.nodes, diagram.edges, direction);
+    // Deduplicate nodes by ID — backend slug collisions can produce duplicate IDs
+    const seenIds = new Set<string>();
+    const uniqueNodes = diagram.nodes.filter((n) => {
+      if (seenIds.has(n.id)) return false;
+      seenIds.add(n.id);
+      return true;
+    });
+    // Only pass edges where both endpoints exist
+    const nodeIds = new Set(uniqueNodes.map((n) => n.id));
+    const uniqueEdges = diagram.edges.filter(
+      (e) => nodeIds.has(e.source) && nodeIds.has(e.target),
+    );
 
-    const flowNodes: Node[] = diagram.nodes.map((n) => {
+    const positions = layoutDiagram(uniqueNodes, uniqueEdges, direction);
+
+    const flowNodes: Node[] = uniqueNodes.map((n) => {
       const pos = positions.get(n.id) ?? { x: 0, y: 0 };
       const style = NODE_STYLES[(n.type as NodeType) ?? "default"] ?? NODE_STYLES.default;
       return {
@@ -131,7 +181,7 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
       };
     });
 
-    const flowEdges: Edge[] = diagram.edges.map((e, i) => ({
+    const flowEdges: Edge[] = uniqueEdges.map((e, i) => ({
       id: `${e.id}-${i}`,
       source: e.source,
       target: e.target,
@@ -224,6 +274,9 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
       nodes={nodes}
       edges={edges}
       fitView
+      fitViewOptions={{ padding: 0.2, maxZoom: 1.2 }}
+      minZoom={0.08}
+      maxZoom={2}
       proOptions={{ hideAttribution: true }}
       colorMode="dark"
       onNodeClick={onNodeClick}

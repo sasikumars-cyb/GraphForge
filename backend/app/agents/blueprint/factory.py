@@ -91,6 +91,79 @@ _FLOW_STEP_TYPE_TO_NODE_TYPE: dict[str, str] = {
     "destination": "output",
 }
 
+# ---------------------------------------------------------------------------
+# Quality enrichment: expand sparse LLM output to minimum viable diagrams
+# ---------------------------------------------------------------------------
+
+_STEP_TYPE_PRIORITY: dict[str, int] = {
+    "source": 0, "process": 1, "storage": 2, "destination": 3,
+}
+_STANDARD_FLOW_STAGES: list[dict] = [
+    {"name": "Data Source", "step_type": "source", "technology": "", "order": 0},
+    {"name": "Validation", "step_type": "process", "technology": "", "order": 0},
+    {"name": "Transformation", "step_type": "process", "technology": "", "order": 0},
+    {"name": "Data Store", "step_type": "storage", "technology": "", "order": 0},
+    {"name": "Delivery", "step_type": "destination", "technology": "", "order": 0},
+]
+
+_LAYER_TYPE_PRIORITY: dict[str, int] = {
+    "source": 0, "ingestion": 1, "processing": 2,
+    "transformation": 2, "storage": 3, "consumption": 4, "monitoring": 5,
+}
+_STANDARD_ARCH_LAYERS: list[dict] = [
+    {"name": "Data Source", "layer_type": "source", "description": "External data origins", "order": 0},
+    {"name": "Ingestion", "layer_type": "ingestion", "description": "Data collection and landing", "order": 0},
+    {"name": "Processing", "layer_type": "processing", "description": "Business logic and transformation", "order": 0},
+    {"name": "Storage", "layer_type": "storage", "description": "Persistent data layer", "order": 0},
+    {"name": "Consumption", "layer_type": "consumption", "description": "APIs and downstream consumers", "order": 0},
+]
+
+
+def _expand_flow_stages(steps: list[dict], min_count: int = 4) -> list[dict]:
+    """Expand a sparse flow to at least min_count stages using standard pipeline types."""
+    if len(steps) >= min_count:
+        return steps
+    covered = {s.get("step_type", "process") for s in steps}
+    result = list(steps)
+    for stage in _STANDARD_FLOW_STAGES:
+        if len(result) >= min_count:
+            break
+        if stage["step_type"] not in covered:
+            result.append(dict(stage))
+            covered.add(stage["step_type"])
+    result.sort(
+        key=lambda s: (_STEP_TYPE_PRIORITY.get(s.get("step_type", "process"), 1), int(s.get("order", 99)))
+    )
+    for i, s in enumerate(result):
+        result[i] = {**s, "order": i + 1}
+    return result
+
+
+def _expand_arch_layers(layers: list[dict], min_count: int = 3) -> list[dict]:
+    """Expand sparse architecture layers to at least min_count layers."""
+    if len(layers) >= min_count:
+        return layers
+    covered = {l.get("layer_type", "processing") for l in layers}
+    result = list(layers)
+    for layer in _STANDARD_ARCH_LAYERS:
+        if len(result) >= min_count:
+            break
+        if layer["layer_type"] not in covered:
+            result.append(dict(layer))
+            covered.add(layer["layer_type"])
+    result.sort(
+        key=lambda l: (_LAYER_TYPE_PRIORITY.get(l.get("layer_type", "processing"), 2), int(l.get("order", 99)))
+    )
+    for i, l in enumerate(result):
+        result[i] = {**l, "order": i + 1}
+    return result
+
+
+def _validate_edges(nodes: list[DiagramNode], edges: list[DiagramEdge]) -> list[DiagramEdge]:
+    """Remove edges that reference node IDs not present in the node list."""
+    node_ids = {n.id for n in nodes}
+    return [e for e in edges if e.source in node_ids and e.target in node_ids]
+
 
 # ---------------------------------------------------------------------------
 # New Principal Architect-level diagram builders
@@ -101,7 +174,8 @@ def _build_solution_architecture(layers: list[dict]) -> Diagram | None:
     """Hero diagram: conceptual solution layers from source to consumption."""
     if not layers:
         return None
-    sorted_layers = sorted(layers, key=lambda l: int(l.get("order", 0)))
+    expanded = _expand_arch_layers(layers, min_count=3)
+    sorted_layers = sorted(expanded, key=lambda l: int(l.get("order", 0)))
     nodes = [
         DiagramNode(
             id=f"layer_{i}",
@@ -115,10 +189,10 @@ def _build_solution_architecture(layers: list[dict]) -> Diagram | None:
     ]
     if not nodes:
         return None
-    edges = [
+    edges = _validate_edges(nodes, [
         DiagramEdge(id=f"layer_{i}_to_{i + 1}", source=f"layer_{i}", target=f"layer_{i + 1}")
         for i in range(len(nodes) - 1)
-    ]
+    ])
     return Diagram(
         id="solution_architecture",
         title="Solution Architecture",
@@ -139,7 +213,8 @@ def _build_data_flow(steps: list[dict]) -> Diagram | None:
     """End-to-end operational flow: how data moves through the system."""
     if not steps:
         return None
-    sorted_steps = sorted(steps, key=lambda s: int(s.get("order", 0)))
+    expanded = _expand_flow_stages(steps, min_count=4)
+    sorted_steps = sorted(expanded, key=lambda s: int(s.get("order", 0)))
     nodes = [
         DiagramNode(
             id=f"flow_{i}",
@@ -151,9 +226,9 @@ def _build_data_flow(steps: list[dict]) -> Diagram | None:
         for i, s in enumerate(sorted_steps)
         if s.get("name")
     ]
-    if not nodes:
+    if len(nodes) < 2:
         return None
-    edges = [
+    edges = _validate_edges(nodes, [
         DiagramEdge(
             id=f"flow_{i}_to_{i + 1}",
             source=f"flow_{i}",
@@ -161,7 +236,7 @@ def _build_data_flow(steps: list[dict]) -> Diagram | None:
             type="data_flow",
         )
         for i in range(len(nodes) - 1)
-    ]
+    ])
     return Diagram(
         id="data_flow",
         title="End-to-End Data Flow",
@@ -184,6 +259,19 @@ def _build_repository_reuse(repo_usage: list[dict]) -> Diagram | None:
     valid = [r for r in repo_usage if r.get("name")]
     if not valid:
         return None
+
+    # Filter out repos with no meaningful data — name alone is not sufficient
+    # to justify a diagram node (e.g. {"name": "foundation"} with no components
+    # or reason produces a "New System → foundation" diagram that communicates nothing).
+    meaningful = [
+        r for r in valid
+        if r.get("reusable_components")
+        or r.get("reason")
+        or int(r.get("estimated_reuse_pct", 0) or 0) > 0
+    ]
+    if not meaningful:
+        return None
+    valid = meaningful
 
     repo_nodes = []
     for r in valid:
@@ -248,8 +336,8 @@ def _build_data_model(entities: list[dict]) -> Diagram | None:
     if not valid:
         return None
 
-    entity_ids = {e["name"]: f"entity_{_slug(e['name'])}" for e in valid}
-    nodes = [
+    entity_ids: dict[str, str] = {e["name"]: f"entity_{_slug(e['name'])}" for e in valid}
+    nodes: list[DiagramNode] = [
         DiagramNode(
             id=entity_ids[e["name"]],
             label=e["name"],
@@ -272,7 +360,23 @@ def _build_data_model(entities: list[dict]) -> Diagram | None:
             verb, target_name = parts[0], parts[1]
             target_id = entity_ids.get(target_name)
             if not target_id:
-                continue
+                # Auto-create any entity referenced in a relationship but absent
+                # from the LLM-provided list — prevents dangling relationships
+                # that would leave the source entity as an isolated island.
+                new_id = f"entity_{_slug(target_name)}"
+                if not _slug(target_name):
+                    continue
+                entity_ids[target_name] = new_id
+                nodes.append(
+                    DiagramNode(
+                        id=new_id,
+                        label=target_name,
+                        type="entity",
+                        properties={"affected_component": ""},
+                        metadata={"attributes": [], "synthesized": True},
+                    )
+                )
+                target_id = new_id
             edge_id = f"{source_id}__{target_id}__{_slug(verb)}"
             if edge_id in seen_edge_ids:
                 continue
@@ -285,6 +389,9 @@ def _build_data_model(entities: list[dict]) -> Diagram | None:
                     label=verb.replace("_", " "),
                 )
             )
+    # A single isolated entity with no edges communicates nothing — skip it.
+    if len(nodes) < 2 or not edges:
+        return None
     return Diagram(
         id="data_model",
         title="Data Model",
@@ -296,7 +403,7 @@ def _build_data_model(entities: list[dict]) -> Diagram | None:
         metadata={
             "section": "Data Model",
             "why": "Domain model — the business entities this system creates, manages, and queries",
-            "entity_count": len(valid),
+            "entity_count": len(nodes),
         },
     )
 

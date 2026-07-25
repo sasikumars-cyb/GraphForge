@@ -64,8 +64,8 @@ const SECTION_DESCRIPTIONS: Record<string, string> = {
   "Implementation Risks":    "Technical debt, breaking changes, and migration risks",
 };
 
-/** Cards that benefit from extra vertical space — predominantly vertical content. */
-const TALL_TYPES = new Set<DiagramType>(["flow", "risk_heatmap"]);
+/** Cards that benefit from extra vertical space — graph-based and vertical content. */
+const TALL_TYPES = new Set<DiagramType>(["flow", "architecture", "dependency", "er", "risk_heatmap"]);
 
 interface BlueprintSection {
   id: string;
@@ -429,7 +429,7 @@ export function BlueprintExplorer({ blueprint }: BlueprintExplorerProps) {
                     <DiagramCard
                       key={diagram.id}
                       diagram={diagram}
-                      minHeight={TALL_TYPES.has(diagram.type as DiagramType) ? 400 : 320}
+                      minHeight={TALL_TYPES.has(diagram.type as DiagramType) ? 460 : 380}
                       index={idx}
                     />
                   ))}
