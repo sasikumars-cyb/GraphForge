@@ -23,7 +23,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from app.ai.config.store import ConfigSnapshot, current_snapshot
+from app.ai.config.store import ConfigSnapshot, ProviderRecord, current_snapshot
 from app.ai.providers.registry import (
     ProviderBuildConfig,
     ProviderSpec,
@@ -42,6 +42,19 @@ _ENV_KEY_FIELDS: dict[str, tuple[str, str]] = {
     "gemini": ("gemini_api_key", "gemini_model"),
     "groq": ("groq_api_key", "groq_model"),
     "deepseek": ("deepseek_api_key", "deepseek_model"),
+}
+
+# Provider-specific options resolved from environment variables. Each entry
+# maps a provider key to a dict of (option_name -> settings_field_name).
+# Keeps provider-specific env logic isolated from the generic resolution code.
+_ENV_PROVIDER_OPTIONS: dict[str, dict[str, str]] = {
+    "bedrock": {"region": "bedrock_region"},
+}
+
+# Providers whose model comes from a dedicated env field rather than the
+# api_key tuple above (because they have no api_key at all).
+_ENV_MODEL_ONLY: dict[str, str] = {
+    "bedrock": "bedrock_model",
 }
 
 
@@ -71,9 +84,50 @@ class ResolvedProvider:
 def _env_credentials(spec_key: str, settings: Settings) -> tuple[str | None, str | None]:
     fields = _ENV_KEY_FIELDS.get(spec_key)
     if not fields:
+        # Providers without an api_key (e.g. Bedrock) may still have an env model.
+        model_field = _ENV_MODEL_ONLY.get(spec_key)
+        if model_field:
+            return None, getattr(settings, model_field, None)
         return None, None
     key_field, model_field = fields
     return getattr(settings, key_field, None), getattr(settings, model_field, None)
+
+
+def _env_provider_options(spec_key: str, settings: Settings) -> dict[str, str]:
+    """Build provider_options from environment variables."""
+    option_map = _ENV_PROVIDER_OPTIONS.get(spec_key)
+    if not option_map:
+        return {}
+    result: dict[str, str] = {}
+    for option_name, settings_field in option_map.items():
+        value = getattr(settings, settings_field, None)
+        if value is not None:
+            result[option_name] = value
+    return result
+
+
+def _resolve_provider_options(
+    spec_key: str,
+    record: ProviderRecord | None,
+    settings: Settings,
+) -> dict[str, str]:
+    """Build provider_options from stored config and env fallback.
+
+    For Bedrock the stored "base_url" column in the database holds the region
+    (the UI writes it there). This is a presentation concern of the DB schema
+    — within the provider itself, the value lives in provider_options["region"]
+    where its semantics are explicit.
+    """
+    # Start with env-level options as the fallback.
+    options = _env_provider_options(spec_key, settings)
+
+    # Stored config overrides env. Bedrock stores region in the base_url
+    # column (it has no actual URL). Other providers might store options in
+    # a JSONB column in the future — for now this covers the one case.
+    if spec_key == "bedrock" and record is not None and record.base_url:
+        options["region"] = record.base_url
+
+    return options
 
 
 def _pick_provider_key(
@@ -217,6 +271,7 @@ def resolve(
                         else None
                     )
                     or spec.default_base_url,
+                    provider_options=_resolve_provider_options(spec.key, prov_cfg, cfg),
                 ),
                 source=profile_source,
                 profile_slug=record.slug,
@@ -264,6 +319,7 @@ def resolve(
                 getattr(cfg, "deepseek_base_url", None) if spec.key == "deepseek" else None
             )
             or spec.default_base_url,
+            provider_options=_resolve_provider_options(spec.key, record, cfg),
         ),
         source=source,
     )

@@ -20,10 +20,12 @@ discovery endpoint) so the UI never hardcodes provider-specific knowledge.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from app.ai.interfaces.llm_provider import ILLMProvider
+from app.ai.providers.bedrock_provider import BedrockProvider
 from app.ai.providers.gemini_provider import GeminiProvider
 from app.ai.providers.openai_provider import OpenAIProvider
 from app.core.exceptions import AppError
@@ -64,6 +66,14 @@ class ProviderBuildConfig:
 
     Resolved by the configuration layer from stored config, workflow
     overrides, and env defaults — providers never read settings themselves.
+
+    ``provider_options`` carries provider-specific settings that do not fit
+    the common fields (api_key, model, base_url, etc.). Examples:
+
+    - Bedrock: {"region": "us-east-1"}
+    - Azure OpenAI: {"deployment": "my-gpt4", "api_version": "2024-02-01"}
+
+    This avoids overloading generic fields with provider-specific semantics.
     """
 
     api_key: str | None
@@ -71,6 +81,7 @@ class ProviderBuildConfig:
     temperature: float = 0.2
     max_tokens: int = 4096
     base_url: str | None = None
+    provider_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -162,6 +173,16 @@ def _build_gemini(cfg: ProviderBuildConfig) -> ILLMProvider:
     )
 
 
+def _build_bedrock(cfg: ProviderBuildConfig) -> ILLMProvider:
+    region = cfg.provider_options.get("region", "us-east-1")
+    return BedrockProvider(
+        model=cfg.model,
+        temperature=cfg.temperature,
+        max_tokens=cfg.max_tokens,
+        region=region,
+    )
+
+
 def _unimplemented(label: str) -> Callable[[ProviderBuildConfig], ILLMProvider]:
     def _build(_: ProviderBuildConfig) -> ILLMProvider:
         raise UnsupportedProviderError(f"{label} provider is not yet implemented.")
@@ -201,6 +222,25 @@ _SPECS: tuple[ProviderSpec, ...] = (
             ModelSpec("gemini-1.5-pro", "Gemini 1.5 Pro", 2_000_000),
         ),
         default_model="gemini-3.6-flash",
+    ),
+    ProviderSpec(
+        key="bedrock",
+        label="Amazon Bedrock",
+        build=_build_bedrock,
+        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION, Capability.REASONING},
+        models=(
+            ModelSpec("us.anthropic.claude-sonnet-4-20250514", "Claude Sonnet 4", 200_000),
+            ModelSpec("us.anthropic.claude-opus-4-20250514", "Claude Opus 4", 200_000),
+            ModelSpec("us.anthropic.claude-haiku-3-5-20250620", "Claude Haiku 3.5", 200_000),
+            ModelSpec("us.amazon.nova-pro-v1:0", "Amazon Nova Pro", 300_000),
+            ModelSpec("us.amazon.nova-lite-v1:0", "Amazon Nova Lite", 300_000),
+            ModelSpec("us.amazon.nova-micro-v1:0", "Amazon Nova Micro", 128_000),
+            ModelSpec("us.meta.llama4-maverick-17b-instruct-v1:0", "Meta Llama 4 Maverick", 128_000),
+            ModelSpec("us.meta.llama4-scout-17b-instruct-v1:0", "Meta Llama 4 Scout", 128_000),
+        ),
+        default_model="us.anthropic.claude-sonnet-4-20250514",
+        requires_api_key=False,
+        notes="Uses AWS credential chain (env, CLI, IAM role). No API key needed.",
     ),
     ProviderSpec(
         key="groq",
@@ -294,7 +334,13 @@ _SPECS: tuple[ProviderSpec, ...] = (
 _BY_KEY: dict[str, ProviderSpec] = {s.key: s for s in _SPECS}
 
 # Legacy aliases so existing env values keep resolving.
-_ALIASES: dict[str, str] = {"claude": "anthropic", "azure": "azure_openai"}
+_ALIASES: dict[str, str] = {
+    "claude": "anthropic",
+    "azure": "azure_openai",
+    "aws": "bedrock",
+    "aws_bedrock": "bedrock",
+    "amazon_bedrock": "bedrock",
+}
 
 
 def all_providers() -> tuple[ProviderSpec, ...]:

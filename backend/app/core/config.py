@@ -105,6 +105,10 @@ class Settings(BaseSettings):
     # producing invalid JSON - see the truncation this default now avoids.
     gemini_max_tokens: int = Field(default=8192)
 
+    # --- Amazon Bedrock (AWS credential chain — no API key stored) ---
+    bedrock_region: str = Field(default="us-east-1")
+    bedrock_model: str = Field(default="us.anthropic.claude-sonnet-4-20250514")
+
     # --- Future integrations (unused until their adapters are implemented) ---
     jira_base_url: str | None = Field(default=None)
     jira_api_token: str | None = Field(default=None)
