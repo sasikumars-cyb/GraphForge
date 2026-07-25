@@ -485,6 +485,43 @@ async def get_workflow(
     )
 
 
+@router.delete("/{workflow_id}", status_code=204)
+async def delete_workflow(
+    workflow_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> None:
+    """Delete a workflow along with every stage run it created.
+
+    `Run.workflow_id` is ON DELETE SET NULL, so deleting the Workflow row
+    alone would just orphan its runs as standalone entries instead of
+    removing them — not what "delete this workflow" means. Each Run is
+    deleted explicitly first (cascading its steps via the same
+    `delete-orphan` relationship DELETE /agent-runs/{id} uses), cancelling
+    any still executing, same as that endpoint.
+    """
+    from app.orchestrator.background_execution import cancel_run as cancel_background_run
+
+    try:
+        wid = uuid.UUID(workflow_id)
+    except ValueError as exc:
+        raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
+
+    workflow = await db.get(Workflow, wid)
+    if workflow is None:
+        raise NotFoundError(f"Workflow '{workflow_id}' not found.")
+
+    result = await db.execute(select(Run).where(Run.workflow_id == wid))
+    runs = result.scalars().all()
+    for run in runs:
+        if run.status in ("queued", "running"):
+            cancel_background_run(run.id)
+        await db.delete(run)
+
+    await db.delete(workflow)
+    await db.commit()
+
+
 @router.post("/{workflow_id}/continue", status_code=202, response_model=ContinueWorkflowResponse)
 async def continue_workflow(
     workflow_id: str,
@@ -680,18 +717,23 @@ async def reject_workflow(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> WorkflowApprovalResponse:
-    """Human rejects a completed blueprint."""
+    """Human rejects a workflow — either the initial blueprint (status
+    "awaiting_approval") or, just as validly, one already past that gate and
+    sitting between stages (status "in_progress"): every stage transition
+    requires an explicit human approval (see ApprovalGateBanner), and Reject
+    there needs to actually stop the workflow, not just hide the banner
+    client-side."""
     try:
         wid = uuid.UUID(workflow_id)
     except ValueError as exc:
         raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
 
     workflow = await workflow_service.get_workflow_for_update(db, wid)
-    if workflow.status != "awaiting_approval":
+    if workflow.status not in ("awaiting_approval", "in_progress"):
         raise AppError(
-            f"Workflow is not awaiting approval (status: {workflow.status}).",
+            f"Workflow cannot be rejected in its current state (status: {workflow.status}).",
             status_code=400,
-            error_code="workflow_not_awaiting_approval",
+            error_code="workflow_not_rejectable",
         )
 
     await workflow_service.reject_workflow(db, workflow)

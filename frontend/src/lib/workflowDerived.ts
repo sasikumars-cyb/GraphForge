@@ -242,6 +242,12 @@ export interface LogLine {
   time: string;
   text: string;
   kind: Evidence["kind"] | "lifecycle";
+  /** The tool/reasoning step actually invoked (Evidence.reference — e.g.
+   * "traverse_repository_graph", "llm_synthesis"), when this line came from
+   * evidence. This is what makes the Log panel a distinct, technical view
+   * rather than a re-timestamped copy of the Agent Activity feed, which
+   * only ever shows Evidence.summary. */
+  reference?: string;
 }
 
 interface RawEvent {
@@ -252,6 +258,7 @@ interface RawEvent {
   atMs: number | null;
   text: string;
   kind: EventKind;
+  reference?: string;
 }
 
 /** The shared, timestamped event sequence for a single step — every other
@@ -276,7 +283,7 @@ function buildStepEvents(step: AgentStep, agentLabel: string): RawEvent[] {
   const n = Math.max(step.evidence.length, 1);
   step.evidence.forEach((ev, i) => {
     const at = start && span > 0 ? start.getTime() + (span * (i + 1)) / (n + 1) : start?.getTime();
-    events.push({ key: `ev-${i}`, atMs: at ?? null, text: ev.summary, kind: ev.kind });
+    events.push({ key: `ev-${i}`, atMs: at ?? null, text: ev.summary, kind: ev.kind, reference: ev.reference });
   });
 
   if (step.confidence.score !== null) {
@@ -303,6 +310,7 @@ export function buildExecutionLog(step: AgentStep, agentLabel: string): LogLine[
     time: ev.atMs !== null ? formatClock(new Date(ev.atMs)) : "—",
     text: ev.text,
     kind: ev.kind,
+    reference: ev.reference,
   }));
 }
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { History, ChevronLeft, ChevronRight, RefreshCw, GitMerge } from "lucide-react";
+import { History, ChevronLeft, ChevronRight, RefreshCw, GitMerge, Trash2 } from "lucide-react";
 import { Card } from "../components/Card";
 import { StatusBadge } from "../components/StatusBadge";
 import { Table, type TableColumn } from "../components/Table";
@@ -10,7 +10,8 @@ import { formatRelativeTime } from "../lib/formatDate";
 import { deriveWorkflowState, stageLabel, workflowStatusDisplay } from "../lib/workflowDerived";
 import { useRunHistory } from "../hooks/useRunHistory";
 import { useAuth } from "../app/auth-context";
-import { getWorkflow } from "../lib/api/workflows";
+import { getWorkflow, deleteWorkflow } from "../lib/api/workflows";
+import { deleteAgentRun } from "../lib/api/agentRuns";
 import type { RunListItem, WorkflowDetail } from "../types/agent";
 
 const GOAL_LABELS: Record<string, string> = {
@@ -55,61 +56,108 @@ function ProviderCell({ row }: { row: RunListItem }) {
   );
 }
 
+function DeleteRunButton({ row, onDeleted }: { row: RunListItem; onDeleted: () => void }) {
+  const { token } = useAuth();
+  const [isDeleting, setIsDeleting] = useState(false);
+  const isActive = row.status === "queued" || row.status === "running";
+
+  async function handleDelete() {
+    if (!token) return;
+    const confirmMsg = isActive
+      ? "This run is still in progress — deleting it will cancel and remove it. Continue?"
+      : "Delete this run? This can't be undone.";
+    if (!window.confirm(confirmMsg)) return;
+    setIsDeleting(true);
+    try {
+      await deleteAgentRun(token, row.run_id);
+      onDeleted();
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handleDelete()}
+      disabled={isDeleting}
+      title={isActive ? "Cancel and delete this run" : "Delete run"}
+      className="text-slate-500 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-30"
+    >
+      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+    </button>
+  );
+}
+
 // Standalone (non-workflow) runs — unchanged from before grouping was added.
-const standaloneColumns: TableColumn<RunListItem>[] = [
-  {
-    key: "subject",
-    header: "Title",
-    render: (row) => (
-      <Link to={`/runs/${row.run_id}`} className="block hover:underline">
-        <p
-          className="truncate font-medium text-slate-100"
-          title={row.title ?? row.subject.display_name}
-        >
-          {row.title ?? row.subject.display_name ?? row.subject.subject_id}
-        </p>
-        <p className="truncate text-xs text-slate-500">
-          {row.repository ?? row.subject.subject_type}
-        </p>
-      </Link>
-    ),
-  },
-  {
-    key: "goal",
-    header: "Goal",
-    render: (row) => (
-      <span className="text-sm text-slate-300">{GOAL_LABELS[row.goal] ?? row.goal}</span>
-    ),
-  },
-  { key: "status", header: "Status", render: (row) => <StatusCell row={row} /> },
-  { key: "provider", header: "Provider", render: (row) => <ProviderCell row={row} /> },
-  { key: "confidence", header: "Confidence", render: (row) => <ConfidenceCell row={row} /> },
-  { key: "started", header: "Started", render: (row) => <StartedCell row={row} /> },
-  { key: "duration", header: "Duration", render: (row) => <DurationCell row={row} /> },
-];
+function buildStandaloneColumns(onDeleted: () => void): TableColumn<RunListItem>[] {
+  return [
+    {
+      key: "subject",
+      header: "Title",
+      render: (row) => (
+        <Link to={`/runs/${row.run_id}`} className="block hover:underline">
+          <p
+            className="truncate font-medium text-slate-100"
+            title={row.title ?? row.subject.display_name}
+          >
+            {row.title ?? row.subject.display_name ?? row.subject.subject_id}
+          </p>
+          <p className="truncate text-xs text-slate-500">
+            {row.repository ?? row.subject.subject_type}
+          </p>
+        </Link>
+      ),
+    },
+    {
+      key: "goal",
+      header: "Goal",
+      render: (row) => (
+        <span className="text-sm text-slate-300">{GOAL_LABELS[row.goal] ?? row.goal}</span>
+      ),
+    },
+    { key: "status", header: "Status", render: (row) => <StatusCell row={row} /> },
+    { key: "provider", header: "Provider", render: (row) => <ProviderCell row={row} /> },
+    { key: "confidence", header: "Confidence", render: (row) => <ConfidenceCell row={row} /> },
+    { key: "started", header: "Started", render: (row) => <StartedCell row={row} /> },
+    { key: "duration", header: "Duration", render: (row) => <DurationCell row={row} /> },
+    {
+      key: "actions",
+      header: "",
+      render: (row) => <DeleteRunButton row={row} onDeleted={onDeleted} />,
+    },
+  ];
+}
 
 // A workflow's stage runs, shown inside its expanded group — same cell
-// renderers as standaloneColumns, "Subject" swapped for "Stage" since every
+// renderers as buildStandaloneColumns, "Subject" swapped for "Stage" since every
 // row here already belongs to one known workflow.
-const stageColumns: TableColumn<RunListItem>[] = [
-  {
-    key: "stage",
-    header: "Stage",
-    render: (row) => (
-      <Link to={`/runs/${row.run_id}`} className="block hover:underline">
-        <p className="text-sm font-medium text-slate-100">
-          {row.workflow_stage
-            ? stageLabel(row.workflow_stage)
-            : (GOAL_LABELS[row.goal] ?? row.goal)}
-        </p>
-      </Link>
-    ),
-  },
-  { key: "status", header: "Status", render: (row) => <StatusCell row={row} /> },
-  { key: "confidence", header: "Confidence", render: (row) => <ConfidenceCell row={row} /> },
-  { key: "started", header: "Started", render: (row) => <StartedCell row={row} /> },
-  { key: "duration", header: "Duration", render: (row) => <DurationCell row={row} /> },
-];
+function buildStageColumns(onDeleted: () => void): TableColumn<RunListItem>[] {
+  return [
+    {
+      key: "stage",
+      header: "Stage",
+      render: (row) => (
+        <Link to={`/runs/${row.run_id}`} className="block hover:underline">
+          <p className="text-sm font-medium text-slate-100">
+            {row.workflow_stage
+              ? stageLabel(row.workflow_stage)
+              : (GOAL_LABELS[row.goal] ?? row.goal)}
+          </p>
+        </Link>
+      ),
+    },
+    { key: "status", header: "Status", render: (row) => <StatusCell row={row} /> },
+    { key: "confidence", header: "Confidence", render: (row) => <ConfidenceCell row={row} /> },
+    { key: "started", header: "Started", render: (row) => <StartedCell row={row} /> },
+    { key: "duration", header: "Duration", render: (row) => <DurationCell row={row} /> },
+    {
+      key: "actions",
+      header: "",
+      render: (row) => <DeleteRunButton row={row} onDeleted={onDeleted} />,
+    },
+  ];
+}
 
 interface WorkflowGroup {
   workflowId: string;
@@ -150,23 +198,45 @@ function groupByWorkflow(runs: RunListItem[]): {
 function WorkflowGroupRow({
   group,
   workflow,
+  onRunDeleted,
 }: {
   group: WorkflowGroup;
   workflow: WorkflowDetail | undefined;
+  onRunDeleted: () => void;
 }) {
+  const { token } = useAuth();
+  const [isDeleting, setIsDeleting] = useState(false);
+  const stageColumns = buildStageColumns(onRunDeleted);
   const state = workflow ? deriveWorkflowState(workflow) : null;
   const status = state && workflow ? workflowStatusDisplay(workflow, state.phase) : null;
   const completedCount = workflow?.stages.filter((s) => s.status === "completed").length ?? 0;
   const totalStages = workflow?.stages.length ?? group.runs.length;
+
+  async function handleDeleteWorkflow(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!token) return;
+    if (!window.confirm("Delete this workflow and all its stage runs? This can't be undone.")) return;
+    setIsDeleting(true);
+    try {
+      await deleteWorkflow(token, group.workflowId);
+      onRunDeleted();
+    } finally {
+      setIsDeleting(false);
+    }
+  }
 
   return (
     <details>
       <summary className="flex cursor-pointer list-none items-center gap-4 px-3 py-3 text-slate-200 hover:bg-slate-800/40">
         <GitMerge className="h-4 w-4 shrink-0 text-indigo-400" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-medium text-slate-100">
+          <Link
+            to={`/workflows/${group.workflowId}`}
+            onClick={(e) => e.stopPropagation()}
+            className="truncate text-sm font-medium text-slate-100 hover:text-brand-300 hover:underline"
+          >
             {workflow?.title ?? "Loading workflow…"}
-          </p>
+          </Link>
           <p className="text-xs text-slate-500">
             {completedCount}/{totalStages} stage{totalStages === 1 ? "" : "s"} complete
           </p>
@@ -175,6 +245,22 @@ function WorkflowGroupRow({
         <span className="text-xs text-slate-500">
           {group.runs[0]?.started_at ? formatRelativeTime(group.runs[0].started_at) : "—"}
         </span>
+        <Link
+          to={`/workflows/${group.workflowId}`}
+          onClick={(e) => e.stopPropagation()}
+          className="shrink-0 rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
+        >
+          Open workflow
+        </Link>
+        <button
+          type="button"
+          onClick={(e) => void handleDeleteWorkflow(e)}
+          disabled={isDeleting}
+          title="Delete workflow"
+          className="shrink-0 text-slate-500 hover:text-rose-400 disabled:cursor-not-allowed disabled:opacity-30"
+        >
+          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
       </summary>
       <div className="border-t border-slate-800/70 bg-slate-950/40 pl-8">
         <Table columns={stageColumns} data={group.runs} getRowKey={(r) => r.run_id} />
@@ -256,6 +342,7 @@ export function RunHistoryPage() {
                 key={group.workflowId}
                 group={group}
                 workflow={workflowsById[group.workflowId]}
+                onRunDeleted={refresh}
               />
             ))}
           </div>
@@ -264,7 +351,7 @@ export function RunHistoryPage() {
 
       <Card title={groups.length > 0 ? "Standalone Runs" : undefined}>
         <Table
-          columns={standaloneColumns}
+          columns={buildStandaloneColumns(refresh)}
           data={standalone}
           getRowKey={(row) => row.run_id}
           emptyMessage={

@@ -43,6 +43,13 @@ export function cancelAgentRun(token: string, runId: string): Promise<CancelRunR
   });
 }
 
+export function deleteAgentRun(token: string, runId: string): Promise<undefined> {
+  return apiFetch<undefined>(`/agent-runs/${encodeURIComponent(runId)}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
 export interface ListRunsParams {
   page?: number;
   page_size?: number;

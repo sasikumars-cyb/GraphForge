@@ -89,6 +89,13 @@ export function rejectWorkflow(
   });
 }
 
+export function deleteWorkflow(token: string, workflowId: string): Promise<undefined> {
+  return apiFetch<undefined>(`/workflows/${encodeURIComponent(workflowId)}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
 export function cancelWorkflow(
   token: string,
   workflowId: string,

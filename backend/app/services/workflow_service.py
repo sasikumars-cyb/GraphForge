@@ -421,7 +421,8 @@ async def approve_workflow(db: AsyncSession, workflow: Workflow, user_id: uuid.U
 
 
 async def reject_workflow(db: AsyncSession, workflow: Workflow) -> None:
-    """Human rejects a completed blueprint — terminal."""
+    """Human rejects the workflow — terminal, from either the initial
+    blueprint-approval gate or a later inter-stage approval gate."""
     workflow.status = "rejected"
     workflow.updated_at = datetime.now(timezone.utc)
     await db.flush()

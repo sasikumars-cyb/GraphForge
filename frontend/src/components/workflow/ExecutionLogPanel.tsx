@@ -32,7 +32,14 @@ export function ExecutionLogPanel({ step, agentLabel }: ExecutionLogPanelProps) 
       {lines.map((line) => (
         <div key={line.key} className="grid grid-cols-[68px_1fr] gap-3 py-0.5">
           <span className="text-slate-600">{line.time}</span>
-          <span className={KIND_STYLE[line.kind] ?? "text-slate-300"}>{line.text}</span>
+          <span>
+            {line.reference && (
+              <span className="mr-1.5 rounded bg-slate-800 px-1 py-0.5 text-[10px] font-semibold text-slate-400">
+                {line.reference}
+              </span>
+            )}
+            <span className={KIND_STYLE[line.kind] ?? "text-slate-300"}>{line.text}</span>
+          </span>
         </div>
       ))}
     </div>

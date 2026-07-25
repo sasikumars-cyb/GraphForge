@@ -335,6 +335,40 @@ async def cancel_run_endpoint(
     return CancelRunResponse(run_id=str(run.id), status=run.status)
 
 
+@router.delete("/{run_id}", status_code=204)
+async def delete_run(
+    run_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> None:
+    """Delete a run and its steps.
+
+    If the run is still executing (queued/running), it's cancelled first
+    (best-effort, same as POST /{run_id}/cancel) so the background task
+    doesn't keep writing to a row that's about to disappear, then deleted
+    either way — the user asked to remove it, not to be blocked pending a
+    separate cancel step. AgentStep rows cascade via the relationship's
+    `delete-orphan` (see app.models.run.Run.steps).
+    """
+    from app.orchestrator.background_execution import cancel_run as cancel_background_run
+
+    try:
+        rid = uuid.UUID(run_id)
+    except ValueError as exc:
+        raise NotFoundError(f"Invalid run_id: {run_id}") from exc
+
+    result = await db.execute(select(Run).where(Run.id == rid))
+    run = result.scalar_one_or_none()
+    if run is None:
+        raise NotFoundError(f"Run '{run_id}' not found.")
+
+    if run.status in ("queued", "running"):
+        cancel_background_run(rid)
+
+    await db.delete(run)
+    await db.commit()
+
+
 @router.get("/{run_id}", response_model=RunDetailResponse)
 async def get_run(
     run_id: str,

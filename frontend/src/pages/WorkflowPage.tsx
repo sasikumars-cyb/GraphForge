@@ -6,8 +6,6 @@ import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { PipelineGraph } from "../components/workflow/PipelineGraph";
 import { WorkflowHeader } from "../components/workflow/WorkflowHeader";
 import { AgentActivityFeed } from "../components/workflow/AgentActivityFeed";
-import { AgentCollaborationFlow } from "../components/workflow/AgentCollaborationFlow";
-import { StageArtifactCard } from "../components/workflow/StageArtifactCard";
 import { ApprovalGateBanner } from "../components/workflow/ApprovalGateBanner";
 import { WorkflowApprovalBanner } from "../components/workflow/WorkflowApprovalBanner";
 import { WorkflowSummaryHero } from "../components/workflow/WorkflowSummaryHero";
@@ -160,6 +158,28 @@ export function WorkflowPage() {
   const canContinue = phase === "awaiting_approval";
   const failedRun = currentStageInfo?.run_id ? runsById.get(currentStageInfo.run_id) : undefined;
 
+  // Collapse retried runs into one tab per stage — a failed attempt gets a
+  // fresh run_id on retry, so without this a retried stage shows two tabs
+  // with the identical agent label and no indication one of them failed.
+  const stageTabs = (() => {
+    const byStage = new Map<string, typeof workflow.runs>();
+    for (const r of workflow.runs) {
+      const key = r.workflow_stage ?? r.run_id;
+      const list = byStage.get(key) ?? [];
+      list.push(r);
+      byStage.set(key, list);
+    }
+    return [...byStage.entries()].map(([stage, runs]) => {
+      const sorted = [...runs].sort((a, b) => a.created_at.localeCompare(b.created_at));
+      const latest = sorted[sorted.length - 1];
+      return {
+        run_id: latest.run_id,
+        attempts: sorted.length,
+        label: STAGE_AGENT_LABEL[stage] ?? latest.workflow_stage ?? latest.goal,
+      };
+    });
+  })();
+
   const selectedRun = selectedRunId ? runsById.get(selectedRunId) : undefined;
   const selectedStage = selectedRun?.workflow_stage ?? null;
   const selectedStep = selectedRun?.steps[0];
@@ -228,6 +248,7 @@ export function WorkflowPage() {
           workflowTitle={workflow.title}
           isSubmitting={isSubmitting}
           onApprove={handleApprove}
+          onReject={handleRejectWorkflow}
         />
       )}
 
@@ -238,6 +259,7 @@ export function WorkflowPage() {
           workflowTitle={workflow.title}
           isSubmitting={isSubmitting}
           onApprove={handleApprove}
+          onReject={handleRejectWorkflow}
           failure={{
             stage: currentStageInfo.stage,
             errorMessage: failedRun?.error_message ?? null,
@@ -255,69 +277,67 @@ export function WorkflowPage() {
         />
       )}
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_1.3fr]">
-        <div className="flex flex-col gap-6">
-          <Card title="Agent Activity" description="Live evidence as each agent works">
-            <AgentActivityFeed stages={workflow.stages} stepsByRunId={stepsByRunId} />
-          </Card>
-          <Card title="Agent Collaboration" description="What each stage hands to the next">
-            <AgentCollaborationFlow stages={workflow.stages} stepsByRunId={stepsByRunId} />
-          </Card>
-        </div>
+      <Card title="Agent Activity" description="Live evidence as each agent works">
+        <AgentActivityFeed stages={workflow.stages} stepsByRunId={stepsByRunId} />
+      </Card>
 
-        <div className="flex min-w-0 flex-col gap-4">
-          {workflow.runs.length > 1 && (
-            <div className="flex flex-wrap gap-2">
-              {workflow.runs.map((r) => (
-                <button
-                  key={r.run_id}
-                  type="button"
-                  onClick={() => setSelectedRunId(r.run_id)}
-                  className={`rounded-md px-3 py-1.5 text-xs font-medium ring-1 ring-inset transition-colors ${
-                    selectedRunId === r.run_id
-                      ? "bg-brand-500/20 text-brand-200 ring-brand-500/40"
-                      : "text-slate-400 ring-slate-700 hover:bg-slate-800 hover:text-slate-200"
-                  }`}
+      {stageTabs.length > 1 && (
+        <div className="flex flex-wrap gap-2">
+          {stageTabs.map((t) => (
+            <button
+              key={t.run_id}
+              type="button"
+              onClick={() => setSelectedRunId(t.run_id)}
+              className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium ring-1 ring-inset transition-colors ${
+                selectedRunId === t.run_id
+                  ? "bg-brand-500/20 text-brand-200 ring-brand-500/40"
+                  : "text-slate-400 ring-slate-700 hover:bg-slate-800 hover:text-slate-200"
+              }`}
+            >
+              {t.label}
+              {t.attempts > 1 && (
+                <span
+                  className="rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400"
+                  title={`Retried ${t.attempts - 1} time${t.attempts - 1 > 1 ? "s" : ""}`}
                 >
-                  {STAGE_AGENT_LABEL[r.workflow_stage ?? ""] ?? r.workflow_stage ?? r.goal}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {selectedRun && selectedStep && (
-            <>
-              <Card title={`${selectedLabel} — Artifacts`}>
-                <div className="mb-3">
-                  <RunStatusBadge status={selectedRun.status} />
-                </div>
-                <StageArtifactCard
-                  stage={selectedStage ?? ""}
-                  step={selectedStep}
-                  stages={workflow.stages}
-                />
-                {selectedRun.error_message && (
-                  <details className="group mt-3">
-                    <summary className="cursor-pointer text-xs font-medium text-rose-300/80 hover:text-rose-200">
-                      View error details
-                    </summary>
-                    <p className="mt-2 rounded-lg bg-slate-950 p-3 font-mono text-xs whitespace-pre-wrap text-rose-300">
-                      {selectedRun.error_message}
-                    </p>
-                  </details>
-                )}
-              </Card>
-
-              <StageResultPanel
-                stage={selectedStage}
-                step={selectedStep}
-                agentLabel={selectedLabel ?? "Agent"}
-                evidence={selectedStep.evidence}
-              />
-            </>
-          )}
+                  retry {t.attempts - 1}
+                </span>
+              )}
+            </button>
+          ))}
         </div>
-      </div>
+      )}
+
+      {/* Blueprint gets the full page width — a diagram grid needs the room
+          a narrow sidebar column can't give it (this is the "Visual
+          Blueprint" reviewers actually came here to see). The old
+          "Artifacts" card (summary text + confidence/evidence stats) and
+          "Agent Log" card were removed — StageResultPanel already has a
+          Summary tab and a Log tab that show the same thing. */}
+      {selectedRun && selectedStep && (
+        <div className="flex flex-col gap-4">
+          <div className="flex items-center gap-2">
+            <RunStatusBadge status={selectedRun.status} />
+            {selectedRun.error_message && (
+              <details className="group">
+                <summary className="cursor-pointer text-xs font-medium text-rose-300/80 hover:text-rose-200">
+                  View error details
+                </summary>
+                <p className="mt-2 rounded-lg bg-slate-950 p-3 font-mono text-xs whitespace-pre-wrap text-rose-300">
+                  {selectedRun.error_message}
+                </p>
+              </details>
+            )}
+          </div>
+
+          <StageResultPanel
+            stage={selectedStage}
+            step={selectedStep}
+            agentLabel={selectedLabel ?? "Agent"}
+            evidence={selectedStep.evidence}
+          />
+        </div>
+      )}
     </div>
   );
 }
