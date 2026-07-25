@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.agents.setup import register_agents
-from app.tools.setup import register_all_tools
+from app.tools.setup import register_all_tools, sync_all_knowledge_connections_to_tools
 from app.api.v1.routers import api_router
 from app.core.config import get_settings
 from app.core.error_handlers import register_exception_handlers
@@ -104,6 +104,13 @@ def create_app() -> FastAPI:
         # asyncio.create_task, which does not survive a restart.
         async with AsyncSessionLocal() as db:
             await recover_orphaned_runs(db)
+
+        # Activate Tool Registry entries (Jira, Confluence, ...) for any
+        # Knowledge Connection (Settings → Integrations) made in an earlier
+        # process — new/updated connections sync immediately via
+        # knowledge.py, this just covers what already existed at restart.
+        async with AsyncSessionLocal() as db:
+            await sync_all_knowledge_connections_to_tools(db)
 
         yield
 

@@ -7,10 +7,15 @@ import time.
 
 from __future__ import annotations
 
+import json
 import logging
+from typing import TYPE_CHECKING
 
 from app.tools.interfaces import ToolCategory
 from app.tools.registry import ToolSpec, get_tool_registry
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger(__name__)
 
@@ -119,3 +124,83 @@ def register_all_tools() -> None:
     )
 
     logger.info("tool_registration_complete tool_count=%d", len(registry.all_specs()))
+
+
+# ---------------------------------------------------------------------------
+# Knowledge Connection → Tool Registry sync
+# ---------------------------------------------------------------------------
+#
+# Settings → Integrations ("Knowledge Connections") is where a user actually
+# enters Jira/Confluence credentials today — the Tool Registry's own
+# `configure()` (Settings → Tool Registry) is a second, separate admin-only
+# config surface for the same tools. Rather than make the user configure
+# Jira twice, a Knowledge Connection for a source that has a matching Tool
+# Registry entry auto-activates that tool: this is the one function that
+# does the field-name translation (KnowledgeConnection's generic
+# "base_url"/"email"/"api_token" → each tool's own prefixed config keys)
+# and calls registry.configure(). Called after a connection is created/
+# updated (knowledge.py) and once at startup to pick up connections made in
+# an earlier process (see app.main's lifespan).
+
+# tool_id -> KnowledgeConnection source_type this tool corresponds to, and
+# the KnowledgeConnection field name -> this tool's own config key.
+_KNOWLEDGE_CONNECTION_TOOL_MAP: dict[str, tuple[str, dict[str, str]]] = {
+    "jira": ("jira", {
+        "base_url": "jira_base_url",
+        "email": "jira_email",
+        "api_token": "jira_api_token",
+    }),
+    "confluence": ("confluence", {
+        "base_url": "confluence_base_url",
+        "email": "confluence_email",
+        "api_token": "confluence_api_token",
+    }),
+}
+
+
+def sync_knowledge_connection_to_tool(source_type: str, config: dict, credentials: dict) -> None:
+    """Activate the Tool Registry entry matching a Knowledge Connection, if any.
+
+    No-op for source types with no corresponding tool (e.g. neo4j, filesystem)
+    or when the required fields aren't all present yet.
+    """
+    for tool_id, (mapped_source_type, field_map) in _KNOWLEDGE_CONNECTION_TOOL_MAP.items():
+        if mapped_source_type != source_type:
+            continue
+
+        merged = {**config, **credentials}
+        tool_config = {
+            tool_key: merged[conn_key] for conn_key, tool_key in field_map.items() if merged.get(conn_key)
+        }
+        if len(tool_config) != len(field_map):
+            logger.info(
+                "tool_sync_incomplete_config tool=%s source_type=%s", tool_id, source_type
+            )
+            return
+
+        get_tool_registry().configure(tool_id, enabled=True, config=tool_config)
+        logger.info("tool_sync_configured tool=%s source_type=%s", tool_id, source_type)
+        return
+
+
+async def sync_all_knowledge_connections_to_tools(db: "AsyncSession") -> None:
+    """Startup backfill: activate tools for Knowledge Connections created in
+    an earlier process (before this sync existed, or before a restart)."""
+    from sqlalchemy import select
+
+    from app.core.crypto import decrypt_secret
+    from app.models.knowledge_connection import KnowledgeConnection
+
+    rows = (await db.execute(select(KnowledgeConnection))).scalars().all()
+    for row in rows:
+        credentials: dict = {}
+        if row.encrypted_credentials:
+            try:
+                credentials = json.loads(decrypt_secret(row.encrypted_credentials))
+            except Exception:
+                logger.warning(
+                    "tool_sync_decrypt_failed connection_id=%s source_type=%s",
+                    row.id, row.source_type,
+                )
+                continue
+        sync_knowledge_connection_to_tool(row.source_type, row.config or {}, credentials)

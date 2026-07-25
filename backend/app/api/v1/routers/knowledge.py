@@ -21,10 +21,11 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_user
-from app.core.crypto import encrypt_secret
+from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.exceptions import NotFoundError
 from app.database.session import get_db_session
 from app.knowledge.registry import all_sources, require_source
+from app.models.github_connection import GitHubConnection
 from app.models.knowledge_connection import KnowledgeConnection
 from app.models.user import User
 from app.schemas.knowledge import (
@@ -36,6 +37,7 @@ from app.schemas.knowledge import (
     KnowledgeSourceInfo,
     TransportInfo,
 )
+from app.tools.setup import sync_knowledge_connection_to_tool
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge-sources"])
 
@@ -63,6 +65,33 @@ def _source_to_info(spec, connection_count: int) -> KnowledgeSourceInfo:
         ],
         available=spec.available,
         connection_count=connection_count,
+    )
+
+
+def _github_connection_to_info(row: GitHubConnection) -> ConnectionInfo:
+    """GitHub's real OAuth connection lives in `github_connections` (one row
+    per user, see ADR 0006), not `knowledge_connections` — the generic table
+    only ever holds PAT/other-transport connections for GitHub. Synthesizing
+    a ConnectionInfo here is what lets the Settings UI show GitHub the same
+    way it shows every other source, without merging two differently-scoped
+    tables (global vs per-user) into one."""
+    return ConnectionInfo(
+        id=row.id,
+        source_type="github",
+        name=f"@{row.github_username}",
+        transport="rest",
+        auth_method="oauth",
+        config={},
+        scope={},
+        enabled=True,
+        credentials_configured=True,
+        status="healthy",
+        status_detail="Connected via OAuth.",
+        last_sync_at=row.updated_at,
+        last_success_at=row.updated_at,
+        latency_ms=None,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
     )
 
 
@@ -94,12 +123,18 @@ def _row_to_info(row: KnowledgeConnection) -> ConnectionInfo:
 
 @router.get("/overview", response_model=KnowledgeOverview, summary="Full Knowledge Sources view")
 async def overview(
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> KnowledgeOverview:
     """Everything the Knowledge Sources section needs in one request."""
     rows = (await db.execute(select(KnowledgeConnection))).scalars().all()
     connections = [_row_to_info(r) for r in rows]
+
+    github_connection = (
+        await db.execute(select(GitHubConnection).where(GitHubConnection.user_id == current_user.id))
+    ).scalar_one_or_none()
+    if github_connection is not None:
+        connections.append(_github_connection_to_info(github_connection))
 
     # Count connections per source type.
     counts: dict[str, int] = {}
@@ -124,7 +159,7 @@ async def list_sources(
 
 @router.get("/connections", response_model=list[ConnectionInfo], summary="All connections")
 async def list_connections(
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
     source_type: str | None = None,
 ) -> list[ConnectionInfo]:
@@ -132,7 +167,16 @@ async def list_connections(
     if source_type:
         stmt = stmt.where(KnowledgeConnection.source_type == source_type)
     rows = (await db.execute(stmt)).scalars().all()
-    return [_row_to_info(r) for r in rows]
+    connections = [_row_to_info(r) for r in rows]
+
+    if source_type is None or source_type == "github":
+        github_connection = (
+            await db.execute(select(GitHubConnection).where(GitHubConnection.user_id == current_user.id))
+        ).scalar_one_or_none()
+        if github_connection is not None:
+            connections.append(_github_connection_to_info(github_connection))
+
+    return connections
 
 
 @router.post(
@@ -165,6 +209,13 @@ async def create_connection(
     db.add(row)
     await db.commit()
     await db.refresh(row)
+
+    # Settings → Integrations is where credentials actually get entered —
+    # activate the matching Tool Registry entry (Jira, Confluence, ...), if
+    # any, immediately rather than requiring a restart. No-op for source
+    # types with no corresponding tool.
+    sync_knowledge_connection_to_tool(body.source_type, body.config, body.credentials or {})
+
     return _row_to_info(row)
 
 
@@ -214,6 +265,15 @@ async def update_connection(
 
     await db.commit()
     await db.refresh(row)
+
+    credentials: dict = {}
+    if row.encrypted_credentials:
+        try:
+            credentials = json.loads(decrypt_secret(row.encrypted_credentials))
+        except Exception:
+            credentials = {}
+    sync_knowledge_connection_to_tool(row.source_type, row.config or {}, credentials)
+
     return _row_to_info(row)
 
 
@@ -223,14 +283,24 @@ async def update_connection(
 )
 async def delete_connection(
     connection_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> None:
     row = await db.get(KnowledgeConnection, connection_id)
-    if row is None:
-        raise NotFoundError("Connection not found.")
-    await db.delete(row)
-    await db.commit()
+    if row is not None:
+        await db.delete(row)
+        await db.commit()
+        return
+
+    # Not a generic connection — check whether it's the caller's synthetic
+    # GitHub OAuth row (see _github_connection_to_info) before giving up.
+    github_row = await db.get(GitHubConnection, connection_id)
+    if github_row is not None and github_row.user_id == current_user.id:
+        await db.delete(github_row)
+        await db.commit()
+        return
+
+    raise NotFoundError("Connection not found.")
 
 
 @router.post(
@@ -240,7 +310,7 @@ async def delete_connection(
 )
 async def check_health(
     connection_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> ConnectionHealthResponse:
     """Verify connectivity and credentials for a connection.
@@ -252,6 +322,13 @@ async def check_health(
     """
     row = await db.get(KnowledgeConnection, connection_id)
     if row is None:
+        # The GitHub OAuth row is healthy by construction (its mere
+        # existence means the token exchange succeeded) — nothing to probe.
+        github_row = await db.get(GitHubConnection, connection_id)
+        if github_row is not None and github_row.user_id == current_user.id:
+            return ConnectionHealthResponse(
+                id=github_row.id, status="healthy", status_detail="Connected via OAuth.", latency_ms=None
+            )
         raise NotFoundError("Connection not found.")
 
     now = datetime.now(UTC)

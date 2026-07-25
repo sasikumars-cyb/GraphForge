@@ -55,6 +55,7 @@ from app.agents.planning.schemas import (
 from app.agents.planning.tools import to_evidence, PlanningObservation
 from app.core.exceptions import AppError
 from app.tools import ContextBuilder, ToolExecutor, ToolInput, get_tool_registry
+from app.tools.implementations.jira_tool import extract_issue_key
 
 _PROMPT_VERSION = "1.0"
 _PROMPT_DIR = Path(__file__).parent / "prompts"
@@ -239,6 +240,11 @@ class PlanningAgent:
 
     async def run(self, context: AgentContext) -> AgentOutput:
         task_description: str = context.subject.display_name
+        # What the user actually typed/pasted — kept separate from
+        # `task_description` (which gets the real Jira content appended
+        # below) so the UI's "Task Description" field shows the original
+        # request, not a multi-paragraph ticket dump.
+        original_task_description = task_description
         subject_id: str = context.subject.subject_id
 
         logger.info(
@@ -249,6 +255,42 @@ class PlanningAgent:
         db: AsyncSession = context.extras["db"]
 
         evidence: list[Evidence] = []
+
+        # ------------------------------------------------------------------
+        # Jira enrichment — if the goal references a Jira issue (a bare key
+        # like "NPT-6" or a full /browse/ URL), fetch its real summary and
+        # description and use THAT for analysis and the LLM prompt instead
+        # of the literal string the user pasted. Without this, a goal that's
+        # just a ticket URL plans against the URL text itself — the ticket's
+        # actual description, the whole reason the URL was pasted, was
+        # never read.
+        # ------------------------------------------------------------------
+        registry = get_tool_registry()
+        executor = ToolExecutor(registry=registry)
+
+        issue_key = extract_issue_key(task_description)
+        if issue_key is not None:
+            jira_result = await executor.execute("jira", ToolInput(query=task_description))
+            jira_obs = PlanningObservation(
+                tool_name="fetch_jira_issue",
+                summary=jira_result.summary or (jira_result.error or ""),
+                data=jira_result.data,
+                succeeded=jira_result.success,
+                error=jira_result.error or "",
+            )
+            evidence.append(to_evidence(jira_obs, "tool_call"))
+            if jira_result.success:
+                task_description = (
+                    f"{task_description}\n\n{jira_result.data.get('context_text', '')}"
+                )
+                logger.info(
+                    "planning_agent_jira_enriched issue_key=%s", issue_key,
+                )
+            else:
+                logger.info(
+                    "planning_agent_jira_fetch_failed issue_key=%s error=%s",
+                    issue_key, jira_result.error,
+                )
 
         # ------------------------------------------------------------------
         # Analyse the business problem FIRST — before any repository data is
@@ -267,10 +309,8 @@ class PlanningAgent:
 
         # ------------------------------------------------------------------
         # Tool Platform: discover → execute → build context
+        # (registry/executor already created above, for the Jira fetch)
         # ------------------------------------------------------------------
-        registry = get_tool_registry()
-        executor = ToolExecutor(registry=registry)
-
         tool_input = ToolInput(
             query=task_description,
             parameters={
@@ -355,7 +395,7 @@ class PlanningAgent:
 
         try:
             raw_response = await _call_llm(user_prompt=prompt, model=context.model)
-            planning_result = _parse_llm_response(raw_response, task_description, profile)
+            planning_result = _parse_llm_response(raw_response, original_task_description, profile)
         except PlanningLLMError as exc:
             # LLM failure — fail cleanly, per AGENT_FRAMEWORK.md error policy.
             logger.error("planning_agent_llm_failed error=%s", str(exc))
@@ -407,7 +447,7 @@ class PlanningAgent:
                 reference="llm_synthesis",
                 summary=(
                     f"LLM synthesized a {len(planning_result.implementation_steps)}-step "
-                    f"plan for: {task_description[:80]}"
+                    f"plan for: {original_task_description[:80]}"
                 ),
             )
         )
