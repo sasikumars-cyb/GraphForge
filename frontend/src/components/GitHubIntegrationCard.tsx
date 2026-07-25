@@ -18,7 +18,7 @@ function messageFrom(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
 }
 
-export function GitHubIntegrationCard() {
+export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}) {
   const { token } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
 
@@ -142,6 +142,7 @@ export function GitHubIntegrationCard() {
           : `Tracking ${selected.length} ${selected.length === 1 ? "repository" : "repositories"}.`,
       );
       await loadRepositories();
+      onSaved?.();
     } catch (err) {
       setError(messageFrom(err, "Couldn't save your repository selection."));
     } finally {

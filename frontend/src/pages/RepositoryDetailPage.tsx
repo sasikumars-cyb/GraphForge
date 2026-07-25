@@ -206,6 +206,12 @@ export function RepositoryDetailPage() {
             {isIndexing ? "Indexing…" : "Run indexing"}
           </button>
         </div>
+
+        {indexingJob?.status === "failed" && indexingJob.error_message && (
+          <p className="mt-3 rounded-md bg-rose-500/10 px-3 py-2 text-xs whitespace-pre-wrap text-rose-300">
+            {indexingJob.error_message}
+          </p>
+        )}
       </Card>
 
       <Card title="Pull requests" description="Pull requests tracked for this repository">

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   Building2,
   Brain,
@@ -96,8 +96,23 @@ export function SettingsShell() {
   // Filter tabs based on role.
   const visibleTabs = TABS.filter((tab) => !tab.adminOnly || isAdmin);
 
-  const [activeTab, setActiveTab] = useState(visibleTabs[0]?.id ?? "workspace");
+  // Tab selection lives in the URL, not local state — the GitHub "Add
+  // Connection" flow does a full-page redirect to GitHub and back (OAuth
+  // can't be done via XHR), which would otherwise reset the tab to the
+  // first one and strand the user on Workspace after connecting.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  // The OAuth callback redirects here with ?github=connected|error and no
+  // ?tab — land back on Integrations, where that outcome is shown.
+  const defaultTabId = searchParams.has("github") ? "integrations" : (visibleTabs[0]?.id ?? "workspace");
+  const activeTab = visibleTabs.some((t) => t.id === requestedTab) ? (requestedTab as string) : defaultTabId;
   const current = visibleTabs.find((t) => t.id === activeTab) ?? visibleTabs[0];
+
+  function setActiveTab(tabId: string) {
+    const next = new URLSearchParams(searchParams);
+    next.set("tab", tabId);
+    setSearchParams(next, { replace: true });
+  }
 
   return (
     <div className="flex flex-col gap-6">

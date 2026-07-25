@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import {
   GitBranch,
   Database,
@@ -23,6 +24,7 @@ import {
   type KnowledgeSourceInfo,
   type ConnectionInfo,
 } from "../../lib/api/knowledge";
+import { getConnectAuthorizationUrl } from "../../lib/api/github";
 
 function messageFrom(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
@@ -280,6 +282,8 @@ function IntegrationCard({
 }) {
   const { token } = useAuth();
   const [showAdd, setShowAdd] = useState(false);
+  const [connectingOAuth, setConnectingOAuth] = useState(false);
+  const [oauthError, setOauthError] = useState<string | null>(null);
 
   async function handleHealthCheck(connId: string) {
     if (!token) return;
@@ -291,6 +295,27 @@ function IntegrationCard({
     if (!token) return;
     await deleteConnection(token, connId);
     onRefresh();
+  }
+
+  // GitHub's REST transport lists OAuth first with no form fields — it's
+  // handled by a real OAuth redirect, not the generic connection form.
+  const usesOAuthRedirect = source.key === "github";
+
+  async function handleAddClick() {
+    if (!usesOAuthRedirect) {
+      setShowAdd(!showAdd);
+      return;
+    }
+    if (!token) return;
+    setConnectingOAuth(true);
+    setOauthError(null);
+    try {
+      const { authorization_url } = await getConnectAuthorizationUrl(token);
+      window.location.href = authorization_url;
+    } catch (err) {
+      setOauthError(messageFrom(err, "Couldn't start the GitHub connection."));
+      setConnectingOAuth(false);
+    }
   }
 
   const isComingSoon = !source.available;
@@ -334,14 +359,21 @@ function IntegrationCard({
         {!isComingSoon && (
           <button
             type="button"
-            onClick={() => setShowAdd(!showAdd)}
-            className="flex items-center gap-1 rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
+            onClick={() => void handleAddClick()}
+            disabled={connectingOAuth}
+            className="flex items-center gap-1 rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-40"
           >
             <Plus className="h-3 w-3" />
-            Add Connection
+            {connectingOAuth ? "Redirecting..." : "Add Connection"}
           </button>
         )}
       </div>
+
+      {oauthError && (
+        <p className="mt-2 rounded-md bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+          {oauthError}
+        </p>
+      )}
 
       {/* Connections list */}
       {connections.length > 0 && (
@@ -378,10 +410,12 @@ function IntegrationCard({
 
 export function IntegrationsSection() {
   const { token } = useAuth();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [sources, setSources] = useState<KnowledgeSourceInfo[]>([]);
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function load() {
     if (!token) return;
@@ -402,6 +436,27 @@ export function IntegrationsSection() {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
+
+  // The backend redirects here with ?github=connected|error after the OAuth
+  // callback (GitHub can't be reached via XHR — see AddConnectAuthorization
+  // flow in the card above). Consume it once, then strip it so a page
+  // refresh doesn't re-show the notice.
+  useEffect(() => {
+    const outcome = searchParams.get("github");
+    if (!outcome) return;
+
+    if (outcome === "connected") {
+      setNotice("GitHub connected.");
+      void load();
+    } else if (outcome === "error") {
+      setError("Connecting to GitHub failed. Please try again.");
+    }
+
+    const next = new URLSearchParams(searchParams);
+    next.delete("github");
+    setSearchParams(next, { replace: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (loading) {
     return (
@@ -426,6 +481,12 @@ export function IntegrationsSection() {
 
   return (
     <div className="flex flex-col gap-5">
+      {notice && (
+        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-300">
+          {notice}
+        </div>
+      )}
+
       {/* Summary card */}
       <Card>
         <div className="grid grid-cols-3 gap-4">

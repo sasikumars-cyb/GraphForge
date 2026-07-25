@@ -4,6 +4,7 @@ import { Card } from "../components/Card";
 import { StatCard } from "../components/StatCard";
 import { Table, type TableColumn } from "../components/Table";
 import { StatusBadge } from "../components/StatusBadge";
+import { GitHubIntegrationCard } from "../components/GitHubIntegrationCard";
 import { useAuth } from "../app/auth-context";
 import { useDashboardData, type DashboardRepositoryRow } from "../hooks/useDashboardData";
 import { getLatestIndexingJob, triggerIndexing } from "../lib/api/repositories";
@@ -219,6 +220,15 @@ export function RepositoriesPage() {
           {error}
         </div>
       )}
+
+      {/* GitHubIntegrationCard was built and tested but never mounted
+          anywhere — without it there was no UI path to actually pick which
+          repos to track, so this page (and anything downstream, like
+          Planning agent indexing) stayed empty even after connecting
+          GitHub. window.location.reload() is a blunt refresh, but simpler
+          and more reliable here than plumbing a refetch through
+          useDashboardData for what's a rare, deliberate action. */}
+      <GitHubIntegrationCard onSaved={() => window.location.reload()} />
 
       <Card>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
