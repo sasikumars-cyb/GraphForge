@@ -18,6 +18,7 @@ import {
   ChevronLeft,
   Presentation,
   Rows3,
+  AlertCircle,
 } from "lucide-react";
 import type { BlueprintArtifact, Diagram, DiagramType } from "../../types/blueprint";
 import { DiagramCard } from "./DiagramCard";
@@ -113,6 +114,96 @@ function groupIntoSections(diagrams: Diagram[]): BlueprintSection[] {
 }
 
 // ---------------------------------------------------------------------------
+// Diagram validation
+// ---------------------------------------------------------------------------
+
+interface ValidationResult {
+  valid: boolean;
+  reason: string;
+}
+
+function validateDiagram(diagram: Diagram): ValidationResult {
+  const n = diagram.nodes.length;
+  const e = diagram.edges.length;
+  switch (diagram.type) {
+    case "architecture":
+      if (n < 3)
+        return { valid: false, reason: `Needs at least 3 architecture layers — found ${n}.` };
+      if (e === 0) return { valid: false, reason: "No connections between architecture layers." };
+      return { valid: true, reason: "" };
+    case "flow":
+      if (n < 3)
+        return { valid: false, reason: `Needs at least 3 data flow stages — found ${n}.` };
+      if (e === 0) return { valid: false, reason: "No connections between flow stages." };
+      return { valid: true, reason: "" };
+    case "er":
+      if (n < 2)
+        return { valid: false, reason: `Needs at least 2 data entities — found ${n}.` };
+      if (e === 0) return { valid: false, reason: "No relationships defined between entities." };
+      return { valid: true, reason: "" };
+    case "dependency":
+      if (n < 3)
+        return { valid: false, reason: `Needs at least 3 nodes to show meaningful relationships — found ${n}.` };
+      if (e === 0) return { valid: false, reason: "No connections between components." };
+      return { valid: true, reason: "" };
+    case "sequence":
+      if (n < 2 || e === 0)
+        return {
+          valid: false,
+          reason: "Needs at least 2 participants and at least 1 interaction.",
+        };
+      return { valid: true, reason: "" };
+    case "timeline":
+      if (n < 2) return { valid: false, reason: `Needs at least 2 phases — found ${n}.` };
+      return { valid: true, reason: "" };
+    case "risk_heatmap":
+      if (n === 0) return { valid: false, reason: "No risks were identified." };
+      return { valid: true, reason: "" };
+    default:
+      if (n === 0) return { valid: false, reason: "No diagram data available." };
+      return { valid: true, reason: "" };
+  }
+}
+
+const SECTION_EMPTY_MESSAGES: Record<string, { heading: string; body: string }> = {
+  Architecture: {
+    heading: "Architecture synthesized from requirements only.",
+    body: "Not enough distinct layers were identified to generate a meaningful architecture diagram. The implementation plan above describes the intended approach.",
+  },
+  "Data Flow": {
+    heading: "Not enough stages to generate a data flow diagram.",
+    body: "At least 3 distinct processing stages are required. The implementation steps describe the intended data flow.",
+  },
+  "Repository Analysis": {
+    heading: "No repositories are currently indexed.",
+    body: "Connect GitHub, GitLab, or Bitbucket in Settings → Repositories, then re-run this plan.",
+  },
+  "Data Model": {
+    heading: "Data model could not be generated.",
+    body: "Fewer than 2 entities with defined relationships were identified from the requirements.",
+  },
+};
+
+function DiagramInvalidState({
+  diagram,
+  reason,
+  sectionTitle,
+}: {
+  diagram: Diagram;
+  reason: string;
+  sectionTitle: string;
+}) {
+  const msg = SECTION_EMPTY_MESSAGES[sectionTitle];
+  return (
+    <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 rounded-xl border border-slate-800 bg-slate-900/40 px-6 py-8 text-center">
+      <AlertCircle className="h-6 w-6 text-slate-600" aria-hidden="true" />
+      <p className="text-sm font-medium text-slate-400">{msg?.heading ?? diagram.title}</p>
+      <p className="max-w-sm text-xs text-slate-500">{msg?.body ?? reason}</p>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Empty state
 // ---------------------------------------------------------------------------
 
@@ -131,18 +222,16 @@ function EmptyBlueprint() {
 
 interface BlueprintExplorerProps {
   blueprint: BlueprintArtifact;
+  /** When true, all sections start expanded (e.g. Planning page hero). Default: false (collapsed). */
+  defaultExpanded?: boolean;
 }
 
-export function BlueprintExplorer({ blueprint }: BlueprintExplorerProps) {
+export function BlueprintExplorer({ blueprint, defaultExpanded = false }: BlueprintExplorerProps) {
   const sections = groupIntoSections(blueprint.diagrams);
   const storageKey = `graphforge.blueprint.expanded.${blueprint.agent_id}.${blueprint.stage}`;
 
-  // Diagram sections start collapsed — a full blueprint is 6-7 graph-heavy
-  // cards and expanding them all produces an unreadable page. The executive
-  // summary above this component is already visible, so the reader gets the
-  // overview first and opens the diagrams they actually want.
-  // Restores the previous session's choices when available.
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {
+    if (defaultExpanded) return new Set(); // all open
     const allIds = sections.map((s) => s.id);
     try {
       const saved = localStorage.getItem(storageKey);
@@ -299,14 +388,27 @@ export function BlueprintExplorer({ blueprint }: BlueprintExplorerProps) {
         </div>
 
         <div className="grid grid-cols-1 gap-4">
-          {slide.diagrams.map((diagram, idx) => (
-            <DiagramCard
-              key={diagram.id}
-              diagram={diagram}
-              minHeight={480}
-              index={idx}
-            />
-          ))}
+          {slide.diagrams.map((diagram, idx) => {
+            const v = validateDiagram(diagram);
+            if (!v.valid) {
+              return (
+                <DiagramInvalidState
+                  key={diagram.id}
+                  diagram={diagram}
+                  reason={v.reason}
+                  sectionTitle={slide.title}
+                />
+              );
+            }
+            return (
+              <DiagramCard
+                key={diagram.id}
+                diagram={diagram}
+                minHeight={480}
+                index={idx}
+              />
+            );
+          })}
         </div>
       </div>
     );
@@ -425,14 +527,27 @@ export function BlueprintExplorer({ blueprint }: BlueprintExplorerProps) {
                   closed sections cost nothing. */}
               {!isCollapsed && (
                 <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-                  {section.diagrams.map((diagram, idx) => (
-                    <DiagramCard
-                      key={diagram.id}
-                      diagram={diagram}
-                      minHeight={TALL_TYPES.has(diagram.type as DiagramType) ? 460 : 380}
-                      index={idx}
-                    />
-                  ))}
+                  {section.diagrams.map((diagram, idx) => {
+                    const v = validateDiagram(diagram);
+                    if (!v.valid) {
+                      return (
+                        <DiagramInvalidState
+                          key={diagram.id}
+                          diagram={diagram}
+                          reason={v.reason}
+                          sectionTitle={section.title}
+                        />
+                      );
+                    }
+                    return (
+                      <DiagramCard
+                        key={diagram.id}
+                        diagram={diagram}
+                        minHeight={TALL_TYPES.has(diagram.type as DiagramType) ? 460 : 380}
+                        index={idx}
+                      />
+                    );
+                  })}
                 </div>
               )}
             </section>

@@ -118,6 +118,35 @@ export interface PlanningStep {
   risk_note?: string;
 }
 
+// Architect-level blueprint fields present in v2 agent output
+export interface ArchitectureLayer {
+  name: string;
+  description?: string;
+  layer_type?: string;
+  order?: number;
+}
+
+export interface DataFlowStep {
+  name: string;
+  technology?: string;
+  step_type?: string;
+  order?: number;
+}
+
+export interface PlanningPhase {
+  name: string;
+  order?: number;
+  deliverables?: string[];
+}
+
+export interface StructuredRisk {
+  description: string;
+  likelihood?: string;
+  impact?: string;
+  mitigation?: string;
+  category?: string;
+}
+
 export interface PlanningResult {
   executive_summary: string;
   implementation_steps: PlanningStep[];
@@ -127,6 +156,14 @@ export interface PlanningResult {
   graph_context_used: boolean;
   repositories_consulted?: string[];
   blueprint?: import("./blueprint").BlueprintArtifact | null;
+  // v2 architect-level fields — optional, empty when agent version is older
+  architecture_layers?: ArchitectureLayer[];
+  data_flow?: DataFlowStep[];
+  implementation_phases?: PlanningPhase[];
+  risks?: StructuredRisk[];
+  capabilities?: string[];
+  project_type?: string;
+  project_type_label?: string;
 }
 
 // --- Development Plan Result (agent-specific payload inside step.result) ---

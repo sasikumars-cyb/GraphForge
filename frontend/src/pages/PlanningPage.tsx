@@ -1,14 +1,21 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { Lightbulb, Send, RotateCcw, History } from "lucide-react";
+import { Lightbulb, Send, RotateCcw, History, ChevronDown, ChevronRight } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
-import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { PlanningResultDetails } from "../components/agents/StageResultDetails";
+import { BlueprintExplorer } from "../components/blueprint/BlueprintExplorer";
+import { KnowledgeSourcesPanel } from "../components/planning/KnowledgeSourcesPanel";
+import { PlanningConfidencePanel } from "../components/planning/PlanningConfidencePanel";
+import {
+  GreenfieldBanner,
+  GreenfieldRecommendations,
+} from "../components/planning/GreenfieldRecommendations";
 import { useAgentRun } from "../hooks/useAgentRun";
 import type { PlanningResult } from "../types/agent";
+import type { BlueprintArtifact } from "../types/blueprint";
 
 const EXAMPLES = [
   "Plan migration from Kafka to Google PubSub",
@@ -26,10 +33,6 @@ export function PlanningPage() {
     const trimmed = input.trim();
     if (!trimmed) return;
     submit({ subject_reference: trimmed, goal: "plan_freeform" });
-  };
-
-  const handleExampleClick = (example: string) => {
-    setInput(example);
   };
 
   const handleNewPlan = () => {
@@ -65,7 +68,7 @@ export function PlanningPage() {
         </Link>
       </div>
 
-      {/* Input Form */}
+      {/* Input form */}
       {!hasResult && (
         <Card>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
@@ -85,7 +88,6 @@ export function PlanningPage() {
               />
             </div>
 
-            {/* Examples */}
             {!isSubmitting && !run && (
               <div>
                 <p className="mb-2 text-xs font-medium text-slate-500">Try an example:</p>
@@ -94,7 +96,7 @@ export function PlanningPage() {
                     <button
                       key={example}
                       type="button"
-                      onClick={() => handleExampleClick(example)}
+                      onClick={() => setInput(example)}
                       className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-400 transition-colors hover:border-sky-500/40 hover:text-sky-300"
                     >
                       {example}
@@ -109,7 +111,6 @@ export function PlanningPage() {
                 type="submit"
                 disabled={isSubmitting || !input.trim()}
                 className="inline-flex items-center gap-2 rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label="Submit planning request"
               >
                 <Send className="h-4 w-4" aria-hidden="true" />
                 {isSubmitting ? "Planning…" : "Generate Plan"}
@@ -150,7 +151,7 @@ export function PlanningPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Result sub-component
+// Result view
 // ---------------------------------------------------------------------------
 
 function PlanningResultView({
@@ -163,14 +164,27 @@ function PlanningResultView({
   const step = run.steps[0];
   const result = step?.result as unknown as PlanningResult | undefined;
   const evidence = step?.evidence ?? [];
+  const blueprint = result?.blueprint as BlueprintArtifact | null | undefined;
+  const hasBlueprint = Boolean(blueprint && blueprint.diagrams.length > 0);
+
+  const isGreenfield =
+    !(result?.graph_context_used ?? false) &&
+    (result?.repositories_consulted?.length ?? 0) === 0;
 
   return (
     <div className="flex flex-col gap-6">
-      {/* Header */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
           <RunStatusBadge status={run.status} />
-          {step?.confidence && <ConfidenceBadge confidence={step.confidence} showReasoning />}
+          {run.subject.display_name && (
+            <span
+              className="max-w-md truncate text-sm text-slate-400"
+              title={run.subject.display_name}
+            >
+              {run.subject.display_name}
+            </span>
+          )}
         </div>
         <button
           type="button"
@@ -182,68 +196,154 @@ function PlanningResultView({
         </button>
       </div>
 
-      {/* Run metadata */}
-      <Card title="Run Details">
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
-          <div>
-            <dt className="text-xs text-slate-500">Goal</dt>
-            <dd className="text-slate-200">{run.goal}</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500">Subject</dt>
-            <dd className="truncate text-slate-200" title={run.subject.display_name}>
-              {run.subject.display_name}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500">Status</dt>
-            <dd>
-              <RunStatusBadge status={run.status} />
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-slate-500">Confidence</dt>
-            <dd>
-              {step?.confidence ? (
-                <ConfidenceBadge confidence={step.confidence} showReasoning />
-              ) : (
-                <span className="text-slate-500">—</span>
-              )}
-            </dd>
-          </div>
-          {run.started_at && (
-            <div>
-              <dt className="text-xs text-slate-500">Started</dt>
-              <dd className="text-slate-200">{new Date(run.started_at).toLocaleString()}</dd>
-            </div>
-          )}
-          {run.completed_at && (
-            <div>
-              <dt className="text-xs text-slate-500">Completed</dt>
-              <dd className="text-slate-200">{new Date(run.completed_at).toLocaleString()}</dd>
-            </div>
-          )}
-          {step?.latency_ms != null && (
-            <div>
-              <dt className="text-xs text-slate-500">Duration</dt>
-              <dd className="text-slate-200">{(step.latency_ms / 1000).toFixed(1)}s</dd>
-            </div>
-          )}
-        </dl>
-      </Card>
+      {/* ── Greenfield notice ───────────────────────────────────────────────── */}
+      {isGreenfield && result && <GreenfieldBanner result={result} />}
 
-      {/* Error message */}
+      {/* ── Error ───────────────────────────────────────────────────────────── */}
       {run.status === "failed" && run.error_message && (
         <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
           <strong>Error:</strong> {run.error_message}
         </div>
       )}
 
-      {/* Planning result */}
-      {result && <PlanningResultDetails result={result} />}
+      {/* ── Blueprint hero ───────────────────────────────────────────────────
+          Primary output: full-width, all sections expanded by default.
+          Always rendered when the blueprint exists — even greenfield projects
+          produce architecture and data flow diagrams synthesized from the brief.
+          Invalid diagrams are replaced by informative empty states inside
+          BlueprintExplorer via the diagram validator. */}
+      {hasBlueprint && blueprint && (
+        <Card
+          title="Visual Blueprint"
+          description={`${blueprint.diagrams.length} diagram${blueprint.diagrams.length === 1 ? "" : "s"} · synthesized from the engineering brief`}
+        >
+          <BlueprintExplorer blueprint={blueprint} defaultExpanded />
+        </Card>
+      )}
 
-      {/* Evidence */}
+      {!hasBlueprint && (
+        <Card title="Visual Blueprint">
+          <div className="flex flex-col items-center justify-center gap-2 py-12 text-center">
+            <p className="text-sm font-medium text-slate-400">No visual blueprint was generated.</p>
+            <p className="max-w-sm text-xs text-slate-500">
+              The planning agent produced a text plan. Visual diagrams are generated when the LLM
+              returns structured architecture, data flow, or entity data.
+            </p>
+          </div>
+        </Card>
+      )}
+
+      {/* ── Main content + sidebar ──────────────────────────────────────────── */}
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_300px]">
+        {/* Left: implementation details */}
+        <div className="min-w-0">
+          {result && <PlanningResultDetails result={result} />}
+        </div>
+
+        {/* Right sidebar: knowledge sources + confidence */}
+        <div className="flex flex-col gap-4">
+          <KnowledgeSourcesPanel result={result} evidence={evidence} />
+          {step?.confidence && (
+            <PlanningConfidencePanel confidence={step.confidence} result={result} />
+          )}
+        </div>
+      </div>
+
+      {/* ── Greenfield recommendations ──────────────────────────────────────── */}
+      {isGreenfield && result && <GreenfieldRecommendations result={result} />}
+
+      {/* ── Evidence trail (collapsed by default) ──────────────────────────── */}
       <EvidencePanel evidence={evidence} />
+
+      {/* ── Run metadata (collapsible) ──────────────────────────────────────── */}
+      <RunDetailsAccordion run={run} step={step} />
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Run details accordion
+// ---------------------------------------------------------------------------
+
+function RunDetailsAccordion({
+  run,
+  step,
+}: {
+  run: NonNullable<ReturnType<typeof useAgentRun>["run"]>;
+  step: ReturnType<typeof useAgentRun>["run"] extends null ? never : NonNullable<ReturnType<typeof useAgentRun>["run"]>["steps"][0] | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className="rounded-xl border border-slate-800 bg-slate-900/60">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center justify-between px-5 py-4 text-left"
+        aria-expanded={open}
+      >
+        <span className="text-sm font-semibold text-slate-300">Run Details</span>
+        {open ? (
+          <ChevronDown className="h-4 w-4 text-slate-500" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="h-4 w-4 text-slate-500" aria-hidden="true" />
+        )}
+      </button>
+
+      {open && (
+        <div className="border-t border-slate-800 px-5 py-4">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
+            <div>
+              <dt className="text-xs text-slate-500">Goal</dt>
+              <dd className="text-slate-200">{run.goal}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-slate-500">Status</dt>
+              <dd>
+                <RunStatusBadge status={run.status} />
+              </dd>
+            </div>
+            {run.model && (
+              <div>
+                <dt className="text-xs text-slate-500">Model</dt>
+                <dd className="text-slate-200">{run.model}</dd>
+              </div>
+            )}
+            {run.started_at && (
+              <div>
+                <dt className="text-xs text-slate-500">Started</dt>
+                <dd className="text-slate-200">{new Date(run.started_at).toLocaleString()}</dd>
+              </div>
+            )}
+            {run.completed_at && (
+              <div>
+                <dt className="text-xs text-slate-500">Completed</dt>
+                <dd className="text-slate-200">{new Date(run.completed_at).toLocaleString()}</dd>
+              </div>
+            )}
+            {step?.latency_ms != null && (
+              <div>
+                <dt className="text-xs text-slate-500">Duration</dt>
+                <dd className="text-slate-200">{(step.latency_ms / 1000).toFixed(1)}s</dd>
+              </div>
+            )}
+            {step?.confidence && (
+              <div>
+                <dt className="text-xs text-slate-500">Confidence</dt>
+                <dd className="text-slate-200">
+                  {Math.round((step.confidence.score ?? 0) * 100)}%
+                </dd>
+              </div>
+            )}
+            {step?.prompt_version && (
+              <div>
+                <dt className="text-xs text-slate-500">Prompt version</dt>
+                <dd className="text-slate-200">{step.prompt_version}</dd>
+              </div>
+            )}
+          </dl>
+        </div>
+      )}
     </div>
   );
 }
