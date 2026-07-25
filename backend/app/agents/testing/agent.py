@@ -47,6 +47,8 @@ from app.agents.testing.tools import (
     to_evidence,
 )
 from app.ai.providers.base import LLMRequestOptions, ResponseFormat
+from app.services.external_context.registry import ExternalContextRegistry
+from app.services.external_context.service import load_workspace_external_context_config
 from app.ai.providers.factory import create_llm_provider
 from app.core.exceptions import AppError
 from app.graph.neo4j_repository import Neo4jGraphRepository
@@ -98,11 +100,16 @@ async def _call_llm(user_prompt: str, model: str | None = None) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _render_prompt(task_description: str, graph_context: str) -> str:
+def _render_prompt(task_description: str, graph_context: str, external_context: str = "") -> str:
     """Render the testing.md template with the given variables."""
-    return render_prompt_template(
+    prompt = render_prompt_template(
         _PROMPT_DIR / "testing.md", task_description, graph_context, _MAX_GRAPH_CONTEXT_CHARS
     )
+    if external_context:
+        prompt = prompt.replace("{{ external_context }}", external_context)
+    else:
+        prompt = prompt.replace("{{ external_context }}", "No external evidence was provided.")
+    return prompt
 
 
 # ---------------------------------------------------------------------------
@@ -314,10 +321,21 @@ class TestPlanningAgent:
             base_confidence = 0.40
 
         # ------------------------------------------------------------------
-        # Synthesize: LLM call with full graph context
+        # Synthesize: LLM call with full graph context + external evidence
         # ------------------------------------------------------------------
         graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs)
-        prompt = _render_prompt(task_description, graph_context_text)
+        external_registry = ExternalContextRegistry()
+        provider_config = await load_workspace_external_context_config(db)
+        external_items = await external_registry.collect(task_description, provider_config)
+        external_context_text = ""
+        if external_items:
+            external_context_text = "\n\n".join(
+                [
+                    f"**{item.provider}**: {item.title}\n{item.summary}\n{item.details}".strip()
+                    for item in external_items
+                ]
+            )
+        prompt = _render_prompt(task_description, graph_context_text, external_context_text)
 
         logger.info(
             "testing_agent_synthesizing has_graph_data=%s graph_context_chars=%d",

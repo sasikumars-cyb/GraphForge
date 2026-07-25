@@ -92,6 +92,11 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None)
     groq_model: str = Field(default="llama-3.3-70b-versatile")
 
+    # --- DeepSeek (OpenAI-compatible endpoint) ---
+    deepseek_api_key: str | None = Field(default=None)
+    deepseek_model: str = Field(default="deepseek-v4-pro")
+    deepseek_base_url: str | None = Field(default=None)
+
     # --- Gemini (Google Generative Language API) ---
     gemini_api_key: str | None = Field(default=None)
     gemini_model: str = Field(default="gemini-3.6-flash")

@@ -54,6 +54,9 @@ def _settings(**overrides) -> Settings:
         "gemini_model": "gemini-3.6-flash",
         "openai_api_key": "env-openai-key",
         "openai_model": "gpt-5",
+        "deepseek_api_key": "env-deepseek-key",
+        "deepseek_model": "deepseek-v4-pro",
+        "deepseek_base_url": "https://api.deepseek.com/anthropic",
     }
     base.update(overrides)
     return Settings(**base)
@@ -73,6 +76,16 @@ def test_registry_exposes_capabilities_and_models():
 
 def test_registry_resolves_legacy_alias():
     assert get_provider_spec("claude") is get_provider_spec("anthropic")
+
+
+def test_deepseek_provider_is_available_and_resolves_from_env():
+    spec = require_provider_spec("deepseek")
+    assert spec is not None
+    resolved = resolve(settings=_settings(ai_provider="deepseek"))
+    assert resolved.key == "deepseek"
+    assert resolved.model == "deepseek-v4-pro"
+    assert resolved.config.api_key == "env-deepseek-key"
+    assert resolved.config.base_url == "https://api.deepseek.com/anthropic"
 
 
 def test_every_provider_declares_a_default_model():

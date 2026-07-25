@@ -48,6 +48,12 @@ async def system_status(
             active=active_provider == "groq",
             model=settings.groq_model if active_provider == "groq" else None,
         ),
+        ProviderStatus(
+            name="deepseek",
+            configured=settings.deepseek_api_key is not None,
+            active=active_provider == "deepseek",
+            model=settings.deepseek_model if active_provider == "deepseek" else None,
+        ),
     ]
     current_provider = next((p for p in providers if p.active), providers[0])
 

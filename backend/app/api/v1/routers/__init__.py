@@ -6,6 +6,7 @@ from app.api.v1.routers.agent_runs import router as agent_runs_router
 from app.api.v1.routers.ai_analysis import router as ai_analysis_router
 from app.api.v1.routers.ai_workspace import router as ai_workspace_router
 from app.api.v1.routers.auth import router as auth_router
+from app.api.v1.routers.external_context import router as external_context_router
 from app.api.v1.routers.github import router as github_router
 from app.api.v1.routers.health import router as health_router
 from app.api.v1.routers.oauth import router as oauth_router
@@ -25,6 +26,7 @@ api_router.include_router(repositories_router)
 api_router.include_router(pull_requests_router)
 api_router.include_router(ai_analysis_router)
 api_router.include_router(ai_workspace_router)
+api_router.include_router(external_context_router)
 api_router.include_router(agent_runs_router)
 api_router.include_router(workflows_router)
 api_router.include_router(system_router)

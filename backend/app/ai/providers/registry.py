@@ -215,6 +215,19 @@ _SPECS: tuple[ProviderSpec, ...] = (
         default_base_url="https://api.groq.com/openai/v1/chat/completions",
     ),
     ProviderSpec(
+        key="deepseek",
+        label="DeepSeek",
+        build=_openai_compatible("deepseek", "https://api.deepseek.com/chat/completions"),
+        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.REASONING},
+        models=(
+            ModelSpec("deepseek-v4-pro", "DeepSeek V4 Pro", 128_000),
+            ModelSpec("deepseek-chat", "DeepSeek Chat", 128_000),
+        ),
+        default_model="deepseek-v4-pro",
+        default_base_url="https://api.deepseek.com/chat/completions",
+        notes="Uses the OpenAI-compatible chat-completions endpoint with a Bearer token.",
+    ),
+    ProviderSpec(
         key="cerebras",
         label="Cerebras",
         build=_openai_compatible("cerebras", "https://api.cerebras.ai/v1/chat/completions"),
