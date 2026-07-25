@@ -13,6 +13,7 @@ from app.api.v1.routers.pull_requests import router as pull_requests_router
 from app.api.v1.routers.repositories import router as repositories_router
 from app.api.v1.routers.system import router as system_router
 from app.api.v1.routers.webhooks import router as webhooks_router
+from app.api.v1.routers.tools import router as tools_router
 from app.api.v1.routers.workflows import router as workflows_router
 
 api_router = APIRouter()
@@ -28,5 +29,6 @@ api_router.include_router(agent_runs_router)
 api_router.include_router(workflows_router)
 api_router.include_router(system_router)
 api_router.include_router(webhooks_router)
+api_router.include_router(tools_router)
 
 __all__ = ["api_router"]

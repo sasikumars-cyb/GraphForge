@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Card } from "../components/Card";
 import { GitHubIntegrationCard } from "../components/GitHubIntegrationCard";
+import { ToolRegistrySection } from "../components/ToolRegistrySection";
 
 interface ToggleRowProps {
   label: string;
@@ -39,8 +40,7 @@ export function SettingsPage() {
       <div>
         <h2 className="text-xl font-semibold text-slate-50">Settings</h2>
         <p className="mt-1 text-sm text-slate-400">
-          Workspace preferences. GitHub is the only integration that's real — everything else on
-          this page is still a placeholder.
+          Workspace preferences and engineering tool integrations.
         </p>
       </div>
 
@@ -88,6 +88,7 @@ export function SettingsPage() {
       </Card>
 
       <GitHubIntegrationCard />
+      <ToolRegistrySection />
     </div>
   );
 }

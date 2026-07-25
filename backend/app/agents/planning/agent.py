@@ -52,16 +52,9 @@ from app.agents.planning.schemas import (
     RepositoryUsage,
     RiskItem,
 )
-from app.agents.planning.tools import (
-    GetIndexedRepositoriesTool,
-    PlanningObservation,
-    TraverseArchitectureGraphTool,
-    format_graph_context,
-    to_evidence,
-)
+from app.agents.planning.tools import to_evidence, PlanningObservation
 from app.core.exceptions import AppError
-from app.graph.neo4j_repository import Neo4jGraphRepository
-from app.graph.session import get_driver
+from app.tools import ContextBuilder, ToolExecutor, ToolInput, get_tool_registry
 
 _PROMPT_VERSION = "1.0"
 _PROMPT_DIR = Path(__file__).parent / "prompts"
@@ -254,8 +247,6 @@ class PlanningAgent:
         )
 
         db: AsyncSession = context.extras["db"]
-        driver = get_driver()
-        graph_repo = Neo4jGraphRepository(driver)
 
         evidence: list[Evidence] = []
 
@@ -275,46 +266,66 @@ class PlanningAgent:
         )
 
         # ------------------------------------------------------------------
-        # Plan: the agent always runs both tools — the repository list
-        # is needed to bound the graph traversal, and the traversal is what
-        # produces the graph_traversal evidence required by the Definition of Done.
+        # Tool Platform: discover → execute → build context
         # ------------------------------------------------------------------
+        registry = get_tool_registry()
+        executor = ToolExecutor(registry=registry)
 
-        # Step 1 — get indexed repositories (tool_call evidence)
-        repos_tool = GetIndexedRepositoriesTool(db=db, graph_repository=graph_repo)
-        repos_obs = await repos_tool.execute()
-        evidence.append(to_evidence(repos_obs, "tool_call"))
-
-        indexed_repos: list[dict[str, str]] = repos_obs.data.get("indexed_repositories", [])
-
-        logger.info(
-            "planning_agent_step1 indexed_repo_count=%d",
-            len(indexed_repos),
+        tool_input = ToolInput(
+            query=task_description,
+            parameters={
+                "db": db,
+                "relevance_terms": profile.search_terms,
+            },
         )
 
-        # Step 2 — traverse the architecture graph (graph_traversal evidence)
-        # Runs even if indexed_repos is empty — the resulting observation
-        # ("No indexed repositories to traverse") is itself a graph traversal
-        # result (a zero-result query is still a graph query).
-        traverse_tool = TraverseArchitectureGraphTool(graph_repository=graph_repo)
-        traverse_obs = await traverse_tool.execute(indexed_repos)
+        results = await executor.execute_all([("neo4j_graph", tool_input)])
+        graph_result = results[0]
+
+        planning_context = ContextBuilder().build(results)
+
+        # Re-derive Evidence from the ToolResult's embedded observation summaries
+        # (preserving the "tool_call" / "graph_traversal" kinds the contract requires).
+        repos_succeeded: bool = graph_result.data.get("_repos_succeeded", graph_result.success)
+        traverse_succeeded: bool = graph_result.data.get("_traverse_succeeded", graph_result.success)
+        repos_summary: str = graph_result.data.get("_repos_summary", graph_result.summary)
+        traverse_summary: str = graph_result.data.get("_traverse_summary", graph_result.summary)
+
+        repos_obs = PlanningObservation(
+            tool_name="get_indexed_repositories",
+            summary=repos_summary,
+            data={"indexed_repositories": graph_result.data.get("indexed_repositories", [])},
+            succeeded=repos_succeeded,
+            error=graph_result.error or "",
+        )
+        traverse_obs = PlanningObservation(
+            tool_name="traverse_architecture_graph",
+            summary=traverse_summary,
+            data={
+                "components": graph_result.data.get("components", []),
+                "kafka_topics": graph_result.data.get("kafka_topics", []),
+            },
+            succeeded=traverse_succeeded,
+            error=graph_result.error or "",
+        )
+
+        evidence.append(to_evidence(repos_obs, "tool_call"))
         evidence.append(to_evidence(traverse_obs, "graph_traversal"))
 
-        component_count: int = len(traverse_obs.data.get("components", []))
-        topic_count: int = len(traverse_obs.data.get("kafka_topics", []))
+        indexed_repos: list[dict[str, str]] = graph_result.data.get("indexed_repositories", [])
+        component_count: int = graph_result.data.get("_component_count", 0)
+        topic_count: int = graph_result.data.get("_topic_count", 0)
 
         logger.info(
-            "planning_agent_step2 component_count=%d topic_count=%d",
-            component_count, topic_count,
+            "planning_agent_tool_execution indexed_repo_count=%d component_count=%d topic_count=%d",
+            len(indexed_repos), component_count, topic_count,
         )
 
         # ------------------------------------------------------------------
         # Observe: determine confidence based on what the graph returned
         # ------------------------------------------------------------------
-        # P0-1 / P1-3: distinguish graph unavailable (tool failure) from
-        # graph available but empty (healthy zero-result query).
-        graph_unavailable = not repos_obs.succeeded or (
-            bool(indexed_repos) and not traverse_obs.succeeded
+        graph_unavailable = not repos_succeeded or (
+            bool(indexed_repos) and not traverse_succeeded
         )
         has_graph_data = (
             not graph_unavailable
@@ -328,25 +339,13 @@ class PlanningAgent:
         else:
             base_confidence = 0.40
 
-        # ------------------------------------------------------------------
-        # Decide: no retry is implemented in this phase — a single pass
-        # always proceeds to synthesis, whatever the graph returned. (An
-        # earlier draft of this method claimed a Review-Agent-style
-        # confidence-triggered retry here; that was never implemented, so
-        # the claim was removed rather than left misleading.)
-        # ------------------------------------------------------------------
         if not indexed_repos:
             logger.info("planning_agent_no_graph_data note=no indexed repositories")
 
         # ------------------------------------------------------------------
-        # Synthesize: LLM call with real graph context
+        # Synthesize: LLM call with real graph context from ContextBuilder
         # ------------------------------------------------------------------
-        # Repository search is capability-driven: only repositories that match
-        # the capabilities the architecture needs reach the prompt. This is the
-        # "repositories validate the architecture, never define it" step.
-        graph_context_text = format_graph_context(
-            repos_obs, traverse_obs, relevance_terms=profile.search_terms
-        )
+        graph_context_text = planning_context.context_text
         prompt = _render_prompt(task_description, graph_context_text, profile)
 
         logger.info(
