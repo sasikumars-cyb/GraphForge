@@ -14,6 +14,10 @@ from tree_sitter import Language, Parser
 from app.indexer.extractors.python.classes import extract_module_classes
 from app.indexer.extractors.python.functions import extract_module_functions
 from app.indexer.extractors.python.imports import extract_imports
+from app.indexer.extractors.python.spark import (
+    extract_spark_table_reads,
+    extract_spark_table_writes,
+)
 from app.indexer.models.architecture import ArchitectureModel, PythonModule, SourceLocation
 from app.indexer.parsers.base import ILanguageParser
 from app.indexer.parsers.python.dependency_parser import parse_python_dependencies
@@ -79,6 +83,12 @@ class PythonParser(ILanguageParser):
                     classes=extract_module_classes(root, source, str(relative_path)),
                     functions=extract_module_functions(root, source, str(relative_path)),
                 )
+            )
+            model.spark_table_reads.extend(
+                extract_spark_table_reads(root, source, str(relative_path))
+            )
+            model.spark_table_writes.extend(
+                extract_spark_table_writes(root, source, str(relative_path))
             )
 
         return model

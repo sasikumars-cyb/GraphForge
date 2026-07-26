@@ -59,6 +59,10 @@ def _python_dependency_node_id(repository_id: str, name: str) -> str:
     return f"{repository_id}:python-dependency:{name}"
 
 
+def _data_table_node_id(repository_id: str, table_name: str) -> str:
+    return f"{repository_id}:data-table:{table_name}"
+
+
 def _build_python_graph(
     repository_id: str,
     repo_id: str,
@@ -175,6 +179,53 @@ def _build_python_graph(
             target_id = function_node_id_by_bare_name.get(bare_name)
             if target_id is not None and target_id != source_id:
                 edges.append(GraphEdge(source_id=source_id, target_id=target_id, type="CALLS"))
+
+    # Spark table reads/writes are attributed to the module they were found
+    # in (not the individual function) - a spark.py extractor result only
+    # carries a bare function name, which is ambiguous against a same-named
+    # method on an unrelated class in the same file; the module is the
+    # coarsest unambiguous owner, matching this codebase's no-guessing
+    # precedent for anything it can't resolve deterministically.
+    module_id_by_file_path = {
+        m.location.file_path: module_node_id_by_name[m.name] for m in model.python_modules
+    }
+
+    for read in model.spark_table_reads:
+        owning_module_id = module_id_by_file_path.get(read.location.file_path)
+        if owning_module_id is None:
+            continue
+        table_id = _data_table_node_id(repository_id, read.table_name)
+        nodes.append(
+            GraphNode(id=table_id, labels=["DataTable"], properties={"name": read.table_name})
+        )
+        edges.append(
+            GraphEdge(
+                source_id=owning_module_id,
+                target_id=table_id,
+                type="READS_FROM",
+                properties={"function_name": read.function_name or ""},
+            )
+        )
+
+    for write in model.spark_table_writes:
+        owning_module_id = module_id_by_file_path.get(write.location.file_path)
+        if owning_module_id is None:
+            continue
+        table_id = _data_table_node_id(repository_id, write.table_name)
+        nodes.append(
+            GraphNode(id=table_id, labels=["DataTable"], properties={"name": write.table_name})
+        )
+        edges.append(
+            GraphEdge(
+                source_id=owning_module_id,
+                target_id=table_id,
+                type="WRITES_TO",
+                properties={
+                    "method_name": write.method_name,
+                    "function_name": write.function_name or "",
+                },
+            )
+        )
 
 
 def build_graph(repository_id: str, model: ArchitectureModel) -> GraphPayload:
@@ -366,9 +417,10 @@ def build_graph(repository_id: str, model: ArchitectureModel) -> GraphPayload:
         )
         edges.append(GraphEdge(source_id=repo_id, target_id=node_id, type="DEPENDS_ON"))
 
-    # A KafkaTopic node is appended once per producer/consumer usage of it,
-    # so the same id can appear several times with identical properties -
-    # harmless for Neo4j's MERGE, but no reason to send duplicates.
+    # A KafkaTopic/DataTable node is appended once per producer/consumer or
+    # read/write usage of it, so the same id can appear several times with
+    # identical properties - harmless for Neo4j's MERGE, but no reason to
+    # send duplicates.
     deduped_nodes = list({node.id: node for node in nodes}.values())
 
     return GraphPayload(nodes=deduped_nodes, edges=edges)

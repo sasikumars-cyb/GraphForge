@@ -15,6 +15,8 @@ from app.indexer.models.architecture import (
     PythonImport,
     PythonModule,
     SourceLocation,
+    SparkTableRead,
+    SparkTableWrite,
 )
 
 LOCATION = SourceLocation(file_path="Order.java")
@@ -321,3 +323,65 @@ def test_python_dependency_depends_on_edge() -> None:
     assert ("repo-1:repository", dependency_id, "DEPENDS_ON") in {
         (e.source_id, e.target_id, e.type) for e in graph.edges
     }
+
+
+def test_spark_table_read_creates_reads_from_edge_from_owning_module() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(name="jobs.report", package="jobs", location=PY_LOCATION),
+        ],
+        spark_table_reads=[
+            SparkTableRead(
+                table_name="bronze.customers", location=PY_LOCATION, function_name="merge_schema"
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    table_id = "repo-1:data-table:bronze.customers"
+    module_id = "repo-1:module:jobs.report"
+    assert any(node.id == table_id and node.labels == ["DataTable"] for node in graph.nodes)
+    edge_key = (module_id, table_id, "READS_FROM")
+    matching_edges = [e for e in graph.edges if (e.source_id, e.target_id, e.type) == edge_key]
+    assert len(matching_edges) == 1
+    assert matching_edges[0].properties["function_name"] == "merge_schema"
+
+
+def test_spark_table_write_creates_writes_to_edge_from_owning_module() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(name="jobs.report", package="jobs", location=PY_LOCATION),
+        ],
+        spark_table_writes=[
+            SparkTableWrite(
+                table_name="gold.report",
+                method_name="saveAsTable",
+                location=PY_LOCATION,
+                function_name="write_report",
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    table_id = "repo-1:data-table:gold.report"
+    module_id = "repo-1:module:jobs.report"
+    assert any(node.id == table_id and node.labels == ["DataTable"] for node in graph.nodes)
+    edge_key = (module_id, table_id, "WRITES_TO")
+    matching_edges = [e for e in graph.edges if (e.source_id, e.target_id, e.type) == edge_key]
+    assert len(matching_edges) == 1
+    assert matching_edges[0].properties["method_name"] == "saveAsTable"
+
+
+def test_spark_table_read_with_no_matching_module_is_skipped() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        spark_table_reads=[SparkTableRead(table_name="bronze.customers", location=PY_LOCATION)],
+    )
+
+    graph = build_graph("repo-1", model)
+    assert not any(e.type == "READS_FROM" for e in graph.edges)

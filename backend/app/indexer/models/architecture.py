@@ -149,6 +149,33 @@ class PythonDependency:
     version: str | None = None
 
 
+@dataclass(frozen=True)
+class SparkTableRead:
+    """A `spark.read.table("db.table")` / `spark.table("db.table")` call
+    with a literal table-name argument, where the call chain resolves back
+    to an identifier literally named `spark` - see
+    extractors/python/spark.py for why that root check exists and what it
+    deliberately does not cover (path-based `.load(...)` reads).
+    """
+
+    table_name: str
+    location: SourceLocation
+    function_name: str | None = None
+
+
+@dataclass(frozen=True)
+class SparkTableWrite:
+    """A `<df>.write...saveAsTable("db.table")` /
+    `<df>.write...insertInto("db.table")` call with a literal table-name
+    argument. `method_name` is whichever of the two matched.
+    """
+
+    table_name: str
+    method_name: str
+    location: SourceLocation
+    function_name: str | None = None
+
+
 @dataclass
 class ArchitectureModel:
     """The aggregate result of parsing one repository."""
@@ -163,3 +190,5 @@ class ArchitectureModel:
     maven_dependencies: list[MavenDependency] = field(default_factory=list)
     python_modules: list[PythonModule] = field(default_factory=list)
     python_dependencies: list[PythonDependency] = field(default_factory=list)
+    spark_table_reads: list[SparkTableRead] = field(default_factory=list)
+    spark_table_writes: list[SparkTableWrite] = field(default_factory=list)
