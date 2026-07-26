@@ -60,7 +60,11 @@ function connStatusTone(status: string): StatusTone {
       return "neutral";
     case "offline":
     case "auth_failed":
+    case "unavailable":
+    case "permission_denied":
       return "danger";
+    case "rate_limited":
+      return "warning";
     default:
       return "neutral";
   }
@@ -76,6 +80,12 @@ function connStatusLabel(status: string): string {
       return "Offline";
     case "auth_failed":
       return "Auth failed";
+    case "unavailable":
+      return "Unavailable";
+    case "rate_limited":
+      return "Rate limited";
+    case "permission_denied":
+      return "Permission denied";
     case "unknown":
       return "Not tested";
     default:

@@ -78,6 +78,16 @@ export function WorkflowHeader({ workflow, completedSteps, phase }: WorkflowHead
             <h1 className="font-display text-xl font-bold tracking-tight text-slate-50 sm:text-2xl">
               {workflow.title}
             </h1>
+            {workflow.original_prompt && workflow.original_prompt !== workflow.title && (
+              <details className="mt-1 max-w-2xl">
+                <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">
+                  {workflow.title} is AI-generated — show what I actually submitted
+                </summary>
+                <p className="mt-1.5 whitespace-pre-wrap rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-sm text-slate-300">
+                  {workflow.original_prompt}
+                </p>
+              </details>
+            )}
           </div>
         </div>
         <Link

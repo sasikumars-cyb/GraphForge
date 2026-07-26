@@ -109,6 +109,25 @@ class Settings(BaseSettings):
     jira_api_token: str | None = Field(default=None)
     ai_engine_api_key: str | None = Field(default=None)
 
+    # --- Known MCP server endpoints, one default per source type ---
+    # These are the *official* hosted MCP servers for each vendor - they
+    # change rarely, so they belong in config rather than being typed into
+    # every Knowledge Connection. A Knowledge Connection's existing API
+    # key/token is reused as the MCP bearer credential (see
+    # app.tools.setup.sync_knowledge_connection_to_tool); nothing new is
+    # asked of the user in the Integrations UI.
+    #
+    # GitHub's hosted MCP server accepts a plain PAT as a bearer token, so
+    # it is safe to default on. Atlassian's hosted MCP server (Jira/
+    # Confluence) requires OAuth 2.1, which this app's MCP client does not
+    # yet implement — defaulting it here would silently break working REST
+    # connections the moment an operator enabled MCP, so it is left unset
+    # until either OAuth support is added or an operator points it at a
+    # self-hosted/compatible bearer-auth Jira or Confluence MCP server.
+    github_mcp_default_server_url: str = Field(default="https://api.githubcopilot.com/mcp/")
+    jira_mcp_default_server_url: str | None = Field(default=None)
+    confluence_mcp_default_server_url: str | None = Field(default=None)
+
 
 @lru_cache
 def get_settings() -> Settings:

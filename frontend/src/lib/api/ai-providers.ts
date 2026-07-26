@@ -93,3 +93,34 @@ export async function listProviderModels(
 ): Promise<ModelInfo[]> {
   return apiFetch<ModelInfo[]>(`/ai/providers/${providerKey}/models`, { token });
 }
+
+// ---------------------------------------------------------------------------
+// Workspace settings — default provider/model, stage mapping, fallback
+// ---------------------------------------------------------------------------
+
+export interface AIWorkspaceSettings {
+  default_profile_slug: string | null;
+  default_provider: string | null;
+  default_model: string | null;
+  temperature: number | null;
+  max_tokens: number | null;
+  stage_overrides: Record<string, unknown>;
+  fallback_order: string[];
+  fallback_enabled: boolean;
+}
+
+export async function getAISettings(token: string): Promise<AIWorkspaceSettings> {
+  return apiFetch<AIWorkspaceSettings>("/ai/settings", { token });
+}
+
+export async function setDefaultProvider(
+  token: string,
+  providerKey: string,
+  model?: string | null,
+): Promise<AIWorkspaceSettings> {
+  return apiFetch<AIWorkspaceSettings>("/ai/settings", {
+    method: "PUT",
+    token,
+    body: { default_provider: providerKey, default_model: model ?? null },
+  });
+}

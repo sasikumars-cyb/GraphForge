@@ -130,8 +130,12 @@ class JiraTool:
     def requires_auth(self) -> bool:
         return True
 
+    @property
+    def _uses_rest(self) -> bool:
+        return bool(self._base_url and self._email and self._token)
+
     async def execute(self, input: ToolInput) -> ToolResult:
-        if not self._uses_mcp and not (self._base_url and self._email and self._token):
+        if not self._uses_mcp and not self._uses_rest:
             return ToolResult(
                 tool_id=self.tool_id,
                 tool_name=self.display_name,
@@ -150,7 +154,18 @@ class JiraTool:
             )
 
         if self._uses_mcp:
-            return await self._execute_via_mcp(issue_key)
+            result = await self._execute_via_mcp(issue_key)
+            # A known MCP endpoint may be auto-wired from the same
+            # credential as REST (see app.tools.setup) rather than actually
+            # verified compatible - e.g. Atlassian's hosted server needs
+            # OAuth, which _execute_via_mcp's bearer-token auth cannot
+            # satisfy. Rather than surface that failure, fall back to REST
+            # when it's available so an auto-wired MCP attempt can never
+            # regress an otherwise-working connection.
+            if result.success or not self._uses_rest:
+                return result
+            logger.info("jira_tool_mcp_fallback_to_rest key=%s", issue_key)
+            return await self._execute_via_rest(issue_key)
         return await self._execute_via_rest(issue_key)
 
     async def _execute_via_mcp(self, issue_key: str) -> ToolResult:
@@ -307,26 +322,35 @@ class JiraTool:
 
     async def health_check(self) -> ToolHealth:
         if self._uses_mcp:
-            try:
-                await call_mcp_tool(
-                    self._mcp_server_url,
-                    self._mcp_tool_name,
-                    {self._mcp_key_arg: "PING-0"},
-                    auth_token=self._mcp_auth_token or None,
-                    timeout=5.0,
-                )
-                return ToolHealth.HEALTHY
-            except MCPToolError as exc:
-                # A "not found"-shaped error for a nonsense key still proves
-                # the server is reachable and the tool call itself works —
-                # only a connection/auth failure should read as unhealthy.
-                text = str(exc).lower()
-                if "not found" in text or "does not exist" in text or "no issue" in text:
-                    return ToolHealth.HEALTHY
-                if "auth" in text or "401" in text or "403" in text:
-                    return ToolHealth.AUTH_FAILED
-                return ToolHealth.OFFLINE
+            health = await self._health_check_mcp()
+            # Same auto-wired-MCP-may-not-actually-work concern as execute():
+            # don't report the tool unhealthy over a guessed MCP endpoint
+            # when the REST credentials it was reused from are fine.
+            if health in (ToolHealth.HEALTHY, ToolHealth.RATE_LIMITED) or not self._uses_rest:
+                return health
+            return await self._health_check_rest()
         return await self._health_check_rest()
+
+    async def _health_check_mcp(self) -> ToolHealth:
+        try:
+            await call_mcp_tool(
+                self._mcp_server_url,
+                self._mcp_tool_name,
+                {self._mcp_key_arg: "PING-0"},
+                auth_token=self._mcp_auth_token or None,
+                timeout=5.0,
+            )
+            return ToolHealth.HEALTHY
+        except MCPToolError as exc:
+            # A "not found"-shaped error for a nonsense key still proves
+            # the server is reachable and the tool call itself works —
+            # only a connection/auth failure should read as unhealthy.
+            text = str(exc).lower()
+            if "not found" in text or "does not exist" in text or "no issue" in text:
+                return ToolHealth.HEALTHY
+            if "auth" in text or "401" in text or "403" in text:
+                return ToolHealth.AUTH_FAILED
+            return ToolHealth.OFFLINE
 
     async def _health_check_rest(self) -> ToolHealth:
         if not self._base_url or not self._token or not self._email:
@@ -340,6 +364,15 @@ class JiraTool:
                 return ToolHealth.AUTH_FAILED
             if response.status_code >= 500:
                 return ToolHealth.UNAVAILABLE
-            return ToolHealth.HEALTHY if response.status_code < 400 else ToolHealth.OFFLINE
+            if response.status_code >= 400:
+                return ToolHealth.OFFLINE
+            # A 2xx status alone doesn't prove this is a Jira API host: a
+            # wrong base URL (e.g. Atlassian's *account* home page rather
+            # than the Jira Cloud site itself) can 200 with an HTML SPA
+            # shell for any path, credentials notwithstanding. Only a real
+            # JSON payload counts as healthy.
+            if "application/json" not in response.headers.get("content-type", ""):
+                return ToolHealth.OFFLINE
+            return ToolHealth.HEALTHY
         except httpx.HTTPError:
             return ToolHealth.OFFLINE

@@ -343,6 +343,10 @@ export interface WorkflowRunItem {
 export interface WorkflowDetail {
   workflow_id: string;
   title: string;
+  // The complete, unmodified text the user submitted to create this
+  // workflow — `title` is an AI-generated summary of this, not a
+  // replacement for it.
+  original_prompt: string;
   // "planning" is the only type creatable today; typed as string (not a
   // narrow union) since new types are added server-side over time and the
   // UI already has fallback handling for anything it doesn't recognize.

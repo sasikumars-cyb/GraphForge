@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from app.core.config import get_settings
+
 
 class Transport(StrEnum):
     """How a connection communicates with the source system."""
@@ -50,6 +52,14 @@ class TransportSpec:
     # Fields the UI should render for each auth method.
     # Key: AuthMethod value → list of field descriptors.
     auth_fields: dict[str, list[str]] = field(default_factory=dict)
+    # The vendor's official hosted MCP server, when one exists and is known
+    # to be compatible with this app's bearer-token MCP client. None means
+    # "no default" - MCP for that source stays REST-only until an operator
+    # supplies one. This is *not* a user-facing field: the UI never renders
+    # an MCP transport separately, it just reuses whatever credential the
+    # user already entered for REST as the MCP bearer token (see
+    # app.tools.setup.sync_knowledge_connection_to_tool).
+    known_mcp_endpoint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +83,8 @@ class KnowledgeSourceSpec:
 # ---------------------------------------------------------------------------
 # The Registry
 # ---------------------------------------------------------------------------
+
+_settings = get_settings()
 
 _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
     KnowledgeSourceSpec(
@@ -102,6 +114,7 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                 label="MCP Server",
                 auth_methods=(AuthMethod.PAT,),
                 auth_fields={"pat": ["server_url", "token"]},
+                known_mcp_endpoint=_settings.github_mcp_default_server_url,
             ),
             TransportSpec(
                 transport=Transport.GRAPHQL,
@@ -138,6 +151,7 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                 label="MCP Server",
                 auth_methods=(AuthMethod.API_KEY,),
                 auth_fields={"api_key": ["server_url", "api_key"]},
+                known_mcp_endpoint=_settings.jira_mcp_default_server_url,
             ),
         ),
     ),
@@ -167,6 +181,7 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                 label="MCP Server",
                 auth_methods=(AuthMethod.API_KEY,),
                 auth_fields={"api_key": ["server_url", "api_key"]},
+                known_mcp_endpoint=_settings.confluence_mcp_default_server_url,
             ),
         ),
     ),

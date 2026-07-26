@@ -8,8 +8,11 @@ import {
   listProviders,
   upsertProvider,
   validateProvider,
+  getAISettings,
+  setDefaultProvider,
   type ProviderInfo,
   type ValidationResponse,
+  type AIWorkspaceSettings as AISettingsDTO,
 } from "../../lib/api/ai-providers";
 
 function messageFrom(err: unknown, fallback: string): string {
@@ -69,16 +72,23 @@ function formatTime(iso: string | null): string {
 // Primary Provider Card
 // ---------------------------------------------------------------------------
 
-function PrimaryProviderCard({ providers }: { providers: ProviderInfo[] }) {
-  const primary = providers.find((p) => p.configured && p.enabled && p.status === "ready")
-    ?? providers.find((p) => p.configured && p.enabled)
-    ?? providers.find((p) => p.implemented);
+function PrimaryProviderCard({
+  providers,
+  settings,
+}: {
+  providers: ProviderInfo[];
+  settings: AISettingsDTO | null;
+}) {
+  const defaultKey = settings?.default_provider ?? null;
+  const primary = (defaultKey && providers.find((p) => p.key === defaultKey)) || null;
 
   if (!primary) {
     return (
-      <Card title="Primary Provider" description="No provider configured">
+      <Card title="Primary Provider" description="No default provider selected">
         <p className="text-sm text-slate-400">
-          Configure an AI provider below to power GraphForge agents.
+          {providers.some((p) => p.configured)
+            ? 'No provider is set as default yet. Choose one below and click "Set as Default".'
+            : "Configure an AI provider below to power GraphForge agents."}
         </p>
       </Card>
     );
@@ -125,15 +135,18 @@ function PrimaryProviderCard({ providers }: { providers: ProviderInfo[] }) {
 
 function ProviderConfigPanel({
   provider,
+  isDefault,
   onSaved,
 }: {
   provider: ProviderInfo;
+  isDefault: boolean;
   onSaved: () => void;
 }) {
   const { token } = useAuth();
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState(provider.model ?? provider.default_model);
   const [region, setRegion] = useState(provider.base_url ?? "");
+  const [makeDefault, setMakeDefault] = useState(isDefault);
   const [isSaving, setIsSaving] = useState(false);
   const [isValidating, setIsValidating] = useState(false);
   const [validation, setValidation] = useState<ValidationResponse | null>(null);
@@ -149,6 +162,9 @@ function ProviderConfigPanel({
       // Bedrock stores region in the base_url column.
       if (region) body.base_url = region;
       await upsertProvider(token, provider.key, body);
+      if (makeDefault && !isDefault) {
+        await setDefaultProvider(token, provider.key, model);
+      }
       onSaved();
     } catch (err) {
       setError(messageFrom(err, "Failed to save."));
@@ -251,6 +267,17 @@ function ProviderConfigPanel({
         </div>
       )}
 
+      <label className="flex items-center gap-2 text-sm text-slate-400">
+        <input
+          type="checkbox"
+          checked={makeDefault}
+          disabled={isDefault}
+          onChange={(e) => setMakeDefault(e.target.checked)}
+          className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-950 accent-sky-500"
+        />
+        {isDefault ? "This is the default provider" : "Set as default provider"}
+      </label>
+
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -279,51 +306,95 @@ function ProviderConfigPanel({
 
 function ProviderList({
   providers,
+  defaultProviderKey,
   onSaved,
 }: {
   providers: ProviderInfo[];
+  defaultProviderKey: string | null;
   onSaved: () => void;
 }) {
+  const { token } = useAuth();
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
+  const [settingDefaultKey, setSettingDefaultKey] = useState<string | null>(null);
+  const [defaultError, setDefaultError] = useState<string | null>(null);
 
   const configured = providers.filter((p) => p.implemented && p.configured);
   const available = providers.filter((p) => p.implemented && !p.configured);
 
+  async function handleSetDefault(p: ProviderInfo) {
+    if (!token) return;
+    setSettingDefaultKey(p.key);
+    setDefaultError(null);
+    try {
+      await setDefaultProvider(token, p.key, p.model ?? p.default_model);
+      onSaved();
+    } catch (err) {
+      setDefaultError(messageFrom(err, `Failed to set ${p.label} as default.`));
+    } finally {
+      setSettingDefaultKey(null);
+    }
+  }
+
   return (
     <div className="flex flex-col gap-5">
+      {defaultError && (
+        <p role="alert" className="rounded-md bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+          {defaultError}
+        </p>
+      )}
       {configured.length > 0 && (
         <Card title="Configured Providers" description="Providers with active configuration">
           <div className="divide-y divide-slate-800/60">
-            {configured.map((p) => (
-              <div key={p.key} className="py-3 first:pt-0 last:pb-0">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-medium text-slate-200">{p.label}</p>
-                    <p className="text-xs text-slate-500">
-                      {p.model ?? p.default_model}
-                      {p.latency_ms != null && ` \u00B7 ${p.latency_ms}ms`}
-                      {p.last_success_at && ` \u00B7 Last used ${formatTime(p.last_success_at)}`}
-                    </p>
+            {configured.map((p) => {
+              const isDefault = p.key === defaultProviderKey;
+              return (
+                <div key={p.key} className="py-3 first:pt-0 last:pb-0">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-200">
+                        {p.label}
+                        {isDefault && (
+                          <span className="ml-2 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300 ring-1 ring-inset ring-sky-500/30">
+                            Default
+                          </span>
+                        )}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {p.model ?? p.default_model}
+                        {p.latency_ms != null && ` \u00B7 ${p.latency_ms}ms`}
+                        {p.last_success_at && ` \u00B7 Last used ${formatTime(p.last_success_at)}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <StatusBadge
+                        label={statusLabel(p.status)}
+                        tone={statusTone(p.status)}
+                      />
+                      {!isDefault && (
+                        <button
+                          type="button"
+                          onClick={() => void handleSetDefault(p)}
+                          disabled={settingDefaultKey === p.key}
+                          className="rounded-md border border-sky-700 px-2.5 py-1 text-xs font-medium text-sky-300 hover:bg-sky-500/10 disabled:opacity-50"
+                        >
+                          {settingDefaultKey === p.key ? "Setting..." : "Set as Default"}
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setExpandedKey(expandedKey === p.key ? null : p.key)}
+                        className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                      >
+                        {expandedKey === p.key ? "Close" : "Configure"}
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <StatusBadge
-                      label={statusLabel(p.status)}
-                      tone={statusTone(p.status)}
-                    />
-                    <button
-                      type="button"
-                      onClick={() => setExpandedKey(expandedKey === p.key ? null : p.key)}
-                      className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
-                    >
-                      {expandedKey === p.key ? "Close" : "Configure"}
-                    </button>
-                  </div>
+                  {expandedKey === p.key && (
+                    <ProviderConfigPanel provider={p} isDefault={isDefault} onSaved={onSaved} />
+                  )}
                 </div>
-                {expandedKey === p.key && (
-                  <ProviderConfigPanel provider={p} onSaved={onSaved} />
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
         </Card>
       )}
@@ -347,7 +418,11 @@ function ProviderList({
                   </button>
                 </div>
                 {expandedKey === p.key && (
-                  <ProviderConfigPanel provider={p} onSaved={onSaved} />
+                  <ProviderConfigPanel
+                    provider={p}
+                    isDefault={p.key === defaultProviderKey}
+                    onSaved={onSaved}
+                  />
                 )}
               </div>
             ))}
@@ -365,6 +440,7 @@ function ProviderList({
 export function AIWorkspaceSection() {
   const { token } = useAuth();
   const [providers, setProviders] = useState<ProviderInfo[]>([]);
+  const [settings, setSettings] = useState<AISettingsDTO | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -372,7 +448,12 @@ export function AIWorkspaceSection() {
     if (!token) return;
     setIsLoading(true);
     try {
-      setProviders(await listProviders(token));
+      const [providerList, aiSettings] = await Promise.all([
+        listProviders(token),
+        getAISettings(token),
+      ]);
+      setProviders(providerList);
+      setSettings(aiSettings);
       setError(null);
     } catch (err) {
       setError(messageFrom(err, "Failed to load providers."));
@@ -405,8 +486,12 @@ export function AIWorkspaceSection() {
 
   return (
     <div className="flex flex-col gap-5">
-      <PrimaryProviderCard providers={providers} />
-      <ProviderList providers={providers} onSaved={() => void loadProviders()} />
+      <PrimaryProviderCard providers={providers} settings={settings} />
+      <ProviderList
+        providers={providers}
+        defaultProviderKey={settings?.default_provider ?? null}
+        onSaved={() => void loadProviders()}
+      />
 
       {/* Profiles and Fallback — forward-looking cards */}
       <Card title="AI Profiles" description="Named configurations for different workflow stages">

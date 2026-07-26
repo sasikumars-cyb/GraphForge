@@ -13,6 +13,7 @@ POST /knowledge/connections/:id/health → run health check
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import UTC, datetime
 
@@ -37,9 +38,22 @@ from app.schemas.knowledge import (
     KnowledgeSourceInfo,
     TransportInfo,
 )
-from app.tools.setup import sync_knowledge_connection_to_tool
+from app.tools.setup import build_tool_for_connection, sync_knowledge_connection_to_tool
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge-sources"])
+
+# ToolHealth value -> human-readable detail shown next to a connection's
+# status badge. Falls back to a title-cased version of the value itself for
+# anything not called out here.
+_HEALTH_DETAIL = {
+    "healthy": "Live check succeeded.",
+    "unconfigured": "Missing required configuration.",
+    "auth_failed": "Authentication failed — check the credentials.",
+    "offline": "Could not reach the server — check the URL.",
+    "unavailable": "Server reachable but reported an error.",
+    "rate_limited": "Rate limited by the server.",
+    "permission_denied": "Authenticated, but the token lacks permission.",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -317,10 +331,13 @@ async def check_health(
 ) -> ConnectionHealthResponse:
     """Verify connectivity and credentials for a connection.
 
-    In this release the health check validates configuration presence.
-    Transport-specific live checks (HTTP ping, DB connect, etc.) are a
-    follow-up — the architecture supports them via the transport/auth_method
-    dispatch that the source registry declares.
+    For sources with a matching Tool Registry implementation (Jira,
+    Confluence — see app.tools.setup's _KNOWLEDGE_CONNECTION_TOOL_MAP), this
+    is a real live probe: an ad-hoc tool instance is built from exactly this
+    connection's own credentials and its health_check() is awaited. Every
+    other source (Neo4j, filesystem, S3, …) falls back to validating that
+    credentials are present — there's no tool-level implementation yet to
+    probe live.
     """
     row = await db.get(KnowledgeConnection, connection_id)
     if row is None:
@@ -334,16 +351,32 @@ async def check_health(
         raise NotFoundError("Connection not found.")
 
     now = datetime.now(UTC)
+    start = time.monotonic()
 
-    # Basic validation: credentials present if auth requires them.
-    if row.auth_method != "none" and not row.encrypted_credentials:
-        row.status = "unconfigured"
-        row.status_detail = "Credentials not provided."
+    credentials: dict = {}
+    if row.encrypted_credentials:
+        credentials = json.loads(decrypt_secret(row.encrypted_credentials))
+
+    tool = build_tool_for_connection(row.source_type, row.transport, row.config or {}, credentials)
+
+    if tool is None:
+        # No tool-backed live check for this source/transport — fall back
+        # to validating that credentials are present, same as before.
+        if row.auth_method != "none" and not row.encrypted_credentials:
+            row.status = "unconfigured"
+            row.status_detail = "Credentials not provided."
+        else:
+            row.status = "healthy"
+            row.status_detail = "Configuration valid (not live-checked — no probe implemented for this source)."
+            row.last_success_at = now
+            row.latency_ms = 0
     else:
-        row.status = "healthy"
-        row.status_detail = "Configuration valid."
-        row.last_success_at = now
-        row.latency_ms = 0  # Placeholder until live transport checks.
+        health = await tool.health_check()
+        row.status = health.value
+        row.status_detail = _HEALTH_DETAIL.get(health.value, health.value.replace("_", " ").capitalize())
+        row.latency_ms = int((time.monotonic() - start) * 1000)
+        if health.value == "healthy":
+            row.last_success_at = now
 
     row.last_sync_at = now
     await db.commit()

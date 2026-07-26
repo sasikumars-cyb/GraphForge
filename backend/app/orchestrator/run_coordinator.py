@@ -160,7 +160,11 @@ class RunCoordinator:
 
         # Inject db session via extras so agents can do Postgres queries
         # per-run without holding a session reference at construction time.
-        ctx_extras: dict = {"db": self._db}
+        # user_id rides along too — it's already persisted on `run` by the
+        # time execution starts (see agent_runs.py), and agents need it to
+        # resolve per-user credentials (e.g. a GitHub OAuth connection)
+        # rather than an install-wide config.
+        ctx_extras: dict = {"db": self._db, "user_id": run.user_id}
         if extras:
             ctx_extras.update(extras)
         context = AgentContext(subject=subject, goal=goal, model=model, extras=ctx_extras)

@@ -57,6 +57,7 @@ from app.agents.planning.schemas import (
 from app.agents.planning.tools import to_evidence, PlanningObservation
 from app.core.exceptions import AppError
 from app.tools import ContextBuilder, ToolExecutor, ToolInput, get_tool_registry
+from app.tools.implementations.github_tool import GitHubTool, extract_pr_or_issue_ref
 from app.tools.implementations.jira_tool import extract_issue_key
 
 _PROMPT_VERSION = "1.0"
@@ -297,6 +298,58 @@ class PlanningAgent:
                     "planning_agent_jira_fetch_failed issue_key=%s error=%s",
                     issue_key, jira_result.error,
                 )
+
+        # ------------------------------------------------------------------
+        # GitHub enrichment — same idea as Jira above, for a goal that
+        # references a PR/issue ("owner/repo#42" or a github.com URL).
+        # GitHub access is per-user (an OAuth connection, not an
+        # install-wide credential), so this tool is never registered with
+        # the global Tool Registry — it's constructed fresh for this run
+        # using the run's own user's token via executor.execute_instance().
+        # No-ops silently if the query has no GitHub reference, or if this
+        # user hasn't connected GitHub — Jira enrichment is unaffected either
+        # way, they're independent.
+        # ------------------------------------------------------------------
+        gh_ref = extract_pr_or_issue_ref(task_description)
+        if gh_ref is not None:
+            user_id = context.extras.get("user_id")
+            github_token = None
+            if user_id is not None:
+                from app.services.github_service import get_decrypted_access_token
+
+                github_token = await get_decrypted_access_token(db, user_id)
+
+            if github_token is None:
+                logger.info("planning_agent_github_skipped_not_connected ref=%s", gh_ref)
+            else:
+                from app.core.config import get_settings
+
+                github_tool = GitHubTool({
+                    "github_token": github_token,
+                    "github_mcp_server_url": get_settings().github_mcp_default_server_url,
+                    "github_mcp_api_key": github_token,
+                })
+                github_result = await executor.execute_instance(
+                    github_tool, "github", "GitHub", ToolInput(query=task_description)
+                )
+                github_obs = PlanningObservation(
+                    tool_name="fetch_github_reference",
+                    summary=github_result.summary or (github_result.error or ""),
+                    data=github_result.data,
+                    succeeded=github_result.success,
+                    error=github_result.error or "",
+                )
+                evidence.append(to_evidence(github_obs, "tool_call"))
+                if github_result.success:
+                    task_description = (
+                        f"{task_description}\n\n{github_result.data.get('context_text', '')}"
+                    )
+                    logger.info("planning_agent_github_enriched ref=%s", gh_ref)
+                else:
+                    logger.info(
+                        "planning_agent_github_fetch_failed ref=%s error=%s",
+                        gh_ref, github_result.error,
+                    )
 
         # ------------------------------------------------------------------
         # Analyse the business problem FIRST — before any repository data is

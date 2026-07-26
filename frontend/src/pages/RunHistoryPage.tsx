@@ -245,13 +245,6 @@ function WorkflowGroupRow({
         <span className="text-xs text-slate-500">
           {group.runs[0]?.started_at ? formatRelativeTime(group.runs[0].started_at) : "—"}
         </span>
-        <Link
-          to={`/workflows/${group.workflowId}`}
-          onClick={(e) => e.stopPropagation()}
-          className="shrink-0 rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
-        >
-          Open workflow
-        </Link>
         <button
           type="button"
           onClick={(e) => void handleDeleteWorkflow(e)}
@@ -263,6 +256,12 @@ function WorkflowGroupRow({
         </button>
       </summary>
       <div className="border-t border-slate-800/70 bg-slate-950/40 pl-8">
+        {workflow?.original_prompt && (
+          <p className="whitespace-pre-wrap px-3 py-2.5 text-xs text-slate-400">
+            <span className="font-medium text-slate-300">Original request: </span>
+            {workflow.original_prompt}
+          </p>
+        )}
         <Table columns={stageColumns} data={group.runs} getRowKey={(r) => r.run_id} />
       </div>
     </details>

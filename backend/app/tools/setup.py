@@ -63,6 +63,15 @@ def register_all_tools() -> None:
 
     from app.tools.implementations.github_tool import GitHubTool
 
+    # Registered for the Tool Registry UI's listing/health-check surface
+    # only - never `configure()`d with a token, and deliberately absent
+    # from tools/setup.py's Knowledge-Connection sync map. GitHub access is
+    # per-user (an OAuth connection - see app.models.github_connection),
+    # not an install-wide credential like Jira/Confluence's, so the
+    # singleton instance here always stays unconfigured. The Planning Agent
+    # builds a real, per-run GitHubTool instance using the current run's
+    # own user's token instead - see PlanningAgent's GitHub enrichment
+    # block and ToolExecutor.execute_instance().
     registry.register(
         ToolSpec(
             tool_id="github",
@@ -78,7 +87,10 @@ def register_all_tools() -> None:
             auth_fields=["github_token", "github_api_url"],
             default_enabled=False,
             icon="🐙",
-            notes="Requires a GitHub personal access token with repo read scope.",
+            notes=(
+                "Configured per-run from each user's connected GitHub account "
+                "(Settings → Integrations), not here."
+            ),
         )
     )
 
@@ -129,10 +141,19 @@ def register_all_tools() -> None:
             capabilities=["design_documents", "adrs", "runbooks", "documentation"],
             factory=lambda cfg: ConfluenceTool(cfg),
             requires_auth=True,
-            auth_fields=["confluence_base_url", "confluence_email", "confluence_api_token"],
+            # REST fields are stored/health-checked but execute() has no REST
+            # path yet — search needs a query DSL (CQL) this tool doesn't
+            # build. MCP is the only working transport today.
+            auth_fields=[
+                "confluence_base_url", "confluence_email", "confluence_api_token",
+                "confluence_mcp_server_url", "confluence_mcp_api_key",
+            ],
             default_enabled=False,
             icon="📚",
-            notes="Requires a Confluence API token and base URL.",
+            notes=(
+                "MCP: a Confluence MCP server URL (+ optional API key). REST "
+                "credentials are stored but search is not yet implemented."
+            ),
         )
     )
 
@@ -177,21 +198,38 @@ _KNOWLEDGE_CONNECTION_TOOL_MAP: dict[tuple[str, str], tuple[str, dict[str, str]]
         "email": "confluence_email",
         "api_token": "confluence_api_token",
     }),
+    ("confluence", "mcp"): ("confluence", {
+        "server_url": "confluence_mcp_server_url",
+        "api_key": "confluence_mcp_api_key",
+    }),
+}
+
+# Auto-wires a REST connection's own credential into the same tool's MCP
+# config keys, so the tool can try the vendor's known MCP server first and
+# fall back to the REST path it was already using - no second connection,
+# no extra field in the Integrations UI. Only applies when the source has a
+# `known_mcp_endpoint` configured (knowledge/registry.py's TransportSpec) -
+# e.g. unset for Jira/Confluence by default because Atlassian's hosted MCP
+# server needs OAuth, which this app's MCP client does not implement yet.
+# source_type -> (rest credential field to reuse, mcp_server_url key, mcp_api_key key)
+_MCP_AUTO_WIRE: dict[str, tuple[str, str, str]] = {
+    "jira": ("api_token", "jira_mcp_server_url", "jira_mcp_api_key"),
+    "confluence": ("api_token", "confluence_mcp_server_url", "confluence_mcp_api_key"),
 }
 
 
-def sync_knowledge_connection_to_tool(
+def _build_tool_config(
     source_type: str, transport: str, config: dict, credentials: dict
-) -> None:
-    """Activate the Tool Registry entry matching a Knowledge Connection, if any.
-
-    No-op for (source_type, transport) combinations with no corresponding
-    tool config (e.g. neo4j, filesystem, or a transport not yet mapped) or
-    when the required fields aren't all present yet.
+) -> tuple[str, dict] | None:
+    """Translate one Knowledge Connection's generic fields into a tool's own
+    config dict. Returns None when there's no matching tool, or the
+    connection's required fields aren't all present yet. Shared by the
+    registry-sync path and the ad-hoc per-connection path below — the two
+    differ only in what they do with the resulting (tool_id, config).
     """
     mapping = _KNOWLEDGE_CONNECTION_TOOL_MAP.get((source_type, transport))
     if mapping is None:
-        return
+        return None
     tool_id, field_map = mapping
 
     merged = {**config, **credentials}
@@ -203,12 +241,87 @@ def sync_knowledge_connection_to_tool(
             "tool_sync_incomplete_config tool=%s source_type=%s transport=%s",
             tool_id, source_type, transport,
         )
+        return None
+
+    if transport == "rest":
+        auto_wire = _MCP_AUTO_WIRE.get(source_type)
+        if auto_wire is not None:
+            cred_field, server_url_key, api_key_key = auto_wire
+            from app.knowledge.registry import get_source
+
+            source_spec = get_source(source_type)
+            known_endpoint = next(
+                (
+                    t.known_mcp_endpoint
+                    for t in (source_spec.transports if source_spec else ())
+                    if t.transport == "mcp" and t.known_mcp_endpoint
+                ),
+                None,
+            )
+            token = merged.get(cred_field)
+            if known_endpoint and token:
+                tool_config[server_url_key] = known_endpoint
+                tool_config[api_key_key] = token
+                logger.info("tool_sync_mcp_auto_wired tool=%s endpoint=%s", tool_id, known_endpoint)
+
+    return tool_id, tool_config
+
+
+def sync_knowledge_connection_to_tool(
+    source_type: str, transport: str, config: dict, credentials: dict
+) -> None:
+    """Activate the Tool Registry entry matching a Knowledge Connection, if any.
+
+    No-op for (source_type, transport) combinations with no corresponding
+    tool config (e.g. neo4j, filesystem, or a transport not yet mapped) or
+    when the required fields aren't all present yet.
+    """
+    built = _build_tool_config(source_type, transport, config, credentials)
+    if built is None:
         return
+    tool_id, tool_config = built
 
     get_tool_registry().configure(tool_id, enabled=True, config=tool_config)
     logger.info(
         "tool_sync_configured tool=%s source_type=%s transport=%s", tool_id, source_type, transport
     )
+
+
+_TOOL_FACTORIES: dict[str, "Callable[[dict], object]"] = {}
+
+
+def _tool_factories() -> dict[str, "Callable[[dict], object]"]:
+    """Lazily built tool_id -> constructor map, for the ad-hoc path below.
+    Local imports on first use, same reasoning as register_all_tools()."""
+    if not _TOOL_FACTORIES:
+        from app.tools.implementations.confluence_tool import ConfluenceTool
+        from app.tools.implementations.jira_tool import JiraTool
+
+        _TOOL_FACTORIES["jira"] = JiraTool
+        _TOOL_FACTORIES["confluence"] = ConfluenceTool
+    return _TOOL_FACTORIES
+
+
+def build_tool_for_connection(
+    source_type: str, transport: str, config: dict, credentials: dict
+) -> object | None:
+    """Construct a fresh, throwaway tool instance for exactly this
+    connection's own credentials — not the Tool Registry singleton.
+
+    The registry holds one instance per tool_id, last-write-wins across
+    however many Knowledge Connections share that source_type. A live health
+    check must prove *this* connection's credentials work, not whichever
+    connection happened to sync into the registry most recently — so this
+    builds an independent instance instead of reading `get_tool_registry()`.
+    """
+    built = _build_tool_config(source_type, transport, config, credentials)
+    if built is None:
+        return None
+    tool_id, tool_config = built
+    factory = _tool_factories().get(tool_id)
+    if factory is None:
+        return None
+    return factory(tool_config)
 
 
 async def sync_all_knowledge_connections_to_tools(db: "AsyncSession") -> None:

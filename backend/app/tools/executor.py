@@ -19,7 +19,7 @@ import asyncio
 import logging
 import time
 
-from app.tools.interfaces import ToolInput, ToolResult
+from app.tools.interfaces import ITool, ToolInput, ToolResult
 from app.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
@@ -44,7 +44,8 @@ class ToolExecutor:
         self._timeout = timeout_secs
 
     async def execute(self, tool_id: str, input: ToolInput) -> ToolResult:
-        """Execute a single tool. Never raises — errors become ToolResult(success=False)."""
+        """Execute a single tool from the registry. Never raises — errors
+        become ToolResult(success=False)."""
         tool = self._registry.get_tool(tool_id)
         spec = next((s for s in self._registry.all_specs() if s.tool_id == tool_id), None)
         display_name = spec.display_name if spec else tool_id
@@ -57,6 +58,17 @@ class ToolExecutor:
                 error=f"Tool '{tool_id}' is not enabled or not configured.",
             )
 
+        return await self.execute_instance(tool, tool_id, display_name, input)
+
+    async def execute_instance(
+        self, tool: ITool, tool_id: str, display_name: str, input: ToolInput
+    ) -> ToolResult:
+        """Execute a tool instance constructed outside the registry — for
+        tools whose credentials are per-user rather than an install-wide
+        config the singleton ToolRegistry can hold (e.g. GitHub's OAuth
+        connection; see app.tools.implementations.github_tool). Same
+        timeout/error-isolation guarantees as `execute()`, just without the
+        registry lookup."""
         start = time.monotonic()
         try:
             result = await asyncio.wait_for(
