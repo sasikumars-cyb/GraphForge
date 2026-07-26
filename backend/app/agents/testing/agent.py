@@ -10,6 +10,19 @@ Implements the IAgent protocol for goal=plan_tests. Every run:
 The agent thinks like a Senior QA Lead: What changed? Who depends on it?
 What could break? Which interfaces require integration tests? What edge
 cases are highest risk?
+
+Inside a workflow, the Planning and Development stages' *full* structured
+results are read directly via get_stage_result() and folded into the
+prompt (see app.agents.stage_context) — not via workflow_service.
+build_stage_context()/resolve_freetext(), whose 256-char truncation
+(app/context/resolvers/freetext.py) meant almost none of that ever
+survived — in practice, only a fragment of Planning's summary, and none of
+Development's, which is why test plans previously drifted onto generic
+graph-wide component selection instead of what Development actually
+changed. context.subject.display_name is still what gets logged/stored as
+this run's own goal text, and is the only input for a standalone run
+(context.extras has no "workflow" outside one) — this is additive
+grounding, not a replacement.
 """
 
 from __future__ import annotations
@@ -26,7 +39,9 @@ from app.agents._contract import (
     Confidence,
     Evidence,
 )
+from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.prompt_utils import render_prompt_template
+from app.agents.stage_context import format_development_block, format_planning_block
 from app.agents.testing.schemas import (
     AutomationCandidate,
     EdgeCase,
@@ -252,6 +267,40 @@ class TestPlanningAgent:
         evidence: list[Evidence] = []
 
         # ------------------------------------------------------------------
+        # Step 0 — Read the Planning and Development stages' full results,
+        # when this run is part of a workflow (context.extras["workflow"] is
+        # only set there; see workflows.py's schedule_run_execution calls).
+        # Untruncated — see module docstring for why that matters; this is
+        # what previously left the test plan with no idea which components
+        # Development had actually changed.
+        # ------------------------------------------------------------------
+        workflow = context.extras.get("workflow")
+        planning_result = get_stage_result(workflow, "planning") if workflow else None
+        development_result = get_stage_result(workflow, "development") if workflow else None
+        prior_blocks = [
+            format_planning_block(planning_result) if planning_result else None,
+            format_development_block(development_result) if development_result else None,
+        ]
+        prior_stage_context = "\n\n".join(b for b in prior_blocks if b)
+        if workflow is not None:
+            found = [
+                label
+                for label, result in (("Planning", planning_result), ("Development", development_result))
+                if result is not None
+            ]
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="read_prior_stage_context",
+                    summary=(
+                        f"Read the full {' and '.join(found)} stage result(s) via get_stage_result()."
+                        if found
+                        else "No completed prior stage results were available to read."
+                    ),
+                )
+            )
+
+        # ------------------------------------------------------------------
         # Step 1 — Discover indexed repositories (tool_call evidence)
         # ------------------------------------------------------------------
         repos_tool = TestRepositoryDiscoveryTool(db=db, graph_repository=graph_repo)
@@ -317,7 +366,10 @@ class TestPlanningAgent:
         # Synthesize: LLM call with full graph context
         # ------------------------------------------------------------------
         graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs)
-        prompt = _render_prompt(task_description, graph_context_text)
+        prompt_task_description = (
+            f"{task_description}\n\n{prior_stage_context}" if prior_stage_context else task_description
+        )
+        prompt = _render_prompt(prompt_task_description, graph_context_text)
 
         logger.info(
             "testing_agent_synthesizing has_graph_data=%s graph_context_chars=%d",

@@ -9,6 +9,16 @@ Implements the IAgent protocol for goal=develop_change_plan. Every run:
 
 The agent thinks like a Senior Engineer: Which repos change? Which services?
 Which files? Can something be reused? What could break? What order?
+
+Inside a workflow, the immediately-prior Planning stage's *full* structured
+result is read directly via get_stage_result() and folded into the prompt
+(see app.agents.stage_context.format_planning_block) — not via
+workflow_service.build_stage_context()/resolve_freetext(), whose 256-char
+truncation (app/context/resolvers/freetext.py) meant Planning's summary
+almost never survived intact. context.subject.display_name is still what
+gets logged/stored as this run's own goal text, and is the only input for a
+standalone run (context.extras has no "workflow" outside one) — this is
+additive grounding, not a replacement.
 """
 
 from __future__ import annotations
@@ -42,7 +52,9 @@ from app.agents.development.tools import (
     format_graph_context,
     to_evidence,
 )
+from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.prompt_utils import render_prompt_template
+from app.agents.stage_context import format_planning_block
 from app.ai.providers.base import LLMRequestOptions, ResponseFormat
 from app.ai.providers.factory import create_llm_provider
 from app.core.exceptions import AppError
@@ -219,6 +231,28 @@ class DevelopmentAgent:
         evidence: list[Evidence] = []
 
         # ------------------------------------------------------------------
+        # Step 0 — Read the Planning stage's full result, when this run is
+        # part of a workflow (context.extras["workflow"] is only set there;
+        # see workflows.py's schedule_run_execution calls). Untruncated —
+        # see module docstring for why that matters.
+        # ------------------------------------------------------------------
+        workflow = context.extras.get("workflow")
+        planning_result = get_stage_result(workflow, "planning") if workflow else None
+        prior_stage_context = format_planning_block(planning_result) if planning_result else ""
+        if workflow is not None:
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="read_prior_stage_context",
+                    summary=(
+                        "Read the full Planning stage result via get_stage_result()."
+                        if planning_result
+                        else "No completed Planning stage result was available to read."
+                    ),
+                )
+            )
+
+        # ------------------------------------------------------------------
         # Step 1 — Discover indexed repositories (tool_call evidence)
         # ------------------------------------------------------------------
         repos_tool = RepositoryDiscoveryTool(db=db, graph_repository=graph_repo)
@@ -282,7 +316,10 @@ class DevelopmentAgent:
         # Synthesize: LLM call with full graph context
         # ------------------------------------------------------------------
         graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs)
-        prompt = _render_prompt(task_description, graph_context_text)
+        prompt_task_description = (
+            f"{task_description}\n\n{prior_stage_context}" if prior_stage_context else task_description
+        )
+        prompt = _render_prompt(prompt_task_description, graph_context_text)
 
         logger.info(
             "development_agent_synthesizing has_graph_data=%s graph_context_chars=%d",
