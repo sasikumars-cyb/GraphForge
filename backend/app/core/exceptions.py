@@ -43,10 +43,31 @@ class ConflictError(AppError):
 
 
 class UnauthorizedError(AppError):
-    """Raised when a request has no, or invalid/expired, credentials."""
+    """Raised when a request has no, or invalid/expired, credentials.
+
+    Also reused directly (not via the `InvalidTokenError` subclass below)
+    for business-logic 401s against an otherwise-valid, authenticated
+    session — e.g. "GitHub is not connected for this user." — where the
+    bearer token itself is fine but some other precondition wasn't met.
+    """
 
     status_code = 401
     error_code = "unauthorized"
+
+
+class InvalidTokenError(UnauthorizedError):
+    """The bearer token itself is missing, malformed, expired, or otherwise
+    unusable — as opposed to a 401 raised for a business-logic reason
+    against an otherwise-valid session (plain `UnauthorizedError` above).
+
+    Only `get_current_user` (app.api.v1.dependencies) raises this. The
+    distinct `error_code` is what lets the frontend safely treat *this*
+    specific 401 as "the session is dead, log out" without also logging a
+    valid user out just because some unrelated endpoint's precondition
+    failed with a generic 401 (see client.ts's UNAUTHORIZED_EVENT).
+    """
+
+    error_code = "invalid_token"
 
 
 class ForbiddenError(AppError):

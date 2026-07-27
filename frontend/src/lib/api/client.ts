@@ -7,6 +7,18 @@
 export const API_BASE_URL: string =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
+/** Dispatched on `window` whenever the backend rejects a request with the
+ * `invalid_token` error code — the bearer token itself is dead (expired,
+ * malformed, or the user was deactivated), not just some unrelated
+ * business-logic 401 (e.g. "GitHub is not connected for this user", which
+ * the backend also returns as a 401 but with a different `code` — see
+ * app.core.exceptions.InvalidTokenError's docstring on the backend). Only
+ * this specific code means "the session is dead, log out" — AuthContext
+ * listens for this event rather than reacting to every 401, so a valid,
+ * still-logged-in user hitting some other 401 never gets logged out by
+ * accident. */
+export const UNAUTHORIZED_EVENT = "graphforge:invalid-token";
+
 /** Matches the backend's error shape: {"error": {"code": ..., "message": ...}} */
 export class ApiError extends Error {
   readonly status: number;
@@ -50,9 +62,13 @@ export async function apiFetch<T>(path: string, options: ApiFetchOptions = {}): 
 
   if (!response.ok) {
     const parsed = await response.json().catch(() => null);
+    const code = parsed?.error?.code ?? "unknown_error";
+    if (code === "invalid_token") {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
     throw new ApiError(
       response.status,
-      parsed?.error?.code ?? "unknown_error",
+      code,
       parsed?.error?.message ?? `Request to ${path} failed with status ${response.status}.`,
     );
   }

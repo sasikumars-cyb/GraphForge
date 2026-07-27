@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { fetchCurrentUser, login as apiLogin } from "../lib/api/auth";
+import { UNAUTHORIZED_EVENT } from "../lib/api/client";
 import type { User } from "../types/auth";
 import { AuthContext } from "./auth-context";
 
@@ -40,6 +41,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [token]);
+
+  // A token can die mid-session (expiry, or the account being deactivated)
+  // with no fetch of this component's own to notice — every other page's
+  // API calls just started failing with a generic error banner and no way
+  // back to /login short of a manual browser refresh. apiFetch dispatches
+  // this event specifically (and only) when the backend reports the
+  // bearer token itself is invalid (see UNAUTHORIZED_EVENT's docstring),
+  // so this can log out immediately without waiting for a future mount.
+  // setToken/setUser are stable across renders, so an empty dependency
+  // array is safe here — no stale-closure risk.
+  useEffect(() => {
+    function handleInvalidToken() {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+      setToken(null);
+      setUser(null);
+    }
+    window.addEventListener(UNAUTHORIZED_EVENT, handleInvalidToken);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, handleInvalidToken);
+  }, []);
 
   async function login(email: string, password: string) {
     const tokens = await apiLogin(email, password);

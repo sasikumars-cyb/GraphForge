@@ -9,7 +9,7 @@ from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.exceptions import ForbiddenError, UnauthorizedError
+from app.core.exceptions import ForbiddenError, InvalidTokenError, UnauthorizedError
 from app.core.security import decode_access_token
 from app.database.session import get_db_session
 from app.integrations.interfaces import IOAuthProvider
@@ -30,29 +30,41 @@ async def get_current_user(
     token: str | None = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db_session),
 ) -> User:
+    """Raises `InvalidTokenError` (never plain `UnauthorizedError`) for
+    every failure here — the bearer token/session itself is what's wrong
+    in every branch below, which is exactly the "log the user out" signal
+    the frontend's global 401 handler keys off of (see InvalidTokenError's
+    docstring)."""
     if token is None:
-        raise UnauthorizedError("Not authenticated.")
+        raise InvalidTokenError("Not authenticated.")
 
-    payload = decode_access_token(token)
+    try:
+        payload = decode_access_token(token)
+    except UnauthorizedError as exc:
+        # decode_access_token raises the generic UnauthorizedError (it's
+        # shared with other callers, e.g. the GitHub OAuth state check) —
+        # re-raised here as InvalidTokenError since in *this* caller, an
+        # expired/malformed JWT unambiguously means the session is dead.
+        raise InvalidTokenError(str(exc)) from exc
     subject = payload.get("sub")
     if subject is None:
-        raise UnauthorizedError("Invalid authentication token.")
+        raise InvalidTokenError("Invalid authentication token.")
     if payload.get("purpose") is not None:
         # A token minted with a `purpose` (e.g. the GitHub OAuth `state`
         # value — see github_service.get_connect_authorization_url) is
         # scoped to that one flow only. Without this check, a leaked/logged
         # `state` value would work as a fully general bearer token for the
         # rest of the API for its whole (albeit short) lifetime.
-        raise UnauthorizedError("This token cannot be used for API authentication.")
+        raise InvalidTokenError("This token cannot be used for API authentication.")
 
     try:
         user_id = uuid.UUID(subject)
     except ValueError as exc:
-        raise UnauthorizedError("Invalid authentication token.") from exc
+        raise InvalidTokenError("Invalid authentication token.") from exc
 
     user = await db.get(User, user_id)
     if user is None or not user.is_active:
-        raise UnauthorizedError("User not found or inactive.")
+        raise InvalidTokenError("User not found or inactive.")
 
     return user
 

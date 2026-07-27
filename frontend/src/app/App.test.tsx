@@ -157,6 +157,12 @@ describe("App navigation (authenticated)", () => {
     ["/reports", "Reports"],
     ["/settings", "Settings"],
   ])("renders the %s page at %s", async (path, heading) => {
+    // Both RepositoriesPage (via useDashboardData) and ArchitecturePage
+    // call this eagerly on mount and it wasn't mocked here — with no
+    // tracked repos, an unmocked call fell through to whatever is actually
+    // listening on the configured API base URL. Mocking it keeps this test
+    // hermetic regardless of what else is reachable on that URL.
+    vi.spyOn(githubApi, "listTrackedRepositories").mockResolvedValue([]);
     renderApp(path);
     expect(await screen.findByRole("heading", { level: 2, name: heading })).toBeInTheDocument();
   });
@@ -182,6 +188,11 @@ describe("App navigation (authenticated)", () => {
     vi.spyOn(repositoriesApi, "getLatestIndexingJob").mockRejectedValue(NOT_FOUND);
     vi.spyOn(repositoriesApi, "removeRepository").mockResolvedValue(undefined);
     vi.spyOn(window, "confirm").mockReturnValue(true);
+    // This test navigates to /repositories after removal, which renders
+    // RepositoriesPage's useDashboardData — it calls this per pull request
+    // and it wasn't mocked here, so it fell through to whatever is
+    // actually reachable at the configured API base URL.
+    vi.spyOn(analysisApi, "getDeterministicAnalysis").mockRejectedValue(NOT_FOUND);
 
     renderApp("/repositories/repo-1");
     await screen.findByRole("heading", { level: 2, name: "local/order-service" });

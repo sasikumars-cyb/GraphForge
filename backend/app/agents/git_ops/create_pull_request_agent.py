@@ -201,7 +201,14 @@ class CreatePullRequestAgent:
         # Reached only via the `else` branch (fresh create) or a successful
         # race-recovery lookup above — both already guarantee a dict, but
         # the try/except's shared `pr_data` type still carries `| None`.
-        assert pr_data is not None
+        # An explicit raise (not `assert`) so this still fails loudly and
+        # clearly if the interpreter is ever run with `-O`/`-OO`, which
+        # strips `assert` statements entirely.
+        if pr_data is None:
+            raise CreatePullRequestExecutionError(
+                f"Internal error: no pull request data available for branch "
+                f"'{branch_name}' after create/recovery."
+            )
         pull_request = await _upsert_pull_request(db, repo_row.id, pr_data)
 
         logger.info(

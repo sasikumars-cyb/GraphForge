@@ -23,7 +23,7 @@ from app.analysis.engine.impact_analysis_engine import ImpactAnalysisEngine
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
 from app.api.v1.dependencies import get_current_user
 from app.core.config import get_settings
-from app.core.exceptions import NotFoundError, UnauthorizedError
+from app.core.exceptions import AppError, NotFoundError, UnauthorizedError
 from app.database.session import get_db_session
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
@@ -244,7 +244,17 @@ async def publish_review(
         raise UnauthorizedError("GitHub is not connected for this user.")
 
     repository = await db.get(Repository, pull_request.repository_id)
-    assert repository is not None  # FK to repositories.id; ownership check already required it
+    if repository is None:
+        # FK to repositories.id; the ownership check above already required
+        # this row to exist. An explicit raise (not `assert`) so this still
+        # fails loudly and clearly if the interpreter is ever run with
+        # `-O`/`-OO`, which strips `assert` statements entirely.
+        raise AppError(
+            f"Repository '{pull_request.repository_id}' referenced by pull request "
+            f"'{pull_request.id}' no longer exists.",
+            status_code=500,
+            error_code="repository_not_found",
+        )
 
     ai_result_model = AIAnalysisResult(
         executive_summary=ai_analysis.executive_summary,
