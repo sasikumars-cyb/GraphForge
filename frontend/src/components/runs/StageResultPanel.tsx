@@ -62,10 +62,10 @@ export function StageResultPanel({
   // The real counts, not a diagram-node-count approximation — see the
   // matching comment on BlueprintExplorerProps for why these must win.
   const implementationStepsCount =
-    planningResult?.implementation_steps.length ?? developmentResult?.implementation_phases.length;
+    planningResult?.implementation_steps?.length ?? developmentResult?.implementation_phases?.length;
   const affectedComponentsCount =
-    planningResult?.affected_components.length ?? developmentResult?.components.length;
-  const risksCount = planningResult?.risk_considerations.length ?? developmentResult?.risks.length;
+    planningResult?.affected_components?.length ?? developmentResult?.components?.length;
+  const risksCount = planningResult?.risk_considerations?.length ?? developmentResult?.risks?.length;
 
   const hasBlueprint = Boolean(blueprint && blueprint.diagrams.length > 0);
   const hasSummary = stage === "planning" || stage === "development" || stage === "testing";

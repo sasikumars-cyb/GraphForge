@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import inspect
+from sqlalchemy.orm.attributes import set_committed_value
 
 from app.agents._contract import Subject
 from app.agents.git_ops._artifact_reader import get_stage_result
@@ -25,6 +26,7 @@ from app.agents.review_adapter import resolve_pr_subject
 from app.api.v1.dependencies import get_current_user
 from app.context.resolvers.freetext import resolve as resolve_freetext
 from app.core.exceptions import AppError, NotFoundError
+from app.core.rate_limit import check_rate_limit
 from app.database.session import get_db_session
 from app.models.run import Run
 from app.models.user import User
@@ -34,6 +36,13 @@ from app.orchestrator.selector import AgentSelector
 from app.services import workflow_service
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
+
+# Every stage start is a real (and, for paid providers, billed) LLM call —
+# see app.core.rate_limit's docstring. 10 stage-starts per user per 5
+# minutes comfortably covers legitimate iteration (start, retry a failed
+# stage, edit and restart) while blocking accidental or scripted spam.
+_STAGE_START_RATE_LIMIT = 10
+_STAGE_START_RATE_WINDOW_SECONDS = 300.0
 
 
 # ---------------------------------------------------------------------------
@@ -52,6 +61,16 @@ class CreateWorkflowRequest(BaseModel):
     workflow_type: str = "planning"
     # Required for auto_execution — references the approved Planning blueprint.
     source_workflow_id: str | None = None
+    # "Refine" — references the workflow this one refines. Distinct from
+    # source_workflow_id (auto_execution's link to an approved blueprint):
+    # this is a version chain within Planning itself. The refined
+    # workflow's completed stage(s) are carried forward as context, same
+    # mechanism as source_workflow_id, plus refinement_note below.
+    parent_workflow_id: str | None = None
+    # The human's own note on what to change in this refinement — threaded
+    # into the new workflow's planning prompt so the next draft actually
+    # responds to it instead of just regenerating cold from the same title.
+    refinement_note: str | None = Field(default=None, max_length=4000)
 
 
 class ContinueWorkflowRequest(BaseModel):
@@ -94,6 +113,11 @@ class WorkflowDetailResponse(BaseModel):
     # Resolved display name (not the raw user id) — None if never approved,
     # or approved before this field existed.
     approved_by: str | None = None
+    # Version lineage — version=1/parent=None for anything not created via
+    # Refine. parent_workflow_id lets the UI link back to what this refines.
+    version: int = 1
+    parent_workflow_id: str | None = None
+    refinement_note: str | None = None
 
 
 class WorkflowListItem(BaseModel):
@@ -106,6 +130,8 @@ class WorkflowListItem(BaseModel):
     created_at: str
     updated_at: str
     approved_by: str | None = None
+    version: int = 1
+    parent_workflow_id: str | None = None
 
 
 class WorkflowListResponse(BaseModel):
@@ -324,7 +350,13 @@ async def create_workflow(
     from app.orchestrator.background_execution import schedule_run_execution
     from app.orchestrator.run_coordinator import RunCoordinator
 
-    # Parse source_workflow_id if provided
+    check_rate_limit(
+        f"stage_start:{user.id}",
+        max_requests=_STAGE_START_RATE_LIMIT,
+        window_seconds=_STAGE_START_RATE_WINDOW_SECONDS,
+    )
+
+    # Parse source_workflow_id / parent_workflow_id if provided
     source_wf_id: uuid.UUID | None = None
     if body.source_workflow_id:
         try:
@@ -336,11 +368,24 @@ async def create_workflow(
                 error_code="invalid_source_workflow_id",
             ) from exc
 
+    parent_wf_id: uuid.UUID | None = None
+    if body.parent_workflow_id:
+        try:
+            parent_wf_id = uuid.UUID(body.parent_workflow_id)
+        except ValueError as exc:
+            raise AppError(
+                f"Invalid parent_workflow_id: {body.parent_workflow_id}",
+                status_code=400,
+                error_code="invalid_parent_workflow_id",
+            ) from exc
+
     workflow = await workflow_service.create_workflow(
         db,
         title=body.title,
         workflow_type=body.workflow_type,
         source_workflow_id=source_wf_id,
+        parent_workflow_id=parent_wf_id,
+        refinement_note=body.refinement_note,
     )
 
     # Execute the first stage of this workflow_type's sequence (today,
@@ -349,16 +394,50 @@ async def create_workflow(
     goal = workflow_service.STAGE_GOALS[stage]
 
     # For auto_execution, enrich the first-stage context with the source
-    # blueprint's outputs. For planning (no source), the title suffices.
+    # blueprint's outputs. For a Refine (parent_workflow_id), same
+    # mechanism — the parent's completed stage(s) become "source" context
+    # — plus the human's own refinement note appended as its own fenced
+    # block. For a plain "New Workflow" (neither), the title suffices.
     if workflow.source_workflow_id:
         source_workflow = await workflow_service.get_workflow(db, workflow.source_workflow_id)
-        workflow.runs = []  # freshly created, no lazy-load needed
+        # A freshly created workflow genuinely has zero runs yet — set the
+        # relationship's already-known value directly rather than
+        # `workflow.runs = []`, which fires SQLAlchemy's "fetch the old
+        # collection to diff against" event and triggers a real lazy-load
+        # query outside an awaited context (MissingGreenlet under asyncio;
+        # this is exactly the hazard _link_failed_run's `inspect(...)
+        # .unloaded` check above guards against, just hit from the write
+        # side instead of the read side).
+        set_committed_value(workflow, "runs", [])
         enriched_ref = workflow_service.build_stage_context(
             workflow,
             original_request=body.title,
             target_stage=stage,
             source_workflow=source_workflow,
         )
+        subject = resolve_freetext(enriched_ref)
+    elif workflow.parent_workflow_id:
+        parent_workflow = await workflow_service.get_workflow(db, workflow.parent_workflow_id)
+        # A freshly created workflow genuinely has zero runs yet — set the
+        # relationship's already-known value directly rather than
+        # `workflow.runs = []`, which fires SQLAlchemy's "fetch the old
+        # collection to diff against" event and triggers a real lazy-load
+        # query outside an awaited context (MissingGreenlet under asyncio;
+        # this is exactly the hazard _link_failed_run's `inspect(...)
+        # .unloaded` check above guards against, just hit from the write
+        # side instead of the read side).
+        set_committed_value(workflow, "runs", [])
+        enriched_ref = workflow_service.build_stage_context(
+            workflow,
+            original_request=body.title,
+            target_stage=stage,
+            source_workflow=parent_workflow,
+        )
+        if body.refinement_note:
+            enriched_ref += (
+                "\n\n--- HUMAN REFINEMENT FEEDBACK (address this in the next draft) ---\n"
+                f"{body.refinement_note}\n--- END FEEDBACK ---"
+            )
         subject = resolve_freetext(enriched_ref)
     else:
         subject = resolve_freetext(body.title)
@@ -438,6 +517,8 @@ async def list_workflows(
             approved_by=(
                 approver_names.get(w.approved_by_user_id) if w.approved_by_user_id else None
             ),
+            version=w.version,
+            parent_workflow_id=str(w.parent_workflow_id) if w.parent_workflow_id else None,
         )
         for w in workflows
     ]
@@ -482,6 +563,9 @@ async def get_workflow(
             if workflow.approved_by_user_id
             else None
         ),
+        version=workflow.version,
+        parent_workflow_id=str(workflow.parent_workflow_id) if workflow.parent_workflow_id else None,
+        refinement_note=workflow.refinement_note,
     )
 
 
@@ -540,6 +624,12 @@ async def continue_workflow(
     """
     from app.orchestrator.background_execution import schedule_run_execution
     from app.orchestrator.run_coordinator import RunCoordinator
+
+    check_rate_limit(
+        f"stage_start:{user.id}",
+        max_requests=_STAGE_START_RATE_LIMIT,
+        window_seconds=_STAGE_START_RATE_WINDOW_SECONDS,
+    )
 
     try:
         wid = uuid.UUID(workflow_id)

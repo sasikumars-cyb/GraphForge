@@ -22,11 +22,14 @@ interface ApprovalGateBannerProps {
   completedStage: string;
   nextStage: string;
   workflowTitle: string;
+  /** This workflow's own id — threaded into "Refine"'s parentId (see
+   * WorkflowApprovalBanner and NewWorkflowPage's parentId handling). */
+  workflowId: string;
   isSubmitting: boolean;
   onApprove: () => void;
   onReject: () => void;
   /** When set, this stage has already failed — render the failure variant
-   * (Retry Stage / Edit Workflow / View error details) instead of the
+   * (Retry Stage / Refine / View error details) instead of the
    * approval variant. `onApprove` doubles as "Retry Stage": the backend's
    * /continue endpoint already allows re-running the same current_stage
    * after a failed attempt (its "already has a run" guard only blocks
@@ -42,19 +45,22 @@ interface ApprovalGateBannerProps {
  * same continueWorkflow() the old button did; "Reject" calls
  * POST /workflows/{id}/reject (status → "rejected", terminal) via the
  * caller's onReject — same real backend mutation as the initial blueprint
- * rejection, not a UI-only fake. "Edit Workflow" starts a fresh workflow
- * with the same objective; that one genuinely has no backend counterpart
- * to mutate (it's just a navigation). */
+ * rejection, not a UI-only fake. "Refine" navigates to NewWorkflowPage
+ * with parentId=this workflow's id — the resulting POST /workflows carries
+ * this workflow's completed stage(s) forward as context (see
+ * workflows.py's create_workflow) rather than starting the agent cold. */
 export function ApprovalGateBanner({
   completedStage,
   nextStage,
   workflowTitle,
+  workflowId,
   isSubmitting,
   onApprove,
   onReject,
   failure,
 }: ApprovalGateBannerProps) {
   const navigate = useNavigate();
+  const refineHref = `/workflows/new?title=${encodeURIComponent(workflowTitle)}&parentId=${encodeURIComponent(workflowId)}`;
 
   if (failure) {
     return (
@@ -83,12 +89,12 @@ export function ApprovalGateBanner({
         <div className="flex shrink-0 items-center gap-2 self-end">
           <button
             type="button"
-            onClick={() => navigate(`/workflows/new?title=${encodeURIComponent(workflowTitle)}`)}
+            onClick={() => navigate(refineHref)}
             disabled={isSubmitting}
             className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 hover:text-slate-200 disabled:opacity-50"
           >
             <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
-            Edit Workflow
+            Refine
           </button>
           <button
             type="button"
@@ -130,12 +136,12 @@ export function ApprovalGateBanner({
         </button>
         <button
           type="button"
-          onClick={() => navigate(`/workflows/new?title=${encodeURIComponent(workflowTitle)}`)}
+          onClick={() => navigate(refineHref)}
           disabled={isSubmitting}
           className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 hover:text-slate-200 disabled:opacity-50"
         >
           <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
-          Edit Workflow
+          Refine
         </button>
         <button
           type="button"

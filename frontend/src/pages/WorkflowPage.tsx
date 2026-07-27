@@ -11,6 +11,7 @@ import { WorkflowApprovalBanner } from "../components/workflow/WorkflowApprovalB
 import { WorkflowSummaryHero } from "../components/workflow/WorkflowSummaryHero";
 import { WorkflowReplayPanel } from "../components/workflow/WorkflowReplayPanel";
 import { StageResultPanel } from "../components/runs/StageResultPanel";
+import { JiraIssuePicker } from "../components/workflow/JiraIssuePicker";
 import { useAuth } from "../app/auth-context";
 import {
   approveWorkflow,
@@ -246,6 +247,7 @@ export function WorkflowPage() {
           completedStage={lastCompletedStage.stage}
           nextStage={workflow.current_stage}
           workflowTitle={workflow.title}
+          workflowId={workflow.workflow_id}
           isSubmitting={isSubmitting}
           onApprove={handleApprove}
           onReject={handleRejectWorkflow}
@@ -257,6 +259,7 @@ export function WorkflowPage() {
           completedStage={lastCompletedStage?.stage ?? currentStageInfo.stage}
           nextStage={currentStageInfo.stage}
           workflowTitle={workflow.title}
+          workflowId={workflow.workflow_id}
           isSubmitting={isSubmitting}
           onApprove={handleApprove}
           onReject={handleRejectWorkflow}
@@ -270,6 +273,7 @@ export function WorkflowPage() {
       {phase === "blueprint_approval" && (
         <WorkflowApprovalBanner
           workflowTitle={workflow.title}
+          workflowId={workflow.workflow_id}
           status={workflow.status}
           isSubmitting={isSubmitting}
           onApprove={handleApproveWorkflow}
@@ -367,8 +371,17 @@ export function NewWorkflowPage() {
   const { token } = useAuth();
   const [searchParams] = useSearchParams();
   const [input, setInput] = useState(() => searchParams.get("title") ?? "");
+  const [refinementNote, setRefinementNote] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Set when arriving via "Refine" on an existing workflow (see
+  // ApprovalGateBanner/WorkflowApprovalBanner) rather than "New Workflow"
+  // from scratch — this workflow becomes a new version in that one's
+  // lineage, and its completed stage(s) are carried forward as context
+  // automatically (see workflows.py's create_workflow), so the objective
+  // text alone doesn't need to repeat everything from before.
+  const parentId = searchParams.get("parentId");
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -380,7 +393,12 @@ export function NewWorkflowPage() {
     try {
       // "planning" is the only creatable type today — Auto Execution is
       // shown (disabled) to preview the direction, not to be selectable.
-      const response = await createWorkflow(token, { title: trimmed, workflow_type: "planning" });
+      const response = await createWorkflow(token, {
+        title: trimmed,
+        workflow_type: "planning",
+        ...(parentId ? { parent_workflow_id: parentId } : {}),
+        ...(parentId && refinementNote.trim() ? { refinement_note: refinementNote.trim() } : {}),
+      });
       // Navigate to workflow page
       window.location.href = `/workflows/${response.workflow_id}`;
     } catch (err) {
@@ -403,10 +421,13 @@ export function NewWorkflowPage() {
           <GitMerge className="h-5 w-5 text-brand-400" aria-hidden="true" />
         </div>
         <div>
-          <h2 className="text-xl font-semibold text-slate-50">Describe what you want built</h2>
+          <h2 className="text-xl font-semibold text-slate-50">
+            {parentId ? "Refine this plan" : "Describe what you want built"}
+          </h2>
           <p className="text-sm text-slate-400">
-            GraphForge turns this into an AI workflow — Planning → Development → Testing → Review —
-            and runs each stage for you.
+            {parentId
+              ? "This becomes a new version of that workflow — its blueprint carries forward automatically, plus whatever you note below."
+              : "GraphForge turns this into an AI workflow — Planning → Development → Testing → Review — and runs each stage for you."}
           </p>
         </div>
       </div>
@@ -459,6 +480,14 @@ export function NewWorkflowPage() {
 
       <Card>
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          {!parentId && (
+            <JiraIssuePicker
+              onSelect={(reference) =>
+                setInput((prev) => (prev.trim() ? `${prev.trim()}\n\n${reference}` : reference))
+              }
+            />
+          )}
+
           <div>
             <label htmlFor="workflow-input" className="block text-sm font-medium text-slate-200">
               What's the engineering objective?
@@ -489,6 +518,24 @@ export function NewWorkflowPage() {
             </p>
           </div>
 
+          {parentId && (
+            <div>
+              <label htmlFor="refinement-note" className="block text-sm font-medium text-slate-200">
+                What should change in this version? <span className="text-slate-500">(optional)</span>
+              </label>
+              <textarea
+                id="refinement-note"
+                value={refinementNote}
+                onChange={(e) => setRefinementNote(e.target.value)}
+                disabled={isSubmitting}
+                placeholder="e.g. The architecture is right, but the risk section is thin — call out the migration's rollback plan explicitly."
+                rows={3}
+                maxLength={4000}
+                className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:opacity-50"
+              />
+            </div>
+          )}
+
           {!isSubmitting && (
             <div>
               <p className="mb-2 text-xs font-medium text-slate-500">Try an example:</p>
@@ -512,10 +559,10 @@ export function NewWorkflowPage() {
               type="submit"
               disabled={isSubmitting || !input.trim()}
               className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-400 disabled:cursor-not-allowed disabled:opacity-50"
-              aria-label="Start SDLC workflow"
+              aria-label={parentId ? "Create refined workflow" : "Start SDLC workflow"}
             >
               <Send className="h-4 w-4" aria-hidden="true" />
-              {isSubmitting ? "Starting…" : "Start Workflow"}
+              {isSubmitting ? "Starting…" : parentId ? "Create Refinement" : "Start Workflow"}
             </button>
             {isSubmitting && (
               <span className="text-xs text-slate-500">

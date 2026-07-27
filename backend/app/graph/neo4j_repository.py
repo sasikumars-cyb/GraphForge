@@ -33,6 +33,7 @@ _ALLOWED_LABELS = frozenset(
         "Class",
         "Function",
         "PythonDependency",
+        "DataTable",
     }
 )
 _ALLOWED_REL_TYPES = frozenset(
@@ -45,6 +46,8 @@ _ALLOWED_REL_TYPES = frozenset(
         "DEPENDS_ON",
         "IMPORTS",
         "INHERITS_FROM",
+        "READS_FROM",
+        "WRITES_TO",
     }
 )
 

@@ -15,7 +15,14 @@ import json
 import logging
 from typing import Any
 
-from app.ai.providers.base import BaseAnalysisProvider, LLMRequestOptions, LLMResponse
+from app.ai.providers.base import (
+    BaseAnalysisProvider,
+    LLMRequestOptions,
+    LLMResponse,
+    ToolSpec,
+    ToolTurnResult,
+    ToolUseRequest,
+)
 from app.ai.providers.errors import (
     AIProviderAuthError,
     AIProviderError,
@@ -160,6 +167,92 @@ class BedrockProvider(BaseAnalysisProvider):
             raise  # pragma: no cover
 
         return self._extract_response(response)
+
+    async def complete_with_tools(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[ToolSpec],
+    ) -> ToolTurnResult:
+        """Native tool-calling turn via Converse API's `toolConfig` — Claude
+        (and other Converse-supported models) can request one or more tool
+        calls per turn; the caller executes them and continues the
+        conversation by appending a `toolResult` message (see base.py's
+        `complete_with_tools` docstring for the full turn-taking contract).
+        """
+        import asyncio
+
+        client = self._get_client()
+
+        converse_params: dict[str, Any] = {
+            "modelId": self._model,
+            "messages": messages,
+            "system": [{"text": system_prompt}],
+            "inferenceConfig": {
+                "temperature": self._temperature,
+                "maxTokens": self._max_tokens,
+            },
+            "toolConfig": {
+                "tools": [
+                    {
+                        "toolSpec": {
+                            "name": t.name,
+                            "description": t.description,
+                            "inputSchema": {"json": t.input_schema},
+                        }
+                    }
+                    for t in tools
+                ]
+            },
+        }
+
+        try:
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(
+                None,
+                lambda: client.converse(**converse_params),
+            )
+        except Exception as exc:
+            self._handle_client_error(exc)
+            raise  # pragma: no cover
+
+        return self._extract_tool_turn(response)
+
+    def _extract_tool_turn(self, response: dict[str, Any]) -> ToolTurnResult:
+        try:
+            output = response["output"]["message"]
+            content_blocks = output.get("content", [])
+
+            texts: list[str] = []
+            tool_uses: list[ToolUseRequest] = []
+            for block in content_blocks:
+                if isinstance(block.get("text"), str):
+                    texts.append(block["text"])
+                elif "toolUse" in block:
+                    tu = block["toolUse"]
+                    tool_uses.append(
+                        ToolUseRequest(
+                            id=tu["toolUseId"], name=tu["name"], input=tu.get("input", {})
+                        )
+                    )
+
+            usage = response.get("usage", {})
+            prompt_tokens = usage.get("inputTokens")
+            completion_tokens = usage.get("outputTokens")
+
+            return ToolTurnResult(
+                content_blocks=content_blocks,
+                tool_uses=tool_uses,
+                text="\n".join(texts),
+                stop_reason=response.get("stopReason"),
+                prompt_tokens=int(prompt_tokens) if prompt_tokens is not None else None,
+                completion_tokens=int(completion_tokens) if completion_tokens is not None else None,
+            )
+        except (KeyError, IndexError, TypeError, ValueError) as exc:
+            raise AIProviderResponseError(
+                "AI provider returned an unexpected response structure."
+            ) from exc
 
     async def _request_completion(self, user_prompt: str) -> LLMResponse:
         """Transitional: delegates to _send_completion with the built-in

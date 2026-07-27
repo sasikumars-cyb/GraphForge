@@ -103,6 +103,14 @@ class Settings(BaseSettings):
     # --- Amazon Bedrock (AWS credential chain — no API key stored) ---
     bedrock_region: str = Field(default="us-east-1")
     bedrock_model: str = Field(default="us.anthropic.claude-sonnet-4-20250514")
+    # Higher than openai_max_tokens for the same reason gemini_max_tokens is
+    # (truncated JSON), plus a hybrid-reasoning model (e.g. Claude Haiku 4.5)
+    # spends part of this same budget on its own reasoning trace before ever
+    # emitting the final answer - too low a cap can consume the entire
+    # budget on reasoning and return empty text, which is exactly what
+    # happened at the previous 4096 default (inherited from openai_max_tokens
+    # via the resolver's fallback, before this field existed).
+    bedrock_max_tokens: int = Field(default=16384)
 
     # --- Future integrations (unused until their adapters are implemented) ---
     jira_base_url: str | None = Field(default=None)

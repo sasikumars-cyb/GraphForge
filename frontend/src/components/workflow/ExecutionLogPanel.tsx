@@ -57,14 +57,31 @@ export function ExecutionLogPanel({ step, agentLabel, llmTrace }: ExecutionLogPa
             <span>
               Full LLM Prompt &amp; Response
               <span className="ml-2 font-normal text-slate-600">
+                {llmTrace.provider ? `${llmTrace.provider} · ` : ""}
                 {llmTrace.model}
                 {llmTrace.latency_ms != null && ` · ${(llmTrace.latency_ms / 1000).toFixed(1)}s`}
+                {llmTrace.total_tokens != null && ` · ${llmTrace.total_tokens.toLocaleString()} tokens`}
+                {llmTrace.estimated_cost_usd != null &&
+                  ` · ~$${llmTrace.estimated_cost_usd.toFixed(4)}`}
               </span>
             </span>
             <span className="text-slate-600 group-open:hidden">Expand</span>
             <span className="hidden text-slate-600 group-open:inline">Collapse</span>
           </summary>
           <div className="flex flex-col gap-3 border-t border-slate-800 p-3">
+            {(llmTrace.prompt_tokens != null || llmTrace.completion_tokens != null) && (
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+                {llmTrace.prompt_tokens != null && (
+                  <span>Prompt: {llmTrace.prompt_tokens.toLocaleString()} tokens</span>
+                )}
+                {llmTrace.completion_tokens != null && (
+                  <span>Completion: {llmTrace.completion_tokens.toLocaleString()} tokens</span>
+                )}
+                {llmTrace.estimated_cost_usd != null && (
+                  <span>Estimated cost: ${llmTrace.estimated_cost_usd.toFixed(4)} (not a billing figure)</span>
+                )}
+              </div>
+            )}
             <div>
               <p className="mb-1 text-[10.5px] font-semibold tracking-wide text-slate-500 uppercase">
                 Prompt sent to the model

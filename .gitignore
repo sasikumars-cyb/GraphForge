@@ -35,6 +35,8 @@ Thumbs.db
 
 # --- Docker ---
 docker/postgres/data/
+docker/docker-compose.override.yml
+docker/local-gitconfig
 
 # --- Logs ---
 *.log

@@ -3,6 +3,10 @@ import { CheckCircle2, Loader2, PenLine, ShieldQuestion, XCircle } from "lucide-
 
 interface WorkflowApprovalBannerProps {
   workflowTitle: string;
+  /** This workflow's own id — threaded into "Refine"'s parentId so the
+   * next draft carries this one's blueprint forward instead of starting
+   * cold (see NewWorkflowPage's parentId handling). */
+  workflowId: string;
   /** The real workflow.status — "awaiting_approval" is the only
    * actionable state; "approved"/"rejected" are terminal and render a
    * read-only confirmation instead of buttons. */
@@ -22,6 +26,7 @@ interface WorkflowApprovalBannerProps {
  * persisted, terminal decision. */
 export function WorkflowApprovalBanner({
   workflowTitle,
+  workflowId,
   status,
   isSubmitting,
   onApprove,
@@ -29,24 +34,46 @@ export function WorkflowApprovalBanner({
 }: WorkflowApprovalBannerProps) {
   const navigate = useNavigate();
 
+  const refineHref = `/workflows/new?title=${encodeURIComponent(workflowTitle)}&parentId=${encodeURIComponent(workflowId)}`;
+
   if (status === "approved") {
     return (
-      <div className="flex items-start gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-5 py-4">
-        <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" aria-hidden="true" />
-        <p className="text-sm text-emerald-200">
-          <strong className="text-emerald-100">Blueprint approved.</strong> Planning is complete and
-          this blueprint is ready for implementation. Turning an approved blueprint into code isn't
-          available yet — this workflow stays here as your approved plan of record.
-        </p>
+      <div className="flex items-start justify-between gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/5 px-5 py-4">
+        <div className="flex items-start gap-3">
+          <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-emerald-400" aria-hidden="true" />
+          <p className="text-sm text-emerald-200">
+            <strong className="text-emerald-100">Blueprint approved.</strong> Planning is complete and
+            this blueprint is ready for implementation. Turning an approved blueprint into code isn't
+            available yet — this workflow stays here as your approved plan of record.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => navigate(refineHref)}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-emerald-300 ring-1 ring-inset ring-emerald-500/30 transition-colors hover:bg-emerald-500/10"
+        >
+          <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
+          Refine
+        </button>
       </div>
     );
   }
 
   if (status === "rejected") {
     return (
-      <div className="rounded-xl border border-slate-800 bg-slate-900/60 px-5 py-4 text-sm text-slate-400">
-        This blueprint was rejected. Nothing further will run automatically — edit and start a new
-        workflow if you'd like to try again.
+      <div className="flex items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900/60 px-5 py-4 text-sm text-slate-400">
+        <p>
+          This blueprint was rejected. Nothing further will run automatically — refine it into a new
+          version if you'd like to try again.
+        </p>
+        <button
+          type="button"
+          onClick={() => navigate(refineHref)}
+          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-slate-300 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800"
+        >
+          <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
+          Refine
+        </button>
       </div>
     );
   }
@@ -63,12 +90,12 @@ export function WorkflowApprovalBanner({
       <div className="flex shrink-0 items-center gap-2">
         <button
           type="button"
-          onClick={() => navigate(`/workflows/new?title=${encodeURIComponent(workflowTitle)}`)}
+          onClick={() => navigate(refineHref)}
           disabled={isSubmitting}
           className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 hover:text-slate-200 disabled:opacity-50"
         >
           <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
-          Edit Workflow
+          Refine
         </button>
         <button
           type="button"

@@ -160,6 +160,8 @@ async def create_workflow(
     title: str,
     workflow_type: str = "planning",
     source_workflow_id: uuid.UUID | None = None,
+    parent_workflow_id: uuid.UUID | None = None,
+    refinement_note: str | None = None,
 ) -> Workflow:
     """Create a new workflow starting at its type's first stage.
 
@@ -170,6 +172,13 @@ async def create_workflow(
 
     For auto_execution workflows, `source_workflow_id` must reference an
     existing, approved Planning workflow (the blueprint being executed).
+
+    `parent_workflow_id`/`refinement_note` are the "Refine" flow (distinct
+    from auto_execution's source_workflow_id above): the workflow this one
+    refines, and the human's own note on what to change. `version` is
+    derived from the parent's version, not recomputed by walking the whole
+    chain, so it stays O(1) regardless of how many refinements deep this
+    goes.
     """
     from app.core.exceptions import AppError
 
@@ -210,6 +219,18 @@ async def create_workflow(
                 error_code="source_workflow_not_approved",
             )
 
+    # --- refine-specific validation ---
+    parent: Workflow | None = None
+    if parent_workflow_id is not None:
+        try:
+            parent = await get_workflow(db, parent_workflow_id)
+        except NotFoundError as exc:
+            raise AppError(
+                f"Parent workflow '{parent_workflow_id}' not found.",
+                status_code=400,
+                error_code="parent_workflow_not_found",
+            ) from exc
+
     generated_title = await generate_title(title)
 
     workflow = Workflow(
@@ -220,12 +241,17 @@ async def create_workflow(
         status="in_progress",
         workflow_type=workflow_type,
         source_workflow_id=source_workflow_id,
+        parent_workflow_id=parent_workflow_id,
+        version=(parent.version + 1) if parent is not None else 1,
+        refinement_note=refinement_note,
     )
     db.add(workflow)
     await db.flush()
 
     logger.info(
-        "workflow_created id=%s title=%s type=%s", str(workflow.id), generated_title, workflow_type
+        "workflow_created id=%s title=%s type=%s version=%d parent_id=%s",
+        str(workflow.id), generated_title, workflow_type, workflow.version,
+        str(parent_workflow_id) if parent_workflow_id else None,
     )
     return workflow
 
@@ -407,6 +433,35 @@ async def finalize_stage_run(db: AsyncSession, workflow_id: uuid.UUID, run: Run)
     return workflow
 
 
+async def _record_confidence_calibration(
+    db: AsyncSession, workflow: Workflow, decision: str
+) -> None:
+    """One row per completed stage's confidence_score, checked against the
+    human decision that just closed out this workflow.
+
+    See app.models.confidence_calibration's docstring for why this exists.
+    `workflow.runs`/`.steps` must already be eager-loaded (both
+    approve_workflow/reject_workflow's caller uses get_workflow_for_update,
+    which does) — this never issues its own query.
+    """
+    from app.models.confidence_calibration import ConfidenceCalibration
+
+    for run in workflow.runs:
+        for step in run.steps:
+            if step.confidence_score is None:
+                continue
+            db.add(
+                ConfidenceCalibration(
+                    id=uuid.uuid4(),
+                    workflow_id=workflow.id,
+                    run_id=run.id,
+                    agent_id=step.agent_id,
+                    confidence_score=step.confidence_score,
+                    decision=decision,
+                )
+            )
+
+
 async def approve_workflow(db: AsyncSession, workflow: Workflow, user_id: uuid.UUID) -> None:
     """Human approves a completed blueprint — terminal, no further stages
     run automatically (matches Auto Execution being a separate, explicit
@@ -416,6 +471,7 @@ async def approve_workflow(db: AsyncSession, workflow: Workflow, user_id: uuid.U
     workflow.status = "approved"
     workflow.approved_by_user_id = user_id
     workflow.updated_at = datetime.now(timezone.utc)
+    await _record_confidence_calibration(db, workflow, "approved")
     await db.flush()
     logger.info("workflow_approved id=%s approved_by=%s", str(workflow.id), str(user_id))
 
@@ -425,5 +481,6 @@ async def reject_workflow(db: AsyncSession, workflow: Workflow) -> None:
     blueprint-approval gate or a later inter-stage approval gate."""
     workflow.status = "rejected"
     workflow.updated_at = datetime.now(timezone.utc)
+    await _record_confidence_calibration(db, workflow, "rejected")
     await db.flush()
     logger.info("workflow_rejected id=%s", str(workflow.id))

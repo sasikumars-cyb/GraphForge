@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.agents.title_generation import generate_title
-from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import get_current_user, require_admin
 from app.context.resolvers.freetext import resolve as resolve_freetext
 from app.core.config import get_settings
 from app.core.exceptions import AppError, NotFoundError
@@ -131,6 +131,7 @@ class AgentManifestResponse(BaseModel):
     purpose: str
     goals: list[str]
     cost_class: str
+    enabled: bool
 
 
 class CancelRunResponse(BaseModel):
@@ -225,9 +226,32 @@ async def list_agents(
             purpose=m.purpose,
             goals=sorted(m.goals),
             cost_class=m.cost_class,
+            enabled=global_registry.is_enabled(m.agent_id),
         )
         for m in global_registry.all_manifests()
     ]
+
+
+@router.post("/agents/{agent_id}/disable", status_code=204)
+async def disable_agent(
+    agent_id: str,
+    _: User = Depends(require_admin),
+) -> None:
+    """Runtime kill switch — stop new runs for this agent immediately,
+    without a deploy. Any run already in progress finishes normally."""
+    if global_registry.get(agent_id) is None:
+        raise NotFoundError(f"Agent '{agent_id}' is not registered.")
+    global_registry.disable(agent_id)
+
+
+@router.post("/agents/{agent_id}/enable", status_code=204)
+async def enable_agent(
+    agent_id: str,
+    _: User = Depends(require_admin),
+) -> None:
+    if global_registry.get(agent_id) is None:
+        raise NotFoundError(f"Agent '{agent_id}' is not registered.")
+    global_registry.enable(agent_id)
 
 
 @router.post("", status_code=202, response_model=CreateRunResponse)

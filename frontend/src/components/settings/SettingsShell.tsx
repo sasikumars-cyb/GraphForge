@@ -4,6 +4,8 @@ import {
   Brain,
   Plug,
   Wrench,
+  Bot,
+  Target,
   Shield,
   Settings2,
   type LucideIcon,
@@ -14,6 +16,8 @@ import { WorkspaceSection } from "./WorkspaceSection";
 import { AIWorkspaceSection } from "./AIWorkspaceSection";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { ToolRegistrySection } from "./ToolRegistrySection";
+import { AgentRegistrySection } from "./AgentRegistrySection";
+import { CalibrationSection } from "./CalibrationSection";
 import { SecuritySection } from "./SecuritySection";
 import { AdvancedSection } from "./AdvancedSection";
 
@@ -55,6 +59,20 @@ const TABS: SettingsTab[] = [
     adminOnly: true,
   },
   {
+    id: "agents",
+    label: "Agents",
+    icon: Bot,
+    description: "Runtime kill switch — enable/disable agents",
+    adminOnly: true,
+  },
+  {
+    id: "calibration",
+    label: "Calibration",
+    icon: Target,
+    description: "Does confidence actually predict approval?",
+    adminOnly: true,
+  },
+  {
     id: "security",
     label: "Security",
     icon: Shield,
@@ -80,6 +98,10 @@ function TabContent({ tabId }: { tabId: string }) {
       return <IntegrationsSection />;
     case "tools":
       return <ToolRegistrySection />;
+    case "agents":
+      return <AgentRegistrySection />;
+    case "calibration":
+      return <CalibrationSection />;
     case "security":
       return <SecuritySection />;
     case "advanced":

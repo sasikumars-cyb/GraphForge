@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 
 import logging
@@ -121,6 +122,12 @@ class RunCoordinator:
             from app.core.exceptions import NotFoundError
             raise NotFoundError(f"Agent '{agent_id}' selected but not found in registry.")
 
+        if not self._registry.is_enabled(agent_id):
+            await self._fail_run(run, f"Agent '{agent_id}' is currently disabled by an administrator.")
+            await self._db.commit()
+            from app.core.exceptions import AgentDisabledError
+            raise AgentDisabledError(f"Agent '{agent_id}' is disabled.")
+
         _manifest, agent = entry
         return run, agent_id, agent
 
@@ -133,6 +140,7 @@ class RunCoordinator:
         goal: str,
         model: str | None = None,
         extras: dict | None = None,
+        on_pre_commit: Callable[[AsyncSession, Run], Awaitable[None]] | None = None,
     ) -> Run:
         """Phase 2: run the resolved `agent` against `subject` and persist
         the outcome onto `run` (status queued/failed -> running ->
@@ -140,6 +148,20 @@ class RunCoordinator:
         session (either freshly created by `create_pending_run` in the same
         session, or re-fetched by id in a different session — see
         `background_execution.py` for the latter).
+
+        `on_pre_commit`, when given, runs immediately before this method's
+        own commit and is expected to call `db.commit()` itself — any other
+        mutation it makes against the same session (e.g. advancing a
+        Workflow's current_stage) lands in the *same* transaction as this
+        run's own status change, so a concurrent reader can never observe
+        one without the other. Without this, `run.status` and a caller's
+        own post-completion bookkeeping were two separate commits, letting
+        a fast poller see the run as done before, say, the owning
+        workflow's current_stage had advanced — a real race, not
+        theoretical (see the flaky test this was found from). A failing
+        hook is logged and swallowed, then this method still commits the
+        run's own status directly, so a bookkeeping bug can never lose the
+        run's result.
         """
         step = AgentStep(
             id=uuid.uuid4(),
@@ -176,7 +198,7 @@ class RunCoordinator:
             latency_ms = int((time.monotonic() - start_ms) * 1000)
             await self._fail_step(step, str(exc), latency_ms)
             await self._fail_run(run, str(exc))
-            await self._db.commit()
+            await self._commit_with_hook(run, on_pre_commit)
             logger.error(
                 "agent_run_failed run_id=%s agent_id=%s error=%s",
                 str(run.id), agent_id, str(exc),
@@ -201,7 +223,7 @@ class RunCoordinator:
         run.status = "completed"
         run.completed_at = now
 
-        await self._db.commit()
+        await self._commit_with_hook(run, on_pre_commit)
 
         logger.info(
             "agent_run_completed run_id=%s agent_id=%s subject_id=%s confidence=%.2f evidence_count=%d latency_ms=%d",
@@ -210,6 +232,27 @@ class RunCoordinator:
         )
 
         return run
+
+    async def _commit_with_hook(
+        self,
+        run: Run,
+        on_pre_commit: Callable[[AsyncSession, Run], Awaitable[None]] | None,
+    ) -> None:
+        """Commit `run`'s pending status change, atomically with whatever
+        `on_pre_commit` also mutates (see execute_run's docstring). Falls
+        back to a plain commit — of the run's own status alone — if the
+        hook is absent or raises, so a caller's bookkeeping bug can never
+        cost the run its own recorded outcome."""
+        if on_pre_commit is None:
+            await self._db.commit()
+            return
+        try:
+            await on_pre_commit(self._db, run)
+        except Exception:
+            logger.exception(
+                "run_coordinator_pre_commit_hook_failed run_id=%s", str(run.id)
+            )
+            await self._db.commit()
 
     async def _fail_step(self, step: AgentStep, error: str, latency_ms: int) -> None:
         step.status = "failed"

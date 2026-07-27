@@ -65,6 +65,27 @@ class Workflow(Base):
         Uuid, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True
     )
 
+    # Set when this workflow was created via "Refine" on another workflow's
+    # blueprint (rather than "New Workflow" from scratch) — links back to
+    # the workflow being refined, forming a version chain distinct from
+    # source_workflow_id's auto_execution linkage above. `version` is this
+    # workflow's 1-indexed position in that chain (1 for anything created
+    # from scratch). Both nullable/default-1 so pre-existing rows are
+    # unaffected. SET NULL on parent deletion mirrors source_workflow_id's
+    # FK behavior — losing the parent row should never retroactively hide
+    # that this was a refinement, only the specific link to which one.
+    parent_workflow_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("workflows.id", ondelete="SET NULL"), nullable=True
+    )
+    version: Mapped[int] = mapped_column(nullable=False, default=1, server_default="1")
+
+    # The human's own free-text note on what to change, captured on Refine
+    # and threaded into the new workflow's planning prompt (see
+    # PlanningAgent) so the next draft actually responds to it instead of
+    # regenerating cold from the same objective. Null for anything not
+    # created via Refine.
+    refinement_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     # Set only when a human has approved this blueprint via /approve — the
     # User whose decision moved this workflow to "approved". Nullable
     # because workflows approved before this column existed, and workflows

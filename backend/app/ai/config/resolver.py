@@ -92,6 +92,22 @@ def _env_credentials(spec_key: str, settings: Settings) -> tuple[str | None, str
     return getattr(settings, key_field, None), getattr(settings, model_field, None)
 
 
+def _default_max_tokens(spec_key: str, cfg: Settings) -> int:
+    """Env-fallback max_tokens, per provider — used only when nothing more
+    specific (stage/profile/stored config) set one. Gemini and Bedrock both
+    need a larger budget than OpenAI's default: Gemini's structured JSON
+    responses were truncating at 4096, and a Bedrock hybrid-reasoning model
+    (e.g. Claude Haiku 4.5) spends part of this same budget on its own
+    reasoning trace before emitting the final answer - too low a cap can
+    consume the whole budget on reasoning and return empty text.
+    """
+    if spec_key == "gemini":
+        return cfg.gemini_max_tokens
+    if spec_key == "bedrock":
+        return cfg.bedrock_max_tokens
+    return cfg.openai_max_tokens
+
+
 def _env_provider_options(spec_key: str, settings: Settings) -> dict[str, str]:
     """Build provider_options from environment variables."""
     option_map = _ENV_PROVIDER_OPTIONS.get(spec_key)
@@ -259,9 +275,7 @@ def resolve(
                         record.max_tokens
                         or (prov_cfg.max_tokens if prov_cfg else None)
                         or snapshot.max_tokens
-                        or (
-                            cfg.gemini_max_tokens if spec.key == "gemini" else cfg.openai_max_tokens
-                        )
+                        or _default_max_tokens(spec.key, cfg)
                     ),
                     base_url=(prov_cfg.base_url if prov_cfg else None) or spec.default_base_url,
                     provider_options=_resolve_provider_options(spec.key, prov_cfg, cfg),
@@ -295,9 +309,7 @@ def resolve(
         _stage_number(snapshot, stage, "max_tokens")
         or (record.max_tokens if record else None)
         or snapshot.max_tokens
-        # Gemini's structured JSON responses need the larger budget; keeping
-        # this per-provider preserves existing behaviour exactly.
-        or (cfg.gemini_max_tokens if spec.key == "gemini" else cfg.openai_max_tokens)
+        or _default_max_tokens(spec.key, cfg)
     )
 
     return ResolvedProvider(

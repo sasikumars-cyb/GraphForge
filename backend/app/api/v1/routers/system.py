@@ -16,6 +16,7 @@ from app.schemas.system import (
     ProviderStatus,
     SystemStatusResponse,
 )
+from app.tools.registry import get_tool_registry
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -32,19 +33,19 @@ async def system_status(
     providers = [
         ProviderStatus(
             name="openai",
-            configured=settings.openai_api_key is not None,
+            configured=bool(settings.openai_api_key),
             active=active_provider == "openai",
             model=settings.openai_model if active_provider == "openai" else None,
         ),
         ProviderStatus(
             name="gemini",
-            configured=settings.gemini_api_key is not None,
+            configured=bool(settings.gemini_api_key),
             active=active_provider == "gemini",
             model=settings.gemini_model if active_provider == "gemini" else None,
         ),
         ProviderStatus(
             name="groq",
-            configured=settings.groq_api_key is not None,
+            configured=bool(settings.groq_api_key),
             active=active_provider == "groq",
             model=settings.groq_model if active_provider == "groq" else None,
         ),
@@ -82,12 +83,15 @@ async def system_status(
         )
     )
 
-    # Jira
+    # Jira — configured via a Knowledge Connection (Settings → Integrations),
+    # not the global JIRA_BASE_URL env var, so ask the tool registry (which
+    # tools/setup.py syncs from Knowledge Connections) instead of settings.
+    jira_configured = get_tool_registry().is_enabled("jira")
     connections.append(
         ConnectionStatus(
             name="Jira",
-            status="configured" if settings.jira_base_url else "not_configured",
-            detail=settings.jira_base_url,
+            status="configured" if jira_configured else "not_configured",
+            detail=(settings.jira_base_url or "Via Knowledge Connection") if jira_configured else None,
         )
     )
 

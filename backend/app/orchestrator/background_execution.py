@@ -94,7 +94,18 @@ async def _execute_run_task(
 
             coordinator = RunCoordinator(db=db, registry=registry, selector=None)  # type: ignore[arg-type]
             try:
-                await coordinator.execute_run(run, agent_id, agent, subject, goal, model, extras)
+                # `on_complete` is passed as execute_run's on_pre_commit, not
+                # called after it returns: both used to be two separate
+                # commits (run status, then this callback's own bookkeeping
+                # — e.g. advancing a Workflow's current_stage), which let a
+                # fast poller observe a stage as "completed" before the
+                # workflow it belongs to had advanced. Passing it through
+                # merges both into execute_run's single commit — see that
+                # method's docstring for the atomicity guarantee and the
+                # fallback if the hook itself fails.
+                await coordinator.execute_run(
+                    run, agent_id, agent, subject, goal, model, extras, on_pre_commit=on_complete
+                )
             except Exception:
                 # execute_run already persisted status="failed" and
                 # committed on any failure path before re-raising — nothing
@@ -103,14 +114,6 @@ async def _execute_run_task(
                 # otherwise only surface as an unhandled "exception never
                 # retrieved" warning on GC).
                 logger.exception("background_run_failed run_id=%s agent_id=%s", run_id, agent_id)
-
-            if on_complete is not None:
-                try:
-                    await on_complete(db, run)
-                except Exception:
-                    logger.exception(
-                        "background_run_on_complete_failed run_id=%s agent_id=%s", run_id, agent_id
-                    )
         except Exception:
             # Defense in depth beyond execute_run's own handling — e.g. a
             # session-level failure (couldn't open a connection, run

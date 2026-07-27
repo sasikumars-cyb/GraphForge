@@ -61,3 +61,18 @@ class NotImplementedYetError(AppError):
 
     status_code = 501
     error_code = "not_implemented"
+
+
+class RateLimitedError(AppError):
+    """Raised when a user exceeds a per-endpoint request rate limit."""
+
+    status_code = 429
+    error_code = "rate_limited"
+
+
+class AgentDisabledError(AppError):
+    """Raised when a run is requested for an agent an admin has disabled
+    via the runtime kill switch (app.orchestrator.registry.AgentRegistry)."""
+
+    status_code = 503
+    error_code = "agent_disabled"

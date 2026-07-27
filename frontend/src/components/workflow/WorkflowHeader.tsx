@@ -75,9 +75,36 @@ export function WorkflowHeader({ workflow, completedSteps, phase }: WorkflowHead
             <p className="text-xs font-semibold uppercase tracking-wide text-brand-400">
               {workflowTypeLabel(workflow.workflow_type)}
             </p>
-            <h1 className="font-display text-xl font-bold tracking-tight text-slate-50 sm:text-2xl">
-              {workflow.title}
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="font-display text-xl font-bold tracking-tight text-slate-50 sm:text-2xl">
+                {workflow.title}
+              </h1>
+              {workflow.version > 1 && (
+                <span
+                  className="rounded-full bg-slate-800 px-2 py-0.5 text-xs font-semibold text-slate-300"
+                  title={
+                    workflow.parent_workflow_id
+                      ? `Refined from an earlier version (workflow ${workflow.parent_workflow_id})`
+                      : undefined
+                  }
+                >
+                  v{workflow.version}
+                </span>
+              )}
+            </div>
+            {workflow.parent_workflow_id && (
+              <Link
+                to={`/workflows/${workflow.parent_workflow_id}`}
+                className="text-xs text-slate-500 hover:text-brand-300"
+              >
+                View the version this refines →
+              </Link>
+            )}
+            {workflow.refinement_note && (
+              <p className="mt-1.5 max-w-2xl rounded-lg border border-brand-500/20 bg-brand-500/5 p-2.5 text-xs text-brand-200">
+                <strong className="text-brand-100">Refinement note:</strong> {workflow.refinement_note}
+              </p>
+            )}
             {workflow.original_prompt && workflow.original_prompt !== workflow.title && (
               <details className="mt-1 max-w-2xl">
                 <summary className="cursor-pointer text-xs text-slate-500 hover:text-slate-300">

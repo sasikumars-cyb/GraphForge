@@ -90,6 +90,9 @@ export function ControlCenterPage() {
 
   const activeProvider = system.ai_providers.find((p) => p.active);
   const githubConnected = github?.connected ?? false;
+  const connectedCount =
+    system.connections.filter((c) => c.name !== "GitHub" && c.status !== "not_configured").length +
+    (githubConnected ? 1 : 0);
 
   return (
     <div className="flex flex-col gap-6">
@@ -117,9 +120,9 @@ export function ControlCenterPage() {
           icon={Brain}
         />
         <StatusIndicator
-          label="GitHub"
-          value={githubConnected ? "Connected" : "Not linked"}
-          status={githubConnected ? "ok" : "neutral"}
+          label="Connections"
+          value={`${connectedCount} of ${system.connections.length}`}
+          status={connectedCount > 0 ? "ok" : "neutral"}
           icon={GitBranch}
         />
         <StatusIndicator

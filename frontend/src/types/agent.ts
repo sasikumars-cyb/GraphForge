@@ -149,9 +149,19 @@ export interface StructuredRisk {
 
 export interface LLMTrace {
   model: string;
+  // Which provider actually served the request — may differ from the
+  // configured default when a rate-limit fallback fired.
+  provider: string;
   prompt: string;
   raw_response: string;
   latency_ms: number | null;
+  prompt_tokens: number | null;
+  completion_tokens: number | null;
+  total_tokens: number | null;
+  // Rough estimate from a static per-model price table, not a real billing
+  // figure — null when the model isn't in that table or usage wasn't
+  // reported by the provider.
+  estimated_cost_usd: number | null;
 }
 
 export interface PlanningResult {
@@ -360,6 +370,10 @@ export interface WorkflowDetail {
   // Resolved display name of whoever approved this blueprint — null if
   // never approved, or approved before this field existed.
   approved_by: string | null;
+  // Version lineage — 1/null for anything not created via "Refine".
+  version: number;
+  parent_workflow_id: string | null;
+  refinement_note: string | null;
 }
 
 export interface WorkflowListItem {
@@ -372,6 +386,8 @@ export interface WorkflowListItem {
   created_at: string;
   updated_at: string;
   approved_by: string | null;
+  version: number;
+  parent_workflow_id: string | null;
 }
 
 export interface WorkflowListResponse {
@@ -386,6 +402,10 @@ export interface CreateWorkflowRequest {
   title: string;
   model?: string;
   workflow_type?: string;
+  // "Refine" — the workflow this one refines, plus the human's own note on
+  // what to change. See NewWorkflowPage's parentId/refinementNote handling.
+  parent_workflow_id?: string;
+  refinement_note?: string;
 }
 
 export interface ContinueWorkflowResponse {

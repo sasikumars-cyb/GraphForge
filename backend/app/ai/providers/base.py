@@ -58,6 +58,49 @@ class LLMResponse:
     total_tokens: int | None = None
 
 
+@dataclass(frozen=True)
+class ToolSpec:
+    """One tool definition offered to the model for a tool-calling turn.
+
+    `input_schema` is a JSON Schema object — passed through to the provider
+    largely as-is, since Converse/OpenAI/Gemini tool-calling APIs all accept
+    JSON Schema for parameters.
+    """
+
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolUseRequest:
+    """One tool call the model asked for in a turn."""
+
+    id: str
+    name: str
+    input: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ToolTurnResult:
+    """One turn of a tool-calling conversation.
+
+    `content_blocks` is the provider-native shape for the assistant's own
+    message — callers append this verbatim to the conversation history so
+    multi-turn state (including tool_use blocks) round-trips correctly on
+    the next call; `tool_uses` is the same information pre-parsed for
+    convenience. `text` is the concatenation of any plain-text blocks (the
+    model's final answer, once it stops requesting tools).
+    """
+
+    content_blocks: list[dict[str, Any]]
+    tool_uses: list[ToolUseRequest]
+    text: str
+    stop_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
 class BaseAnalysisProvider(ILLMProvider):
     """Provider-agnostic analyze pipeline.
 
@@ -103,6 +146,33 @@ class BaseAnalysisProvider(ILLMProvider):
         options: LLMRequestOptions,
     ) -> LLMResponse:
         """Provider-specific transport.  Subclasses MUST override."""
+        raise NotImplementedError
+
+    async def complete_with_tools(
+        self,
+        *,
+        system_prompt: str,
+        messages: list[dict[str, Any]],
+        tools: list[ToolSpec],
+    ) -> ToolTurnResult:
+        """Native tool/function-calling turn, for callers that need the
+        model itself to drive a multi-step tool-use loop (as opposed to
+        `complete()`, a single fixed prompt -> text call).
+
+        `messages` is provider-native chat history — the caller owns
+        building and extending it turn-to-turn (appending
+        `ToolTurnResult.content_blocks` as the assistant turn, then a
+        tool-result message once it has executed whatever the model asked
+        for). This mirrors Converse API's own message shape since that's
+        the first (and, for now, only) implementation; a second provider
+        adding this would need to translate to/from its own native shape.
+
+        Not every provider implements this — raises NotImplementedError by
+        default. Callers must catch that and degrade gracefully (see
+        PlanningAgent's Confluence context gathering, which skips that
+        enrichment entirely rather than failing the run when the active
+        provider doesn't support it).
+        """
         raise NotImplementedError
 
     # ------------------------------------------------------------------

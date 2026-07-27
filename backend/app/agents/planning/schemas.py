@@ -112,12 +112,25 @@ class RiskItem(BaseModel):
 class LLMTrace(BaseModel):
     """The actual prompt sent to the LLM and its raw response — real
     trace-level detail, not the one-line Evidence summary. Truncated (see
-    agent.py) to a sane cap before storage; not an unbounded dump."""
+    agent.py) to a sane cap before storage; not an unbounded dump.
+
+    `provider` is which provider actually served the request — may differ
+    from the configured default when a rate-limit fallback fired (see
+    agent.py's _call_llm). Token counts and `estimated_cost_usd` are None
+    when the serving provider didn't report usage (see LLMResponse) or the
+    model isn't in app.ai.providers.pricing's table — never a fabricated
+    guess presented as real.
+    """
 
     model: str = ""
+    provider: str = ""
     prompt: str = ""
     raw_response: str = ""
     latency_ms: int | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    estimated_cost_usd: float | None = None
 
 
 class PlanningResult(BaseModel):

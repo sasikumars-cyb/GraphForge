@@ -21,6 +21,12 @@ class AgentRegistry:
 
     def __init__(self) -> None:
         self._store: dict[str, tuple[AgentManifest, IAgent]] = {}
+        # Runtime kill switch: an agent_id in this set is registered but
+        # refuses new runs until re-enabled. In-memory (like ToolRegistry's
+        # `_enabled`) — a config-change endpoint, not a persisted setting;
+        # a restart re-enables everything, which is fine since disabling is
+        # meant as an incident-response lever, not a standing configuration.
+        self._disabled: set[str] = set()
 
     def register(self, manifest: AgentManifest, agent: IAgent) -> None:
         """Register an agent. Raises ValueError on duplicate agent_id."""
@@ -44,6 +50,24 @@ class AgentRegistry:
     def all_manifests(self) -> list[AgentManifest]:
         """Return all registered manifests, ordered by agent_id."""
         return [manifest for manifest, _ in sorted(self._store.values(), key=lambda t: t[0].agent_id)]
+
+    def is_enabled(self, agent_id: str) -> bool:
+        """False only if `disable(agent_id)` was called and not since
+        reversed. An unknown agent_id is treated as enabled — `get()`
+        returning None is what actually blocks a run for an unknown id,
+        this method answers one question only: was this agent turned off."""
+        return agent_id not in self._disabled
+
+    def disable(self, agent_id: str) -> None:
+        """Runtime kill switch — new runs for this agent_id fail immediately
+        (see RunCoordinator.create_pending_run) until enable() is called.
+        Does not affect a run already in progress."""
+        self._disabled.add(agent_id)
+        logger.warning("agent_disabled agent_id=%s", agent_id)
+
+    def enable(self, agent_id: str) -> None:
+        self._disabled.discard(agent_id)
+        logger.info("agent_enabled agent_id=%s", agent_id)
 
 
 # Module-level singleton — imported and used by agents and the RunCoordinator.

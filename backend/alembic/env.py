@@ -17,6 +17,7 @@ from app.database.base import Base
 from app.models.agent_step import AgentStep  # noqa: F401
 from app.models.ai_profile import AIProfile, AIProviderUsage  # noqa: F401
 from app.models.ai_provider_config import AIProviderConfig, AISettings  # noqa: F401
+from app.models.confidence_calibration import ConfidenceCalibration  # noqa: F401
 from app.models.github_connection import GitHubConnection  # noqa: F401
 from app.models.indexing_job import IndexingJob  # noqa: F401
 from app.models.pull_request import PullRequest  # noqa: F401

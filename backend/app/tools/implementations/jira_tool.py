@@ -279,6 +279,91 @@ class JiraTool:
             url=f"{self._base_url}/browse/{issue_key}",
         )
 
+    async def search_issues(self, query: str, max_results: int = 15) -> list[dict[str, str]]:
+        """Free-text JQL search — the real "browse the backlog" entry point,
+        as opposed to `execute()`'s "fetch one issue by key" (which requires
+        already knowing the exact key, and used to be the *only* way a user
+        could reference a Jira ticket: paste a key/URL into the objective
+        textarea and hope `extract_issue_key` found it). JQL search itself
+        is REST only — no standardized MCP search tool exists across
+        servers the way "get one issue by key" does.
+
+        When `query` already looks like a bare issue key (e.g. "NPT-6") and
+        JQL search isn't available (MCP-only connection, or REST search
+        failed), falls back to a direct single-issue fetch via `execute()`
+        — that path works over both REST and MCP, so a user who already
+        knows the key still gets a real, selectable result instead of a
+        blanket "no matches" purely because the *search* endpoint happens
+        to be REST-only. Free-text search on an MCP-only connection still
+        can't return anything — there is no MCP search tool to fall back to
+        for that case.
+
+        Returns [] (not an error) when Jira isn't configured or the search
+        itself fails — this is a "nice to have while typing" affordance,
+        not a required step, so callers show an empty result list rather
+        than surfacing a hard error for what's still an optional picker.
+        """
+        if not query.strip():
+            return []
+
+        if not self._uses_rest:
+            return await self._search_fallback_single_key(query)
+        jql = f'text ~ "{query.strip()}*" ORDER BY updated DESC'
+        try:
+            async with httpx.AsyncClient(
+                auth=(self._email, self._token), timeout=10.0, follow_redirects=True
+            ) as client:
+                response = await client.get(
+                    f"{self._base_url}/rest/api/3/search",
+                    params={
+                        "jql": jql,
+                        "maxResults": max_results,
+                        "fields": "summary,status,issuetype",
+                    },
+                    headers={"Accept": "application/json"},
+                )
+            response.raise_for_status()
+            payload = response.json()
+        except httpx.HTTPError as exc:
+            logger.warning("jira_tool_search_failed query=%s error=%s", query, str(exc))
+            return await self._search_fallback_single_key(query)
+
+        results: list[dict[str, str]] = []
+        for issue in payload.get("issues", []):
+            fields = issue.get("fields", {})
+            results.append({
+                "key": issue.get("key", ""),
+                "summary": fields.get("summary", ""),
+                "status": _name_of(fields.get("status")),
+                "issue_type": _name_of(fields.get("issuetype")),
+                "url": f"{self._base_url}/browse/{issue.get('key', '')}",
+            })
+
+        if not results:
+            return await self._search_fallback_single_key(query)
+        return results
+
+    async def _search_fallback_single_key(self, query: str) -> list[dict[str, str]]:
+        """If `query` names a real issue key, fetch that one issue via the
+        existing REST-or-MCP `execute()` path and return it as a
+        single-item search result. Not a real search (nothing else in the
+        project is discoverable this way), but it means a user who already
+        knows the key gets a real, clickable result on an MCP-only
+        connection instead of an unconditional "no matches"."""
+        issue_key = extract_issue_key(query)
+        if issue_key is None:
+            return []
+        result = await self.execute(ToolInput(query=issue_key))
+        if not result.success:
+            return []
+        return [{
+            "key": result.data.get("issue_key", issue_key),
+            "summary": result.data.get("summary", ""),
+            "status": result.data.get("status", ""),
+            "issue_type": result.data.get("issue_type", ""),
+            "url": result.data.get("url", ""),
+        }]
+
     def _build_result(
         self,
         issue_key: str,
