@@ -13,8 +13,31 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import AppError
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
+
+
+def _require(obj: Any, *keys: str) -> Any:
+    """Nested dict lookup that raises a clean 400 AppError naming the
+    missing key, instead of a bare KeyError several layers deep surfacing
+    as an unhandled 500. The webhook signature already verified this
+    payload actually came from GitHub — an unexpected/missing field means a
+    GitHub event shape this endpoint doesn't handle yet, not tampering —
+    but GitHub treats any non-2xx response as a delivery failure and
+    retries, so a payload shape this can't handle must still be ack'd with
+    a clean 4xx (logged once) rather than crash and retry forever.
+    """
+    current = obj
+    for i, key in enumerate(keys):
+        if not isinstance(current, dict) or key not in current:
+            raise AppError(
+                f"Malformed pull_request webhook payload: missing '{'.'.join(keys[: i + 1])}'.",
+                status_code=400,
+                error_code="invalid_webhook_payload",
+            )
+        current = current[key]
+    return current
 
 
 def verify_signature(payload_body: bytes, signature_header: str | None, secret: str) -> bool:
@@ -34,7 +57,7 @@ def verify_signature(payload_body: bytes, signature_header: str | None, secret: 
 def _pull_request_state(pr_payload: dict[str, Any]) -> str:
     if pr_payload.get("merged"):
         return "merged"
-    return str(pr_payload["state"])
+    return str(_require(pr_payload, "state"))
 
 
 async def handle_pull_request_event(db: AsyncSession, payload: dict[str, Any]) -> list[PullRequest]:
@@ -43,9 +66,9 @@ async def handle_pull_request_event(db: AsyncSession, payload: dict[str, Any]) -
     who tracks it, so one GitHub event can fan out to several rows.
     Repositories nobody tracks are silently ignored (still ack'd 200 to GitHub).
     """
-    github_repo_id = str(payload["repository"]["id"])
-    pr_payload = payload["pull_request"]
-    github_pr_id = str(pr_payload["id"])
+    github_repo_id = str(_require(payload, "repository", "id"))
+    pr_payload = _require(payload, "pull_request")
+    github_pr_id = str(_require(pr_payload, "id"))
 
     repositories_result = await db.execute(
         select(Repository).where(Repository.github_repo_id == github_repo_id)
@@ -63,20 +86,20 @@ async def handle_pull_request_event(db: AsyncSession, payload: dict[str, Any]) -
         pull_request = existing_result.scalar_one_or_none()
 
         fields = {
-            "number": pr_payload["number"],
-            "title": pr_payload["title"],
+            "number": _require(pr_payload, "number"),
+            "title": _require(pr_payload, "title"),
             "state": _pull_request_state(pr_payload),
             "is_draft": pr_payload.get("draft", False),
-            "author_login": pr_payload["user"]["login"],
-            "html_url": pr_payload["html_url"],
-            "head_ref": pr_payload["head"]["ref"],
-            "head_sha": pr_payload["head"]["sha"],
-            "base_ref": pr_payload["base"]["ref"],
+            "author_login": _require(pr_payload, "user", "login"),
+            "html_url": _require(pr_payload, "html_url"),
+            "head_ref": _require(pr_payload, "head", "ref"),
+            "head_sha": _require(pr_payload, "head", "sha"),
+            "base_ref": _require(pr_payload, "base", "ref"),
             "github_created_at": datetime.fromisoformat(
-                pr_payload["created_at"].replace("Z", "+00:00")
+                _require(pr_payload, "created_at").replace("Z", "+00:00")
             ),
             "github_updated_at": datetime.fromisoformat(
-                pr_payload["updated_at"].replace("Z", "+00:00")
+                _require(pr_payload, "updated_at").replace("Z", "+00:00")
             ),
         }
 

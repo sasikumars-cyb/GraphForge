@@ -308,7 +308,16 @@ class JiraTool:
 
         if not self._uses_rest:
             return await self._search_fallback_single_key(query)
-        jql = f'text ~ "{query.strip()}*" ORDER BY updated DESC'
+        # `query` is free text from an authenticated user (GET /jira/search?q=...,
+        # only length-bounded, no character filtering) embedded directly into a
+        # JQL string literal below — a `"` in the input would otherwise close
+        # the literal early and let arbitrary JQL clauses be appended
+        # (bounded by whatever the shared Jira credential can see, but a real
+        # injection into a query language regardless). JQL's own escaping
+        # rules for string literals are backslash and double-quote, same as
+        # most C-like query languages.
+        escaped_query = query.strip().replace("\\", "\\\\").replace('"', '\\"')
+        jql = f'text ~ "{escaped_query}*" ORDER BY updated DESC'
         try:
             async with httpx.AsyncClient(
                 auth=(self._email, self._token), timeout=10.0, follow_redirects=True

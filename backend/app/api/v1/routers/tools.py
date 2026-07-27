@@ -8,10 +8,11 @@ PUT  /api/v1/tools/{id}     → enable/disable + update config (not yet persiste
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
 from app.api.v1.dependencies import require_admin
+from app.core.exceptions import NotFoundError
 from app.models.user import User
 from app.tools.interfaces import ToolHealth
 from app.tools.registry import ToolSpec, get_tool_registry
@@ -91,7 +92,7 @@ async def get_tool(tool_id: str, _: User = Depends(require_admin)) -> ToolRespon
     specs = {s.tool_id: s for s in registry.all_specs()}
     spec = specs.get(tool_id)
     if spec is None:
-        raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found.")
+        raise NotFoundError(f"Tool '{tool_id}' not found.")
     return _spec_to_response(spec)
 
 
@@ -101,7 +102,7 @@ async def check_health(tool_id: str, _: User = Depends(require_admin)) -> Health
     registry = get_tool_registry()
     specs = {s.tool_id: s for s in registry.all_specs()}
     if tool_id not in specs:
-        raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found.")
+        raise NotFoundError(f"Tool '{tool_id}' not found.")
     health: ToolHealth = await registry.check_health(tool_id)
     return HealthCheckResponse(tool_id=tool_id, health=health.value)
 
@@ -118,6 +119,6 @@ async def configure_tool(tool_id: str, body: ConfigureToolRequest, _: User = Dep
     specs = {s.tool_id: s for s in registry.all_specs()}
     spec = specs.get(tool_id)
     if spec is None:
-        raise HTTPException(status_code=404, detail=f"Tool '{tool_id}' not found.")
+        raise NotFoundError(f"Tool '{tool_id}' not found.")
     registry.configure(tool_id, enabled=body.enabled, config=body.config)
     return _spec_to_response(spec)

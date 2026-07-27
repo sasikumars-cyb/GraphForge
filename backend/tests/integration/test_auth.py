@@ -1,5 +1,7 @@
 """Registration, login, /me, and the GitHub OAuth stub routes."""
 
+import uuid
+
 import pytest
 from httpx import AsyncClient
 
@@ -30,6 +32,26 @@ async def test_register_creates_user(db_client: AsyncClient) -> None:
     assert "created_at" in body
     assert "password" not in body
     assert "hashed_password" not in body
+
+
+async def test_register_never_grants_admin_regardless_of_email(db_client: AsyncClient) -> None:
+    """Regression test: app/main.py's lifespan used to run an unconditional
+    `UPDATE users SET role='admin' WHERE email='admin@graphforge.dev'` on
+    every startup, in every environment. Combined with open self-registration,
+    anyone could register that exact email and be auto-promoted to admin on
+    the next restart — confirmed this had actually happened against this
+    dev database (a real admin@graphforge.dev/role=admin row, since
+    remediated). That startup SQL is gone — self-registering with this (or
+    any) email must always yield an ordinary 'user' role. A fresh,
+    never-registered-before variant of the address, since a stray
+    already-admin row from the exploit this test guards against would
+    otherwise hit the 409-duplicate-email path instead of actually
+    exercising registration.
+    """
+    response = await _register(db_client, email=f"admin+{uuid.uuid4()}@graphforge.dev")
+
+    assert response.status_code == 201
+    assert response.json()["role"] == "user"
 
 
 async def test_register_duplicate_email_returns_409(db_client: AsyncClient) -> None:
@@ -70,6 +92,26 @@ async def test_login_with_wrong_password_returns_401(db_client: AsyncClient) -> 
 
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "unauthorized"
+
+
+async def test_login_is_rate_limited_per_email(db_client: AsyncClient) -> None:
+    """Regression test: login previously had no rate limiting at all, unlike
+    workflows.py's stage-start endpoints — an attacker could make unlimited
+    password guesses against one account. A unique email keeps this test's
+    hits isolated from every other login test sharing the same rate-limit
+    module state."""
+    email = f"rate-limit-test-{uuid.uuid4()}@example.com"
+    await _register(db_client, email=email)
+
+    last_response = None
+    for _ in range(11):
+        last_response = await db_client.post(
+            "/api/v1/auth/login",
+            json={"email": email, "password": "not-the-right-password"},
+        )
+
+    assert last_response is not None
+    assert last_response.status_code == 429
 
 
 async def test_login_with_unknown_email_returns_401(db_client: AsyncClient) -> None:

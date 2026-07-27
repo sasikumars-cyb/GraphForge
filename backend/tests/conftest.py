@@ -6,9 +6,25 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.core import rate_limit
 from app.database.base import Base
 from app.database.session import engine, get_db_session
 from app.main import create_app
+
+
+@pytest.fixture(autouse=True)
+def _reset_rate_limits() -> None:
+    """`app.core.rate_limit._hits` is a module-level, process-global dict —
+    unlike the DB (rolled back per test via `db_session`), it is NOT reset
+    between tests. Several test files reuse the same fixed email (e.g.
+    "ada@example.com" across test_auth.py/test_repositories.py/
+    test_webhooks.py/test_github_oauth.py), each logging in at least once;
+    with login now rate-limited (see auth.py), enough of those accumulating
+    within the suite's own runtime (well under the 5-minute window) trips
+    the limit and fails unrelated, later tests with a 429 instead of their
+    expected response. Every test gets a clean rate-limit table regardless.
+    """
+    rate_limit._hits.clear()
 
 
 @pytest.fixture

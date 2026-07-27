@@ -93,11 +93,16 @@ def create_app() -> FastAPI:
                 CREATE INDEX IF NOT EXISTS ix_knowledge_connections_source_type
                 ON knowledge_connections (source_type)
             """))
-            # Ensure a development admin account exists.
-            await conn.execute(text("""
-                UPDATE users SET role = 'admin'
-                WHERE email = 'admin@graphforge.dev' AND role != 'admin'
-            """))
+            # No admin-promotion SQL here on purpose — the bootstrap admin
+            # account is seeded once, by the b5c6d7e8f9a0 migration, not on
+            # every process start. An unconditional
+            # `UPDATE users SET role='admin' WHERE email=...` running in
+            # every environment (including production) combined with this
+            # app's open self-registration meant anyone could register that
+            # exact email and be auto-promoted to admin on the next
+            # restart/deploy — a real privilege-escalation path, not a
+            # hypothetical one. See b5c6d7e8f9a0's own docstring for the
+            # production-safety note on that seeded account.
 
         # Recover any Run left "running" by a previous process — background
         # execution (see app.orchestrator.background_execution) runs on

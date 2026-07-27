@@ -71,7 +71,17 @@ async def get_calibration_summary(
     materially higher approval rate than its low-confidence bucket — if
     they're roughly equal, the score isn't carrying real information yet.
     """
-    result = await db.execute(select(ConfidenceCalibration))
+    # One row per completed workflow-stage-run decision — grows slower than
+    # most tables here, but still unbounded with no cap at all. Ordered
+    # most-recent-first and capped so calibration reflects recent agent
+    # behavior (what you actually want to know — "is this agent well
+    # calibrated *now*") rather than an ever-growing full-history pull that
+    # degrades this endpoint's latency/memory as the table grows. A rolling
+    # time-window aggregation would be the more correct long-term fix if
+    # this cap is ever actually reached in practice.
+    result = await db.execute(
+        select(ConfidenceCalibration).order_by(ConfidenceCalibration.decided_at.desc()).limit(5000)
+    )
     rows = list(result.scalars().all())
 
     by_agent: dict[str, list[ConfidenceCalibration]] = defaultdict(list)

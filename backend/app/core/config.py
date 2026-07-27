@@ -6,8 +6,22 @@ A single `Settings` object is the only place in the codebase allowed to read
 
 from functools import lru_cache
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Fields whose default value is a real, working credential — safe for local
+# dev (documented at each field below) but a full compromise if ever left
+# unrotated in production: `jwt_secret_key` forges valid auth tokens for any
+# user, `token_encryption_key` decrypts every GitHub token at rest,
+# `neo4j_password` is the actual Neo4j credential this app connects with.
+# `_reject_insecure_defaults_in_production` below is the fail-fast guard —
+# without it, an operator who forgets to override one of these in production
+# gets a silently-broken security boundary instead of a startup error.
+_INSECURE_DEFAULTS: dict[str, str] = {
+    "jwt_secret_key": "dev-only-insecure-secret-change-me",
+    "token_encryption_key": "7pLY9C3PlWFCWMtvlkhNSMWreEmwwM-oTidOaU-_dmk=",
+    "neo4j_password": "graphforge-dev",
+}
 
 
 class Settings(BaseSettings):
@@ -144,6 +158,31 @@ class Settings(BaseSettings):
     confluence_mcp_default_server_url: str | None = Field(
         default="https://mcp.atlassian.com/v1/mcp/authv2"
     )
+
+    @model_validator(mode="after")
+    def _reject_insecure_defaults_in_production(self) -> "Settings":
+        """Fail fast rather than run production on a publicly-known secret.
+
+        `environment` itself has an insecure default ("development"), so
+        this only fires once an operator has explicitly set
+        `ENVIRONMENT=production` — at that point, silence is worse than a
+        crash: a misconfigured production deployment would otherwise look
+        healthy while being fully compromisable by anyone who has ever
+        seen this repository (see _INSECURE_DEFAULTS' docstring above).
+        """
+        if self.environment == "production":
+            offending = [
+                field for field, insecure_value in _INSECURE_DEFAULTS.items()
+                if getattr(self, field) == insecure_value
+            ]
+            if offending:
+                raise ValueError(
+                    "Refusing to start with ENVIRONMENT=production while these "
+                    f"settings still hold their insecure default value: {', '.join(offending)}. "
+                    "Set real values via environment variables (see backend/.env.example) "
+                    "before deploying."
+                )
+        return self
 
 
 @lru_cache

@@ -103,18 +103,30 @@ async def system_status(
     )
     repos_tracked = repo_count_result.scalar() or 0
 
-    # Count repos with at least one completed indexing job
+    # Count repos with at least one completed indexing job — joined through
+    # to Repository.user_id, same as repos_tracked above. Without this join,
+    # this counted every user's indexing jobs: user A's dashboard showed
+    # progress that included user B's repositories, both an incorrect
+    # figure and a minor cross-tenant data leak (counts only, not content).
     indexed_result = await db.execute(
-        select(func.count(func.distinct(IndexingJob.repository_id))).where(
-            IndexingJob.status == "completed"
+        select(func.count(func.distinct(IndexingJob.repository_id)))
+        .select_from(IndexingJob)
+        .join(Repository, IndexingJob.repository_id == Repository.id)
+        .where(
+            IndexingJob.status == "completed",
+            Repository.user_id == current_user.id,
         )
     )
     repos_indexed = indexed_result.scalar() or 0
 
-    # Count repos with pending/running indexing
+    # Count repos with pending/running indexing — same per-user scoping.
     pending_result = await db.execute(
-        select(func.count(func.distinct(IndexingJob.repository_id))).where(
-            IndexingJob.status.in_(["pending", "running"])
+        select(func.count(func.distinct(IndexingJob.repository_id)))
+        .select_from(IndexingJob)
+        .join(Repository, IndexingJob.repository_id == Repository.id)
+        .where(
+            IndexingJob.status.in_(["pending", "running"]),
+            Repository.user_id == current_user.id,
         )
     )
     repos_pending = pending_result.scalar() or 0

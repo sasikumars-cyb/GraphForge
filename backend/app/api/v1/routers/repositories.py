@@ -168,6 +168,14 @@ async def list_pull_requests(
         select(PullRequest)
         .where(PullRequest.repository_id == repository.id)
         .order_by(PullRequest.number.desc())
+        # A repository accumulates one row per webhook-ingested PR forever
+        # with no prior bound — most recent first, so this cap is "the
+        # newest 500," not an arbitrary/misleading slice. Full pagination
+        # (page/page_size/total, matching agent_runs.py/workflows.py) is
+        # the real fix if a repository's PR history ever needs to exceed
+        # this; not done here since it's a response-shape change the
+        # frontend would need to follow.
+        .limit(500)
     )
     return [PullRequestResponse.model_validate(pr) for pr in pr_result.scalars().all()]
 

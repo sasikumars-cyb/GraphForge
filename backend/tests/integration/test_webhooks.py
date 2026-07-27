@@ -252,3 +252,56 @@ async def test_pull_request_for_untracked_repo_is_ignored_not_errored(
 
     assert response.status_code == 200
     assert response.json()["pull_requests_updated"] == "0"
+
+
+async def test_malformed_json_body_returns_400_not_500(
+    db_client: AsyncClient, webhook_secret_configured: None
+) -> None:
+    """Regression test: the signature-verified-but-not-valid-JSON case used
+    to raise an unhandled JSONDecodeError (a 500). GitHub treats any non-2xx
+    response as a delivery failure and retries — an unhandled 500 here
+    would retry the same unparseable payload forever."""
+    body = b"{not actually json"
+
+    response = await db_client.post(
+        "/api/v1/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": _sign(body),
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_webhook_payload"
+
+
+async def test_pull_request_payload_missing_required_field_returns_400_not_500(
+    db_client: AsyncClient, webhook_secret_configured: None
+) -> None:
+    """Regression test: a `pull_request` payload missing a field this
+    handler reads (e.g. a GitHub event shape variant not anticipated) used
+    to raise a bare KeyError deep in handle_pull_request_event — again an
+    unhandled 500 GitHub would retry indefinitely, instead of a clean 400
+    logged once."""
+    # The missing field is only ever read inside the per-tracked-repository
+    # loop — a repo must actually be tracked/selected for this payload's
+    # `repository.id` or that loop body (and thus the validation) never runs.
+    await _register_and_select_repo(db_client)
+    payload = _pull_request_payload()
+    del payload["pull_request"]["head"]  # a field the handler requires
+    body = json.dumps(payload).encode()
+
+    response = await db_client.post(
+        "/api/v1/webhooks/github",
+        content=body,
+        headers={
+            "Content-Type": "application/json",
+            "X-GitHub-Event": "pull_request",
+            "X-Hub-Signature-256": _sign(body),
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_webhook_payload"

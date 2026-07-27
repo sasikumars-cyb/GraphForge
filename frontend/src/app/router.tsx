@@ -19,12 +19,17 @@ import { ReportsPage } from "../pages/ReportsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WorkflowPage, NewWorkflowPage } from "../pages/WorkflowPage";
 import { ApprovedQueuePage } from "../pages/ApprovedQueuePage";
+import { NotFoundPage } from "../pages/NotFoundPage";
 
 // Exported as plain data (not just the created router) so tests can build a
 // createMemoryRouter from the exact same route tree instead of duplicating
 // it and risking drift.
 export const routes: RouteObject[] = [
   { path: "/login", element: <LoginPage /> },
+  // Catch-all — top-level (not nested under RequireAuth) so it renders
+  // regardless of auth state for any unmatched path (typo, stale bookmark,
+  // bad deep link), instead of React Router's default unstyled fallback.
+  { path: "*", element: <NotFoundPage /> },
   {
     element: <RequireAuth />,
     children: [

@@ -10,6 +10,7 @@ module does for local accounts.
 """
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ConflictError, UnauthorizedError
@@ -35,7 +36,18 @@ async def register_user(db: AsyncSession, request: UserRegisterRequest) -> User:
         auth_provider="local",
     )
     db.add(user)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # TOCTOU: two concurrent registrations for the same email can both
+        # pass the `existing is None` check above before either commits —
+        # the second one's INSERT then violates users.email's unique
+        # constraint. Without this, that surfaces as an unhandled
+        # IntegrityError → a generic 500 instead of the 409 a duplicate
+        # email is supposed to produce. The session must be rolled back
+        # before it can be used again (a failed commit leaves it unusable).
+        await db.rollback()
+        raise ConflictError("An account with this email already exists.")
     await db.refresh(user)
     return user
 

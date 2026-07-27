@@ -39,21 +39,31 @@ def upgrade() -> None:
         sa.Column("role", sa.String(length=32), nullable=False, server_default="user"),
     )
 
-    # Seed the development admin account.
-    op.execute(
-        sa.text(
-            """
-            INSERT INTO users (id, email, full_name, hashed_password, auth_provider, role, is_active)
-            VALUES (:id, :email, :full_name, :hashed_password, 'local', 'admin', true)
-            ON CONFLICT (email) DO UPDATE SET role = 'admin'
-            """
-        ).bindparams(
-            sa.bindparam("id", value=uuid.uuid4(), type_=sa.Uuid()),
-            email=_ADMIN_EMAIL,
-            full_name=_ADMIN_NAME,
-            hashed_password=_hash_password(_ADMIN_PASSWORD),
+    # Seed the development admin account — never in production. A known
+    # admin/admin credential is safe only because local dev/demo databases
+    # are throwaway; running this same INSERT against a production database
+    # would hand out real admin access to anyone who knows this migration
+    # exists (it's public, in this repo). `ENVIRONMENT=production` is the
+    # same settings field app/core/config.py's insecure-default guard
+    # checks — skip the seed there instead of trusting every operator to
+    # remember to change/remove it afterward.
+    from app.core.config import get_settings
+
+    if get_settings().environment != "production":
+        op.execute(
+            sa.text(
+                """
+                INSERT INTO users (id, email, full_name, hashed_password, auth_provider, role, is_active)
+                VALUES (:id, :email, :full_name, :hashed_password, 'local', 'admin', true)
+                ON CONFLICT (email) DO UPDATE SET role = 'admin'
+                """
+            ).bindparams(
+                sa.bindparam("id", value=uuid.uuid4(), type_=sa.Uuid()),
+                email=_ADMIN_EMAIL,
+                full_name=_ADMIN_NAME,
+                hashed_password=_hash_password(_ADMIN_PASSWORD),
+            )
         )
-    )
 
 
 def downgrade() -> None:

@@ -16,12 +16,22 @@ backend is ever run with >1 replica.
 from __future__ import annotations
 
 import time
-from collections import defaultdict, deque
+from collections import deque
 
 from app.core.exceptions import RateLimitedError
 
-# user_id -> deque of monotonic() timestamps of recent requests, per limiter key
-_hits: dict[str, deque[float]] = defaultdict(deque)
+# limiter key -> deque of monotonic() timestamps of recent requests.
+_hits: dict[str, deque[float]] = {}
+
+# Bounds total memory instead of letting `_hits` grow forever. A key whose
+# window has fully lapsed and is never queried again would otherwise sit in
+# this dict indefinitely — slow for ordinary per-user keys, but a real
+# memory-exhaustion vector for any limiter keyed on attacker-controlled
+# input from an unauthenticated endpoint (e.g. login rate-limited by the
+# submitted email — see auth.py's login). Sweeping only once this many
+# distinct keys have accumulated keeps the common case cheap (no per-call
+# scan) while still bounding worst-case size.
+_SWEEP_THRESHOLD = 10_000
 
 
 def check_rate_limit(key: str, *, max_requests: int, window_seconds: float) -> None:
@@ -32,12 +42,43 @@ def check_rate_limit(key: str, *, max_requests: int, window_seconds: float) -> N
     endpoints keep independent budgets for the same user.
     """
     now = time.monotonic()
-    hits = _hits[key]
-    while hits and now - hits[0] > window_seconds:
-        hits.popleft()
-    if len(hits) >= max_requests:
+
+    hits = _hits.get(key)
+    if hits is not None:
+        while hits and now - hits[0] > window_seconds:
+            hits.popleft()
+        if not hits:
+            # Every hit aged out — don't keep an empty deque under this key
+            # forever just because nothing has evicted it yet.
+            del _hits[key]
+            hits = None
+
+    if hits is not None and len(hits) >= max_requests:
         retry_after = max(0, window_seconds - (now - hits[0]))
         raise RateLimitedError(
             f"Too many requests. Try again in {retry_after:.0f}s.",
         )
+
+    if hits is None:
+        hits = deque()
+        _hits[key] = hits
     hits.append(now)
+
+    if len(_hits) > _SWEEP_THRESHOLD:
+        _sweep_stale_keys(now)
+
+
+def _sweep_stale_keys(now: float) -> None:
+    """Drop every key whose most recent hit is old enough that no caller's
+    `window_seconds` could still consider it active.
+
+    Different call sites use different windows, and a key's own window
+    isn't recorded anywhere — so this uses a generous fixed horizon (1
+    hour) rather than trying to reconstruct the original window. Safe
+    either way: a key that's genuinely swept too early just starts a fresh
+    window on its very next hit, identical to a first-time key.
+    """
+    stale_horizon_seconds = 3600.0
+    stale_keys = [k for k, v in _hits.items() if not v or now - v[-1] > stale_horizon_seconds]
+    for k in stale_keys:
+        del _hits[k]

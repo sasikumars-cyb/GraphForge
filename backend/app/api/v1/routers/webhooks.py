@@ -47,7 +47,26 @@ async def github_webhook(
         logger.info("Ignoring unhandled GitHub event type: %s", x_github_event)
         return {"status": "ignored", "event": x_github_event or "unknown"}
 
-    payload = json.loads(raw_body)
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError as exc:
+        # A malformed body (not a KeyError further down — the signature
+        # already verified this came from GitHub, so this is "GitHub sent
+        # something that isn't valid JSON," not tampering) must produce a
+        # clean 400, not an unhandled crash. GitHub treats any non-2xx
+        # response as a delivery failure and retries — an unhandled 500
+        # here would retry the same unparseable payload indefinitely.
+        raise AppError(
+            f"Webhook payload is not valid JSON: {exc}",
+            status_code=400,
+            error_code="invalid_webhook_payload",
+        ) from exc
+    if not isinstance(payload, dict):
+        raise AppError(
+            "Webhook payload must be a JSON object.",
+            status_code=400,
+            error_code="invalid_webhook_payload",
+        )
     updated = await handle_pull_request_event(db, payload)
     logger.info(
         "Processed pull_request event: action=%s repo=%s prs_updated=%d",
