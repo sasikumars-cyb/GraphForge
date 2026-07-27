@@ -163,10 +163,19 @@ class ConfluenceTool:
                 )
                 return ToolHealth.HEALTHY
             except MCPToolError as exc:
+                # e.g. Atlassian's own server reports a plain-language
+                # "You don't have permission to connect via API token" for
+                # an org that hasn't enabled that access — no "auth"/401/403
+                # substring, so this needs its own check, not just status
+                # codes. A non-auth failure here is a real OFFLINE
+                # regardless of whether REST fields also happen to be
+                # present — REST is a permanent stub (see module docstring),
+                # so falling back to it would just misreport OFFLINE as
+                # UNCONFIGURED, implying nothing was even attempted.
                 text = str(exc).lower()
-                if "auth" in text or "401" in text or "403" in text:
+                if "auth" in text or "401" in text or "403" in text or "permission" in text:
                     return ToolHealth.AUTH_FAILED
-                return ToolHealth.OFFLINE if not self._uses_rest else ToolHealth.UNCONFIGURED
+                return ToolHealth.OFFLINE
 
         if not self._base_url or not self._token:
             return ToolHealth.UNCONFIGURED

@@ -433,7 +433,7 @@ class JiraTool:
             text = str(exc).lower()
             if "not found" in text or "does not exist" in text or "no issue" in text:
                 return ToolHealth.HEALTHY
-            if "auth" in text or "401" in text or "403" in text:
+            if "auth" in text or "401" in text or "403" in text or "permission" in text:
                 return ToolHealth.AUTH_FAILED
             return ToolHealth.OFFLINE
 

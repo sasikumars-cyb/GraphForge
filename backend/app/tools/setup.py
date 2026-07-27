@@ -208,9 +208,10 @@ _KNOWLEDGE_CONNECTION_TOOL_MAP: dict[tuple[str, str], tuple[str, dict[str, str]]
 # config keys, so the tool can try the vendor's known MCP server first and
 # fall back to the REST path it was already using - no second connection,
 # no extra field in the Integrations UI. Only applies when the source has a
-# `known_mcp_endpoint` configured (knowledge/registry.py's TransportSpec) -
-# e.g. unset for Jira/Confluence by default because Atlassian's hosted MCP
-# server needs OAuth, which this app's MCP client does not implement yet.
+# `known_mcp_endpoint` configured (knowledge/registry.py's TransportSpec,
+# sourced from app.core.config's jira/confluence_mcp_default_server_url —
+# both point at Atlassian's official hosted MCP server, confirmed to accept
+# a plain bearer-token API key, not OAuth-only as originally assumed).
 # source_type -> (rest credential field to reuse, mcp_server_url key, mcp_api_key key)
 _MCP_AUTO_WIRE: dict[str, tuple[str, str, str]] = {
     "jira": ("api_token", "jira_mcp_server_url", "jira_mcp_api_key"),
