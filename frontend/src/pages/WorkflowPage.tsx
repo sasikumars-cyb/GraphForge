@@ -39,13 +39,17 @@ export function WorkflowPage() {
   const hasSelectedRef = useRef(false);
 
   const loadWorkflow = useCallback(
-    async (isInitial: boolean) => {
+    async (isInitial: boolean, signal?: AbortSignal) => {
       if (!token || !workflowId) return;
       try {
-        const detail = await getWorkflow(token, workflowId);
+        const detail = await getWorkflow(token, workflowId, signal);
+        if (signal?.aborted) return;
         setWorkflow(detail);
 
-        const runDetails = await Promise.all(detail.runs.map((r) => getAgentRun(token, r.run_id)));
+        const runDetails = await Promise.all(
+          detail.runs.map((r) => getAgentRun(token, r.run_id, signal)),
+        );
+        if (signal?.aborted) return;
         setRunsById(new Map(runDetails.map((r) => [r.run_id, r])));
 
         if (!hasSelectedRef.current && runDetails.length > 0) {
@@ -54,25 +58,43 @@ export function WorkflowPage() {
         }
         if (isInitial) setError(null);
       } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
         setError(err instanceof Error ? err.message : "Failed to load workflow.");
       } finally {
-        setIsLoading(false);
+        if (!signal?.aborted) setIsLoading(false);
       }
     },
     [token, workflowId],
   );
 
+  // `workflowId` changing (navigating from one workflow's page to another —
+  // React Router reuses this component instance rather than remounting it)
+  // must not let a still-in-flight fetch for the *previous* workflow
+  // resolve after the new one's and overwrite the view with stale data.
   useEffect(() => {
-    loadWorkflow(true);
+    hasSelectedRef.current = false;
+    setIsLoading(true);
+    setWorkflow(null);
+    setRunsById(new Map());
+    setSelectedRunId(null);
+    const controller = new AbortController();
+    loadWorkflow(true, controller.signal);
+    return () => controller.abort();
   }, [loadWorkflow]);
 
   // Feature 9 / "watch it happen": poll for live updates while running,
   // reusing the same GET /workflows/{id} the page already calls — no new
   // endpoint, no websocket, just the existing resource refreshed on a timer.
+  // Aborted/cleared on unmount or whenever `workflow` changes out from under
+  // it (e.g. the effect above just reset it for a new workflowId).
   useEffect(() => {
     if (workflow?.status !== "in_progress") return;
-    const id = window.setInterval(() => loadWorkflow(false), POLL_INTERVAL_MS);
-    return () => window.clearInterval(id);
+    const controller = new AbortController();
+    const id = window.setInterval(() => loadWorkflow(false, controller.signal), POLL_INTERVAL_MS);
+    return () => {
+      window.clearInterval(id);
+      controller.abort();
+    };
   }, [workflow?.status, loadWorkflow]);
 
   const handleApprove = async () => {

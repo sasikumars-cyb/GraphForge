@@ -21,7 +21,7 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.dependencies import get_current_user
+from app.api.v1.dependencies import require_admin
 from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.exceptions import NotFoundError
 from app.database.session import get_db_session
@@ -137,7 +137,7 @@ def _row_to_info(row: KnowledgeConnection) -> ConnectionInfo:
 
 @router.get("/overview", response_model=KnowledgeOverview, summary="Full Knowledge Sources view")
 async def overview(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> KnowledgeOverview:
     """Everything the Knowledge Sources section needs in one request."""
@@ -161,7 +161,7 @@ async def overview(
 
 @router.get("/sources", response_model=list[KnowledgeSourceInfo], summary="Source catalog")
 async def list_sources(
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[KnowledgeSourceInfo]:
     rows = (await db.execute(select(KnowledgeConnection))).scalars().all()
@@ -173,7 +173,7 @@ async def list_sources(
 
 @router.get("/connections", response_model=list[ConnectionInfo], summary="All connections")
 async def list_connections(
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
     source_type: str | None = None,
 ) -> list[ConnectionInfo]:
@@ -201,7 +201,7 @@ async def list_connections(
 )
 async def create_connection(
     body: ConnectionCreateRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> ConnectionInfo:
     # Validate source type exists.
@@ -238,7 +238,7 @@ async def create_connection(
 @router.get("/connections/{connection_id}", response_model=ConnectionInfo)
 async def get_connection(
     connection_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> ConnectionInfo:
     row = await db.get(KnowledgeConnection, connection_id)
@@ -251,7 +251,7 @@ async def get_connection(
 async def update_connection(
     connection_id: uuid.UUID,
     body: ConnectionUpdateRequest,
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> ConnectionInfo:
     row = await db.get(KnowledgeConnection, connection_id)
@@ -299,7 +299,7 @@ async def update_connection(
 )
 async def delete_connection(
     connection_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> None:
     row = await db.get(KnowledgeConnection, connection_id)
@@ -326,7 +326,7 @@ async def delete_connection(
 )
 async def check_health(
     connection_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(require_admin),
     db: AsyncSession = Depends(get_db_session),
 ) -> ConnectionHealthResponse:
     """Verify connectivity and credentials for a connection.

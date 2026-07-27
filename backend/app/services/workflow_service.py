@@ -162,6 +162,7 @@ async def create_workflow(
     source_workflow_id: uuid.UUID | None = None,
     parent_workflow_id: uuid.UUID | None = None,
     refinement_note: str | None = None,
+    user_id: uuid.UUID | None = None,
 ) -> Workflow:
     """Create a new workflow starting at its type's first stage.
 
@@ -200,7 +201,13 @@ async def create_workflow(
                 error_code="missing_source_workflow",
             )
         source = await db.get(Workflow, source_workflow_id)
-        if source is None:
+        if source is None or (
+            user_id is not None and source.user_id is not None and source.user_id != user_id
+        ):
+            # Same "don't reveal it exists" NotFoundError treatment as
+            # _check_workflow_owned — a source_workflow_id owned by someone
+            # else must fail identically to one that doesn't exist at all,
+            # otherwise this endpoint becomes an IDOR oracle.
             raise AppError(
                 f"Source workflow '{source_workflow_id}' not found.",
                 status_code=400,
@@ -223,7 +230,7 @@ async def create_workflow(
     parent: Workflow | None = None
     if parent_workflow_id is not None:
         try:
-            parent = await get_workflow(db, parent_workflow_id)
+            parent = await get_workflow(db, parent_workflow_id, user_id=user_id)
         except NotFoundError as exc:
             raise AppError(
                 f"Parent workflow '{parent_workflow_id}' not found.",
@@ -244,6 +251,7 @@ async def create_workflow(
         parent_workflow_id=parent_workflow_id,
         version=(parent.version + 1) if parent is not None else 1,
         refinement_note=refinement_note,
+        user_id=user_id,
     )
     db.add(workflow)
     await db.flush()
@@ -256,11 +264,29 @@ async def create_workflow(
     return workflow
 
 
+def _check_workflow_owned(workflow: Workflow, user_id: uuid.UUID) -> None:
+    """Raise NotFoundError (not Forbidden — don't reveal that a workflow
+    owned by someone else exists) unless `workflow` has no recorded owner
+    (a row created before Workflow.user_id existed, kept visible to any
+    authenticated user rather than becoming permanently inaccessible) or
+    the caller *is* its owner."""
+    if workflow.user_id is not None and workflow.user_id != user_id:
+        raise NotFoundError(f"Workflow '{workflow.id}' not found.")
+
+
 async def get_workflow(
     db: AsyncSession,
     workflow_id: uuid.UUID,
+    user_id: uuid.UUID | None = None,
 ) -> Workflow:
-    """Fetch a workflow with all linked runs eagerly loaded."""
+    """Fetch a workflow with all linked runs eagerly loaded.
+
+    `user_id`, when given, enforces ownership — pass it from every
+    user-facing endpoint. It's optional only because internal callers
+    (e.g. resolving a `source_workflow_id`/`parent_workflow_id` reference
+    while building another workflow) legitimately need to read a workflow
+    without applying the *current* request's ownership to it.
+    """
     result = await db.execute(
         select(Workflow)
         .options(selectinload(Workflow.runs).selectinload(Run.steps))
@@ -269,18 +295,22 @@ async def get_workflow(
     workflow = result.scalar_one_or_none()
     if workflow is None:
         raise NotFoundError(f"Workflow '{workflow_id}' not found.")
+    if user_id is not None:
+        _check_workflow_owned(workflow, user_id)
     return workflow
 
 
 async def get_workflow_for_update(
     db: AsyncSession,
     workflow_id: uuid.UUID,
+    user_id: uuid.UUID | None = None,
 ) -> Workflow:
     """Fetch a workflow with a row-level lock (FOR UPDATE).
 
     Use this in mutating endpoints (continue, approve, reject) to prevent
     TOCTOU races where concurrent requests both pass the in-memory
-    status/stage checks before either commits.
+    status/stage checks before either commits. `user_id` enforces
+    ownership the same way as `get_workflow` above.
     """
     result = await db.execute(
         select(Workflow)
@@ -291,6 +321,8 @@ async def get_workflow_for_update(
     workflow = result.scalar_one_or_none()
     if workflow is None:
         raise NotFoundError(f"Workflow '{workflow_id}' not found.")
+    if user_id is not None:
+        _check_workflow_owned(workflow, user_id)
     return workflow
 
 
@@ -300,10 +332,17 @@ async def list_workflows(
     workflow_type: str | None = None,
     page: int = 1,
     page_size: int = 25,
+    user_id: uuid.UUID | None = None,
 ) -> tuple[list[Workflow], int]:
     """List workflows with pagination, optionally filtered by status
-    and/or workflow_type."""
-    from sqlalchemy import func as sa_func
+    and/or workflow_type.
+
+    `user_id`, when given, restricts results to workflows owned by that
+    user plus any legacy row with no recorded owner (see
+    Workflow.user_id's docstring) — the same ownership rule
+    `_check_workflow_owned` enforces on single-workflow reads/writes.
+    """
+    from sqlalchemy import func as sa_func, or_
 
     query = select(Workflow)
     count_query = select(sa_func.count(Workflow.id))
@@ -314,6 +353,10 @@ async def list_workflows(
     if workflow_type:
         query = query.where(Workflow.workflow_type == workflow_type)
         count_query = count_query.where(Workflow.workflow_type == workflow_type)
+    if user_id is not None:
+        ownership = or_(Workflow.user_id == user_id, Workflow.user_id.is_(None))
+        query = query.where(ownership)
+        count_query = count_query.where(ownership)
 
     total_result = await db.execute(count_query)
     total = total_result.scalar() or 0

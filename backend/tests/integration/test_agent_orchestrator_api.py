@@ -406,3 +406,86 @@ async def test_get_workflow_not_found_returns_404(db_client: AsyncClient) -> Non
         "/api/v1/workflows/00000000-0000-0000-0000-000000000000", headers=headers
     )
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# IDOR regression tests — a second user must not be able to read, cancel, or
+# delete another user's workflow/run, and must not see it in their own list.
+# ---------------------------------------------------------------------------
+
+
+async def test_workflow_not_visible_or_mutable_by_a_different_user(client: AsyncClient) -> None:
+    owner_token = await _register_unique_and_get_token(client)
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    other_token = await _register_unique_and_get_token(client)
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
+    ):
+        create_response = await client.post(
+            "/api/v1/workflows", json={"title": "Owner-only workflow"}, headers=owner_headers
+        )
+        workflow_id = create_response.json()["workflow_id"]
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", owner_headers)
+
+    # A different, unrelated user must not be able to read it...
+    get_response = await client.get(f"/api/v1/workflows/{workflow_id}", headers=other_headers)
+    assert get_response.status_code == 404
+
+    # ...continue it...
+    continue_response = await client.post(
+        f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=other_headers
+    )
+    assert continue_response.status_code == 404
+
+    # ...cancel it...
+    cancel_response = await client.post(
+        f"/api/v1/workflows/{workflow_id}/cancel", headers=other_headers
+    )
+    assert cancel_response.status_code == 404
+
+    # ...or delete it.
+    delete_response = await client.delete(f"/api/v1/workflows/{workflow_id}", headers=other_headers)
+    assert delete_response.status_code == 404
+
+    # It also must not appear in the other user's own workflow list.
+    list_response = await client.get("/api/v1/workflows", headers=other_headers)
+    listed_ids = {item["workflow_id"] for item in list_response.json()["items"]}
+    assert workflow_id not in listed_ids
+
+    # The actual owner can still do all of the above.
+    owner_get_response = await client.get(f"/api/v1/workflows/{workflow_id}", headers=owner_headers)
+    assert owner_get_response.status_code == 200
+
+
+async def test_run_not_visible_or_mutable_by_a_different_user(client: AsyncClient) -> None:
+    owner_token = await _register_unique_and_get_token(client)
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    other_token = await _register_unique_and_get_token(client)
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+
+    create_response = await client.post(
+        "/api/v1/agent-runs",
+        json={"subject_reference": "freetext:some standalone task", "goal": "plan_freeform"},
+        headers=owner_headers,
+    )
+    run_id = create_response.json()["run_id"]
+
+    get_response = await client.get(f"/api/v1/agent-runs/{run_id}", headers=other_headers)
+    assert get_response.status_code == 404
+
+    cancel_response = await client.post(f"/api/v1/agent-runs/{run_id}/cancel", headers=other_headers)
+    assert cancel_response.status_code == 404
+
+    delete_response = await client.delete(f"/api/v1/agent-runs/{run_id}", headers=other_headers)
+    assert delete_response.status_code == 404
+
+    list_response = await client.get("/api/v1/agent-runs", headers=other_headers)
+    listed_ids = {item["run_id"] for item in list_response.json()["items"]}
+    assert run_id not in listed_ids
+
+    owner_get_response = await client.get(f"/api/v1/agent-runs/{run_id}", headers=owner_headers)
+    assert owner_get_response.status_code == 200

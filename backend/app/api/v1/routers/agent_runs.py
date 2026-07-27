@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,6 +24,7 @@ from app.database.session import get_db_session
 from app.models.agent_step import AgentStep
 from app.models.run import Run
 from app.models.user import User
+from app.models.workflow import Workflow
 from app.orchestrator.registry import global_registry
 from app.orchestrator.selector import AgentSelector
 
@@ -171,6 +172,47 @@ def _repository_from_run(run: Run) -> str | None:
             if repo not in repos:
                 repos.append(repo)
     return ", ".join(repos) if repos else None
+
+
+def _run_ownership_clause(user_id: uuid.UUID):
+    """SQLAlchemy WHERE clause matching a Run this user may access.
+
+    A Run is owned via one of two paths, since standalone runs and
+    workflow-stage runs record "who triggered this" differently (see
+    Run.user_id's docstring): a standalone run sets `Run.user_id` directly
+    at creation (see create_run below); a workflow-stage run never does —
+    ownership instead follows the parent Workflow's own `user_id` (see
+    Workflow.user_id). A run/workflow with no recorded owner at all (rows
+    predating either column) stays visible to any authenticated user
+    rather than becoming permanently inaccessible — same rule
+    `workflow_service._check_workflow_owned` applies.
+
+    Callers must `outerjoin(Workflow, Run.workflow_id == Workflow.id)`
+    before applying this clause, since it references `Workflow.user_id`.
+    """
+    return or_(
+        Run.user_id == user_id,
+        and_(Run.workflow_id.is_(None), Run.user_id.is_(None)),
+        Workflow.user_id == user_id,
+        and_(Run.workflow_id.isnot(None), Workflow.user_id.is_(None)),
+    )
+
+
+async def _get_owned_run(db: AsyncSession, run_id: uuid.UUID, user_id: uuid.UUID) -> Run:
+    """Fetch a single Run (with steps eagerly loaded), enforcing the same
+    ownership rule as `_run_ownership_clause` — NotFoundError, not
+    Forbidden, so this never confirms that a run owned by someone else
+    exists."""
+    result = await db.execute(
+        select(Run)
+        .options(selectinload(Run.steps))
+        .outerjoin(Workflow, Run.workflow_id == Workflow.id)
+        .where(Run.id == run_id, _run_ownership_clause(user_id))
+    )
+    run = result.scalar_one_or_none()
+    if run is None:
+        raise NotFoundError(f"Run '{run_id}' not found.")
+    return run
 
 
 async def _resolve_user_names(db: AsyncSession, runs: list[Run]) -> dict[uuid.UUID, str]:
@@ -342,10 +384,7 @@ async def cancel_run_endpoint(
     except ValueError as exc:
         raise NotFoundError(f"Invalid run_id: {run_id}") from exc
 
-    result = await db.execute(select(Run).where(Run.id == rid))
-    run = result.scalar_one_or_none()
-    if run is None:
-        raise NotFoundError(f"Run '{run_id}' not found.")
+    run = await _get_owned_run(db, rid, user.id)
 
     if run.status in ("completed", "failed"):
         return CancelRunResponse(run_id=str(run.id), status=run.status)
@@ -381,10 +420,7 @@ async def delete_run(
     except ValueError as exc:
         raise NotFoundError(f"Invalid run_id: {run_id}") from exc
 
-    result = await db.execute(select(Run).where(Run.id == rid))
-    run = result.scalar_one_or_none()
-    if run is None:
-        raise NotFoundError(f"Run '{run_id}' not found.")
+    run = await _get_owned_run(db, rid, user.id)
 
     if run.status in ("queued", "running"):
         cancel_background_run(rid)
@@ -405,10 +441,7 @@ async def get_run(
     except ValueError as exc:
         raise NotFoundError(f"Invalid run_id: {run_id}") from exc
 
-    result = await db.execute(select(Run).options(selectinload(Run.steps)).where(Run.id == rid))
-    run = result.scalar_one_or_none()
-    if run is None:
-        raise NotFoundError(f"Run '{run_id}' not found.")
+    run = await _get_owned_run(db, rid, user.id)
 
     user_names = await _resolve_user_names(db, [run])
 
@@ -445,8 +478,15 @@ async def list_runs(
     subject_id: str | None = None,
 ) -> RunListResponse:
     """List agent runs with pagination and optional filtering."""
-    query = select(Run)
-    count_query = select(func.count(Run.id))
+    query = select(Run).outerjoin(Workflow, Run.workflow_id == Workflow.id).where(
+        _run_ownership_clause(user.id)
+    )
+    count_query = (
+        select(func.count(Run.id))
+        .select_from(Run)
+        .outerjoin(Workflow, Run.workflow_id == Workflow.id)
+        .where(_run_ownership_clause(user.id))
+    )
 
     if goal:
         query = query.where(Run.goal == goal)

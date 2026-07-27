@@ -386,6 +386,7 @@ async def create_workflow(
         source_workflow_id=source_wf_id,
         parent_workflow_id=parent_wf_id,
         refinement_note=body.refinement_note,
+        user_id=user.id,
     )
 
     # Execute the first stage of this workflow_type's sequence (today,
@@ -500,7 +501,8 @@ async def list_workflows(
 ) -> WorkflowListResponse:
     """List workflows with pagination."""
     workflows, total = await workflow_service.list_workflows(
-        db, status=status, workflow_type=workflow_type, page=page, page_size=page_size
+        db, status=status, workflow_type=workflow_type, page=page, page_size=page_size,
+        user_id=user.id,
     )
     approver_names = await _resolve_approver_names(db, workflows)
 
@@ -544,7 +546,7 @@ async def get_workflow(
     except ValueError as exc:
         raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
 
-    workflow = await workflow_service.get_workflow(db, wid)
+    workflow = await workflow_service.get_workflow(db, wid, user_id=user.id)
     approver_names = await _resolve_approver_names(db, [workflow])
 
     return WorkflowDetailResponse(
@@ -594,6 +596,8 @@ async def delete_workflow(
     workflow = await db.get(Workflow, wid)
     if workflow is None:
         raise NotFoundError(f"Workflow '{workflow_id}' not found.")
+    if workflow.user_id is not None and workflow.user_id != user.id:
+        raise NotFoundError(f"Workflow '{workflow_id}' not found.")
 
     result = await db.execute(select(Run).where(Run.workflow_id == wid))
     runs = result.scalars().all()
@@ -636,7 +640,7 @@ async def continue_workflow(
     except ValueError as exc:
         raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
 
-    workflow = await workflow_service.get_workflow_for_update(db, wid)
+    workflow = await workflow_service.get_workflow_for_update(db, wid, user_id=user.id)
 
     if workflow.status in ("completed", "awaiting_approval", "approved", "rejected"):
         raise AppError(
@@ -756,7 +760,7 @@ async def cancel_workflow_run(
     except ValueError as exc:
         raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
 
-    workflow = await workflow_service.get_workflow_for_update(db, wid)
+    workflow = await workflow_service.get_workflow_for_update(db, wid, user_id=user.id)
 
     in_flight_run = next(
         (r for r in workflow.runs if r.workflow_stage == workflow.current_stage and r.status in ("queued", "running")),
@@ -788,7 +792,7 @@ async def approve_workflow(
     except ValueError as exc:
         raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
 
-    workflow = await workflow_service.get_workflow_for_update(db, wid)
+    workflow = await workflow_service.get_workflow_for_update(db, wid, user_id=user.id)
     if workflow.status != "awaiting_approval":
         raise AppError(
             f"Workflow is not awaiting approval (status: {workflow.status}).",
@@ -818,7 +822,7 @@ async def reject_workflow(
     except ValueError as exc:
         raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
 
-    workflow = await workflow_service.get_workflow_for_update(db, wid)
+    workflow = await workflow_service.get_workflow_for_update(db, wid, user_id=user.id)
     if workflow.status not in ("awaiting_approval", "in_progress"):
         raise AppError(
             f"Workflow cannot be rejected in its current state (status: {workflow.status}).",

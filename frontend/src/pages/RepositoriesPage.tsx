@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Card } from "../components/Card";
 import { StatCard } from "../components/StatCard";
@@ -15,6 +15,11 @@ import { FolderGit2, GitPullRequest, LayoutDashboard, Clock } from "lucide-react
 
 type IndexingFilter = "all" | "indexed" | "not_indexed" | "failed";
 
+// Bulk indexing polls every selected repo's job status; capped so a hung
+// backend job can't keep this loop (and its setState calls) running forever.
+const BULK_INDEX_POLL_INTERVAL_MS = 1500;
+const BULK_INDEX_POLL_MAX_MS = 5 * 60 * 1000;
+
 function indexingStatusOf(job: IndexingJob | null | undefined): IndexingFilter {
   if (!job) return "not_indexed";
   if (job.status === "completed") return "indexed";
@@ -30,6 +35,17 @@ export function RepositoriesPage() {
   const [filter, setFilter] = useState<IndexingFilter>("all");
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const [bulkResult, setBulkResult] = useState<{ success: number; failed: number } | null>(null);
+  // Tracks component lifetime — handleIndexSelected's poll loop below is
+  // started from a click handler, not a `useEffect`, so it has no cleanup
+  // path of its own otherwise, and would keep calling setState after this
+  // page unmounts (route change) while a bulk index is still in flight.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Reuses the same GET .../index (latest job) endpoint the repository
   // detail page already polls with - just once per row here, not repeatedly.
@@ -87,7 +103,14 @@ export function RepositoriesPage() {
     const pending = new Set(ids);
     let success = 0;
     let failed = 0;
-    while (pending.size > 0) {
+    const startedAt = Date.now();
+    while (pending.size > 0 && isMountedRef.current) {
+      if (Date.now() - startedAt > BULK_INDEX_POLL_MAX_MS) {
+        // Whatever's still pending is left as-is (still indexing on the
+        // backend) rather than reported as failed — this loop is just
+        // giving up on watching it, not cancelling the actual job.
+        break;
+      }
       const statuses = await Promise.all(
         Array.from(pending).map((id) =>
           getLatestIndexingJob(token, id)
@@ -95,6 +118,7 @@ export function RepositoriesPage() {
             .then((job) => [id, job] as const),
         ),
       );
+      if (!isMountedRef.current) return;
       for (const [id, job] of statuses) {
         if (job?.status === "completed" || job?.status === "failed") {
           pending.delete(id);
@@ -105,10 +129,11 @@ export function RepositoriesPage() {
       }
       setBulkProgress({ current: ids.length - pending.size, total: ids.length });
       if (pending.size > 0) {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
+        await new Promise((resolve) => setTimeout(resolve, BULK_INDEX_POLL_INTERVAL_MS));
       }
     }
 
+    if (!isMountedRef.current) return;
     setBulkProgress(null);
     setBulkResult({ success, failed });
     setSelectedIds(new Set());

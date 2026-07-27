@@ -25,6 +25,17 @@ class Workflow(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
 
+    # Who created this workflow — nullable because rows created before this
+    # column existed have no answer (treated as visible to any authenticated
+    # user, see workflow_service.list_workflows/get_workflow's ownership
+    # filter), and SET NULL on user deletion mirrors approved_by_user_id's
+    # FK behavior below: losing the User row should never retroactively
+    # hide that the workflow exists. Every workflow created after this
+    # column shipped always has a real value.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     # AI-generated, concise (5-10 word) title — see
     # app.agents.title_generation.generate_title(). Generated once at
     # creation time from `original_prompt` and persisted; never

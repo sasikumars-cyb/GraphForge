@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import { Table, type TableColumn } from "../components/Table";
@@ -16,6 +16,12 @@ import { formatRelativeTime } from "../lib/formatDate";
 import type { TrackedRepository } from "../types/github";
 import type { IndexingJob } from "../types/graph";
 import type { PullRequest } from "../types/pullRequest";
+
+// Indexing is a real repository clone + tree-sitter parse of every file —
+// slow, but not unbounded. Caps the poll below so a hung/stuck backend job
+// doesn't leave this page polling every 1.5s forever.
+const INDEXING_POLL_INTERVAL_MS = 1500;
+const INDEXING_POLL_MAX_MS = 5 * 60 * 1000;
 
 const JOB_STATUS_TONE: Record<IndexingJob["status"], "neutral" | "info" | "success" | "danger"> = {
   pending: "neutral",
@@ -50,6 +56,18 @@ export function RepositoryDetailPage() {
   const [isIndexing, setIsIndexing] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Tracks component lifetime (not React Router's fixed `id` param — a
+  // fresh mount if the user navigates to a different repository's page
+  // entirely), so handleTriggerIndexing's poll loop below — started from a
+  // click handler, not a `useEffect`, so it has no cleanup path of its own
+  // otherwise — stops calling setState once this page is gone.
+  const isMountedRef = useRef(true);
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!token || !id) {
@@ -97,19 +115,32 @@ export function RepositoryDetailPage() {
     setError(null);
     try {
       const job = await triggerIndexing(token, id);
+      if (!isMountedRef.current) return;
       setIndexingJob(job);
-      // Indexing runs in a background task; poll until it's no longer pending/running.
+      // Indexing runs in a background task; poll until it's no longer
+      // pending/running, but stop if this page has unmounted (isMountedRef)
+      // or the job has been running longer than INDEXING_POLL_MAX_MS (a
+      // hung backend job must not poll this page forever).
+      const startedAt = Date.now();
       const poll = async () => {
+        if (!isMountedRef.current) return;
         const latest = await getLatestIndexingJob(token, id);
+        if (!isMountedRef.current) return;
         setIndexingJob(latest);
-        if (latest.status === "pending" || latest.status === "running") {
-          setTimeout(poll, 1500);
-        } else {
+        if (latest.status !== "pending" && latest.status !== "running") {
           setIsIndexing(false);
+          return;
         }
+        if (Date.now() - startedAt > INDEXING_POLL_MAX_MS) {
+          setError("Indexing is taking longer than expected — check back later.");
+          setIsIndexing(false);
+          return;
+        }
+        setTimeout(poll, INDEXING_POLL_INTERVAL_MS);
       };
-      setTimeout(poll, 1500);
+      setTimeout(poll, INDEXING_POLL_INTERVAL_MS);
     } catch (err) {
+      if (!isMountedRef.current) return;
       setError(err instanceof Error ? err.message : "Failed to trigger indexing.");
       setIsIndexing(false);
     }

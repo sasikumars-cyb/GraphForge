@@ -309,7 +309,11 @@ export function PullRequestDetailPage() {
   const { id } = useParams<{ id: string }>();
   const { token } = useAuth();
   const { modelId } = useAiModel();
-  const { pullRequests } = usePullRequestsData();
+  const {
+    pullRequests,
+    isLoading: isLoadingPullRequests,
+    error: pullRequestsError,
+  } = usePullRequestsData();
   const pr = pullRequests.find((row) => row.id === id);
 
   const [deterministic, setDeterministic] = useState<PullRequestAnalysis | null>(null);
@@ -413,7 +417,38 @@ export function PullRequestDetailPage() {
   }
 
   if (!pr) {
-    return <p className="text-sm text-slate-500">Loading…</p>;
+    if (isLoadingPullRequests) {
+      return <p className="text-sm text-slate-500">Loading…</p>;
+    }
+    if (pullRequestsError) {
+      return (
+        <div className="flex flex-col gap-4">
+          <Link
+            to="/pull-requests"
+            className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
+          >
+            ← Back to pull requests
+          </Link>
+          <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+            {pullRequestsError}
+          </div>
+        </div>
+      );
+    }
+    // Loading finished with no error, and no row matches this id — a bad
+    // link, a deleted PR, or a typo'd URL. Distinct from the loading state
+    // above so this never looks like a spinner stuck forever.
+    return (
+      <div className="flex flex-col gap-4">
+        <Link
+          to="/pull-requests"
+          className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
+        >
+          ← Back to pull requests
+        </Link>
+        <p className="text-sm text-slate-500">Pull request not found.</p>
+      </div>
+    );
   }
 
   return (
