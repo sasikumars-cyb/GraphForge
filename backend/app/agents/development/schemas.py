@@ -86,3 +86,8 @@ class DevelopmentPlan(BaseModel):
     repositories_consulted: list[str] = Field(default_factory=list)
     blueprint: dict | None = Field(default=None)
     prompt_version: str = "1.0"
+
+    # Deterministic, non-LLM warnings: components/files/repositories cited
+    # above that do not appear in this run's own tool-returned evidence.
+    # See app.agents.verification. Empty when nothing was flagged.
+    verification_warnings: list[str] = Field(default_factory=list)

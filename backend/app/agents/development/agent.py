@@ -29,6 +29,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents import verification
 from app.agents._contract import (
     AgentContext,
     AgentOutput,
@@ -339,6 +340,45 @@ class DevelopmentAgent:
         # Never trust the LLM's self-reported graph_context_used — derive it
         # from what the tools actually returned.
         plan.graph_context_used = has_graph_data
+
+        # ------------------------------------------------------------------
+        # Verify the LLM's specific claims against this run's own tool
+        # evidence (see app.agents.verification) — generic string
+        # membership, no source-code parsing, applies to any repo language.
+        # ------------------------------------------------------------------
+        evidence_pool = verification.build_evidence_pool(
+            [r["name"] for r in indexed_repos],
+            [c.get("name", "") for c in components_obs.data.get("components", [])],
+            [c.get("file_path", "") for c in components_obs.data.get("components", [])],
+            [t.get("name", "") for t in components_obs.data.get("kafka_topics", [])],
+        )
+        verification_warnings: list[str] = []
+        repo_check = verification.verify_claims([r.name for r in plan.repositories], evidence_pool)
+        for name in repo_check.unverified:
+            verification_warnings.append(
+                f"Repository '{name}' cited in this plan was not found among the "
+                "repositories this run's graph traversal actually returned — unverified."
+            )
+        for comp in plan.components:
+            comp_check = verification.verify_claims([comp.name, comp.file_path], evidence_pool)
+            for claim in comp_check.unverified:
+                verification_warnings.append(
+                    f"Component claim '{claim}' (for '{comp.name}') does not appear in "
+                    "this run's indexed graph data — unverified."
+                )
+        plan.verification_warnings = verification_warnings
+        if verification_warnings:
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="claim_verification",
+                    summary=(
+                        f"{len(verification_warnings)} claim(s) in this implementation "
+                        "blueprint could not be verified against this run's own tool "
+                        "evidence — see verification_warnings."
+                    ),
+                )
+            )
 
         # Generate visual blueprint from structured plan fields
         try:

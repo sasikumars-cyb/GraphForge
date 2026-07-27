@@ -33,6 +33,7 @@ from pathlib import Path
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents import verification
 from app.agents._contract import (
     AgentContext,
     AgentOutput,
@@ -389,6 +390,53 @@ class TestPlanningAgent:
         # Never trust the LLM's self-reported graph_context_used — derive it
         # from what the tools actually returned.
         test_plan.graph_context_used = has_graph_data
+
+        # ------------------------------------------------------------------
+        # Verify claims against this run's own tool evidence (see
+        # app.agents.verification) — generic string membership, no
+        # source-code parsing. Also flags, unconditionally, that this
+        # agent never executes anything: it is a test plan, not a test
+        # result, and nothing downstream should mistake one for the other.
+        # ------------------------------------------------------------------
+        evidence_pool = verification.build_evidence_pool(
+            [r["name"] for r in indexed_repos],
+            [c.get("name", "") for c in components_obs.data.get("components", [])],
+            [c.get("file_path", "") for c in components_obs.data.get("components", [])],
+            [t.get("name", "") for t in components_obs.data.get("kafka_topics", [])],
+        )
+        verification_warnings: list[str] = [
+            "This is a test PLAN produced by an LLM — no test in it has actually "
+            "been executed. Regression/integration/edge-case results below are "
+            "proposed coverage, not verified pass/fail outcomes."
+        ]
+        repo_check = verification.verify_claims(test_plan.affected_repositories, evidence_pool)
+        for name in repo_check.unverified:
+            verification_warnings.append(
+                f"Repository '{name}' cited in this test plan was not found among the "
+                "repositories this run's graph traversal actually returned — unverified."
+            )
+        component_claims = list(test_plan.affected_components)
+        component_claims += [t.component for t in test_plan.regression_tests]
+        component_claims += [t.source_component for t in test_plan.integration_tests]
+        component_claims += [t.target_component for t in test_plan.integration_tests]
+        comp_check = verification.verify_claims(component_claims, evidence_pool)
+        for name in comp_check.unverified:
+            verification_warnings.append(
+                f"Component '{name}' referenced in this test plan does not appear in "
+                "this run's indexed graph data — unverified."
+            )
+        test_plan.verification_warnings = verification_warnings
+        evidence.append(
+            Evidence(
+                kind="tool_call",
+                reference="claim_verification",
+                summary=(
+                    f"Test plan verification: {len(verification_warnings) - 1} claim(s) "
+                    "unverified against this run's own tool evidence (plan-vs-execution "
+                    "distinction always noted)."
+                ),
+            )
+        )
 
         # LLM synthesis evidence
         evidence.append(

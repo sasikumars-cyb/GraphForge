@@ -45,6 +45,7 @@ from app.core.config import get_settings
 
 logger = logging.getLogger(__name__)
 
+from app.agents import verification
 from app.agents.blueprint.factory import BlueprintFactory
 from app.agents.planning.classifier import PlanningProfile, analyse, pattern_for_key
 from app.agents.planning.confluence_context import gather_confluence_context, get_confluence_mcp_config
@@ -59,7 +60,7 @@ from app.agents.planning.schemas import (
     RepositoryUsage,
     RiskItem,
 )
-from app.agents.planning.tools import to_evidence, PlanningObservation
+from app.agents.planning.tools import stars_for_rank, to_evidence, PlanningObservation
 from app.core.exceptions import AppError
 from app.tools import ContextBuilder, ToolExecutor, ToolInput, get_tool_registry
 from app.tools.implementations.github_tool import GitHubTool, extract_pr_or_issue_ref
@@ -575,10 +576,43 @@ class PlanningAgent:
         indexed_repos: list[dict[str, str]] = graph_result.data.get("indexed_repositories", [])
         component_count: int = graph_result.data.get("_component_count", 0)
         topic_count: int = graph_result.data.get("_topic_count", 0)
+        ranked_repo_names: list[str] = graph_result.data.get("ranked_repositories", [])
+        graph_components: list[dict] = graph_result.data.get("components", [])
+        graph_topics: list[dict] = graph_result.data.get("kafka_topics", [])
 
         logger.info(
             "planning_agent_tool_execution indexed_repo_count=%d component_count=%d topic_count=%d",
             len(indexed_repos), component_count, topic_count,
+        )
+
+        # ------------------------------------------------------------------
+        # Deterministic, non-LLM verification (see app.agents.verification):
+        # entity/tenant mismatch on the top-ranked repository, and a real
+        # evidence pool this run's own tools returned, used below to check
+        # the LLM's specific claims before showing them to a reviewer.
+        # ------------------------------------------------------------------
+        verification_warnings: list[str] = []
+        if ranked_repo_names:
+            mismatch = verification.check_entity_mismatch(task_description, ranked_repo_names[0])
+            if mismatch:
+                verification_warnings.append(mismatch)
+                evidence.append(
+                    Evidence(
+                        kind="tool_call",
+                        reference="entity_tenant_check",
+                        summary=mismatch,
+                    )
+                )
+                logger.warning(
+                    "planning_agent_entity_mismatch repo=%s warning=%s",
+                    ranked_repo_names[0], mismatch,
+                )
+
+        evidence_pool = verification.build_evidence_pool(
+            [r["name"] for r in indexed_repos],
+            [c.get("name", "") for c in graph_components],
+            [c.get("file_path", "") for c in graph_components],
+            [t.get("name", "") for t in graph_topics],
         )
 
         # ------------------------------------------------------------------
@@ -712,6 +746,54 @@ class PlanningAgent:
         # from what the tools actually returned. If traversal failed or the
         # graph was empty, this must be False regardless of what the model claims.
         planning_result.graph_context_used = has_graph_data
+
+        # ------------------------------------------------------------------
+        # Verify the LLM's repository_usage claims against ground truth
+        # (see app.agents.verification): `stars` is replaced with the
+        # deterministic rank-based value (never LLM-free-generated),
+        # `verified` reflects whether the repo name actually came back from
+        # this run's graph traversal, and `files_affected` claims that don't
+        # appear anywhere in this run's evidence are flagged, not deleted —
+        # visibility over silent trust.
+        # ------------------------------------------------------------------
+        indexed_repo_names = {r["name"] for r in indexed_repos}
+        for usage in planning_result.repository_usage:
+            usage.verified = usage.name in indexed_repo_names
+            if usage.name in ranked_repo_names:
+                usage.stars = stars_for_rank(ranked_repo_names.index(usage.name))
+            elif not usage.verified:
+                verification_warnings.append(
+                    f"Repository '{usage.name}' cited in repository_usage was not "
+                    "found among the repositories this run's graph traversal actually "
+                    "returned — treat its stars/reuse estimate as unverified."
+                )
+            files_check = verification.verify_claims(usage.files_affected, evidence_pool)
+            for path in files_check.unverified:
+                verification_warnings.append(
+                    f"File '{path}' claimed for '{usage.name}' does not appear in "
+                    "this run's indexed component data — unverified."
+                )
+
+        components_check = verification.verify_claims(planning_result.affected_components, evidence_pool)
+        for name in components_check.unverified:
+            verification_warnings.append(
+                f"Affected component '{name}' does not appear in this run's graph "
+                "traversal results — unverified."
+            )
+
+        planning_result.verification_warnings = verification_warnings
+        if verification_warnings:
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="claim_verification",
+                    summary=(
+                        f"{len(verification_warnings)} claim(s) in this plan could not be "
+                        "verified against this run's own tool evidence — see "
+                        "verification_warnings."
+                    ),
+                )
+            )
 
         # Generate visual blueprint from the structured result. Runs after
         # repositories_consulted and graph_context_used are finalized so

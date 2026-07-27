@@ -76,4 +76,10 @@ class EngineeringReadinessReport(BaseModel):
     blocking_issues: list[str] = Field(default_factory=list)
     recommendations: list[str] = Field(default_factory=list)
 
+    # Deterministic verification_warnings carried forward from Planning/
+    # Development/Testing (see app.agents.verification) — never generated
+    # by this agent's own LLM call, only read from the stages that
+    # produced them and used to override an over-optimistic "ready" verdict.
+    prior_verification_warnings: list[str] = Field(default_factory=list)
+
     prompt_version: str = "1.0"

@@ -19,6 +19,7 @@ from app.agents.planning.tools import (
     GetIndexedRepositoriesTool,
     TraverseArchitectureGraphTool,
     format_graph_context,
+    rank_repositories,
 )
 from app.graph.interfaces import IGraphRepository
 from app.graph.neo4j_repository import Neo4jGraphRepository
@@ -94,6 +95,18 @@ class Neo4jGraphTool:
             component_count = len(traverse_obs.data.get("components", []))
             topic_count = len(traverse_obs.data.get("kafka_topics", []))
 
+            # Best-first repository names by the same deterministic score
+            # `format_graph_context` used to build `context_text` — exposed as
+            # its own field so callers (e.g. the entity/tenant mismatch check
+            # in app.agents.verification) know exactly which repository was
+            # actually selected, without re-deriving or guessing it from the
+            # rendered markdown text.
+            ranked_repositories = [
+                name for _, name in rank_repositories(
+                    indexed_repos, traverse_obs.data.get("components", []), relevance_terms
+                )
+            ]
+
             evidence_items = [
                 repos_obs.summary,
                 traverse_obs.summary,
@@ -106,6 +119,7 @@ class Neo4jGraphTool:
                 data={
                     "context_text": context_text,
                     "indexed_repositories": indexed_repos,
+                    "ranked_repositories": ranked_repositories,
                     "components": traverse_obs.data.get("components", []),
                     "kafka_topics": traverse_obs.data.get("kafka_topics", []),
                     # Carry individual observations so the planning agent can

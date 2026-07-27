@@ -77,20 +77,52 @@ _READINESS_CONFIDENCE = {
 }
 
 
+def _collect_verification_warnings(
+    planning_result: dict[str, Any] | None,
+    development_result: dict[str, Any] | None,
+    testing_result: dict[str, Any] | None,
+) -> list[str]:
+    """Pull each stage's own deterministic `verification_warnings` — never
+    re-derived or judged by this agent's LLM call, just read straight out
+    of the stored stage results (see app.agents.verification, which
+    produced them at Planning/Development/Testing time). This is the
+    ground-truth signal this agent previously had no access to: it could
+    only compare the three stages' free text against each other, never
+    against what those stages' own tool calls actually verified.
+    """
+    warnings: list[str] = []
+    for label, result in (
+        ("Planning", planning_result),
+        ("Development", development_result),
+        ("Testing", testing_result),
+    ):
+        for w in (result or {}).get("verification_warnings", []) or []:
+            warnings.append(f"[{label}] {w}")
+    return warnings
+
+
 def _build_blueprint_context(
     original_objective: str,
     planning_result: dict[str, Any] | None,
     development_result: dict[str, Any] | None,
     testing_result: dict[str, Any] | None,
+    verification_warnings: list[str],
 ) -> str:
-    context = "\n\n".join(
-        [
-            f"## Original Objective\n{original_objective}",
-            _format_planning_block(planning_result),
-            _format_development_block(development_result),
-            _format_testing_block(testing_result),
-        ]
-    )
+    sections = [
+        f"## Original Objective\n{original_objective}",
+        _format_planning_block(planning_result),
+        _format_development_block(development_result),
+        _format_testing_block(testing_result),
+    ]
+    if verification_warnings:
+        sections.append(
+            "## Pre-existing Verification Warnings (deterministic, not LLM-generated)\n"
+            "These were flagged by each stage's own code against its own tool evidence "
+            "before this review ever ran — weigh them as real, already-established facts, "
+            "not claims to re-judge:\n"
+            + "\n".join(f"- {w}" for w in verification_warnings)
+        )
+    context = "\n\n".join(sections)
     if len(context) > _MAX_BLUEPRINT_CONTEXT_CHARS:
         logger.warning(
             "engineering_review_blueprint_context_truncated original_chars=%d max_chars=%d",
@@ -212,8 +244,15 @@ class EngineeringReviewAgent:
         development_result = get_stage_result(workflow, "development") if workflow else None
         testing_result = get_stage_result(workflow, "testing") if workflow else None
 
+        prior_verification_warnings = _collect_verification_warnings(
+            planning_result, development_result, testing_result
+        )
         blueprint_context = _build_blueprint_context(
-            context.subject.display_name, planning_result, development_result, testing_result
+            context.subject.display_name,
+            planning_result,
+            development_result,
+            testing_result,
+            prior_verification_warnings,
         )
 
         logger.info(
@@ -247,6 +286,18 @@ class EngineeringReviewAgent:
                 ),
             )
         ]
+        if prior_verification_warnings:
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="prior_stage_verification_warnings",
+                    summary=(
+                        f"Carried forward {len(prior_verification_warnings)} deterministic "
+                        "verification warning(s) from Planning/Development/Testing — see "
+                        "result.prior_verification_warnings."
+                    ),
+                )
+            )
 
         prompt = _render_prompt(blueprint_context)
 
@@ -256,6 +307,26 @@ class EngineeringReviewAgent:
         except EngineeringReviewLLMError as exc:
             logger.error("engineering_review_agent_llm_failed error=%s", str(exc))
             raise
+
+        # ------------------------------------------------------------------
+        # Ground-truth override: never let the LLM mark a blueprint "ready"
+        # over a deterministic, code-verified problem it didn't reconcile.
+        # Same pattern as `graph_context_used` elsewhere in this codebase —
+        # a real fact from the pipeline itself wins over the model's own
+        # verdict, it is never just folded into the prompt and hoped for.
+        # ------------------------------------------------------------------
+        report.prior_verification_warnings = prior_verification_warnings
+        if prior_verification_warnings and report.readiness_status == "ready":
+            report.readiness_status = "needs_revision"
+            report.blocking_issues = list(report.blocking_issues) + [
+                "Automatically downgraded from 'ready': one or more prior stages carry "
+                "unresolved, code-verified findings (see prior_verification_warnings) "
+                "that this review's own judgment did not account for."
+            ]
+            logger.warning(
+                "engineering_review_agent_downgraded_ready subject_id=%s warning_count=%d",
+                subject_id, len(prior_verification_warnings),
+            )
 
         evidence.append(
             Evidence(

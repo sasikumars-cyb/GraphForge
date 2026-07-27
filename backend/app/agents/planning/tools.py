@@ -223,6 +223,46 @@ def _relevance(text: str, terms: list[str]) -> int:
     return sum(1 for t in terms if t in lowered)
 
 
+def rank_repositories(
+    indexed_repos: list[dict[str, str]],
+    components: list[dict[str, Any]],
+    relevance_terms: list[str] | None = None,
+) -> list[tuple[int, str]]:
+    """Score and sort indexed repositories by keyword/component overlap with
+    the required capabilities. Returns (score, name) pairs, best first —
+    the single source of truth for repository ranking, used both to decide
+    which repositories reach the LLM prompt (`format_graph_context` below)
+    and to pick the top candidate for the entity/tenant mismatch check
+    (see app.agents.verification.check_entity_mismatch), so both paths
+    agree on which repository was actually selected.
+    """
+    terms = relevance_terms or []
+    by_repo: dict[str, list[dict[str, Any]]] = {}
+    for comp in components:
+        by_repo.setdefault(comp["repository"], []).append(comp)
+
+    def score(name: str) -> int:
+        if not terms:
+            return 0
+        total = _relevance(name, terms) * 2
+        for comp in by_repo.get(name, []):
+            total += _relevance(f"{comp['name']} {comp['type']}", terms)
+        return total
+
+    return sorted(
+        ((score(r["name"]), r["name"]) for r in indexed_repos),
+        key=lambda pair: (-pair[0], pair[1]),
+    )
+
+
+def stars_for_rank(rank_index: int) -> int:
+    """Deterministic 1-5 star rating from a repository's position in
+    `rank_repositories`' output (0 = best match). Replaces the LLM's
+    free-generated `stars` value in RepositoryUsage with the same ground
+    truth already used to decide which repositories reach the prompt."""
+    return max(1, 5 - rank_index)
+
+
 def format_graph_context(
     repos_observation: PlanningObservation,
     traverse_observation: PlanningObservation,
@@ -264,18 +304,7 @@ def format_graph_context(
     for comp in components:
         by_repo_all.setdefault(comp["repository"], []).append(comp)
 
-    def repo_score(name: str) -> int:
-        if not terms:
-            return 0
-        score = _relevance(name, terms) * 2
-        for comp in by_repo_all.get(name, []):
-            score += _relevance(f"{comp['name']} {comp['type']}", terms)
-        return score
-
-    scored = sorted(
-        ((repo_score(r["name"]), r["name"]) for r in indexed_repos),
-        key=lambda pair: (-pair[0], pair[1]),
-    )
+    scored = rank_repositories(indexed_repos, components, terms)
     if terms:
         # Drop repositories that match no required capability at all — they
         # are the ones that get pattern-matched into the architecture for no

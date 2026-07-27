@@ -117,3 +117,9 @@ class TestPlan(BaseModel):
     graph_context_used: bool = False
     repositories_consulted: list[str] = Field(default_factory=list)
     prompt_version: str = "1.0"
+
+    # Deterministic, non-LLM warnings: components/repositories cited above
+    # that do not appear in this run's own tool-returned evidence. See
+    # app.agents.verification. Always includes a note that this is a test
+    # PLAN, not executed test results — nothing here was actually run.
+    verification_warnings: list[str] = Field(default_factory=list)

@@ -61,7 +61,10 @@ class RepositoryUsage(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     name: str
-    stars: int = 3  # 1-5 relevance rating
+    stars: int = 3  # 1-5 — overwritten by the agent from the deterministic
+    # repo_score ranking (app.agents.planning.tools.rank_repositories), same
+    # ground truth used to pick which repos reach the LLM prompt at all.
+    # The LLM's own free-generated value is never trusted for this field.
     purpose: str = ""  # what this repository does today
     reusable_components: list[str] = Field(default_factory=list)
     reason: str = ""  # which architectural capability it satisfies
@@ -70,6 +73,11 @@ class RepositoryUsage(BaseModel):
     confidence: str = "medium"  # low | medium | high
     files_affected: list[str] = Field(default_factory=list)
     alternatives: list[str] = Field(default_factory=list)
+    # False when this repository name was not found among the repositories
+    # the graph traversal actually returned this run (see
+    # app.agents.verification.verify_claims) — an LLM-invented or stale
+    # repository name, surfaced rather than silently trusted.
+    verified: bool = True
 
 
 class DataEntity(BaseModel):
@@ -160,6 +168,12 @@ class PlanningResult(BaseModel):
     repositories_consulted: list[str] = Field(default_factory=list)
     blueprint: dict | None = Field(default=None)
     prompt_version: str = "1.0"
+
+    # Deterministic warnings the agent code produced itself (entity/tenant
+    # mismatches, claims not backed by this run's own tool evidence) — never
+    # LLM-generated, never silently dropped. Empty when nothing was flagged.
+    # See app.agents.verification.
+    verification_warnings: list[str] = Field(default_factory=list)
 
     # Capability analysis (v4) — derived deterministically from the brief
     # before any repository context is assembled, so the architecture is
