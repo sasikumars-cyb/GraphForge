@@ -19,6 +19,7 @@ import pytest
 
 from app.agents._contract import AgentContext, Subject
 from app.agents.planning.agent import PlanningAgent, PlanningLLMError
+from app.agents.planning.classifier import analyse
 from app.agents.planning.schemas import PlanningResult
 from app.agents.planning.tools import (
     GetIndexedRepositoriesTool,
@@ -147,6 +148,97 @@ def test_format_graph_context_with_data() -> None:
     ctx = format_graph_context(repos_obs, traverse_obs)
     assert "order-service" in ctx
     assert "order.created" in ctx
+
+
+def test_format_graph_context_ranks_specific_component_over_generic_noise() -> None:
+    """A brief that names a specific field/function should surface the
+    component that actually contains it, not whichever component happens
+    to share a few common English words with the brief.
+
+    Regression test for a real failure: the Planning Agent's context for a
+    ticket about `realservicepointno` handling in `rate_attribute` exports
+    listed unrelated config/loader components, because relevance terms were
+    scored by "one point per substring match" with no regard for how common
+    that substring was — so a component sharing several generic, ticket-
+    boilerplate words ("create", "input", "value", "file", "record")
+    outscored the one component whose name is actually a near-match for
+    what the brief names. Exercises the real production path — capability
+    detection + free-text term extraction (`classifier.analyse`) feeding
+    `format_graph_context`, exactly as `PlanningAgent` wires them — not the
+    scoring internals in isolation, since the fix for this spans both.
+    """
+    task_description = (
+        "Jira: PROT-5746 — Rate_attribute record is not getting generated "
+        "when realservicepointno is 'n/a'. Steps: create input data with "
+        "realservicepointno value 'n/a'. Verify the rate_attribute file — "
+        "records having value 'n/a' are not exported."
+    )
+
+    repos_obs = PlanningObservation(
+        tool_name="get_indexed_repositories",
+        summary="1 repo.",
+        data={
+            "indexed_repositories": [{"id": "r1", "name": "soco-ingest", "owner": "acme"}],
+            "total_tracked": 1,
+        },
+    )
+    components = [
+        # The actual match: shares the brief's specific vocabulary.
+        {
+            "id": "c1",
+            "name": "transform_rate_attribute",
+            "type": "Function",
+            "repository": "soco-ingest",
+            "file_path": "src/transforms/export/rate_attribute.py",
+        },
+        # Noise: shares only generic, ticket-boilerplate words with the
+        # brief ("create", "input"), and under naive substring matching
+        # would also pick up an incidental hit ("value" inside "values").
+        {
+            "id": "c2",
+            "name": "_create_input_schema",
+            "type": "Function",
+            "repository": "soco-ingest",
+            "file_path": "src/config/pipeline_config.py",
+        },
+        # More noise: incidental substring hits under naive matching
+        # ("process" inside "processed", "file" as a real but generic word).
+        {
+            "id": "c3",
+            "name": "test_already_processed_file_exits_early",
+            "type": "Function",
+            "repository": "soco-ingest",
+            "file_path": "tests/test_loader.py",
+        },
+    ]
+    traverse_obs = PlanningObservation(
+        tool_name="traverse_architecture_graph",
+        summary="Found 3 components.",
+        data={"components": components, "kafka_topics": [], "repository_count": 1},
+    )
+
+    profile = analyse(task_description)
+    ctx = format_graph_context(repos_obs, traverse_obs, relevance_terms=profile.search_terms)
+
+    rate_attribute_pos = ctx.find("transform_rate_attribute")
+    noise_pos = ctx.find("_create_input_schema")
+    assert rate_attribute_pos != -1
+    assert rate_attribute_pos < noise_pos, (
+        "the component matching the brief's own specific vocabulary should "
+        "rank ahead of components that only share generic words"
+    )
+
+
+def test_relevance_requires_whole_token_match_not_substring() -> None:
+    """"process" must not match "processed", and "page" must not match
+    "pagination" — a search term is a real word, not an arbitrary substring
+    of an unrelated one. See app.agents.planning.tools._tokenize."""
+    from app.agents.planning.tools import _relevance
+
+    assert _relevance("test_already_processed_file", ["process"]) == 0
+    assert _relevance("test_s3_pagination_fetches_pages", ["page"]) == 0
+    # But a real whole-word match still counts.
+    assert _relevance("process_batch", ["process"]) == 1
 
 
 # ---------------------------------------------------------------------------

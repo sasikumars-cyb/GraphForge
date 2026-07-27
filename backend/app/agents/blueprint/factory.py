@@ -166,6 +166,135 @@ def _validate_edges(nodes: list[DiagramNode], edges: list[DiagramEdge]) -> list[
 
 
 # ---------------------------------------------------------------------------
+# Ground-truth diagram builder — built directly from the Knowledge Graph
+# traversal, not from anything the LLM wrote. See BlueprintFactory's
+# `from_planning_result` docstring for why this exists and is ordered first.
+# ---------------------------------------------------------------------------
+
+
+def _build_grounded_architecture(
+    components: list[dict],
+    repository_name: str,
+    verified_names: set[str],
+    verified_file_paths: set[str],
+) -> Diagram | None:
+    """The real package/file layout of the top-matched repository, built
+    straight from this run's own `traverse_architecture_graph` tool result —
+    no LLM involved, no architecture template.
+
+    `_build_solution_architecture` below draws whatever layers the LLM
+    wrote into `architecture_layers` — usually a plausible generic ETL/API
+    shape, since that field is guided by a fixed pattern template
+    (`app.agents.planning.classifier._PATTERNS`) rather than the indexed
+    code. That diagram is worth keeping for the ~30-40% of a plan that is
+    genuinely new work with nothing to point at yet, but it is a narrative,
+    not a fact, and presenting it first invites reading it as one.
+
+    This diagram only contains what the Knowledge Graph actually returned
+    for `repository_name` this run: every directory node is a real folder,
+    every file node is a real indexed file. Nodes are marked `has_affected`
+    only when they matched a claim `app.agents.verification.verify_claims`
+    already confirmed against this run's own evidence — so a reader can
+    tell, from the diagram alone, which part of the plan is grounded.
+    """
+    by_repo = [c for c in components if c.get("repository") == repository_name and c.get("file_path")]
+    if not by_repo:
+        return None
+
+    def _is_affected(c: dict) -> bool:
+        name = c.get("name", "")
+        path = c.get("file_path", "")
+        short_name = name.rsplit(".", 1)[-1] if name else ""
+        if name in verified_names or short_name in verified_names:
+            return True
+        return any(
+            path == p or path.endswith(f"/{p}") or p.endswith(f"/{path}")
+            for p in verified_file_paths if p
+        )
+
+    by_dir: dict[str, list[dict]] = {}
+    for c in by_repo:
+        file_path = c["file_path"]
+        dir_path = file_path.rsplit("/", 1)[0] if "/" in file_path else "(root)"
+        by_dir.setdefault(dir_path, []).append(c)
+
+    nodes = [
+        DiagramNode(
+            id="repo_root",
+            label=repository_name,
+            type="input",
+            properties={"affected_component": f"{len(by_repo)} indexed component(s)"},
+            metadata={"kind": "repository"},
+        )
+    ]
+    edges: list[DiagramEdge] = []
+    seen_files: set[str] = set()
+
+    for dir_path, comps_in_dir in sorted(by_dir.items()):
+        has_affected = any(_is_affected(c) for c in comps_in_dir)
+        dir_id = f"dir_{_slug(dir_path)}"
+        nodes.append(
+            DiagramNode(
+                id=dir_id,
+                label=dir_path,
+                type="risk" if has_affected else "component",
+                properties={"affected_component": f"{len(comps_in_dir)} component(s) indexed here"},
+                metadata={"kind": "directory", "has_affected": has_affected},
+            )
+        )
+        edges.append(DiagramEdge(id=f"root_to_{dir_id}", source="repo_root", target=dir_id))
+
+        for c in comps_in_dir:
+            if not _is_affected(c):
+                continue
+            file_path = c["file_path"]
+            if file_path in seen_files:
+                continue
+            seen_files.add(file_path)
+            file_id = f"file_{_slug(file_path)}"
+            nodes.append(
+                DiagramNode(
+                    id=file_id,
+                    label=file_path.rsplit("/", 1)[-1],
+                    type="risk",
+                    properties={"affected_component": c.get("name", "")},
+                    metadata={
+                        "kind": "file",
+                        "file_path": file_path,
+                        "component_type": c.get("type", ""),
+                    },
+                )
+            )
+            edges.append(
+                DiagramEdge(id=f"{dir_id}_to_{file_id}", source=dir_id, target=file_id, type="risk")
+            )
+
+    if len(nodes) <= 1:
+        return None
+
+    edges = _validate_edges(nodes, edges)
+    return Diagram(
+        id="grounded_architecture",
+        title="Indexed Codebase Structure (Ground Truth)",
+        description=(
+            f"The real, indexed package layout of {repository_name} — every node here "
+            "exists in the Knowledge Graph right now. Highlighted nodes are the files "
+            "this plan's specific claims were verified against."
+        ),
+        type=DiagramType.DEPENDENCY,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Architecture",
+            "why": "Grounds the plan in the repository as actually indexed, not a generated template",
+            "repository": repository_name,
+            "grounded": True,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
 # New Principal Architect-level diagram builders
 # ---------------------------------------------------------------------------
 
@@ -195,8 +324,11 @@ def _build_solution_architecture(layers: list[dict]) -> Diagram | None:
     ])
     return Diagram(
         id="solution_architecture",
-        title="Solution Architecture",
-        description="High-level solution layers — what we are building",
+        title="Solution Architecture (Conceptual)",
+        description=(
+            "The LLM's proposed high-level layers for this brief — a narrative shape, "
+            "not indexed code. See 'Indexed Codebase Structure' for what actually exists."
+        ),
         type=DiagramType.ARCHITECTURE,
         nodes=nodes,
         edges=edges,
@@ -205,6 +337,7 @@ def _build_solution_architecture(layers: list[dict]) -> Diagram | None:
             "section": "Architecture",
             "why": "Shows the conceptual solution layers from data source to consumption",
             "layer_count": len(nodes),
+            "grounded": False,
         },
     )
 
@@ -1067,9 +1200,32 @@ class BlueprintFactory:
     """
 
     @staticmethod
-    def from_planning_result(result: "PlanningResult") -> BlueprintArtifact:
+    def from_planning_result(
+        result: "PlanningResult",
+        graph_components: list[dict] | None = None,
+        top_repository: str | None = None,
+        verified_affected_names: list[str] | None = None,
+        verified_file_paths: list[str] | None = None,
+    ) -> BlueprintArtifact:
         diagrams: list[Diagram] = []
         steps_raw = [s.model_dump() for s in result.implementation_steps]
+
+        # 0. Indexed Codebase Structure — ground truth, built directly from
+        # this run's own graph traversal (see `_build_grounded_architecture`).
+        # Ordered first, deliberately: this is what the hackathon's visual
+        # focus is about — leading with the LLM's conceptual architecture
+        # invites reading a narrative as a fact. Silently skipped (returns
+        # None) whenever no repository was actually matched/traversed, so
+        # callers that don't pass graph data get the same output as before.
+        if graph_components and top_repository:
+            grounded = _build_grounded_architecture(
+                graph_components,
+                top_repository,
+                set(verified_affected_names or []),
+                set(verified_file_paths or []),
+            )
+            if grounded:
+                diagrams.append(grounded)
 
         # 1. Solution Architecture (hero diagram — "what are we building?")
         arch_layers_raw = [l.model_dump() for l in result.architecture_layers]

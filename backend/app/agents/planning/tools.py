@@ -11,10 +11,10 @@ agents never write to the graph directly (GraphWriter rule from AGENT_FRAMEWORK.
 
 from __future__ import annotations
 
+import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
-
-import logging
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -217,17 +217,74 @@ class TraverseArchitectureGraphTool:
 # ---------------------------------------------------------------------------
 
 
-def _relevance(text: str, terms: list[str]) -> int:
-    """How many capability search terms this text matches."""
-    lowered = text.lower()
-    return sum(1 for t in terms if t in lowered)
+_TOKEN_BOUNDARY_RE = re.compile(r"[^a-z0-9]+")
+_CAMEL_BOUNDARY_RE = re.compile(r"([a-z0-9])([A-Z])")
+
+
+def _tokenize(text: str) -> frozenset[str]:
+    """Split an identifier, file path, or free-text string into its
+    individual sub-words: `snake_case`, `dotted.paths`, `slash/separated`,
+    and `camelCase` are all token breaks — the same tokenization a code
+    search engine applies to identifiers.
+
+    This is what a component name and a search term are compared through,
+    rather than raw substring containment. Substring containment treats
+    "process" as a hit inside "test_already_**process**ed_file" and "page"
+    as a hit inside "**page**ination" — real words that happen to contain
+    the query as a fragment, not an actual match. Token equality doesn't
+    make that mistake, and it composes correctly for multi-word terms too:
+    "rate_attribute" tokenizes to {"rate", "attribute"}, which overlaps
+    *both* words of `transform_rate_attribute`'s {"transform", "rate",
+    "attribute"} — two-token overlap naturally outscores any single
+    incidental one-token match without needing separate phrase handling.
+    """
+    spaced = _CAMEL_BOUNDARY_RE.sub(r"\1_\2", text)
+    return frozenset(t for t in _TOKEN_BOUNDARY_RE.split(spaced.lower()) if len(t) >= 3)
+
+
+def _relevance(text: str, terms: list[str], weights: dict[str, float] | None = None) -> float:
+    """How much this text matches the search terms, by token overlap —
+    flat count of matching tokens, or (when `weights` is given) the sum of
+    each matched token's weight. See `_term_weights` for where the weights
+    come from."""
+    text_tokens = _tokenize(text)
+    term_tokens = _tokenize(" ".join(terms))
+    matched = text_tokens & term_tokens
+    if weights is None:
+        return float(len(matched))
+    return sum(weights.get(t, 1.0) for t in matched)
+
+
+def _term_weights(terms: list[str], components: list[dict[str, Any]]) -> dict[str, float]:
+    """Inverse-document-frequency weight for each search-term token over the
+    *current* component pool: a token that matches almost every component is
+    nearly worthless as a discriminator; a token that matches one or two is
+    exactly what should decide the ranking.
+
+    This is what lets `relevance_terms` mix two very different kinds of
+    vocabulary safely: a fixed capability-keyword list ("loader", "schema",
+    "validator" — deliberately generic, so it matches broadly) and free-text
+    terms pulled straight out of the brief (see
+    `app.agents.planning.classifier.extract_key_terms` — deliberately
+    specific, e.g. a field or function name mentioned once). A flat
+    "one match = one point" count lets the generic terms drown out the
+    specific ones just by matching more often; weighting by rarity fixes
+    that without needing to hand-classify which list a term came from, and
+    self-calibrates to whatever this repository set's own vocabulary is —
+    no fixed thresholds, no stopword tuning per domain.
+    """
+    term_tokens = _tokenize(" ".join(terms))
+    if not term_tokens:
+        return {}
+    token_sets = [_tokenize(f"{c['name']} {c['type']}") for c in components]
+    return {t: 1.0 / (1 + sum(1 for ts in token_sets if t in ts)) for t in term_tokens}
 
 
 def rank_repositories(
     indexed_repos: list[dict[str, str]],
     components: list[dict[str, Any]],
     relevance_terms: list[str] | None = None,
-) -> list[tuple[int, str]]:
+) -> list[tuple[float, str]]:
     """Score and sort indexed repositories by keyword/component overlap with
     the required capabilities. Returns (score, name) pairs, best first —
     the single source of truth for repository ranking, used both to decide
@@ -240,13 +297,14 @@ def rank_repositories(
     by_repo: dict[str, list[dict[str, Any]]] = {}
     for comp in components:
         by_repo.setdefault(comp["repository"], []).append(comp)
+    weights = _term_weights(terms, components)
 
-    def score(name: str) -> int:
+    def score(name: str) -> float:
         if not terms:
-            return 0
-        total = _relevance(name, terms) * 2
+            return 0.0
+        total = _relevance(name, terms, weights) * 2
         for comp in by_repo.get(name, []):
-            total += _relevance(f"{comp['name']} {comp['type']}", terms)
+            total += _relevance(f"{comp['name']} {comp['type']}", terms, weights)
         return total
 
     return sorted(
@@ -304,6 +362,7 @@ def format_graph_context(
     for comp in components:
         by_repo_all.setdefault(comp["repository"], []).append(comp)
 
+    weights = _term_weights(terms, components)
     scored = rank_repositories(indexed_repos, components, terms)
     if terms:
         # Drop repositories that match no required capability at all — they
@@ -334,7 +393,10 @@ def format_graph_context(
             if terms:
                 comps = sorted(
                     comps,
-                    key=lambda c: (-_relevance(f"{c['name']} {c['type']}", terms), c["name"]),
+                    key=lambda c: (
+                        -_relevance(f"{c['name']} {c['type']}", terms, weights),
+                        c["name"],
+                    ),
                 )
             listed = [f"{c['name']} ({c['type']})" for c in comps[:max_components_per_repo]]
             if listed:

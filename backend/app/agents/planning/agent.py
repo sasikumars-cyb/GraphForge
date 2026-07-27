@@ -757,6 +757,7 @@ class PlanningAgent:
         # visibility over silent trust.
         # ------------------------------------------------------------------
         indexed_repo_names = {r["name"] for r in indexed_repos}
+        verified_file_paths: list[str] = []
         for usage in planning_result.repository_usage:
             usage.verified = usage.name in indexed_repo_names
             if usage.name in ranked_repo_names:
@@ -768,6 +769,7 @@ class PlanningAgent:
                     "returned — treat its stars/reuse estimate as unverified."
                 )
             files_check = verification.verify_claims(usage.files_affected, evidence_pool)
+            verified_file_paths.extend(files_check.verified)
             for path in files_check.unverified:
                 verification_warnings.append(
                     f"File '{path}' claimed for '{usage.name}' does not appear in "
@@ -800,7 +802,13 @@ class PlanningAgent:
         # factory has the complete picture. Never blocks workflow completion
         # on failure — blueprint is a presentation layer, not core output.
         try:
-            blueprint = BlueprintFactory.from_planning_result(planning_result)
+            blueprint = BlueprintFactory.from_planning_result(
+                planning_result,
+                graph_components=graph_components,
+                top_repository=ranked_repo_names[0] if ranked_repo_names else None,
+                verified_affected_names=components_check.verified,
+                verified_file_paths=verified_file_paths,
+            )
             planning_result.blueprint = blueprint.model_dump()
         except Exception:
             logger.warning("planning_agent_blueprint_generation_failed", exc_info=True)

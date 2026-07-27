@@ -68,6 +68,12 @@ class PlanningProfile:
 
     pattern: ArchitecturePattern
     capabilities: tuple[Capability, ...] = ()
+    # Significant identifiers/nouns pulled straight from the brief itself
+    # (field names, function names, entity names) — see `extract_key_terms`.
+    # Kept separate from `capabilities` because these say nothing about
+    # architecture (they must never shape `playbook()`'s layers), only about
+    # which already-indexed code is worth showing the model.
+    ticket_terms: tuple[str, ...] = ()
 
     @property
     def key(self) -> str:
@@ -83,12 +89,25 @@ class PlanningProfile:
 
     @property
     def search_terms(self) -> list[str]:
-        """Flat list of repository-search terms across detected capabilities.
+        """Flat list of repository-search terms: the brief's own vocabulary
+        first, then the fixed capability vocabulary.
 
-        Used to rank repositories by what the architecture actually needs,
-        rather than searching for the project type as a single blunt term.
+        The capability terms alone ("loader", "validator", "reader", ...)
+        describe architecture *shapes* — they can find a repo that does
+        file ingestion in general, but they say nothing about which
+        specific field, function, or entity the brief is actually about.
+        A ticket that names `realservicepointno` or `rate_attribute`
+        directly should be able to surface the exact component that
+        contains those names, not just "some ingestion-shaped repo" — so
+        `ticket_terms` (extracted from the raw brief) are folded in here
+        too, ticket-specific terms first since they're the more precise
+        signal. Used to rank repositories/components by what the request
+        actually needs, rather than a blunt project-type label.
         """
         terms: list[str] = []
+        for t in self.ticket_terms:
+            if t not in terms:
+                terms.append(t)
         for cap in self.capabilities:
             for t in cap.search_terms:
                 if t not in terms:
@@ -493,6 +512,72 @@ def derive_pattern(capabilities: tuple[Capability, ...]) -> ArchitecturePattern:
     return _PATTERNS[best_key]
 
 
+_TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_]{3,}")
+
+# Generic English function words, plus the app's own fixed prompt-wrapper
+# vocabulary (see app.agents.prompt_utils.wrap_untrusted_content), plus the
+# handful of nouns/verbs so common across *any* bug report or work item
+# ("create a record", "process the file", "check the value") that they
+# carry no domain signal on their own. None of this is specific to any one
+# ticket's subject matter — it's the same fixed list for every brief.
+#
+# Why exclude ticket-boilerplate nouns at all, when `_term_weights` already
+# downweights whatever turns out to be common? Because that weighting is
+# computed per-run over whatever the traversal happens to return — often a
+# few hundred components. In a sample that small, a generic word can look
+# artificially "rare" (and so score as if it were specific) purely because
+# only one or two components happen to contain it, not because it actually
+# means anything. Stopwording removes the words this applies to categorically
+# rather than leaving it to per-run sample noise.
+_GENERIC_STOPWORDS = frozenset({
+    "this", "that", "these", "those", "with", "from", "into", "when", "where",
+    "which", "should", "would", "could", "must", "also", "being", "been",
+    "have", "has", "had", "will", "shall", "does", "done", "after", "before",
+    "during", "while", "about", "then", "than", "only", "even", "both",
+    "either", "neither", "each", "every", "some", "such", "other", "another",
+    "more", "most", "less", "least", "very", "just", "still", "again", "once",
+    "here", "there", "what", "whose", "whom", "the", "and", "for", "are",
+    "was", "were", "not", "but", "can", "its", "our", "your", "their", "his",
+    "her", "they", "them", "you", "we",
+    "begin", "end", "untrusted", "content", "data", "follow", "any",
+    "instructions", "found", "below", "phrased", "commands", "prepare",
+    "implementation", "plan", "ticket", "issue", "task",
+    "create", "created", "creates", "creating", "input", "inputs", "output",
+    "outputs", "value", "values", "record", "records", "process", "processed",
+    "processing", "result", "results", "system", "error", "errors", "please",
+    "note", "connect", "verify", "verified", "check", "checking", "via",
+    "case", "cases", "having", "getting",
+})
+
+
+def extract_key_terms(text: str, max_terms: int = 25) -> tuple[str, ...]:
+    """Pull the significant identifiers/nouns out of free text — field
+    names, function names, entity names — so they can be matched against
+    the Knowledge Graph's own component names.
+
+    Deliberately dumb and generic (regex + stopword filter, no NLP model,
+    no per-ticket tuning): any word/identifier of 4+ characters that isn't
+    a common function word or prompt-boilerplate token is kept, in the
+    order it first appears. This is what lets a brief that names a specific
+    field ("realservicepointno") or function ("rate_attribute") surface the
+    exact module/function that contains it, instead of relying entirely on
+    the fixed capability-keyword vocabulary in `_CAPABILITIES`, which
+    describes architecture shapes ("loader", "validator") and has no way to
+    know about any one codebase's actual identifiers.
+    """
+    if not text:
+        return ()
+    seen: list[str] = []
+    for match in _TOKEN_RE.finditer(text.lower()):
+        token = match.group(0)
+        if token in _GENERIC_STOPWORDS or token in seen:
+            continue
+        seen.append(token)
+        if len(seen) >= max_terms:
+            break
+    return tuple(seen)
+
+
 def analyse(task_description: str) -> PlanningProfile:
     """Full capability analysis for one brief.
 
@@ -500,7 +585,12 @@ def analyse(task_description: str) -> PlanningProfile:
     architecture pattern out, before any repository data is touched.
     """
     capabilities = detect_capabilities(task_description)
-    return PlanningProfile(pattern=derive_pattern(capabilities), capabilities=capabilities)
+    ticket_terms = extract_key_terms(task_description or "")
+    return PlanningProfile(
+        pattern=derive_pattern(capabilities),
+        capabilities=capabilities,
+        ticket_terms=ticket_terms,
+    )
 
 
 def pattern_for_key(key: str) -> ArchitecturePattern:
