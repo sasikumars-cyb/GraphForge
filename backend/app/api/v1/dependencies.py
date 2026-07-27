@@ -37,6 +37,13 @@ async def get_current_user(
     subject = payload.get("sub")
     if subject is None:
         raise UnauthorizedError("Invalid authentication token.")
+    if payload.get("purpose") is not None:
+        # A token minted with a `purpose` (e.g. the GitHub OAuth `state`
+        # value — see github_service.get_connect_authorization_url) is
+        # scoped to that one flow only. Without this check, a leaked/logged
+        # `state` value would work as a fully general bearer token for the
+        # rest of the API for its whole (albeit short) lifetime.
+        raise UnauthorizedError("This token cannot be used for API authentication.")
 
     try:
         user_id = uuid.UUID(subject)

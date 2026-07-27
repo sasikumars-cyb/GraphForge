@@ -29,6 +29,9 @@ export interface SystemStatusResponse {
   knowledge_base: KnowledgeBaseStatus;
 }
 
-export function getSystemStatus(token: string): Promise<SystemStatusResponse> {
-  return apiFetch<SystemStatusResponse>("/system/status", { token });
+export function getSystemStatus(
+  token: string,
+  signal?: AbortSignal,
+): Promise<SystemStatusResponse> {
+  return apiFetch<SystemStatusResponse>("/system/status", { token, signal });
 }

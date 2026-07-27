@@ -20,3 +20,10 @@ _driver: AsyncDriver = AsyncGraphDatabase.driver(
 
 def get_driver() -> AsyncDriver:
     return _driver
+
+
+async def close_driver() -> None:
+    """Close the driver's connection pool — called from app.main's lifespan
+    shutdown. Without this, the pool's sockets stay open until the process
+    exits rather than being released as part of a graceful shutdown."""
+    await _driver.close()

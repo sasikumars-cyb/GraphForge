@@ -86,25 +86,62 @@ export function StageResultPanel({
     return true;
   });
 
+  const panelId = (id: ResultTab) => `stage-result-panel-${id}`;
+  const tabId = (id: ResultTab) => `stage-result-tab-${id}`;
+
+  function focusTab(id: ResultTab) {
+    document.getElementById(tabId(id))?.focus();
+  }
+
+  function handleTabKeyDown(event: React.KeyboardEvent<HTMLButtonElement>, index: number) {
+    // Standard ARIA tabs arrow-key navigation — Left/Right (and Home/End)
+    // move focus between tabs and activate the newly-focused one,
+    // matching the pattern screen readers expect from role="tab".
+    if (event.key === "ArrowRight" || event.key === "ArrowLeft") {
+      event.preventDefault();
+      const delta = event.key === "ArrowRight" ? 1 : -1;
+      const next = visibleTabs[(index + delta + visibleTabs.length) % visibleTabs.length];
+      setActiveTab(next.id);
+      focusTab(next.id);
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setActiveTab(visibleTabs[0].id);
+      focusTab(visibleTabs[0].id);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      const last = visibleTabs[visibleTabs.length - 1];
+      setActiveTab(last.id);
+      focusTab(last.id);
+    }
+  }
+
   return (
     <div className="flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
       {/* Tab bar */}
-      <div className="flex items-center gap-0.5 border-b border-slate-800 px-2 pt-2">
-        {visibleTabs.map((tab) => {
+      <div
+        className="flex items-center gap-0.5 border-b border-slate-800 px-2 pt-2"
+        role="tablist"
+        aria-label="Stage result views"
+      >
+        {visibleTabs.map((tab, index) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.id;
           return (
             <button
               key={tab.id}
+              id={tabId(tab.id)}
               type="button"
               onClick={() => setActiveTab(tab.id)}
+              onKeyDown={(e) => handleTabKeyDown(e, index)}
               className={`flex items-center gap-1.5 rounded-t px-3 py-2 text-xs font-medium transition-colors ${
                 isActive
                   ? "border-b-2 border-brand-500 text-brand-300"
                   : "text-slate-500 hover:text-slate-300"
               }`}
               aria-selected={isActive}
+              aria-controls={panelId(tab.id)}
               role="tab"
+              tabIndex={isActive ? 0 : -1}
             >
               <Icon className="h-3 w-3" aria-hidden="true" />
               {tab.label}
@@ -121,16 +158,24 @@ export function StageResultPanel({
       {/* Tab panels */}
       <div className="min-h-[300px] p-4">
         {activeTab === "blueprint" && blueprint && (
-          <BlueprintExplorer
-            blueprint={blueprint}
-            implementationStepsCount={implementationStepsCount}
-            affectedComponentsCount={affectedComponentsCount}
-            risksCount={risksCount}
-          />
+          <div id={panelId("blueprint")} role="tabpanel" aria-labelledby={tabId("blueprint")} tabIndex={0}>
+            <BlueprintExplorer
+              blueprint={blueprint}
+              implementationStepsCount={implementationStepsCount}
+              affectedComponentsCount={affectedComponentsCount}
+              risksCount={risksCount}
+            />
+          </div>
         )}
 
         {activeTab === "summary" && (
-          <div className="flex flex-col gap-4">
+          <div
+            id={panelId("summary")}
+            role="tabpanel"
+            aria-labelledby={tabId("summary")}
+            tabIndex={0}
+            className="flex flex-col gap-4"
+          >
             {stage === "planning" && (
               <PlanningResultDetails result={step.result as unknown as PlanningResult} />
             )}
@@ -144,17 +189,23 @@ export function StageResultPanel({
         )}
 
         {activeTab === "evidence" && (
-          <EvidencePanel evidence={evidence} />
+          <div id={panelId("evidence")} role="tabpanel" aria-labelledby={tabId("evidence")} tabIndex={0}>
+            <EvidencePanel evidence={evidence} />
+          </div>
         )}
 
         {activeTab === "log" && (
-          <ExecutionLogPanel step={step} agentLabel={agentLabel} llmTrace={planningResult?.llm_trace} />
+          <div id={panelId("log")} role="tabpanel" aria-labelledby={tabId("log")} tabIndex={0}>
+            <ExecutionLogPanel step={step} agentLabel={agentLabel} llmTrace={planningResult?.llm_trace} />
+          </div>
         )}
 
         {activeTab === "json" && (
-          <pre className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs text-slate-300">
-            {JSON.stringify(step.result, null, 2)}
-          </pre>
+          <div id={panelId("json")} role="tabpanel" aria-labelledby={tabId("json")} tabIndex={0}>
+            <pre className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs text-slate-300">
+              {JSON.stringify(step.result, null, 2)}
+            </pre>
+          </div>
         )}
       </div>
     </div>

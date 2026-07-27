@@ -43,6 +43,7 @@ export interface ListWorkflowsParams {
 export function listWorkflows(
   token: string,
   params: ListWorkflowsParams = {},
+  signal?: AbortSignal,
 ): Promise<WorkflowListResponse> {
   const searchParams = new URLSearchParams();
   if (params.page) searchParams.set("page", String(params.page));
@@ -51,7 +52,7 @@ export function listWorkflows(
   if (params.workflow_type) searchParams.set("workflow_type", params.workflow_type);
 
   const qs = searchParams.toString();
-  return apiFetch<WorkflowListResponse>(`/workflows${qs ? `?${qs}` : ""}`, { token });
+  return apiFetch<WorkflowListResponse>(`/workflows${qs ? `?${qs}` : ""}`, { token, signal });
 }
 
 export function continueWorkflow(

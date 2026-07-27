@@ -241,3 +241,41 @@ async def test_repositories_endpoint_requires_connection(
     )
 
     assert response.status_code == 401
+
+
+async def test_regular_login_token_is_rejected_as_oauth_state(
+    db_client: AsyncClient, github_configured: None
+) -> None:
+    """Regression test: the callback used to accept any validly-signed
+    token as `state` — a user's own regular login access token would have
+    worked just as well as the real, purpose-scoped state value."""
+    token = await _register_and_get_token(db_client)
+
+    response = await db_client.get(
+        f"/api/v1/github/callback?code=abc123&state={token}", follow_redirects=False
+    )
+
+    assert response.status_code in (302, 307)
+    assert "github=error" in response.headers["location"]
+
+
+async def test_oauth_state_token_is_rejected_as_bearer_auth(
+    db_client: AsyncClient, github_configured: None
+) -> None:
+    """Regression test: the OAuth `state` value used to be created via the
+    exact same function as a normal login token, with no distinguishing
+    claim — functionally a full bearer token for the rest of the API for
+    its whole (10-minute) lifetime if it ever leaked, not scoped to the
+    GitHub-connect flow it was meant for."""
+    token = await _register_and_get_token(db_client)
+    connect_response = await db_client.get(
+        "/api/v1/github/connect", headers={"Authorization": f"Bearer {token}"}
+    )
+    url = connect_response.json()["authorization_url"]
+    state = url.split("state=")[1].split("&")[0]
+
+    response = await db_client.get(
+        "/api/v1/auth/me", headers={"Authorization": f"Bearer {state}"}
+    )
+
+    assert response.status_code == 401

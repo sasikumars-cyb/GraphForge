@@ -5,8 +5,11 @@ import type {
   TrackedRepository,
 } from "../../types/github";
 
-export function getConnectionStatus(token: string): Promise<GitHubConnectionStatus> {
-  return apiFetch<GitHubConnectionStatus>("/github/connection", { token });
+export function getConnectionStatus(
+  token: string,
+  signal?: AbortSignal,
+): Promise<GitHubConnectionStatus> {
+  return apiFetch<GitHubConnectionStatus>("/github/connection", { token, signal });
 }
 
 export function getConnectAuthorizationUrl(token: string): Promise<{ authorization_url: string }> {

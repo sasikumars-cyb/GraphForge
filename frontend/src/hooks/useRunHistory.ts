@@ -28,22 +28,38 @@ export function useRunHistory(params: ListRunsParams = {}): UseRunHistoryReturn 
   const filterStatus = params.status;
   const subjectType = params.subject_type;
 
-  const fetchRuns = useCallback(async () => {
-    if (!token) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const result = await listAgentRuns(token, { goal, status: filterStatus, subject_type: subjectType, page });
-      setData(result);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load run history.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, [token, page, goal, filterStatus, subjectType, refreshKey]);
+  const fetchRuns = useCallback(
+    async (signal?: AbortSignal) => {
+      if (!token) return;
+      setIsLoading(true);
+      setError(null);
+      try {
+        const result = await listAgentRuns(
+          token,
+          { goal, status: filterStatus, subject_type: subjectType, page },
+          signal,
+        );
+        if (signal?.aborted) return;
+        setData(result);
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
+        setError(err instanceof Error ? err.message : "Failed to load run history.");
+      } finally {
+        if (!signal?.aborted) setIsLoading(false);
+      }
+    },
+    [token, page, goal, filterStatus, subjectType, refreshKey],
+  );
 
   useEffect(() => {
-    fetchRuns();
+    // Aborts a still-in-flight fetch for the previous page/filters if
+    // `page`/`goal`/`filterStatus`/`subjectType` changes again quickly
+    // (e.g. rapid Next/Prev clicks) — without this, an older response can
+    // resolve after a newer one and overwrite the table with the wrong
+    // page's data.
+    const controller = new AbortController();
+    fetchRuns(controller.signal);
+    return () => controller.abort();
   }, [fetchRuns]);
 
   return {

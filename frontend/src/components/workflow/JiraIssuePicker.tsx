@@ -26,6 +26,7 @@ export function JiraIssuePicker({ onSelect }: JiraIssuePickerProps) {
   const [isSearching, setIsSearching] = useState(false);
   const [isOpen, setIsOpen] = useState(false);
   const debounceRef = useRef<number | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (debounceRef.current) window.clearTimeout(debounceRef.current);
@@ -35,20 +36,49 @@ export function JiraIssuePicker({ onSelect }: JiraIssuePickerProps) {
       return;
     }
     setIsSearching(true);
+    const controller = new AbortController();
     debounceRef.current = window.setTimeout(async () => {
       try {
-        const found = await searchJiraIssues(token, query.trim());
+        const found = await searchJiraIssues(token, query.trim(), controller.signal);
+        if (controller.signal.aborted) return;
         setResults(found);
-      } catch {
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") return;
         setResults([]);
       } finally {
-        setIsSearching(false);
+        if (!controller.signal.aborted) setIsSearching(false);
       }
     }, DEBOUNCE_MS);
     return () => {
       if (debounceRef.current) window.clearTimeout(debounceRef.current);
+      // Cancels the in-flight request itself (not just the pending
+      // debounce timer) — without this, a slow response to an older
+      // keystroke can still resolve after a newer one and clobber
+      // `results` with stale matches.
+      controller.abort();
     };
   }, [query, token]);
+
+  // Close on outside click and Escape — this was only closeable before by
+  // selecting a result, leaving the dropdown open (and blocking whatever's
+  // behind it) if the user clicked elsewhere or pressed Escape instead.
+  useEffect(() => {
+    if (!isOpen) return;
+    function handlePointerDown(event: MouseEvent) {
+      if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+        setIsOpen(false);
+      }
+    }
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setIsOpen(false);
+    }
+    document.addEventListener("mousedown", handlePointerDown);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isOpen]);
 
   function handleSelect(issue: JiraIssueResult) {
     onSelect(`Jira: ${issue.key} — ${issue.summary}`);
@@ -58,7 +88,7 @@ export function JiraIssuePicker({ onSelect }: JiraIssuePickerProps) {
   }
 
   return (
-    <div className="relative">
+    <div className="relative" ref={containerRef}>
       <label htmlFor="jira-search" className="block text-sm font-medium text-slate-200">
         Link a Jira issue <span className="text-slate-500">(optional)</span>
       </label>

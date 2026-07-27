@@ -22,6 +22,7 @@ from app.models.user import User
 from app.schemas.github import AvailableRepository, RepositorySelectionRequest
 
 _STATE_EXPIRY = timedelta(minutes=10)
+_OAUTH_STATE_PURPOSE = "github_oauth_state"
 
 
 class GitHubNotConfiguredError(AppError):
@@ -70,7 +71,9 @@ def get_connect_authorization_url(user: User) -> str:
     callback knows whose GitHubConnection to write.
     """
     provider = _build_provider()
-    state = create_access_token(subject=str(user.id), expires_delta=_STATE_EXPIRY)
+    state = create_access_token(
+        subject=str(user.id), expires_delta=_STATE_EXPIRY, purpose=_OAUTH_STATE_PURPOSE
+    )
     return provider.get_authorization_url(state)
 
 
@@ -78,6 +81,11 @@ async def handle_oauth_callback(db: AsyncSession, code: str, state: str) -> User
     """Verifies `state`, exchanges `code` for a token, and upserts the
     GitHubConnection for the user `state` identifies. Returns that user."""
     payload = decode_access_token(state)
+    if payload.get("purpose") != _OAUTH_STATE_PURPOSE:
+        # Rejects a general login access token presented as `state` too —
+        # this callback should only ever accept a token minted specifically
+        # for this flow (see get_connect_authorization_url).
+        raise UnauthorizedError("Invalid OAuth state.")
     subject = payload.get("sub")
     if subject is None:
         raise UnauthorizedError("Invalid OAuth state.")

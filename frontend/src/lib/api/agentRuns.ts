@@ -61,6 +61,7 @@ export interface ListRunsParams {
 export function listAgentRuns(
   token: string,
   params: ListRunsParams = {},
+  signal?: AbortSignal,
 ): Promise<RunListResponse> {
   const searchParams = new URLSearchParams();
   if (params.page) searchParams.set("page", String(params.page));
@@ -70,7 +71,7 @@ export function listAgentRuns(
   if (params.subject_type) searchParams.set("subject_type", params.subject_type);
 
   const qs = searchParams.toString();
-  return apiFetch<RunListResponse>(`/agent-runs${qs ? `?${qs}` : ""}`, { token });
+  return apiFetch<RunListResponse>(`/agent-runs${qs ? `?${qs}` : ""}`, { token, signal });
 }
 
 export function listAgentManifests(token: string): Promise<AgentManifest[]> {

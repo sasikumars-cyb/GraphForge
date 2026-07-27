@@ -26,11 +26,13 @@ export function ControlCenterPage() {
 
   useEffect(() => {
     if (!token) return;
+    const controller = new AbortController();
     setLoading(true);
     Promise.allSettled([
-      getSystemStatus(token),
-      getConnectionStatus(token),
+      getSystemStatus(token, controller.signal),
+      getConnectionStatus(token, controller.signal),
     ]).then(([sysResult, ghResult]) => {
+      if (controller.signal.aborted) return;
       if (sysResult.status === "fulfilled") {
         setSystem(sysResult.value);
       } else {
@@ -41,6 +43,7 @@ export function ControlCenterPage() {
       }
       setLoading(false);
     });
+    return () => controller.abort();
   }, [token]);
 
   const platformHealthLabel =

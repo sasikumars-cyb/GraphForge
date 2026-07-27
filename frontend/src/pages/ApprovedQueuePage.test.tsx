@@ -232,6 +232,7 @@ describe("ApprovedQueuePage", () => {
       expect(workflowsApi.listWorkflows).toHaveBeenCalledWith(
         "test-token",
         expect.objectContaining({ page: 2 }),
+        expect.anything(),
       ),
     );
   });

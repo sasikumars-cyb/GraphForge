@@ -30,13 +30,25 @@ def verify_password(password: str, hashed_password: str) -> bool:
     return bcrypt.checkpw(truncated, hashed_password.encode("utf-8"))
 
 
-def create_access_token(subject: str, expires_delta: timedelta | None = None) -> str:
-    """Issue a signed JWT whose `sub` claim is `subject` (the user's id)."""
+def create_access_token(
+    subject: str, expires_delta: timedelta | None = None, purpose: str | None = None
+) -> str:
+    """Issue a signed JWT whose `sub` claim is `subject` (the user's id).
+
+    `purpose`, when given, scopes this token to a specific single-use flow
+    (e.g. "github_oauth_state") rather than general API authentication —
+    `get_current_user` rejects any token carrying a `purpose` claim, so a
+    token minted for one narrow flow can never double as a bearer token
+    for the rest of the API even if it leaks (e.g. via a referrer header,
+    a log line, browser history). Omit for a normal login access token.
+    """
     settings = get_settings()
     expire = datetime.now(UTC) + (
         expires_delta or timedelta(minutes=settings.access_token_expire_minutes)
     )
-    payload = {"sub": subject, "exp": expire}
+    payload: dict[str, Any] = {"sub": subject, "exp": expire}
+    if purpose is not None:
+        payload["purpose"] = purpose
     return jwt.encode(payload, settings.jwt_secret_key, algorithm=settings.jwt_algorithm)
 
 

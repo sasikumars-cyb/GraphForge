@@ -19,6 +19,7 @@ from app.core.config import get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import configure_logging
 from app.database.session import AsyncSessionLocal, engine
+from app.graph.session import close_driver
 from app.orchestrator.background_execution import recover_orphaned_runs
 
 OPENAPI_TAGS = [
@@ -118,6 +119,12 @@ def create_app() -> FastAPI:
             await sync_all_knowledge_connections_to_tools(db)
 
         yield
+
+        # Graceful shutdown: release the Neo4j connection pool and dispose
+        # the SQLAlchemy engine's own pool, rather than leaving both open
+        # until the OS reclaims them at process exit.
+        await close_driver()
+        await engine.dispose()
 
     app = FastAPI(
         title=settings.app_name,

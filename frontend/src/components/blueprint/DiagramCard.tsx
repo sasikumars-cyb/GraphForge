@@ -47,18 +47,68 @@ interface DiagramCardProps {
   index?: number;
 }
 
-function FullscreenPortal({ children }: { children: ReactNode }) {
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function FullscreenPortal({ children, onClose }: { children: ReactNode; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
+
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = prev; };
   }, []);
 
+  // Focus management: move focus into the dialog on open (the trigger
+  // button was focused a moment ago, but nothing inside this dialog is
+  // reachable from there without this) and restore it to whatever
+  // triggered the dialog on close, rather than leaving focus stranded or
+  // reset to the document body.
+  useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    dialogRef.current?.focus();
+    return () => {
+      previouslyFocused?.focus?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.stopPropagation();
+        onClose();
+        return;
+      }
+      // Minimal focus trap: Tab/Shift+Tab wraps within the dialog's own
+      // focusable elements instead of escaping to the (hidden-behind-it)
+      // page underneath.
+      if (event.key === "Tab" && dialogRef.current) {
+        const focusable = Array.from(
+          dialogRef.current.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR),
+        );
+        if (focusable.length === 0) return;
+        const first = focusable[0];
+        const last = focusable[focusable.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    }
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   return (
     <div
-      className="fixed inset-0 z-50 flex flex-col bg-slate-950"
+      ref={dialogRef}
+      className="fixed inset-0 z-50 flex flex-col bg-slate-950 outline-none"
       role="dialog"
       aria-modal="true"
+      tabIndex={-1}
     >
       {children}
     </div>
@@ -173,7 +223,7 @@ export function DiagramCard({ diagram, minHeight = 320, index = 0 }: DiagramCard
 
   if (isFullscreen) {
     return (
-      <FullscreenPortal>
+      <FullscreenPortal onClose={() => setIsFullscreen(false)}>
         {renderHeader(true)}
         <div className="flex-1 overflow-hidden">
           <div style={{ height: "100%" }} className="w-full">

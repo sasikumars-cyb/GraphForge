@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
-import { useParams, useSearchParams, Link } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams, Link } from "react-router-dom";
 import { GitMerge, Send, Clapperboard } from "lucide-react";
 import { Card } from "../components/Card";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
@@ -391,6 +391,7 @@ const MAX_OBJECTIVE_LENGTH = 8000;
 
 export function NewWorkflowPage() {
   const { token } = useAuth();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const [input, setInput] = useState(() => searchParams.get("title") ?? "");
   const [refinementNote, setRefinementNote] = useState("");
@@ -421,8 +422,10 @@ export function NewWorkflowPage() {
         ...(parentId ? { parent_workflow_id: parentId } : {}),
         ...(parentId && refinementNote.trim() ? { refinement_note: refinementNote.trim() } : {}),
       });
-      // Navigate to workflow page
-      window.location.href = `/workflows/${response.workflow_id}`;
+      // SPA navigation to the new workflow's page — a full document reload
+      // (window.location.href) discarded the in-memory auth/router state
+      // unnecessarily on every new workflow creation.
+      navigate(`/workflows/${response.workflow_id}`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create workflow.");
       setIsSubmitting(false);

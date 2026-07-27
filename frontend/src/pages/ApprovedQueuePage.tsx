@@ -123,23 +123,28 @@ export function ApprovedQueuePage() {
 
   useEffect(() => {
     if (!token) return;
+    const controller = new AbortController();
     setIsLoading(true);
     setError(null);
-    listWorkflows(token, {
-      status: "approved",
-      workflow_type: "planning",
-      page,
-      page_size: PAGE_SIZE,
-    })
+    listWorkflows(
+      token,
+      { status: "approved", workflow_type: "planning", page, page_size: PAGE_SIZE },
+      controller.signal,
+    )
       .then((res) => {
+        if (controller.signal.aborted) return;
         setItems(res.items);
         setTotal(res.total);
         setHasMore(res.has_more);
       })
       .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return;
         setError(err instanceof Error ? err.message : "Failed to load the approved queue.");
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoading(false);
+      });
+    return () => controller.abort();
   }, [token, page]);
 
   useEffect(() => {

@@ -8,6 +8,13 @@ export interface JiraIssueResult {
   url: string;
 }
 
-export function searchJiraIssues(token: string, query: string): Promise<JiraIssueResult[]> {
-  return apiFetch<JiraIssueResult[]>(`/jira/search?q=${encodeURIComponent(query)}`, { token });
+export function searchJiraIssues(
+  token: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<JiraIssueResult[]> {
+  return apiFetch<JiraIssueResult[]>(`/jira/search?q=${encodeURIComponent(query)}`, {
+    token,
+    signal,
+  });
 }
