@@ -95,14 +95,10 @@ def _validate_and_parse(raw: str) -> GeneratedCodeResult:
     try:
         data = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise CodeGenerationValidationError(
-            f"LLM response is not valid JSON: {exc}"
-        ) from exc
+        raise CodeGenerationValidationError(f"LLM response is not valid JSON: {exc}") from exc
 
     if not isinstance(data, dict):
-        raise CodeGenerationValidationError(
-            "LLM response must be a JSON object."
-        )
+        raise CodeGenerationValidationError("LLM response must be a JSON object.")
 
     # Required fields
     missing = []
@@ -119,29 +115,21 @@ def _validate_and_parse(raw: str) -> GeneratedCodeResult:
     # Files validation
     raw_files = data["files"]
     if not isinstance(raw_files, list) or len(raw_files) == 0:
-        raise CodeGenerationValidationError(
-            "LLM response 'files' must be a non-empty list."
-        )
+        raise CodeGenerationValidationError("LLM response 'files' must be a non-empty list.")
 
     seen_paths: set[str] = set()
     files: list[GeneratedFile] = []
 
     for i, f in enumerate(raw_files):
         if not isinstance(f, dict):
-            raise CodeGenerationValidationError(
-                f"files[{i}] must be an object."
-            )
+            raise CodeGenerationValidationError(f"files[{i}] must be an object.")
 
         path = f.get("path", "").strip()
         if not path:
-            raise CodeGenerationValidationError(
-                f"files[{i}] is missing 'path'."
-            )
+            raise CodeGenerationValidationError(f"files[{i}] is missing 'path'.")
 
         if path in seen_paths:
-            raise CodeGenerationValidationError(
-                f"Duplicate file path: '{path}'."
-            )
+            raise CodeGenerationValidationError(f"Duplicate file path: '{path}'.")
         seen_paths.add(path)
 
         operation = f.get("operation", "").strip().lower()
@@ -236,8 +224,7 @@ class CodeGenerationAgent:
         )
 
         logger.info(
-            "code_generation_agent_completed subject_id=%s repo=%s "
-            "files=%d confidence=%.2f",
+            "code_generation_agent_completed subject_id=%s repo=%s " "files=%d confidence=%.2f",
             subject_id,
             result.repository,
             len(result.files),

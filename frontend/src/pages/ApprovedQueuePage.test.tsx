@@ -60,6 +60,8 @@ function makeWorkflowItem(overrides: Partial<WorkflowListItem> = {}): WorkflowLi
     created_at: "2026-01-01T10:00:00Z",
     updated_at: "2026-01-02T10:00:00Z",
     approved_by: "Jane Doe",
+    version: 1,
+    parent_workflow_id: null,
     ...overrides,
   };
 }

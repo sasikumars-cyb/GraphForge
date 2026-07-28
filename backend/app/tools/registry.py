@@ -13,8 +13,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from app.tools.interfaces import ITool, ToolCategory, ToolHealth
 
@@ -86,9 +87,7 @@ class ToolRegistry:
                 self._instances[spec.tool_id] = spec.factory({})
                 logger.info("tool_registered tool=%s auto_enabled=True", spec.tool_id)
             except Exception:
-                logger.warning(
-                    "tool_registration_failed tool=%s", spec.tool_id, exc_info=True
-                )
+                logger.warning("tool_registration_failed tool=%s", spec.tool_id, exc_info=True)
         else:
             logger.info(
                 "tool_registered tool=%s enabled=%s requires_auth=%s",
@@ -118,9 +117,7 @@ class ToolRegistry:
                 self._instances[tool_id] = spec.factory(config)
                 logger.info("tool_configured tool=%s enabled=True", tool_id)
             except Exception:
-                logger.error(
-                    "tool_configure_factory_failed tool=%s", tool_id, exc_info=True
-                )
+                logger.error("tool_configure_factory_failed tool=%s", tool_id, exc_info=True)
                 self._instances.pop(tool_id, None)
         else:
             self._instances.pop(tool_id, None)
@@ -184,7 +181,7 @@ class ToolRegistry:
             *(self.check_health(tid) for tid in tool_ids),
             return_exceptions=False,
         )
-        return dict(zip(tool_ids, results))
+        return dict(zip(tool_ids, results, strict=True))
 
 
 # ---------------------------------------------------------------------------

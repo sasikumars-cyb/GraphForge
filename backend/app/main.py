@@ -5,15 +5,14 @@ Swagger UI is served automatically at `/docs` (ReDoc at `/redoc`, the raw
 schema at `/openapi.json`) - no extra wiring needed beyond the metadata below.
 """
 
-from contextlib import asynccontextmanager
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
 from app.agents.setup import register_agents
-from app.tools.setup import register_all_tools, sync_all_knowledge_connections_to_tools
 from app.api.v1.routers import api_router
 from app.core.config import get_settings
 from app.core.error_handlers import register_exception_handlers
@@ -21,6 +20,7 @@ from app.core.logging import configure_logging
 from app.database.session import AsyncSessionLocal, engine
 from app.graph.session import close_driver
 from app.orchestrator.background_execution import recover_orphaned_runs
+from app.tools.setup import register_all_tools, sync_all_knowledge_connections_to_tools
 
 OPENAPI_TAGS = [
     {
@@ -66,9 +66,12 @@ def create_app() -> FastAPI:
         """
         async with engine.begin() as conn:
             # Ensure the 'role' column exists on users table.
-            await conn.execute(text(
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(32) NOT NULL DEFAULT 'user'"
-            ))
+            await conn.execute(
+                text(
+                    "ALTER TABLE users ADD COLUMN IF NOT EXISTS role "
+                    "VARCHAR(32) NOT NULL DEFAULT 'user'"
+                )
+            )
             # Ensure knowledge_connections table exists.
             await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS knowledge_connections (

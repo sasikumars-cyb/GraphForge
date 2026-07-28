@@ -66,11 +66,13 @@ class TestRepositoryDiscoveryTool:
             indexed: list[dict[str, str]] = []
             for repo in all_repos:
                 if await self._graph_repository.has_graph(str(repo.id)):
-                    indexed.append({
-                        "id": str(repo.id),
-                        "name": repo.name,
-                        "owner": repo.owner,
-                    })
+                    indexed.append(
+                        {
+                            "id": str(repo.id),
+                            "name": repo.name,
+                            "owner": repo.owner,
+                        }
+                    )
 
             summary = (
                 f"Discovered {len(indexed)} indexed repositor{'y' if len(indexed) == 1 else 'ies'} "
@@ -104,9 +106,7 @@ class TestComponentDiscoveryTool:
     def __init__(self, graph_repository: IGraphRepository) -> None:
         self._graph_repository = graph_repository
 
-    async def execute(
-        self, repositories: list[dict[str, str]]
-    ) -> TestingObservation:
+    async def execute(self, repositories: list[dict[str, str]]) -> TestingObservation:
         if not repositories:
             return TestingObservation(
                 tool_name=self.name,
@@ -122,36 +122,37 @@ class TestComponentDiscoveryTool:
             repo_id = repo["id"]
             repo_name = repo["name"]
             try:
-                components = await self._graph_repository.get_nodes_by_label(
-                    repo_id, "Component"
-                )
+                components = await self._graph_repository.get_nodes_by_label(repo_id, "Component")
                 for node in components:
-                    all_components.append({
-                        "id": node.id,
-                        "name": node.properties.get("name", node.id),
-                        "type": next(
-                            (la for la in node.labels if la != "Component"),
-                            "Component",
-                        ),
-                        "repository": repo_name,
-                        "file_path": node.properties.get("file_path", ""),
-                    })
+                    all_components.append(
+                        {
+                            "id": node.id,
+                            "name": node.properties.get("name", node.id),
+                            "type": next(
+                                (la for la in node.labels if la != "Component"),
+                                "Component",
+                            ),
+                            "repository": repo_name,
+                            "file_path": node.properties.get("file_path", ""),
+                        }
+                    )
 
-                topics = await self._graph_repository.get_nodes_by_label(
-                    repo_id, "KafkaTopic"
-                )
+                topics = await self._graph_repository.get_nodes_by_label(repo_id, "KafkaTopic")
                 for node in topics:
-                    all_topics.append({
-                        "id": node.id,
-                        "name": node.properties.get("name", node.id),
-                        "repository": repo_name,
-                    })
+                    all_topics.append(
+                        {
+                            "id": node.id,
+                            "name": node.properties.get("name", node.id),
+                            "repository": repo_name,
+                        }
+                    )
 
             except Exception as exc:
                 errors.append(f"{repo_name}: {exc}")
                 logger.warning(
                     "testing_tool_discover_components_failed repo=%s error=%s",
-                    repo_name, str(exc),
+                    repo_name,
+                    str(exc),
                 )
 
         # Kafka detection only exists for Java/Spring Boot (see
@@ -192,9 +193,7 @@ class TestDependencyTraversalTool:
     def __init__(self, graph_repository: IGraphRepository) -> None:
         self._graph_repository = graph_repository
 
-    async def execute(
-        self, repositories: list[dict[str, str]]
-    ) -> TestingObservation:
+    async def execute(self, repositories: list[dict[str, str]]) -> TestingObservation:
         if not repositories:
             return TestingObservation(
                 tool_name=self.name,
@@ -212,17 +211,20 @@ class TestDependencyTraversalTool:
             try:
                 graph_payload = await self._graph_repository.get_full_graph(repo_id)
                 for edge in graph_payload.edges:
-                    all_edges.append({
-                        "source": edge.source_id,
-                        "target": edge.target_id,
-                        "type": edge.type,
-                        "repository": repo_name,
-                    })
+                    all_edges.append(
+                        {
+                            "source": edge.source_id,
+                            "target": edge.target_id,
+                            "type": edge.type,
+                            "repository": repo_name,
+                        }
+                    )
             except Exception as exc:
                 errors.append(f"{repo_name}: {exc}")
                 logger.warning(
                     "testing_tool_traverse_deps_failed repo=%s error=%s",
-                    repo_name, str(exc),
+                    repo_name,
+                    str(exc),
                 )
 
         # Identify cross-repo coupling via shared topics
@@ -239,17 +241,18 @@ class TestDependencyTraversalTool:
             for prod_repo in producers:
                 for cons_repo in consumers:
                     if prod_repo != cons_repo:
-                        cross_repo_edges.append({
-                            "topic": topic_id,
-                            "producer_repo": prod_repo,
-                            "consumer_repo": cons_repo,
-                            "type": "CROSS_REPO_KAFKA",
-                        })
+                        cross_repo_edges.append(
+                            {
+                                "topic": topic_id,
+                                "producer_repo": prod_repo,
+                                "consumer_repo": cons_repo,
+                                "type": "CROSS_REPO_KAFKA",
+                            }
+                        )
 
         # Identify key integration points (CALLS, PRODUCES_TO, CONSUMES_FROM)
         integration_points = [
-            e for e in all_edges
-            if e["type"] in ("CALLS", "PRODUCES_TO", "CONSUMES_FROM")
+            e for e in all_edges if e["type"] in ("CALLS", "PRODUCES_TO", "CONSUMES_FROM")
         ]
 
         summary = (
@@ -327,7 +330,9 @@ def format_graph_context(
         int_lines = []
         for e in integration_points[:20]:
             int_lines.append(f"  {e['source']} —[{e['type']}]→ {e['target']} ({e['repository']})")
-        parts.append("**Integration points (require integration testing)**:\n" + "\n".join(int_lines))
+        parts.append(
+            "**Integration points (require integration testing)**:\n" + "\n".join(int_lines)
+        )
     else:
         parts.append("**Integration points**: none found")
 
@@ -339,7 +344,10 @@ def format_graph_context(
             coupling_lines.append(
                 f"  {cr['producer_repo']} → [{cr['topic']}] → {cr['consumer_repo']}"
             )
-        parts.append("**Cross-repository coupling (high-risk integration tests)**:\n" + "\n".join(coupling_lines))
+        parts.append(
+            "**Cross-repository coupling (high-risk integration tests)**:\n"
+            + "\n".join(coupling_lines)
+        )
 
     return "\n\n".join(parts)
 

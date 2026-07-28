@@ -5,14 +5,13 @@ RunCoordinator has its own dedicated test file: test_run_coordinator.py.
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from app.agents._contract import AgentManifest
 from app.orchestrator.registry import AgentRegistry
 from app.orchestrator.selector import GOAL_PLAN_FREEFORM, GOAL_REVIEW_PR, AgentSelector
-
 
 # ---------------------------------------------------------------------------
 # AgentRegistry

@@ -16,19 +16,20 @@ Design rules:
 
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
 
-class DiagramType(str, Enum):
-    FLOW = "flow"                   # ordered step-by-step flow
-    ARCHITECTURE = "architecture"   # component relationships
-    SEQUENCE = "sequence"           # time-ordered interactions
-    DEPENDENCY = "dependency"       # dependency graph (repo/component/topic)
-    TIMELINE = "timeline"           # phase-based horizontal timeline
-    ER = "er"                       # entity-relationship
-    RISK_HEATMAP = "risk_heatmap"   # risk severity grid
+class DiagramType(StrEnum):
+    FLOW = "flow"  # ordered step-by-step flow
+    ARCHITECTURE = "architecture"  # component relationships
+    SEQUENCE = "sequence"  # time-ordered interactions
+    DEPENDENCY = "dependency"  # dependency graph (repo/component/topic)
+    TIMELINE = "timeline"  # phase-based horizontal timeline
+    ER = "er"  # entity-relationship
+    RISK_HEATMAP = "risk_heatmap"  # risk severity grid
 
 
 class DiagramNode(BaseModel):
@@ -41,8 +42,8 @@ class DiagramNode(BaseModel):
     id: str
     label: str
     type: str = "default"
-    properties: dict = Field(default_factory=dict)
-    metadata: dict = Field(default_factory=dict)
+    properties: dict[str, Any] = Field(default_factory=dict[str, Any])
+    metadata: dict[str, Any] = Field(default_factory=dict[str, Any])
 
 
 class DiagramEdge(BaseModel):
@@ -53,12 +54,12 @@ class DiagramEdge(BaseModel):
     target: str
     label: str = ""
     type: str = "default"  # default | dependency | data_flow | call | risk
-    metadata: dict = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict[str, Any])
 
 
 class DiagramLayout(BaseModel):
-    direction: str = "LR"      # LR | TB | RL | BT
-    algorithm: str = "dagre"   # dagre | manual | grid
+    direction: str = "LR"  # LR | TB | RL | BT
+    algorithm: str = "dagre"  # dagre | manual | grid
 
 
 class Diagram(BaseModel):
@@ -69,7 +70,7 @@ class Diagram(BaseModel):
     nodes: list[DiagramNode] = Field(default_factory=list)
     edges: list[DiagramEdge] = Field(default_factory=list)
     layout: DiagramLayout = Field(default_factory=DiagramLayout)
-    metadata: dict = Field(default_factory=dict)
+    metadata: dict[str, Any] = Field(default_factory=dict[str, Any])
     evidence: list[str] = Field(default_factory=list)
     confidence: float | None = None
 

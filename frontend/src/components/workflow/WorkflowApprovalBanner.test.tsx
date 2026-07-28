@@ -9,6 +9,7 @@ function renderBanner(props: Partial<Parameters<typeof WorkflowApprovalBanner>[0
     <MemoryRouter>
       <WorkflowApprovalBanner
         workflowTitle="Add rate limiting"
+        workflowId="wf-1"
         status="awaiting_approval"
         isSubmitting={false}
         onApprove={vi.fn()}
@@ -24,7 +25,7 @@ describe("WorkflowApprovalBanner — awaiting_approval", () => {
     renderBanner();
     expect(screen.getByRole("button", { name: /Approve Blueprint/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reject" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Edit Workflow" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refine" })).toBeInTheDocument();
   });
 
   it("calls onApprove when Approve Blueprint is clicked", async () => {
@@ -46,7 +47,7 @@ describe("WorkflowApprovalBanner — awaiting_approval", () => {
   it("disables all actions while submitting", () => {
     renderBanner({ isSubmitting: true });
     expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Edit Workflow" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refine" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Submitting…/ })).toBeDisabled();
   });
 });

@@ -8,6 +8,7 @@ only as the boolean `api_key_configured`.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -128,7 +129,7 @@ class AIWorkspaceSettings(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     # stage -> {"profile": slug} | {"provider": key, "model": id}
-    stage_overrides: dict = Field(default_factory=dict)
+    stage_overrides: dict[str, Any] = Field(default_factory=dict[str, Any])
     fallback_order: list[str] = Field(default_factory=list)
     fallback_enabled: bool = False
 
@@ -141,7 +142,7 @@ class AIWorkspaceSettingsUpdate(BaseModel):
     default_model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    stage_overrides: dict | None = None
+    stage_overrides: dict[str, Any] | None = None
     fallback_order: list[str] | None = None
     fallback_enabled: bool | None = None
 

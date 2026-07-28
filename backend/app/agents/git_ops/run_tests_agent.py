@@ -61,16 +61,12 @@ class TestRunnerAgent:
         subject_id = context.subject.subject_id
 
         if workflow is None:
-            raise TestRunnerExecutionError(
-                "run_tests requires a workflow context."
-            )
+            raise TestRunnerExecutionError("run_tests requires a workflow context.")
 
         # --- Read prior stage results ---
         commit_result = get_stage_result(workflow, "commit_changes")
         if commit_result is None:
-            raise TestRunnerExecutionError(
-                "No completed commit_changes result found in workflow."
-            )
+            raise TestRunnerExecutionError("No completed commit_changes result found in workflow.")
 
         repository = commit_result.get("repository", "")
         if not repository or "/" not in repository:
@@ -83,20 +79,14 @@ class TestRunnerAgent:
         commit_sha = commit_result.get("commit_sha", "")
 
         if not branch_name:
-            raise TestRunnerExecutionError(
-                "Missing branch_name in commit_changes result."
-            )
+            raise TestRunnerExecutionError("Missing branch_name in commit_changes result.")
         if not commit_sha:
-            raise TestRunnerExecutionError(
-                "Missing commit_sha in commit_changes result."
-            )
+            raise TestRunnerExecutionError("Missing commit_sha in commit_changes result.")
 
         # --- Get access token ---
         user_id = context.extras.get("user_id")
         if user_id is None:
-            raise TestRunnerExecutionError(
-                "run_tests requires user_id in context extras."
-            )
+            raise TestRunnerExecutionError("run_tests requires user_id in context extras.")
         access_token = await get_decrypted_access_token(db, user_id)
         if access_token is None:
             raise TestRunnerExecutionError(
@@ -121,9 +111,7 @@ class TestRunnerAgent:
             elapsed = time.monotonic() - start_time
 
             try:
-                check_runs = await vcs.get_check_runs(
-                    owner, repo, commit_sha, access_token
-                )
+                check_runs = await vcs.get_check_runs(owner, repo, commit_sha, access_token)
                 last_check_runs = check_runs
                 poll_count += 1
             except GitHubApiError as exc:
@@ -135,15 +123,17 @@ class TestRunnerAgent:
             if not check_runs:
                 # On first poll, give CI a moment to start; on timeout, report unknown
                 if elapsed >= timeout:
-                    evidence.append(Evidence(
-                        kind="tool_call",
-                        reference="github_check_runs",
-                        summary=(
-                            f"No check runs found for commit {commit_sha[:8]} "
-                            f"after {int(elapsed)}s ({poll_count} polls). "
-                            f"CI may not be configured."
-                        ),
-                    ))
+                    evidence.append(
+                        Evidence(
+                            kind="tool_call",
+                            reference="github_check_runs",
+                            summary=(
+                                f"No check runs found for commit {commit_sha[:8]} "
+                                f"after {int(elapsed)}s ({poll_count} polls). "
+                                f"CI may not be configured."
+                            ),
+                        )
+                    )
                     return _build_output(
                         subject_id=subject_id,
                         repository=repository,
@@ -159,14 +149,16 @@ class TestRunnerAgent:
                 result = _evaluate_check_runs(check_runs)
 
                 if result["terminal"]:
-                    evidence.append(Evidence(
-                        kind="tool_call",
-                        reference="github_check_runs",
-                        summary=(
-                            f"CI completed after {int(elapsed)}s ({poll_count} polls): "
-                            f"{result['status']} — {result['summary']}"
-                        ),
-                    ))
+                    evidence.append(
+                        Evidence(
+                            kind="tool_call",
+                            reference="github_check_runs",
+                            summary=(
+                                f"CI completed after {int(elapsed)}s ({poll_count} polls): "
+                                f"{result['status']} — {result['summary']}"
+                            ),
+                        )
+                    )
                     return _build_output(
                         subject_id=subject_id,
                         repository=repository,
@@ -189,8 +181,7 @@ class TestRunnerAgent:
                 status = "timeout"
                 conclusion = "timeout"
                 summary_text = (
-                    f"CI observation timed out after {int(elapsed)}s "
-                    f"({poll_count} polls)."
+                    f"CI observation timed out after {int(elapsed)}s " f"({poll_count} polls)."
                 )
 
                 if last_check_runs:
@@ -202,11 +193,13 @@ class TestRunnerAgent:
                         f"last status: {status} ({last_eval['summary']})"
                     )
 
-                evidence.append(Evidence(
-                    kind="tool_call",
-                    reference="github_check_runs",
-                    summary=summary_text,
-                ))
+                evidence.append(
+                    Evidence(
+                        kind="tool_call",
+                        reference="github_check_runs",
+                        summary=summary_text,
+                    )
+                )
                 return _build_output(
                     subject_id=subject_id,
                     repository=repository,
@@ -221,7 +214,10 @@ class TestRunnerAgent:
             # --- Exponential backoff ---
             logger.debug(
                 "run_tests_poll repo=%s sha=%s poll=%d interval=%.0fs",
-                repository, commit_sha[:8], poll_count, current_interval,
+                repository,
+                commit_sha[:8],
+                poll_count,
+                current_interval,
             )
             await asyncio.sleep(current_interval)
             current_interval = min(current_interval * 2, max_poll_interval)
@@ -247,11 +243,11 @@ def _evaluate_check_runs(check_runs: list[dict[str, Any]]) -> dict[str, Any]:
 
     # Pick the most relevant check run for detail fields
     # Priority: first failure > first in-progress > first completed > first queued
-    failed_runs = [cr for cr in check_runs if cr.get("conclusion") in ("failure", "cancelled", "timed_out")]
+    failed_runs = [
+        cr for cr in check_runs if cr.get("conclusion") in ("failure", "cancelled", "timed_out")
+    ]
     representative = (
-        failed_runs[0] if failed_runs
-        else in_progress[0] if in_progress
-        else check_runs[0]
+        failed_runs[0] if failed_runs else in_progress[0] if in_progress else check_runs[0]
     )
 
     detail = {
@@ -269,9 +265,7 @@ def _evaluate_check_runs(check_runs: list[dict[str, Any]]) -> dict[str, Any]:
                 "terminal": True,
                 "status": "failed",
                 "conclusion": representative.get("conclusion", "failure"),
-                "summary": (
-                    f"{len(failed_runs)} of {len(check_runs)} check run(s) failed."
-                ),
+                "summary": (f"{len(failed_runs)} of {len(check_runs)} check run(s) failed."),
                 **detail,
             }
         else:
@@ -289,9 +283,7 @@ def _evaluate_check_runs(check_runs: list[dict[str, Any]]) -> dict[str, Any]:
             "terminal": False,
             "status": "in_progress",
             "conclusion": "",
-            "summary": (
-                f"{len(in_progress)} of {len(check_runs)} check run(s) still running."
-            ),
+            "summary": (f"{len(in_progress)} of {len(check_runs)} check run(s) still running."),
             **detail,
         }
 

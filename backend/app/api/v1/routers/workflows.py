@@ -11,13 +11,13 @@ POST /workflows/{workflow_id}/reject   → Reject a completed Planning blueprint
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import inspect
 from sqlalchemy.orm.attributes import set_committed_value
 
 from app.agents._contract import Subject
@@ -34,6 +34,9 @@ from app.models.workflow import Workflow
 from app.orchestrator.registry import global_registry
 from app.orchestrator.selector import AgentSelector
 from app.services import workflow_service
+
+if TYPE_CHECKING:
+    from app.orchestrator.background_execution import OnComplete
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
 
@@ -288,7 +291,7 @@ def _resolve_stage_subject(workflow: Workflow, target_stage: str, enriched_ref: 
     )
 
 
-def _workflow_stage_finalizer(workflow_id: uuid.UUID):
+def _workflow_stage_finalizer(workflow_id: uuid.UUID) -> OnComplete:
     """Build the on_complete callback passed to schedule_run_execution.
 
     Runs in the background task's own DB session, after the stage's run
@@ -309,9 +312,10 @@ def _build_run_responses(workflow: Workflow) -> list[WorkflowRunResponse]:
     for run in sorted(workflow.runs or [], key=lambda r: r.created_at):
         best_confidence = None
         for step in run.steps or []:
-            if step.confidence_score is not None:
-                if best_confidence is None or step.confidence_score > best_confidence:
-                    best_confidence = step.confidence_score
+            if step.confidence_score is not None and (
+                best_confidence is None or step.confidence_score > best_confidence
+            ):
+                best_confidence = step.confidence_score
 
         items.append(
             WorkflowRunResponse(
@@ -501,7 +505,11 @@ async def list_workflows(
 ) -> WorkflowListResponse:
     """List workflows with pagination."""
     workflows, total = await workflow_service.list_workflows(
-        db, status=status, workflow_type=workflow_type, page=page, page_size=page_size,
+        db,
+        status=status,
+        workflow_type=workflow_type,
+        page=page,
+        page_size=page_size,
         user_id=user.id,
     )
     approver_names = await _resolve_approver_names(db, workflows)
@@ -566,7 +574,9 @@ async def get_workflow(
             else None
         ),
         version=workflow.version,
-        parent_workflow_id=str(workflow.parent_workflow_id) if workflow.parent_workflow_id else None,
+        parent_workflow_id=(
+            str(workflow.parent_workflow_id) if workflow.parent_workflow_id else None
+        ),
         refinement_note=workflow.refinement_note,
     )
 
@@ -763,7 +773,11 @@ async def cancel_workflow_run(
     workflow = await workflow_service.get_workflow_for_update(db, wid, user_id=user.id)
 
     in_flight_run = next(
-        (r for r in workflow.runs if r.workflow_stage == workflow.current_stage and r.status in ("queued", "running")),
+        (
+            r
+            for r in workflow.runs
+            if r.workflow_stage == workflow.current_stage and r.status in ("queued", "running")
+        ),
         None,
     )
     if in_flight_run is None:
@@ -772,7 +786,7 @@ async def cancel_workflow_run(
     if cancel_background_run(in_flight_run.id):
         in_flight_run.status = "failed"
         in_flight_run.error_message = "Cancelled by user."
-        in_flight_run.completed_at = datetime.now(timezone.utc)
+        in_flight_run.completed_at = datetime.now(UTC)
         await db.commit()
 
     return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)

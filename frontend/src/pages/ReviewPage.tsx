@@ -245,7 +245,7 @@ function ReviewResultView({ run, onNewReview }: { run: NonNullable<ReturnType<ty
               <li key={i} className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-4 py-3">
                 <div className="flex items-center gap-2">
                   <span className="text-sm font-medium text-rose-300">{bc.component as string}</span>
-                  {bc.severity && (
+                  {Boolean(bc.severity) && (
                     <span className="rounded-full bg-rose-500/10 px-2 py-0.5 text-xs text-rose-300 ring-1 ring-inset ring-rose-500/30">
                       {bc.severity as string}
                     </span>
@@ -266,7 +266,7 @@ function ReviewResultView({ run, onNewReview }: { run: NonNullable<ReturnType<ty
               <li key={i} className="rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-3">
                 <span className="text-xs font-medium text-slate-400">{ma.component as string}</span>
                 <p className="mt-0.5 text-sm text-slate-200">{ma.advice as string}</p>
-                {ma.priority && (
+                {Boolean(ma.priority) && (
                   <span className="mt-1 inline-block text-xs text-slate-500">Priority: {ma.priority as string}</span>
                 )}
               </li>

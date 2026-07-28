@@ -41,16 +41,12 @@ class CreateBranchAgent:
         subject_id = context.subject.subject_id
 
         if workflow is None:
-            raise CreateBranchExecutionError(
-                "create_branch requires a workflow context."
-            )
+            raise CreateBranchExecutionError("create_branch requires a workflow context.")
 
         # --- Read generate_code result ---
         code_result = get_stage_result(workflow, "generate_code")
         if code_result is None:
-            raise CreateBranchExecutionError(
-                "No completed generate_code result found in workflow."
-            )
+            raise CreateBranchExecutionError("No completed generate_code result found in workflow.")
 
         repository = code_result.get("repository", "")
         if not repository or "/" not in repository:
@@ -65,9 +61,7 @@ class CreateBranchAgent:
         # --- Get access token ---
         user_id = context.extras.get("user_id")
         if user_id is None:
-            raise CreateBranchExecutionError(
-                "create_branch requires user_id in context extras."
-            )
+            raise CreateBranchExecutionError("create_branch requires user_id in context extras.")
         access_token = await get_decrypted_access_token(db, user_id)
         if access_token is None:
             raise CreateBranchExecutionError(
@@ -79,24 +73,25 @@ class CreateBranchAgent:
 
         # --- Idempotency: check if branch already exists ---
         try:
-            existing_sha = await vcs.get_branch_sha_or_none(
-                owner, repo, branch_name, access_token
-            )
+            existing_sha = await vcs.get_branch_sha_or_none(owner, repo, branch_name, access_token)
         except GitHubApiError as exc:
-            raise CreateBranchExecutionError(
-                f"Failed to check existing branch: {exc}"
-            ) from exc
+            raise CreateBranchExecutionError(f"Failed to check existing branch: {exc}") from exc
 
         if existing_sha is not None:
             logger.info(
                 "create_branch_idempotent branch=%s already exists sha=%s",
-                branch_name, existing_sha,
+                branch_name,
+                existing_sha,
             )
-            evidence.append(Evidence(
-                kind="tool_call",
-                reference="github_get_ref",
-                summary=f"Branch '{branch_name}' already exists (SHA: {existing_sha[:8]}). Reused.",
-            ))
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="github_get_ref",
+                    summary=(
+                        f"Branch '{branch_name}' already exists (SHA: {existing_sha[:8]}). Reused."
+                    ),
+                )
+            )
             base_sha = existing_sha
         else:
             # --- Get default branch HEAD ---
@@ -109,11 +104,13 @@ class CreateBranchAgent:
                     f"Failed to get default branch HEAD: {exc}"
                 ) from exc
 
-            evidence.append(Evidence(
-                kind="tool_call",
-                reference="github_get_ref",
-                summary=f"Retrieved HEAD of '{default_branch}': {base_sha[:8]}",
-            ))
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="github_get_ref",
+                    summary=f"Retrieved HEAD of '{default_branch}': {base_sha[:8]}",
+                )
+            )
 
             # --- Create branch ---
             try:
@@ -122,24 +119,28 @@ class CreateBranchAgent:
                 # 422 with "Reference already exists" is a race condition —
                 # treat as idempotent success
                 if "already exists" in str(exc).lower():
-                    logger.info(
-                        "create_branch_race_idempotent branch=%s", branch_name
+                    logger.info("create_branch_race_idempotent branch=%s", branch_name)
+                    evidence.append(
+                        Evidence(
+                            kind="tool_call",
+                            reference="github_create_ref",
+                            summary=(
+                                f"Branch '{branch_name}' created by concurrent request. Reused."
+                            ),
+                        )
                     )
-                    evidence.append(Evidence(
-                        kind="tool_call",
-                        reference="github_create_ref",
-                        summary=f"Branch '{branch_name}' created by concurrent request. Reused.",
-                    ))
                 else:
                     raise CreateBranchExecutionError(
                         f"Failed to create branch '{branch_name}': {exc}"
                     ) from exc
             else:
-                evidence.append(Evidence(
-                    kind="tool_call",
-                    reference="github_create_ref",
-                    summary=f"Created branch '{branch_name}' from {base_sha[:8]}",
-                ))
+                evidence.append(
+                    Evidence(
+                        kind="tool_call",
+                        reference="github_create_ref",
+                        summary=f"Created branch '{branch_name}' from {base_sha[:8]}",
+                    )
+                )
 
         result = BranchInfo(
             repository=repository,
@@ -150,7 +151,9 @@ class CreateBranchAgent:
 
         logger.info(
             "create_branch_completed repo=%s branch=%s sha=%s",
-            repository, branch_name, base_sha[:8],
+            repository,
+            branch_name,
+            base_sha[:8],
         )
 
         return AgentOutput(

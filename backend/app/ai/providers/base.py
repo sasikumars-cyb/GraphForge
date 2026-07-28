@@ -7,7 +7,7 @@ providers requires only request/response mapping code.
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -16,7 +16,6 @@ from app.ai.providers.errors import AIProviderResponseError
 from app.ai.schemas.analysis_result import AIAnalysisResult
 from app.ai.services.context_builder import AIContext
 from app.ai.services.prompt_builder import PromptBuilder
-
 
 # ------------------------------------------------------------------
 # Transport-level data types

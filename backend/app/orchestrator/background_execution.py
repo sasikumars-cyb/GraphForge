@@ -33,7 +33,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -68,7 +68,7 @@ async def _execute_run_task(
     subject: Subject,
     goal: str,
     model: str | None,
-    extras: dict | None,
+    extras: dict[str, Any] | None,
     agent_id: str,
     registry: AgentRegistry,
     on_complete: OnComplete | None,
@@ -92,7 +92,7 @@ async def _execute_run_task(
                 return
             _manifest, agent = entry
 
-            coordinator = RunCoordinator(db=db, registry=registry, selector=None)  # type: ignore[arg-type]
+            coordinator = RunCoordinator(db=db, registry=registry, selector=None)
             try:
                 # `on_complete` is passed as execute_run's on_pre_commit, not
                 # called after it returns: both used to be two separate
@@ -136,7 +136,7 @@ def schedule_run_execution(
     subject: Subject,
     goal: str,
     model: str | None,
-    extras: dict | None,
+    extras: dict[str, Any] | None,
     agent_id: str,
     registry: AgentRegistry,
     on_complete: OnComplete | None = None,
@@ -182,7 +182,7 @@ async def recover_orphaned_runs(db: AsyncSession) -> int:
     for run in orphaned:
         run.status = "failed"
         run.error_message = "Interrupted by server restart."
-        run.completed_at = datetime.now(timezone.utc)
+        run.completed_at = datetime.now(UTC)
     if orphaned:
         await db.commit()
         logger.warning(

@@ -11,7 +11,7 @@ user's own personal OAuth App, never a company-owned one.
 """
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -464,10 +464,11 @@ class GitHubVersionControlProvider(IVersionControlProvider):
         repo: str,
         sha: str,
         access_token: str | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """Fetch a commit by SHA. Used for idempotency checks."""
-        return await _github_get(
-            f"/repos/{owner}/{repo}/git/commits/{sha}", access_token
+        return cast(
+            dict[str, Any],
+            await _github_get(f"/repos/{owner}/{repo}/git/commits/{sha}", access_token),
         )
 
     async def get_check_runs(
@@ -476,7 +477,7 @@ class GitHubVersionControlProvider(IVersionControlProvider):
         repo: str,
         ref: str,
         access_token: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """Return check runs for a Git ref (SHA or branch name).
 
         Uses GET /repos/{owner}/{repo}/commits/{ref}/check-runs.

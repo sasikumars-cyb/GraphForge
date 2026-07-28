@@ -17,15 +17,19 @@ Evidence mapping from the reasoning_log:
 
 from __future__ import annotations
 
-import uuid
-
 import logging
+import uuid
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-logger = logging.getLogger(__name__)
-
-from app.agents._contract import AgentContext, AgentManifest, AgentOutput, Confidence, Evidence, Subject
+from app.agents._contract import (
+    AgentContext,
+    AgentManifest,
+    AgentOutput,
+    Confidence,
+    Evidence,
+    Subject,
+)
 from app.ai.agent.investigation_agent import InvestigationAgent, InvestigationResult
 from app.ai.providers.factory import create_llm_provider
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
@@ -34,6 +38,8 @@ from app.core.exceptions import NotFoundError
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
 from app.integrations.factory import create_version_control_provider
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Manifest (registered in app/orchestrator/registry.py at startup)
@@ -49,10 +55,12 @@ REVIEW_MANIFEST = AgentManifest(
 )
 
 # Graph-read tools map to graph_traversal evidence kind.
-_GRAPH_TRAVERSAL_TOOLS = frozenset({
-    "read_dependency_graph",
-    "traverse_dependency_graph",
-})
+_GRAPH_TRAVERSAL_TOOLS = frozenset(
+    {
+        "read_dependency_graph",
+        "traverse_dependency_graph",
+    }
+)
 
 
 def resolve_pr_subject(pull_request_id: uuid.UUID, display_name: str = "") -> Subject:
@@ -77,9 +85,7 @@ def _extract_pr_uuid(subject: Subject) -> uuid.UUID:
     """
     sid = subject.subject_id
     if not sid.startswith("pr:"):
-        raise NotFoundError(
-            f"Review Agent expects subject_id 'pr:<uuid>', got '{sid}'."
-        )
+        raise NotFoundError(f"Review Agent expects subject_id 'pr:<uuid>', got '{sid}'.")
     raw = sid[3:]
     try:
         return uuid.UUID(raw)
@@ -102,11 +108,7 @@ def _map_evidence(result: InvestigationResult) -> list[Evidence]:
     for step in result.reasoning_log:
         if step.tool_selected is None:
             continue
-        kind = (
-            "graph_traversal"
-            if step.tool_selected in _GRAPH_TRAVERSAL_TOOLS
-            else "tool_call"
-        )
+        kind = "graph_traversal" if step.tool_selected in _GRAPH_TRAVERSAL_TOOLS else "tool_call"
         summary = (
             step.observation.summary
             if step.observation
@@ -158,7 +160,9 @@ class ReviewAgentAdapter:
 
         logger.info(
             "review_agent_started subject_id=%s pr_uuid=%s model=%s",
-            context.subject.subject_id, str(pr_uuid), context.model,
+            context.subject.subject_id,
+            str(pr_uuid),
+            context.model,
         )
 
         agent = self._build_agent(db, context.model)

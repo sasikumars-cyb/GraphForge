@@ -12,8 +12,7 @@ Covers:
 
 from __future__ import annotations
 
-import uuid
-from unittest.mock import AsyncMock, MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -30,10 +29,10 @@ from app.orchestrator.registry import AgentRegistry
 from app.orchestrator.run_coordinator import RunCoordinator
 from app.orchestrator.selector import AgentSelector
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_subject() -> Subject:
     return Subject(
@@ -49,7 +48,11 @@ def _make_output(agent_id: str = "planning") -> AgentOutput:
         subject_id="freetext:abc123",
         confidence=Confidence(score=0.85, reasoning="Good evidence."),
         evidence=[
-            Evidence(kind="graph_traversal", reference="traverse_architecture_graph", summary="3 components."),
+            Evidence(
+                kind="graph_traversal",
+                reference="traverse_architecture_graph",
+                summary="3 components.",
+            ),
             Evidence(kind="tool_call", reference="get_indexed_repositories", summary="2 repos."),
         ],
         result={"executive_summary": "A plan."},
@@ -138,7 +141,7 @@ async def test_successful_execution_persists_step() -> None:
     coordinator, mock_db, mock_agent = _build_coordinator()
     subject = _make_subject()
 
-    run = await coordinator.execute(subject, "plan_freeform")
+    await coordinator.execute(subject, "plan_freeform")
 
     # db.add should be called at least twice: once for Run, once for AgentStep
     assert mock_db.add.call_count >= 2
@@ -159,7 +162,7 @@ async def test_successful_step_has_correct_fields() -> None:
     coordinator, mock_db, mock_agent = _build_coordinator()
     subject = _make_subject()
 
-    run = await coordinator.execute(subject, "plan_freeform")
+    await coordinator.execute(subject, "plan_freeform")
 
     # The step is the second object added (after the Run)
     step = mock_db.add.call_args_list[1][0][0]
@@ -277,9 +280,7 @@ async def test_agent_exception_marks_step_as_failed() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_exception_commits_before_raising() -> None:
-    coordinator, mock_db, _ = _build_coordinator(
-        agent_run_side_effect=RuntimeError("fail")
-    )
+    coordinator, mock_db, _ = _build_coordinator(agent_run_side_effect=RuntimeError("fail"))
     subject = _make_subject()
 
     with pytest.raises(RuntimeError):
@@ -301,9 +302,6 @@ async def test_status_transitions_success() -> None:
     subject = _make_subject()
 
     # Capture status at each flush/commit
-    original_flush = mock_db.flush
-    original_commit = mock_db.commit
-
     async def capture_flush(*a, **kw):
         run = mock_db.add.call_args_list[0][0][0]
         statuses.append(run.status)
@@ -326,9 +324,7 @@ async def test_status_transitions_success() -> None:
 @pytest.mark.asyncio
 async def test_status_transitions_agent_failure() -> None:
     """Run goes queued → running → failed on agent exception."""
-    coordinator, mock_db, _ = _build_coordinator(
-        agent_run_side_effect=RuntimeError("boom")
-    )
+    coordinator, mock_db, _ = _build_coordinator(agent_run_side_effect=RuntimeError("boom"))
     subject = _make_subject()
 
     with pytest.raises(RuntimeError):

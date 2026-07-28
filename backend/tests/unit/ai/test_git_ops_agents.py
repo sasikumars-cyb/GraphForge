@@ -13,9 +13,9 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -32,7 +32,6 @@ from app.agents.git_ops.create_branch_agent import (
 from app.agents.git_ops.manifests import COMMIT_CHANGES_MANIFEST, CREATE_BRANCH_MANIFEST
 from app.agents.git_ops.schemas import BranchInfo, CommitInfo
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -47,12 +46,14 @@ def _make_step(result: dict | None) -> SimpleNamespace:
     return SimpleNamespace(result=result)
 
 
-def _make_run(stage: str, status: str, result: dict | None, created_at: datetime | None = None) -> SimpleNamespace:
+def _make_run(
+    stage: str, status: str, result: dict | None, created_at: datetime | None = None
+) -> SimpleNamespace:
     return SimpleNamespace(
         workflow_stage=stage,
         status=status,
         steps=[_make_step(result)] if result is not None else [],
-        created_at=created_at or datetime.now(timezone.utc),
+        created_at=created_at or datetime.now(UTC),
     )
 
 
@@ -188,8 +189,8 @@ class TestArtifactReader:
     def test_returns_latest_completed_run(self):
         old = _code_result(commit_message="old")
         new = _code_result(commit_message="new")
-        old_run = _make_run("generate_code", "completed", old, datetime(2024, 1, 1, tzinfo=timezone.utc))
-        new_run = _make_run("generate_code", "completed", new, datetime(2024, 6, 1, tzinfo=timezone.utc))
+        old_run = _make_run("generate_code", "completed", old, datetime(2024, 1, 1, tzinfo=UTC))
+        new_run = _make_run("generate_code", "completed", new, datetime(2024, 6, 1, tzinfo=UTC))
         workflow = _make_workflow(runs=[old_run, new_run])
         result = get_stage_result(workflow, "generate_code")
         assert result is not None
@@ -211,9 +212,14 @@ class TestCreateBranchAgent:
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.create_branch_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.create_branch_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.create_branch_agent.GitHubVersionControlProvider") as MockVCS,
-            patch("app.agents.git_ops.create_branch_agent._get_default_branch", new_callable=AsyncMock) as mock_default,
+            patch(
+                "app.agents.git_ops.create_branch_agent._get_default_branch", new_callable=AsyncMock
+            ) as mock_default,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -240,7 +246,10 @@ class TestCreateBranchAgent:
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.create_branch_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.create_branch_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.create_branch_agent.GitHubVersionControlProvider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
@@ -251,7 +260,10 @@ class TestCreateBranchAgent:
             output = await agent.run(ctx)
 
         assert output.result["base_sha"] == FAKE_SHA
-        assert "already exists" in output.evidence[0].summary.lower() or "reused" in output.evidence[0].summary.lower()
+        assert (
+            "already exists" in output.evidence[0].summary.lower()
+            or "reused" in output.evidence[0].summary.lower()
+        )
         # Should NOT call create_branch
         vcs.create_branch = AsyncMock()  # would fail if called
 
@@ -265,9 +277,14 @@ class TestCreateBranchAgent:
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.create_branch_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.create_branch_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.create_branch_agent.GitHubVersionControlProvider") as MockVCS,
-            patch("app.agents.git_ops.create_branch_agent._get_default_branch", new_callable=AsyncMock) as mock_default,
+            patch(
+                "app.agents.git_ops.create_branch_agent._get_default_branch", new_callable=AsyncMock
+            ) as mock_default,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -324,7 +341,10 @@ class TestCreateBranchAgent:
         workflow = _make_workflow(runs=[_make_run("generate_code", "completed", code)])
         ctx = _make_context(workflow=workflow)
 
-        with patch("app.agents.git_ops.create_branch_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token:
+        with patch(
+            "app.agents.git_ops.create_branch_agent.get_decrypted_access_token",
+            new_callable=AsyncMock,
+        ) as mock_token:
             mock_token.return_value = None
             agent = CreateBranchAgent()
             with pytest.raises(CreateBranchExecutionError, match="No GitHub connection"):
@@ -339,7 +359,10 @@ class TestCreateBranchAgent:
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.create_branch_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.create_branch_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.create_branch_agent.GitHubVersionControlProvider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
@@ -359,9 +382,14 @@ class TestCreateBranchAgent:
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.create_branch_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.create_branch_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.create_branch_agent.GitHubVersionControlProvider") as MockVCS,
-            patch("app.agents.git_ops.create_branch_agent._get_default_branch", new_callable=AsyncMock) as mock_default,
+            patch(
+                "app.agents.git_ops.create_branch_agent._get_default_branch", new_callable=AsyncMock
+            ) as mock_default,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -391,16 +419,23 @@ class TestCommitChangesAgent:
     async def test_happy_path_creates_commit(self):
         code = _code_result()
         branch = _branch_result()
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", code),
-            _make_run("create_branch", "completed", branch),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", code),
+                _make_run("create_branch", "completed", branch),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
 
         with (
-            patch("app.agents.git_ops.commit_changes_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
-            patch("app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider") as MockVCS,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider"
+            ) as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -424,16 +459,23 @@ class TestCommitChangesAgent:
     async def test_idempotent_commit_already_applied(self):
         code = _code_result()
         branch = _branch_result()
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", code),
-            _make_run("create_branch", "completed", branch),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", code),
+                _make_run("create_branch", "completed", branch),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
 
         with (
-            patch("app.agents.git_ops.commit_changes_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
-            patch("app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider") as MockVCS,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider"
+            ) as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -459,9 +501,11 @@ class TestCommitChangesAgent:
 
     @pytest.mark.asyncio
     async def test_missing_generate_code_result_raises(self):
-        workflow = _make_workflow(runs=[
-            _make_run("create_branch", "completed", _branch_result()),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("create_branch", "completed", _branch_result()),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
         agent = CommitChangesAgent()
@@ -470,9 +514,11 @@ class TestCommitChangesAgent:
 
     @pytest.mark.asyncio
     async def test_missing_create_branch_result_raises(self):
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", _code_result()),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", _code_result()),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
         agent = CommitChangesAgent()
@@ -481,10 +527,12 @@ class TestCommitChangesAgent:
 
     @pytest.mark.asyncio
     async def test_missing_user_id_raises(self):
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", _code_result()),
-            _make_run("create_branch", "completed", _branch_result()),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", _code_result()),
+                _make_run("create_branch", "completed", _branch_result()),
+            ]
+        )
         ctx = _make_context(workflow=workflow, user_id=None)
         ctx.goal = "commit_changes"
         agent = CommitChangesAgent()
@@ -493,14 +541,19 @@ class TestCommitChangesAgent:
 
     @pytest.mark.asyncio
     async def test_missing_access_token_raises(self):
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", _code_result()),
-            _make_run("create_branch", "completed", _branch_result()),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", _code_result()),
+                _make_run("create_branch", "completed", _branch_result()),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
 
-        with patch("app.agents.git_ops.commit_changes_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token:
+        with patch(
+            "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
+            new_callable=AsyncMock,
+        ) as mock_token:
             mock_token.return_value = None
             agent = CommitChangesAgent()
             with pytest.raises(CommitChangesExecutionError, match="No GitHub connection"):
@@ -509,10 +562,12 @@ class TestCommitChangesAgent:
     @pytest.mark.asyncio
     async def test_empty_files_raises(self):
         code = _code_result(files=[])
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", code),
-            _make_run("create_branch", "completed", _branch_result()),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", code),
+                _make_run("create_branch", "completed", _branch_result()),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
         agent = CommitChangesAgent()
@@ -522,10 +577,12 @@ class TestCommitChangesAgent:
     @pytest.mark.asyncio
     async def test_missing_commit_message_raises(self):
         code = _code_result(commit_message="")
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", code),
-            _make_run("create_branch", "completed", _branch_result()),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", code),
+                _make_run("create_branch", "completed", _branch_result()),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
         agent = CommitChangesAgent()
@@ -538,16 +595,23 @@ class TestCommitChangesAgent:
 
         code = _code_result()
         branch = _branch_result()
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", code),
-            _make_run("create_branch", "completed", branch),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", code),
+                _make_run("create_branch", "completed", branch),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
 
         with (
-            patch("app.agents.git_ops.commit_changes_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
-            patch("app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider") as MockVCS,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider"
+            ) as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -569,16 +633,23 @@ class TestCommitChangesAgent:
         ]
         code = _code_result(files=files)
         branch = _branch_result()
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", code),
-            _make_run("create_branch", "completed", branch),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", code),
+                _make_run("create_branch", "completed", branch),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
 
         with (
-            patch("app.agents.git_ops.commit_changes_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
-            patch("app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider") as MockVCS,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider"
+            ) as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -600,16 +671,23 @@ class TestCommitChangesAgent:
     async def test_result_matches_commit_info_schema(self):
         code = _code_result()
         branch = _branch_result()
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", code),
-            _make_run("create_branch", "completed", branch),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", code),
+                _make_run("create_branch", "completed", branch),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
 
         with (
-            patch("app.agents.git_ops.commit_changes_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
-            patch("app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider") as MockVCS,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider"
+            ) as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -631,23 +709,28 @@ class TestCommitChangesAgent:
 
         code = _code_result()
         branch = _branch_result()
-        workflow = _make_workflow(runs=[
-            _make_run("generate_code", "completed", code),
-            _make_run("create_branch", "completed", branch),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("generate_code", "completed", code),
+                _make_run("create_branch", "completed", branch),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         ctx.goal = "commit_changes"
 
         with (
-            patch("app.agents.git_ops.commit_changes_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
-            patch("app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider") as MockVCS,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
+            patch(
+                "app.agents.git_ops.commit_changes_agent.GitHubVersionControlProvider"
+            ) as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
             # Idempotency check fails
-            vcs.get_branch_sha = AsyncMock(
-                side_effect=GitHubApiError("Not found", status_code=404)
-            )
+            vcs.get_branch_sha = AsyncMock(side_effect=GitHubApiError("Not found", status_code=404))
             # But commit succeeds
             vcs.create_commit = AsyncMock(return_value=COMMIT_SHA)
 

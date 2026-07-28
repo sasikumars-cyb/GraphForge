@@ -6,6 +6,8 @@ Machine-readable, card-friendly for the frontend. No large text blobs.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -84,7 +86,7 @@ class DevelopmentPlan(BaseModel):
 
     graph_context_used: bool = False
     repositories_consulted: list[str] = Field(default_factory=list)
-    blueprint: dict | None = Field(default=None)
+    blueprint: dict[str, Any] | None = Field(default=None)
     prompt_version: str = "1.0"
 
     # Deterministic, non-LLM warnings: components/files/repositories cited

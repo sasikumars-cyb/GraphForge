@@ -20,7 +20,6 @@ import pytest
 from app.agents._contract import AgentContext, Subject
 from app.agents.planning.agent import PlanningAgent, PlanningLLMError
 from app.agents.planning.classifier import analyse
-from app.agents.planning.schemas import PlanningResult
 from app.agents.planning.tools import (
     GetIndexedRepositoriesTool,
     PlanningObservation,
@@ -29,7 +28,6 @@ from app.agents.planning.tools import (
     to_evidence,
 )
 from app.graph.models import GraphNode
-
 
 # ---------------------------------------------------------------------------
 # Tool unit tests (no I/O)
@@ -136,8 +134,20 @@ def test_format_graph_context_with_data() -> None:
         summary="Found 3 components.",
         data={
             "components": [
-                {"id": "c1", "name": "OrderController", "type": "Controller", "repository": "order-service", "file_path": ""},
-                {"id": "c2", "name": "PaymentService", "type": "Service", "repository": "payment-service", "file_path": ""},
+                {
+                    "id": "c1",
+                    "name": "OrderController",
+                    "type": "Controller",
+                    "repository": "order-service",
+                    "file_path": "",
+                },
+                {
+                    "id": "c2",
+                    "name": "PaymentService",
+                    "type": "Service",
+                    "repository": "payment-service",
+                    "file_path": "",
+                },
             ],
             "kafka_topics": [
                 {"id": "t1", "name": "order.created", "repository": "order-service"},
@@ -230,7 +240,7 @@ def test_format_graph_context_ranks_specific_component_over_generic_noise() -> N
 
 
 def test_relevance_requires_whole_token_match_not_substring() -> None:
-    """"process" must not match "processed", and "page" must not match
+    """ "process" must not match "processed", and "page" must not match
     "pagination" — a search term is a real word, not an arbitrary substring
     of an unrelated one. See app.agents.planning.tools._tokenize."""
     from app.agents.planning.tools import _relevance
@@ -330,9 +340,7 @@ async def test_get_indexed_repos_filters_by_owning_user() -> None:
     mock_result.scalars.return_value.all.return_value = []
     mock_db.execute.return_value = mock_result
 
-    tool = GetIndexedRepositoriesTool(
-        db=mock_db, graph_repository=AsyncMock(), user_id="user-1"
-    )
+    tool = GetIndexedRepositoriesTool(db=mock_db, graph_repository=AsyncMock(), user_id="user-1")
     await tool.execute()
 
     executed = mock_db.execute.await_args.args[0]
@@ -426,7 +434,9 @@ async def test_traverse_all_repos_fail_marks_as_failed() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_planning_context(display_name: str = "Plan a new Kafka consumer for order events") -> AgentContext:
+def _make_planning_context(
+    display_name: str = "Plan a new Kafka consumer for order events",
+) -> AgentContext:
     subject = Subject(
         subject_id="freetext:abc123",
         subject_type="freetext",
@@ -445,22 +455,24 @@ def _make_planning_context(display_name: str = "Plan a new Kafka consumer for or
 
 
 def _make_llm_response(steps: int = 3) -> str:
-    return json.dumps({
-        "executive_summary": "A plan to implement the feature.",
-        "implementation_steps": [
-            {
-                "order": i + 1,
-                "description": f"Step {i + 1}",
-                "affected_component": "OrderService",
-                "risk_note": "",
-            }
-            for i in range(steps)
-        ],
-        "affected_components": ["OrderService"],
-        "kafka_topics_involved": ["order.created"],
-        "risk_considerations": ["Risk 1"],
-        "graph_context_used": True,
-    })
+    return json.dumps(
+        {
+            "executive_summary": "A plan to implement the feature.",
+            "implementation_steps": [
+                {
+                    "order": i + 1,
+                    "description": f"Step {i + 1}",
+                    "affected_component": "OrderService",
+                    "risk_note": "",
+                }
+                for i in range(steps)
+            ],
+            "affected_components": ["OrderService"],
+            "kafka_topics_involved": ["order.created"],
+            "risk_considerations": ["Risk 1"],
+            "graph_context_used": True,
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -473,11 +485,13 @@ async def test_planning_agent_happy_path_has_graph_evidence() -> None:
     mock_graph_repo = MagicMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=True)
     component_node = GraphNode(
-        id="c1", labels=["Component", "Service"],
+        id="c1",
+        labels=["Component", "Service"],
         properties={"name": "OrderService"},
     )
     topic_node = GraphNode(
-        id="t1", labels=["KafkaTopic"],
+        id="t1",
+        labels=["KafkaTopic"],
         properties={"name": "order.created"},
     )
     mock_graph_repo.get_nodes_by_label = AsyncMock(
@@ -497,8 +511,13 @@ async def test_planning_agent_happy_path_has_graph_evidence() -> None:
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
-        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_make_llm_response())),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_make_llm_response())
+        ),
     ):
         agent = PlanningAgent()
         output = await agent.run(context)
@@ -580,18 +599,25 @@ async def test_planning_agent_no_indexed_repos_still_produces_evidence() -> None
     mock_result.scalars.return_value.all.return_value = [mock_repo]
     mock_db.execute.return_value = mock_result
 
-    llm_response = json.dumps({
-        "executive_summary": "Plan based on general engineering practices.",
-        "implementation_steps": [{"order": 1, "description": "Step 1", "affected_component": "", "risk_note": ""}],
-        "affected_components": [],
-        "kafka_topics_involved": [],
-        "risk_considerations": [],
-        "graph_context_used": False,
-    })
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Plan based on general engineering practices.",
+            "implementation_steps": [
+                {"order": 1, "description": "Step 1", "affected_component": "", "risk_note": ""}
+            ],
+            "affected_components": [],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": False,
+        }
+    )
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
@@ -622,8 +648,14 @@ async def test_planning_agent_llm_failure_raises() -> None:
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
-        patch("app.agents.planning.agent._call_llm", new=AsyncMock(side_effect=PlanningLLMError("API key missing."))),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(side_effect=PlanningLLMError("API key missing.")),
+        ),
     ):
         agent = PlanningAgent()
         with pytest.raises(PlanningLLMError):
@@ -644,17 +676,24 @@ async def test_planning_agent_output_matches_agent_output_contract() -> None:
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
         patch(
             "app.agents.planning.agent._call_llm",
-            new=AsyncMock(return_value=json.dumps({
-                "executive_summary": "Plan.",
-                "implementation_steps": [],
-                "affected_components": [],
-                "kafka_topics_involved": [],
-                "risk_considerations": [],
-                "graph_context_used": False,
-            })),
+            new=AsyncMock(
+                return_value=json.dumps(
+                    {
+                        "executive_summary": "Plan.",
+                        "implementation_steps": [],
+                        "affected_components": [],
+                        "kafka_topics_involved": [],
+                        "risk_considerations": [],
+                        "graph_context_used": False,
+                    }
+                )
+            ),
         ),
     ):
         agent = PlanningAgent()
@@ -698,18 +737,23 @@ async def test_planning_agent_graph_unavailable_no_false_evidence() -> None:
     mock_result.scalars.return_value.all.return_value = [mock_repo]
     mock_db.execute.return_value = mock_result
 
-    llm_response = json.dumps({
-        "executive_summary": "Plan without graph.",
-        "implementation_steps": [{"order": 1, "description": "Step 1"}],
-        "affected_components": [],
-        "kafka_topics_involved": [],
-        "risk_considerations": [],
-        "graph_context_used": False,
-    })
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Plan without graph.",
+            "implementation_steps": [{"order": 1, "description": "Step 1"}],
+            "affected_components": [],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": False,
+        }
+    )
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
@@ -719,7 +763,7 @@ async def test_planning_agent_graph_unavailable_no_false_evidence() -> None:
     # traversal actually failed
     for ev in output.evidence:
         if ev.kind == "graph_traversal":
-            assert False, (
+            raise AssertionError(
                 f"Found graph_traversal evidence '{ev.summary}' but the "
                 "graph was unavailable — this is fabricated evidence."
             )
@@ -758,18 +802,23 @@ async def test_planning_agent_graph_context_used_overridden_when_graph_fails() -
 
     # LLM lies and claims it used graph context even though every
     # traversal call failed.
-    llm_response = json.dumps({
-        "executive_summary": "Plan.",
-        "implementation_steps": [],
-        "affected_components": [],
-        "kafka_topics_involved": [],
-        "risk_considerations": [],
-        "graph_context_used": True,
-    })
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Plan.",
+            "implementation_steps": [],
+            "affected_components": [],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": True,
+        }
+    )
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
@@ -790,7 +839,9 @@ async def test_planning_agent_graph_context_used_true_when_graph_has_data() -> N
     mock_graph_repo = MagicMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=True)
     component_node = GraphNode(
-        id="c1", labels=["Component", "Service"], properties={"name": "OrderService"},
+        id="c1",
+        labels=["Component", "Service"],
+        properties={"name": "OrderService"},
     )
     mock_graph_repo.get_nodes_by_label = AsyncMock(
         side_effect=lambda repo_id, label: [component_node] if label == "Component" else []
@@ -806,18 +857,23 @@ async def test_planning_agent_graph_context_used_true_when_graph_has_data() -> N
     mock_db.execute.return_value = mock_result
 
     # LLM under-reports — the code's own signal should win.
-    llm_response = json.dumps({
-        "executive_summary": "Plan.",
-        "implementation_steps": [],
-        "affected_components": [],
-        "kafka_topics_involved": [],
-        "risk_considerations": [],
-        "graph_context_used": False,
-    })
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Plan.",
+            "implementation_steps": [],
+            "affected_components": [],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": False,
+        }
+    )
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
@@ -839,9 +895,7 @@ async def test_planning_agent_graph_unavailable_confidence_reasoning() -> None:
 
     mock_graph_repo = MagicMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=True)
-    mock_graph_repo.get_nodes_by_label = AsyncMock(
-        side_effect=Exception("Connection refused")
-    )
+    mock_graph_repo.get_nodes_by_label = AsyncMock(side_effect=Exception("Connection refused"))
 
     mock_db = context.extras["db"]
     mock_repo = MagicMock()
@@ -852,27 +906,32 @@ async def test_planning_agent_graph_unavailable_confidence_reasoning() -> None:
     mock_result.scalars.return_value.all.return_value = [mock_repo]
     mock_db.execute.return_value = mock_result
 
-    llm_response = json.dumps({
-        "executive_summary": "Plan.",
-        "implementation_steps": [],
-        "affected_components": [],
-        "kafka_topics_involved": [],
-        "risk_considerations": [],
-        "graph_context_used": False,
-    })
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Plan.",
+            "implementation_steps": [],
+            "affected_components": [],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": False,
+        }
+    )
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
         output = await agent.run(context)
 
     # Confidence must be lower than the healthy-empty case (0.45)
-    assert output.confidence.score <= 0.35, (
-        f"Graph unavailable should give very low confidence, got {output.confidence.score}"
-    )
+    assert (
+        output.confidence.score <= 0.35
+    ), f"Graph unavailable should give very low confidence, got {output.confidence.score}"
     assert "unavailable" in output.confidence.reasoning.lower()
 
 
@@ -890,26 +949,31 @@ async def test_planning_agent_graph_empty_confidence_reasoning() -> None:
     mock_result.scalars.return_value.all.return_value = []
     mock_db.execute.return_value = mock_result
 
-    llm_response = json.dumps({
-        "executive_summary": "Plan.",
-        "implementation_steps": [],
-        "affected_components": [],
-        "kafka_topics_involved": [],
-        "risk_considerations": [],
-        "graph_context_used": False,
-    })
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Plan.",
+            "implementation_steps": [],
+            "affected_components": [],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": False,
+        }
+    )
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=mock_graph_repo),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
         patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
     ):
         agent = PlanningAgent()
         output = await agent.run(context)
 
     # Should be healthy-empty confidence (0.45 + possible step bump)
-    assert 0.40 <= output.confidence.score <= 0.55, (
-        f"Healthy-empty graph should give moderate confidence, got {output.confidence.score}"
-    )
+    assert (
+        0.40 <= output.confidence.score <= 0.55
+    ), f"Healthy-empty graph should give moderate confidence, got {output.confidence.score}"
     assert "healthy" in output.confidence.reasoning.lower()
     assert "unavailable" not in output.confidence.reasoning.lower()

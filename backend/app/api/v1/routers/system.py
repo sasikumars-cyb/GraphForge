@@ -114,15 +114,15 @@ async def system_status(
         ConnectionStatus(
             name="Jira",
             status="configured" if jira_configured else "not_configured",
-            detail=(settings.jira_base_url or "Via Knowledge Connection") if jira_configured else None,
+            detail=(
+                (settings.jira_base_url or "Via Knowledge Connection") if jira_configured else None
+            ),
         )
     )
 
     # ── Knowledge Base ──────────────────────────────────────────────
     repo_count_result = await db.execute(
-        select(func.count()).select_from(Repository).where(
-            Repository.user_id == current_user.id
-        )
+        select(func.count()).select_from(Repository).where(Repository.user_id == current_user.id)
     )
     repos_tracked = repo_count_result.scalar() or 0
 

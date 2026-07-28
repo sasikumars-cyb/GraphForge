@@ -106,7 +106,7 @@ class JiraTool:
         "project_management",
     ]
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         # REST transport config
         self._base_url: str = config.get("jira_base_url", "").rstrip("/")
         self._token: str = config.get("jira_api_token", "")
@@ -340,13 +340,15 @@ class JiraTool:
         results: list[dict[str, str]] = []
         for issue in payload.get("issues", []):
             fields = issue.get("fields", {})
-            results.append({
-                "key": issue.get("key", ""),
-                "summary": fields.get("summary", ""),
-                "status": _name_of(fields.get("status")),
-                "issue_type": _name_of(fields.get("issuetype")),
-                "url": f"{self._base_url}/browse/{issue.get('key', '')}",
-            })
+            results.append(
+                {
+                    "key": issue.get("key", ""),
+                    "summary": fields.get("summary", ""),
+                    "status": _name_of(fields.get("status")),
+                    "issue_type": _name_of(fields.get("issuetype")),
+                    "url": f"{self._base_url}/browse/{issue.get('key', '')}",
+                }
+            )
 
         if not results:
             return await self._search_fallback_single_key(query)
@@ -365,13 +367,15 @@ class JiraTool:
         result = await self.execute(ToolInput(query=issue_key))
         if not result.success:
             return []
-        return [{
-            "key": result.data.get("issue_key", issue_key),
-            "summary": result.data.get("summary", ""),
-            "status": result.data.get("status", ""),
-            "issue_type": result.data.get("issue_type", ""),
-            "url": result.data.get("url", ""),
-        }]
+        return [
+            {
+                "key": result.data.get("issue_key", issue_key),
+                "summary": result.data.get("summary", ""),
+                "status": result.data.get("status", ""),
+                "issue_type": result.data.get("issue_type", ""),
+                "url": result.data.get("url", ""),
+            }
+        ]
 
     def _build_result(
         self,
@@ -390,7 +394,9 @@ class JiraTool:
         context builder) needs to know or care which one ran."""
         context_text = (
             f"Jira {issue_type or 'ticket'} {issue_key} — {summary_text}\n"
-            f"Status: {status}" + (f" | Priority: {priority}" if priority else "") + "\n"
+            f"Status: {status}"
+            + (f" | Priority: {priority}" if priority else "")
+            + "\n"
             + (f"Labels: {', '.join(labels)}\n" if labels else "")
             + (f"\nDescription:\n{description}" if description else "")
         )

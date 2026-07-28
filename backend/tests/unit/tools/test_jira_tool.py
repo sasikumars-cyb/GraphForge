@@ -36,11 +36,13 @@ def test_uses_mcp_when_mcp_server_url_present():
 
 
 def test_uses_rest_when_only_rest_fields_present():
-    tool = JiraTool({
-        "jira_base_url": "https://example.atlassian.net",
-        "jira_email": "a@b.com",
-        "jira_api_token": "token",
-    })
+    tool = JiraTool(
+        {
+            "jira_base_url": "https://example.atlassian.net",
+            "jira_email": "a@b.com",
+            "jira_api_token": "token",
+        }
+    )
     assert tool._uses_mcp is False
 
 
@@ -62,10 +64,12 @@ async def test_execute_no_issue_key_in_query():
 
 @pytest.mark.asyncio
 async def test_execute_via_mcp_success():
-    tool = JiraTool({
-        "jira_mcp_server_url": "https://example.com/mcp",
-        "jira_mcp_api_key": "secret",
-    })
+    tool = JiraTool(
+        {
+            "jira_mcp_server_url": "https://example.com/mcp",
+            "jira_mcp_api_key": "secret",
+        }
+    )
 
     fake_payload = {
         "fields": {
@@ -113,11 +117,13 @@ async def test_execute_via_mcp_failure():
 
 @pytest.mark.asyncio
 async def test_execute_via_rest_success():
-    tool = JiraTool({
-        "jira_base_url": "https://example.atlassian.net",
-        "jira_email": "a@b.com",
-        "jira_api_token": "token",
-    })
+    tool = JiraTool(
+        {
+            "jira_base_url": "https://example.atlassian.net",
+            "jira_email": "a@b.com",
+            "jira_api_token": "token",
+        }
+    )
 
     class FakeResponse:
         status_code = 200
@@ -150,11 +156,13 @@ async def test_execute_via_rest_success():
 async def test_execute_via_rest_and_mcp_return_same_shape():
     """The Planning Agent reads result.data['context_text'] regardless of
     transport — both paths must populate the same keys."""
-    rest_tool = JiraTool({
-        "jira_base_url": "https://example.atlassian.net",
-        "jira_email": "a@b.com",
-        "jira_api_token": "token",
-    })
+    rest_tool = JiraTool(
+        {
+            "jira_base_url": "https://example.atlassian.net",
+            "jira_email": "a@b.com",
+            "jira_api_token": "token",
+        }
+    )
     mcp_tool = JiraTool({"jira_mcp_server_url": "https://example.com/mcp"})
 
     class FakeResponse:
@@ -181,14 +189,16 @@ async def test_execute_via_rest_and_mcp_return_same_shape():
 
     with patch(
         "app.tools.implementations.jira_tool.call_mcp_tool",
-        new=AsyncMock(return_value={
-            "fields": {
-                "summary": "S",
-                "status": {"name": "To Do"},
-                "issuetype": {"name": "Story"},
-                "priority": {"name": "Medium"},
-            },
-        }),
+        new=AsyncMock(
+            return_value={
+                "fields": {
+                    "summary": "S",
+                    "status": {"name": "To Do"},
+                    "issuetype": {"name": "Story"},
+                    "priority": {"name": "Medium"},
+                },
+            }
+        ),
     ):
         mcp_result = await mcp_tool.execute(ToolInput(query="NPT-6"))
 

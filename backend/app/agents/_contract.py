@@ -168,5 +168,7 @@ class ISelector(Protocol):
 class IRunCoordinator(Protocol):
     """Executes a selected agent for a subject+goal and persists the run."""
 
-    async def execute(self, subject: Subject, goal: str, model: str | None = None) -> Any:  # pragma: no cover
+    async def execute(
+        self, subject: Subject, goal: str, model: str | None = None
+    ) -> Any:  # pragma: no cover
         ...

@@ -11,8 +11,8 @@ ContextBuilder.build(). The builder:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Sequence
 
 from app.tools.interfaces import ToolResult
 
@@ -59,9 +59,7 @@ class ContextBuilder:
         failed = [r for r in results if not r.success]
 
         for r in failed:
-            logger.info(
-                "context_builder_skipped_failed tool=%s error=%s", r.tool_id, r.error
-            )
+            logger.info("context_builder_skipped_failed tool=%s error=%s", r.tool_id, r.error)
 
         if not successful:
             return PlanningContext(

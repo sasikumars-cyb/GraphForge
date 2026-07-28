@@ -14,6 +14,7 @@ ToolInput.parameters expected keys:
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from app.agents.planning.tools import (
     GetIndexedRepositoriesTool,
@@ -57,7 +58,7 @@ class Neo4jGraphTool:
         "architecture_context",
     ]
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         pass
 
     def requires_auth(self) -> bool:
@@ -87,9 +88,9 @@ class Neo4jGraphTool:
                 error="ToolInput.parameters['user_id'] is required to scope repository access.",
             )
 
-        graph_repo: IGraphRepository = input.parameters.get(
-            "graph_repo"
-        ) or Neo4jGraphRepository(get_driver())
+        graph_repo: IGraphRepository = input.parameters.get("graph_repo") or Neo4jGraphRepository(
+            get_driver()
+        )
 
         relevance_terms: list[str] = input.parameters.get("relevance_terms") or []
 
@@ -99,7 +100,7 @@ class Neo4jGraphTool:
             )
             repos_obs = await repos_tool.execute()
 
-            indexed_repos: list[dict] = repos_obs.data.get("indexed_repositories", [])
+            indexed_repos: list[dict[str, Any]] = repos_obs.data.get("indexed_repositories", [])
 
             traverse_tool = TraverseArchitectureGraphTool(graph_repository=graph_repo)
             traverse_obs = await traverse_tool.execute(indexed_repos)
@@ -118,7 +119,8 @@ class Neo4jGraphTool:
             # actually selected, without re-deriving or guessing it from the
             # rendered markdown text.
             ranked_repositories = [
-                name for _, name in rank_repositories(
+                name
+                for _, name in rank_repositories(
                     indexed_repos, traverse_obs.data.get("components", []), relevance_terms
                 )
             ]

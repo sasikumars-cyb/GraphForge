@@ -49,14 +49,16 @@ async def call_mcp_tool(
     headers = {"Authorization": f"Bearer {auth_token}"} if auth_token else None
 
     try:
-        async with streamablehttp_client(server_url, headers=headers, timeout=timeout) as (
-            read_stream,
-            write_stream,
-            _get_session_id,
+        async with (
+            streamablehttp_client(server_url, headers=headers, timeout=timeout) as (
+                read_stream,
+                write_stream,
+                _get_session_id,
+            ),
+            ClientSession(read_stream, write_stream) as session,
         ):
-            async with ClientSession(read_stream, write_stream) as session:
-                await session.initialize()
-                result = await session.call_tool(tool_name, arguments)
+            await session.initialize()
+            result = await session.call_tool(tool_name, arguments)
     except MCPToolError:
         raise
     except Exception as exc:

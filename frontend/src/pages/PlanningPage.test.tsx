@@ -48,7 +48,7 @@ describe("PlanningPage", () => {
 
   it("disables submit button when input is empty", () => {
     renderWithAuth();
-    const button = screen.getByRole("button", { name: "Submit planning request" });
+    const button = screen.getByRole("button", { name: "Generate Plan" });
     expect(button).toBeDisabled();
   });
 
@@ -57,7 +57,7 @@ describe("PlanningPage", () => {
     renderWithAuth();
     const textarea = screen.getByLabelText("What would you like to plan?");
     await user.type(textarea, "Plan a new feature");
-    const button = screen.getByRole("button", { name: "Submit planning request" });
+    const button = screen.getByRole("button", { name: "Generate Plan" });
     expect(button).toBeEnabled();
   });
 

@@ -7,10 +7,9 @@ for actual agent execution — this layer adds only the sequencing logic.
 
 from __future__ import annotations
 
-import json
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -141,18 +140,16 @@ def _summarize_previous_output(run: Run) -> str:
         "integration_tests",
         "edge_cases",
     ):
-        if items := result.get(key):
-            if isinstance(items, list) and items:
-                parts.append(
-                    f"{key.replace('_', ' ').title()}: {', '.join(str(i) for i in items[:10])}"
-                )
+        items = result.get(key)
+        if isinstance(items, list) and items:
+            parts.append(
+                f"{key.replace('_', ' ').title()}: {', '.join(str(i) for i in items[:10])}"
+            )
 
     return "\n".join(parts)
 
 
-CREATABLE_WORKFLOW_TYPES: frozenset[str] = frozenset(
-    WORKFLOW_TYPE_STAGES.keys() - {"legacy_sdlc"}
-)
+CREATABLE_WORKFLOW_TYPES: frozenset[str] = frozenset(WORKFLOW_TYPE_STAGES.keys() - {"legacy_sdlc"})
 
 
 async def create_workflow(
@@ -258,7 +255,10 @@ async def create_workflow(
 
     logger.info(
         "workflow_created id=%s title=%s type=%s version=%d parent_id=%s",
-        str(workflow.id), generated_title, workflow_type, workflow.version,
+        str(workflow.id),
+        generated_title,
+        workflow_type,
+        workflow.version,
         str(parent_workflow_id) if parent_workflow_id else None,
     )
     return workflow
@@ -342,7 +342,8 @@ async def list_workflows(
     Workflow.user_id's docstring) — the same ownership rule
     `_check_workflow_owned` enforces on single-workflow reads/writes.
     """
-    from sqlalchemy import func as sa_func, or_
+    from sqlalchemy import func as sa_func
+    from sqlalchemy import or_
 
     query = select(Workflow)
     count_query = select(sa_func.count(Workflow.id))
@@ -396,8 +397,12 @@ def build_stage_context(
             if run.status == "completed":
                 summary = _summarize_previous_output(run)
                 if summary:
+                    stage_label = STAGE_LABELS.get(
+                        run.workflow_stage or "", run.workflow_stage or ""
+                    )
                     parts.append(
-                        f"\n--- Blueprint context from {STAGE_LABELS.get(run.workflow_stage or '', run.workflow_stage or '')} stage (source workflow) ---\n{summary}"
+                        f"\n--- Blueprint context from {stage_label} stage "
+                        f"(source workflow) ---\n{summary}"
                     )
 
     # Find all completed runs in this workflow, ordered by creation
@@ -405,8 +410,9 @@ def build_stage_context(
         if run.status == "completed" and run.workflow_stage != target_stage:
             summary = _summarize_previous_output(run)
             if summary:
+                stage_label = STAGE_LABELS.get(run.workflow_stage or "", run.workflow_stage or "")
                 parts.append(
-                    f"\n--- Context from {STAGE_LABELS.get(run.workflow_stage or '', run.workflow_stage or '')} stage (run {run.id}) ---\n{summary}"
+                    f"\n--- Context from {stage_label} stage (run {run.id}) ---\n{summary}"
                 )
 
     return "\n".join(parts)
@@ -441,7 +447,7 @@ async def advance_workflow(
     else:
         workflow.current_stage = nxt
 
-    workflow.updated_at = datetime.now(timezone.utc)
+    workflow.updated_at = datetime.now(UTC)
     await db.flush()
 
     logger.info(
@@ -513,7 +519,7 @@ async def approve_workflow(db: AsyncSession, workflow: Workflow, user_id: uuid.U
     approver, not a guess."""
     workflow.status = "approved"
     workflow.approved_by_user_id = user_id
-    workflow.updated_at = datetime.now(timezone.utc)
+    workflow.updated_at = datetime.now(UTC)
     await _record_confidence_calibration(db, workflow, "approved")
     await db.flush()
     logger.info("workflow_approved id=%s approved_by=%s", str(workflow.id), str(user_id))
@@ -523,7 +529,7 @@ async def reject_workflow(db: AsyncSession, workflow: Workflow) -> None:
     """Human rejects the workflow — terminal, from either the initial
     blueprint-approval gate or a later inter-stage approval gate."""
     workflow.status = "rejected"
-    workflow.updated_at = datetime.now(timezone.utc)
+    workflow.updated_at = datetime.now(UTC)
     await _record_confidence_calibration(db, workflow, "rejected")
     await db.flush()
     logger.info("workflow_rejected id=%s", str(workflow.id))

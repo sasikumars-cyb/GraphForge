@@ -7,13 +7,14 @@ GET /api/v1/agent-runs/{run_id}, GET /api/v1/agent-runs (paginated).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.agents.title_generation import generate_title
 from app.api.v1.dependencies import get_current_user, require_admin
@@ -174,7 +175,7 @@ def _repository_from_run(run: Run) -> str | None:
     return ", ".join(repos) if repos else None
 
 
-def _run_ownership_clause(user_id: uuid.UUID):
+def _run_ownership_clause(user_id: uuid.UUID) -> ColumnElement[bool]:
     """SQLAlchemy WHERE clause matching a Run this user may access.
 
     A Run is owned via one of two paths, since standalone runs and
@@ -392,7 +393,7 @@ async def cancel_run_endpoint(
     if cancel_background_run(rid):
         run.status = "failed"
         run.error_message = "Cancelled by user."
-        run.completed_at = datetime.now(timezone.utc)
+        run.completed_at = datetime.now(UTC)
         await db.commit()
 
     return CancelRunResponse(run_id=str(run.id), status=run.status)
@@ -478,8 +479,10 @@ async def list_runs(
     subject_id: str | None = None,
 ) -> RunListResponse:
     """List agent runs with pagination and optional filtering."""
-    query = select(Run).outerjoin(Workflow, Run.workflow_id == Workflow.id).where(
-        _run_ownership_clause(user.id)
+    query = (
+        select(Run)
+        .outerjoin(Workflow, Run.workflow_id == Workflow.id)
+        .where(_run_ownership_clause(user.id))
     )
     count_query = (
         select(func.count(Run.id))
@@ -518,9 +521,10 @@ async def list_runs(
         # Get the best confidence score from steps
         best_confidence = None
         for step in run.steps:
-            if step.confidence_score is not None:
-                if best_confidence is None or step.confidence_score > best_confidence:
-                    best_confidence = step.confidence_score
+            if step.confidence_score is not None and (
+                best_confidence is None or step.confidence_score > best_confidence
+            ):
+                best_confidence = step.confidence_score
 
         items.append(
             RunListItem(

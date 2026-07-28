@@ -15,7 +15,10 @@ const failedEvidence: Evidence[] = [
 
 describe("EvidencePanel", () => {
   it("renders all evidence items", () => {
-    render(<EvidencePanel evidence={sampleEvidence} />);
+    // Full per-item summaries only render in the expanded list view — the
+    // default collapsed view shows one kind-label pill per item instead
+    // (see "renders evidence kind labels" below), so this test opts in.
+    render(<EvidencePanel evidence={sampleEvidence} defaultExpanded />);
     expect(screen.getByText("Found 5 components across 2 repos")).toBeInTheDocument();
     expect(screen.getByText("Queried 3 repositories")).toBeInTheDocument();
     expect(screen.getByText("LLM synthesized a 4-step plan")).toBeInTheDocument();
@@ -32,7 +35,7 @@ describe("EvidencePanel", () => {
   });
 
   it("renders failed evidence with distinct styling", () => {
-    render(<EvidencePanel evidence={failedEvidence} />);
+    render(<EvidencePanel evidence={failedEvidence} defaultExpanded />);
     expect(screen.getByText("Failed")).toBeInTheDocument();
     expect(screen.getByText("FAILED: Neo4j connection refused")).toBeInTheDocument();
   });
@@ -45,7 +48,7 @@ describe("EvidencePanel", () => {
   });
 
   it("has accessible list role", () => {
-    render(<EvidencePanel evidence={sampleEvidence} />);
+    render(<EvidencePanel evidence={sampleEvidence} defaultExpanded />);
     expect(screen.getByRole("list", { name: "Evidence items" })).toBeInTheDocument();
   });
 });

@@ -252,9 +252,7 @@ class TestBedrockInference:
         call_kwargs = mock_client.converse.call_args[1]
         assert call_kwargs["modelId"] == "us.amazon.nova-pro-v1:0"
         assert call_kwargs["system"] == [{"text": "System instructions."}]
-        assert call_kwargs["messages"] == [
-            {"role": "user", "content": [{"text": "User message."}]}
-        ]
+        assert call_kwargs["messages"] == [{"role": "user", "content": [{"text": "User message."}]}]
         assert call_kwargs["inferenceConfig"]["temperature"] == 0.7
         assert call_kwargs["inferenceConfig"]["maxTokens"] == 2048
 
@@ -277,9 +275,7 @@ class TestBedrockInference:
         }
 
         provider = BedrockProvider(bedrock_client=mock_client)
-        response = await provider.complete(
-            system_prompt="sys", user_prompt="usr"
-        )
+        response = await provider.complete(system_prompt="sys", user_prompt="usr")
         assert response.text == "First part.\nSecond part."
 
     @pytest.mark.asyncio
@@ -461,7 +457,9 @@ class TestBedrockErrors:
         from botocore.exceptions import ReadTimeoutError
 
         mock_client = MagicMock()
-        mock_client.converse.side_effect = ReadTimeoutError(endpoint_url="https://bedrock.us-east-1.amazonaws.com")
+        mock_client.converse.side_effect = ReadTimeoutError(
+            endpoint_url="https://bedrock.us-east-1.amazonaws.com"
+        )
 
         provider = BedrockProvider(bedrock_client=mock_client)
         with pytest.raises(AIProviderTimeoutError):
@@ -472,7 +470,9 @@ class TestBedrockErrors:
         from botocore.exceptions import EndpointConnectionError
 
         mock_client = MagicMock()
-        mock_client.converse.side_effect = EndpointConnectionError(endpoint_url="https://bedrock.bad-region.amazonaws.com")
+        mock_client.converse.side_effect = EndpointConnectionError(
+            endpoint_url="https://bedrock.bad-region.amazonaws.com"
+        )
 
         provider = BedrockProvider(bedrock_client=mock_client)
         with pytest.raises(AIProviderError):
@@ -550,8 +550,14 @@ class TestProviderSwitching:
             ConfigSnapshot(
                 providers={
                     "bedrock": ProviderRecord(
-                        "bedrock", None, "us.amazon.nova-pro-v1:0",
-                        "us-west-2", None, None, True, "ready"
+                        "bedrock",
+                        None,
+                        "us.amazon.nova-pro-v1:0",
+                        "us-west-2",
+                        None,
+                        None,
+                        True,
+                        "ready",
                     )
                 },
                 default_provider="bedrock",
@@ -578,8 +584,14 @@ class TestProviderSwitching:
             ConfigSnapshot(
                 providers={
                     "bedrock": ProviderRecord(
-                        "bedrock", None, "us.anthropic.claude-haiku-3-5-20250620",
-                        "ap-southeast-1", None, None, True, "ready"
+                        "bedrock",
+                        None,
+                        "us.anthropic.claude-haiku-3-5-20250620",
+                        "ap-southeast-1",
+                        None,
+                        None,
+                        True,
+                        "ready",
                     )
                 },
                 default_provider="bedrock",
@@ -599,8 +611,14 @@ class TestProviderSwitching:
             ConfigSnapshot(
                 providers={
                     "bedrock": ProviderRecord(
-                        "bedrock", None, "us.anthropic.claude-sonnet-4-20250514",
-                        "eu-central-1", None, None, True, "ready"
+                        "bedrock",
+                        None,
+                        "us.anthropic.claude-sonnet-4-20250514",
+                        "eu-central-1",
+                        None,
+                        None,
+                        True,
+                        "ready",
                     )
                 },
                 default_provider="bedrock",

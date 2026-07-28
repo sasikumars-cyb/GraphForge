@@ -8,7 +8,7 @@ PullRequestInfo — output of create_pull_request
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 class BranchInfo(BaseModel):

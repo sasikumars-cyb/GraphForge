@@ -10,7 +10,12 @@ from typing import Any
 
 import httpx
 
-from app.ai.providers.base import BaseAnalysisProvider, LLMRequestOptions, LLMResponse, ResponseFormat
+from app.ai.providers.base import (
+    BaseAnalysisProvider,
+    LLMRequestOptions,
+    LLMResponse,
+    ResponseFormat,
+)
 from app.ai.providers.errors import (
     AIProviderAuthError,
     AIProviderError,

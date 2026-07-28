@@ -222,7 +222,9 @@ class DevelopmentAgent:
 
         logger.info(
             "development_agent_started subject_id=%s task=%.80s model=%s",
-            subject_id, task_description, context.model,
+            subject_id,
+            task_description,
+            context.model,
         )
 
         db: AsyncSession = context.extras["db"]
@@ -274,7 +276,8 @@ class DevelopmentAgent:
         topic_count = len(components_obs.data.get("kafka_topics", []))
         logger.info(
             "development_agent_step2 component_count=%d topic_count=%d",
-            component_count, topic_count,
+            component_count,
+            topic_count,
         )
 
         # ------------------------------------------------------------------
@@ -288,7 +291,8 @@ class DevelopmentAgent:
         cross_repo_count = len(deps_obs.data.get("cross_repo_edges", []))
         logger.info(
             "development_agent_step3 edge_count=%d cross_repo_couplings=%d",
-            edge_count, cross_repo_count,
+            edge_count,
+            cross_repo_count,
         )
 
         # ------------------------------------------------------------------
@@ -318,13 +322,16 @@ class DevelopmentAgent:
         # ------------------------------------------------------------------
         graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs)
         prompt_task_description = (
-            f"{task_description}\n\n{prior_stage_context}" if prior_stage_context else task_description
+            f"{task_description}\n\n{prior_stage_context}"
+            if prior_stage_context
+            else task_description
         )
         prompt = _render_prompt(prompt_task_description, graph_context_text)
 
         logger.info(
             "development_agent_synthesizing has_graph_data=%s graph_context_chars=%d",
-            has_graph_data, len(graph_context_text),
+            has_graph_data,
+            len(graph_context_text),
         )
 
         try:
@@ -440,8 +447,12 @@ class DevelopmentAgent:
         logger.info(
             "development_agent_completed subject_id=%s confidence=%.2f "
             "evidence_count=%d phases=%d components=%d risks=%d",
-            subject_id, confidence_score, len(evidence),
-            len(plan.implementation_phases), len(plan.components), len(plan.risks),
+            subject_id,
+            confidence_score,
+            len(evidence),
+            len(plan.implementation_phases),
+            len(plan.components),
+            len(plan.risks),
         )
 
         return AgentOutput(

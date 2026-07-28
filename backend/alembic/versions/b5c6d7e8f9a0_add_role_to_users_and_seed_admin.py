@@ -51,13 +51,13 @@ def upgrade() -> None:
 
     if get_settings().environment != "production":
         op.execute(
-            sa.text(
-                """
-                INSERT INTO users (id, email, full_name, hashed_password, auth_provider, role, is_active)
+            sa.text("""
+                INSERT INTO users (
+                    id, email, full_name, hashed_password, auth_provider, role, is_active
+                )
                 VALUES (:id, :email, :full_name, :hashed_password, 'local', 'admin', true)
                 ON CONFLICT (email) DO UPDATE SET role = 'admin'
-                """
-            ).bindparams(
+                """).bindparams(
                 sa.bindparam("id", value=uuid.uuid4(), type_=sa.Uuid()),
                 email=_ADMIN_EMAIL,
                 full_name=_ADMIN_NAME,

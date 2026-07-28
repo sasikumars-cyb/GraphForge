@@ -11,8 +11,10 @@ function renderBanner(props: Partial<Parameters<typeof ApprovalGateBanner>[0]> =
         completedStage="planning"
         nextStage="development"
         workflowTitle="Implement JWT auth"
+        workflowId="wf-1"
         isSubmitting={false}
         onApprove={vi.fn()}
+        onReject={vi.fn()}
         {...props}
       />
     </MemoryRouter>,
@@ -34,30 +36,31 @@ describe("ApprovalGateBanner", () => {
     expect(onApprove).toHaveBeenCalledTimes(1);
   });
 
-  it("does not call any API — Reject is a local, non-mutating UI state", async () => {
+  it("calls onReject (a real, persisted rejection — see the component's own docstring) when Reject is clicked", async () => {
     const user = userEvent.setup();
     const onApprove = vi.fn();
-    renderBanner({ onApprove });
+    const onReject = vi.fn();
+    renderBanner({ onApprove, onReject });
     await user.click(screen.getByRole("button", { name: "Reject" }));
+    expect(onReject).toHaveBeenCalledTimes(1);
     expect(onApprove).not.toHaveBeenCalled();
-    expect(screen.getByText(/left at/)).toBeInTheDocument();
   });
 
   it("disables all actions while submitting", () => {
     renderBanner({ isSubmitting: true });
     expect(screen.getByRole("button", { name: "Reject" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Edit Workflow" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Refine" })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Starting…/ })).toBeDisabled();
   });
 });
 
 describe("ApprovalGateBanner — failure variant", () => {
-  it("shows Retry Stage and Edit Workflow instead of Approve/Reject", () => {
+  it("shows Retry Stage and Refine instead of Approve/Reject", () => {
     renderBanner({ failure: { stage: "testing", errorMessage: "boom" } });
     expect(screen.getByText(/Testing/)).toBeInTheDocument();
     expect(screen.getByText(/failed/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /Retry Stage/ })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Edit Workflow" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refine" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Reject" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Approve/ })).not.toBeInTheDocument();
   });

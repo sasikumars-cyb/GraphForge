@@ -60,7 +60,5 @@ async def generate_title(objective: str, *, model: str | None = None) -> str:
             return title
         logger.warning("title_generation_empty_response falling back to truncated objective")
     except AppError as exc:
-        logger.warning(
-            "title_generation_failed error=%s falling back to truncated objective", exc
-        )
+        logger.warning("title_generation_failed error=%s falling back to truncated objective", exc)
     return _fallback_title(objective)

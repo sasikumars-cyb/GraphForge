@@ -154,7 +154,9 @@ class Settings(BaseSettings):
     # REST, or (for Confluence) stays exactly as non-functional as before.
     # Override via env if you have a self-hosted/compatible MCP server.
     github_mcp_default_server_url: str = Field(default="https://api.githubcopilot.com/mcp/")
-    jira_mcp_default_server_url: str | None = Field(default="https://mcp.atlassian.com/v1/mcp/authv2")
+    jira_mcp_default_server_url: str | None = Field(
+        default="https://mcp.atlassian.com/v1/mcp/authv2"
+    )
     confluence_mcp_default_server_url: str | None = Field(
         default="https://mcp.atlassian.com/v1/mcp/authv2"
     )
@@ -172,7 +174,8 @@ class Settings(BaseSettings):
         """
         if self.environment == "production":
             offending = [
-                field for field, insecure_value in _INSECURE_DEFAULTS.items()
+                field
+                for field, insecure_value in _INSECURE_DEFAULTS.items()
                 if getattr(self, field) == insecure_value
             ]
             if offending:

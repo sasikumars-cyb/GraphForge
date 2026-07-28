@@ -21,8 +21,13 @@ from app.ai.config import store
 from app.ai.config.resolver import resolve
 from app.ai.config.usage import all_usage
 from app.ai.config.validation import validate_provider
-from app.ai.providers.registry import all_providers, get_provider_spec, require_provider_spec
-from app.api.v1.dependencies import get_current_user, require_admin
+from app.ai.providers.registry import (
+    ProviderSpec,
+    all_providers,
+    get_provider_spec,
+    require_provider_spec,
+)
+from app.api.v1.dependencies import require_admin
 from app.core.crypto import encrypt_secret
 from app.core.exceptions import AppError, NotFoundError
 from app.database.session import get_db_session
@@ -73,7 +78,7 @@ async def _reload(db: AsyncSession) -> None:
     await store.refresh(db)
 
 
-def _build_provider_info(spec, config: AIProviderConfig | None) -> ProviderInfo:
+def _build_provider_info(spec: ProviderSpec, config: AIProviderConfig | None) -> ProviderInfo:
     return ProviderInfo(
         key=spec.key,
         label=spec.label,

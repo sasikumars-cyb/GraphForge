@@ -211,7 +211,15 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
     }
 
     return {
-      nodes: flowNodes.map((n) => {
+      // Explicit `Node`/`Edge` return types below (not left to inference):
+      // an unannotated arrow function returning `{...n, zIndex: <number>}`
+      // infers `zIndex` as always-present, while `Node.zIndex` is optional
+      // — a strictly *more specific* value than the field allows, but
+      // still a different structural shape than `Node` itself, which is
+      // what <ReactFlow nodes={...} onInit={...}> needs to line up with
+      // the plain `ReactFlowInstance` (`Node`/`Edge` defaults) `onInit` is
+      // typed against.
+      nodes: flowNodes.map((n): Node => {
         const isSel = n.id === selectedId;
         const isHov = n.id === hoveredId && !selectedId;
         const isIn = incoming.has(n.id);
@@ -255,7 +263,7 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
           },
         };
       }),
-      edges: flowEdges.map((e) => {
+      edges: flowEdges.map((e): Edge => {
         const isIn = e.target === selectedId;
         const isOut = e.source === selectedId;
         const color = isIn ? "#34d399" : isOut ? "#38bdf8" : null;

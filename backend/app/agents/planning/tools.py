@@ -1,8 +1,8 @@
 """Planning Agent tools — own minimal tool-calling code.
 
-NOT shared with the Review Agent's ToolRegistry. These tools are specific to the planning domain: gathering a
-high-level architecture overview from the Knowledge Graph to ground an
-implementation plan.
+NOT shared with the Review Agent's ToolRegistry. These tools are specific to
+the planning domain: gathering a high-level architecture overview from the
+Knowledge Graph to ground an implementation plan.
 
 Each tool wraps one or more existing deterministic graph-read methods and
 returns an Observation describing what it found. No write operations here —
@@ -101,7 +101,8 @@ class GetIndexedRepositoriesTool:
 
             logger.debug(
                 "planning_tool_get_indexed_repos indexed=%d total=%d",
-                len(indexed), len(all_repos),
+                len(indexed),
+                len(all_repos),
             )
 
             return PlanningObservation(
@@ -110,9 +111,7 @@ class GetIndexedRepositoriesTool:
                 data={"indexed_repositories": indexed, "total_tracked": len(all_repos)},
             )
         except Exception as exc:
-            logger.warning(
-                "planning_tool_get_indexed_repos_failed error=%s", str(exc)
-            )
+            logger.warning("planning_tool_get_indexed_repos_failed error=%s", str(exc))
             return PlanningObservation(
                 tool_name=self.name,
                 summary=f"Failed to retrieve repositories: {exc}",
@@ -140,9 +139,7 @@ class TraverseArchitectureGraphTool:
     def __init__(self, graph_repository: IGraphRepository) -> None:
         self._graph_repository = graph_repository
 
-    async def execute(
-        self, repositories: list[dict[str, str]]
-    ) -> PlanningObservation:
+    async def execute(self, repositories: list[dict[str, str]]) -> PlanningObservation:
         if not repositories:
             return PlanningObservation(
                 tool_name=self.name,
@@ -159,37 +156,38 @@ class TraverseArchitectureGraphTool:
             repo_name = repo["name"]
             try:
                 # Components: Controllers, Services, FeignClients
-                components = await self._graph_repository.get_nodes_by_label(
-                    repo_id, "Component"
-                )
+                components = await self._graph_repository.get_nodes_by_label(repo_id, "Component")
                 for node in components:
-                    all_components.append({
-                        "id": node.id,
-                        "name": node.properties.get("name", node.id),
-                        "type": next(
-                            (l for l in node.labels if l != "Component"),
-                            "Component",
-                        ),
-                        "repository": repo_name,
-                        "file_path": node.properties.get("file_path", ""),
-                    })
+                    all_components.append(
+                        {
+                            "id": node.id,
+                            "name": node.properties.get("name", node.id),
+                            "type": next(
+                                (label for label in node.labels if label != "Component"),
+                                "Component",
+                            ),
+                            "repository": repo_name,
+                            "file_path": node.properties.get("file_path", ""),
+                        }
+                    )
 
                 # Kafka topics
-                topics = await self._graph_repository.get_nodes_by_label(
-                    repo_id, "KafkaTopic"
-                )
+                topics = await self._graph_repository.get_nodes_by_label(repo_id, "KafkaTopic")
                 for node in topics:
-                    all_topics.append({
-                        "id": node.id,
-                        "name": node.properties.get("name", node.id),
-                        "repository": repo_name,
-                    })
+                    all_topics.append(
+                        {
+                            "id": node.id,
+                            "name": node.properties.get("name", node.id),
+                            "repository": repo_name,
+                        }
+                    )
 
             except Exception as exc:
                 errors.append(f"{repo_name}: {exc}")
                 logger.warning(
                     "planning_tool_traverse_failed_for_repo repo=%s error=%s",
-                    repo_name, str(exc),
+                    repo_name,
+                    str(exc),
                 )
 
         # Kafka topic extraction only exists for Java/Spring Boot
@@ -199,20 +197,29 @@ class TraverseArchitectureGraphTool:
         # "0 Kafka topics" as a finding would misrepresent an unimplemented
         # detector as a real absence, so the clause only appears when
         # there's something to report.
-        found_clause = f"found {len(all_components)} component{'s' if len(all_components) != 1 else ''}"
+        found_clause = (
+            f"found {len(all_components)} component{'s' if len(all_components) != 1 else ''}"
+        )
         if all_topics:
-            found_clause += f" and {len(all_topics)} Kafka topic{'s' if len(all_topics) != 1 else ''}"
+            found_clause += (
+                f" and {len(all_topics)} Kafka topic{'s' if len(all_topics) != 1 else ''}"
+            )
+        repo_word = "y" if len(repositories) == 1 else "ies"
         summary_parts = [
-            f"Graph traversal across {len(repositories)} repositor{'y' if len(repositories) == 1 else 'ies'}",
+            f"Graph traversal across {len(repositories)} repositor{repo_word}",
             found_clause + ".",
         ]
         if errors:
-            summary_parts.append(f"{len(errors)} repositor{'y' if len(errors) == 1 else 'ies'} failed.")
+            summary_parts.append(
+                f"{len(errors)} repositor{'y' if len(errors) == 1 else 'ies'} failed."
+            )
         summary = " ".join(summary_parts)
 
         logger.info(
             "planning_tool_traverse_architecture_graph components=%d topics=%d repos=%d",
-            len(all_components), len(all_topics), len(repositories),
+            len(all_components),
+            len(all_topics),
+            len(repositories),
         )
 
         # Succeeded only if at least one repository was traversed without error.
@@ -366,9 +373,7 @@ def format_graph_context(
     parts: list[str] = []
     terms = relevance_terms or []
 
-    indexed_repos: list[dict[str, str]] = repos_observation.data.get(
-        "indexed_repositories", []
-    )
+    indexed_repos: list[dict[str, str]] = repos_observation.data.get("indexed_repositories", [])
     if not indexed_repos:
         return "No repositories have been indexed into the Knowledge Graph yet."
 
@@ -400,8 +405,7 @@ def format_graph_context(
         # does not assume these are the only repositories that exist.
         plural = "y" if omitted == 1 else "ies"
         header += (
-            f" ({omitted} further indexed repositor{plural} "
-            "less relevant to these capabilities)"
+            f" ({omitted} further indexed repositor{plural} " "less relevant to these capabilities)"
         )
     parts.append(header)
 

@@ -18,6 +18,7 @@ someone configures a provider in the UI.
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -93,12 +94,14 @@ class AISettings(Base):
     # {"planning": {"provider": "anthropic", "model": "...", "temperature": 0.1}, ...}
     # JSONB rather than columns so adding a stage or an overridable parameter
     # never needs a migration.
-    stage_overrides: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    stage_overrides: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict[str, Any], nullable=False
+    )
 
     # Ordered provider keys tried after a *recoverable* failure. Empty means
     # fallback is disabled, which is the default — a run must not silently
     # cross vendors unless an operator asked for it.
-    fallback_order: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
+    fallback_order: Mapped[list[Any]] = mapped_column(JSONB, default=list[Any], nullable=False)
     fallback_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(

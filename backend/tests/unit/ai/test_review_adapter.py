@@ -32,7 +32,6 @@ from app.ai.agent.models import Observation, ReasoningStep
 from app.ai.schemas.analysis_result import AIAnalysisResult, ConfidenceScore
 from app.core.exceptions import NotFoundError
 
-
 # ---------------------------------------------------------------------------
 # Manifest
 # ---------------------------------------------------------------------------
@@ -72,18 +71,27 @@ def test_resolve_pr_subject_uses_provided_display_name() -> None:
 
 def test_extract_pr_uuid_valid() -> None:
     pr_id = uuid.uuid4()
-    subject = Subject(subject_id=f"pr:{pr_id}", subject_type="pull_request", graph_node_ids=[], display_name="")
+    subject = Subject(
+        subject_id=f"pr:{pr_id}", subject_type="pull_request", graph_node_ids=[], display_name=""
+    )
     assert _extract_pr_uuid(subject) == pr_id
 
 
 def test_extract_pr_uuid_missing_prefix_raises() -> None:
-    subject = Subject(subject_id="not-a-pr-ref", subject_type="pull_request", graph_node_ids=[], display_name="")
+    subject = Subject(
+        subject_id="not-a-pr-ref", subject_type="pull_request", graph_node_ids=[], display_name=""
+    )
     with pytest.raises(NotFoundError, match="expects subject_id 'pr:<uuid>'"):
         _extract_pr_uuid(subject)
 
 
 def test_extract_pr_uuid_malformed_uuid_raises() -> None:
-    subject = Subject(subject_id="pr:not-a-valid-uuid", subject_type="pull_request", graph_node_ids=[], display_name="")
+    subject = Subject(
+        subject_id="pr:not-a-valid-uuid",
+        subject_type="pull_request",
+        graph_node_ids=[],
+        display_name="",
+    )
     with pytest.raises(NotFoundError, match="does not contain a valid UUID"):
         _extract_pr_uuid(subject)
 
@@ -93,7 +101,9 @@ def test_extract_pr_uuid_malformed_uuid_raises() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_result(reasoning_log: list[ReasoningStep], confidence_score: float = 0.8) -> InvestigationResult:
+def _make_result(
+    reasoning_log: list[ReasoningStep], confidence_score: float = 0.8
+) -> InvestigationResult:
     analysis = AIAnalysisResult(
         executive_summary="A change was analyzed.",
         confidence=ConfidenceScore(score=confidence_score, reasoning="Grounded in real diff data."),
@@ -104,9 +114,18 @@ def _make_result(reasoning_log: list[ReasoningStep], confidence_score: float = 0
 
 def test_map_evidence_skips_steps_with_no_tool_selected() -> None:
     """A skip decision is a recorded reasoning step, not fabricated evidence."""
-    result = _make_result([
-        ReasoningStep(step_number=1, goal="g", plan="p", tool_selected=None, observation=None, decision="skip"),
-    ])
+    result = _make_result(
+        [
+            ReasoningStep(
+                step_number=1,
+                goal="g",
+                plan="p",
+                tool_selected=None,
+                observation=None,
+                decision="skip",
+            ),
+        ]
+    )
     evidence = _map_evidence(result)
 
     # Only the trailing llm_reasoning entry should be present — the skip
@@ -116,14 +135,20 @@ def test_map_evidence_skips_steps_with_no_tool_selected() -> None:
 
 
 def test_map_evidence_graph_read_tools_map_to_graph_traversal() -> None:
-    result = _make_result([
-        ReasoningStep(
-            step_number=1, goal="g", plan="p",
-            tool_selected="read_dependency_graph",
-            observation=Observation(tool_name="read_dependency_graph", summary="Found 3 dependents."),
-            decision="proceed",
-        ),
-    ])
+    result = _make_result(
+        [
+            ReasoningStep(
+                step_number=1,
+                goal="g",
+                plan="p",
+                tool_selected="read_dependency_graph",
+                observation=Observation(
+                    tool_name="read_dependency_graph", summary="Found 3 dependents."
+                ),
+                decision="proceed",
+            ),
+        ]
+    )
     evidence = _map_evidence(result)
 
     graph_entries = [e for e in evidence if e.kind == "graph_traversal"]
@@ -133,14 +158,20 @@ def test_map_evidence_graph_read_tools_map_to_graph_traversal() -> None:
 
 
 def test_map_evidence_other_tools_map_to_tool_call() -> None:
-    result = _make_result([
-        ReasoningStep(
-            step_number=1, goal="g", plan="p",
-            tool_selected="get_recent_file_authors",
-            observation=Observation(tool_name="get_recent_file_authors", summary="Found 2 authors."),
-            decision="proceed",
-        ),
-    ])
+    result = _make_result(
+        [
+            ReasoningStep(
+                step_number=1,
+                goal="g",
+                plan="p",
+                tool_selected="get_recent_file_authors",
+                observation=Observation(
+                    tool_name="get_recent_file_authors", summary="Found 2 authors."
+                ),
+                decision="proceed",
+            ),
+        ]
+    )
     evidence = _map_evidence(result)
 
     tool_entries = [e for e in evidence if e.kind == "tool_call"]
@@ -149,14 +180,18 @@ def test_map_evidence_other_tools_map_to_tool_call() -> None:
 
 
 def test_map_evidence_missing_observation_falls_back_to_generic_summary() -> None:
-    result = _make_result([
-        ReasoningStep(
-            step_number=1, goal="g", plan="p",
-            tool_selected="get_recent_file_authors",
-            observation=None,
-            decision="proceed",
-        ),
-    ])
+    result = _make_result(
+        [
+            ReasoningStep(
+                step_number=1,
+                goal="g",
+                plan="p",
+                tool_selected="get_recent_file_authors",
+                observation=None,
+                decision="proceed",
+            ),
+        ]
+    )
     evidence = _map_evidence(result)
     tool_entries = [e for e in evidence if e.kind == "tool_call"]
     assert "no observation recorded" in tool_entries[0].summary
@@ -166,7 +201,9 @@ def test_map_evidence_llm_synthesis_always_appended_last() -> None:
     result = _make_result(
         [
             ReasoningStep(
-                step_number=1, goal="g", plan="p",
+                step_number=1,
+                goal="g",
+                plan="p",
                 tool_selected="read_dependency_graph",
                 observation=Observation(tool_name="read_dependency_graph", summary="ok"),
                 decision="proceed",
@@ -195,9 +232,13 @@ async def test_review_agent_adapter_run_builds_correct_agent_output() -> None:
     fake_result = _make_result(
         [
             ReasoningStep(
-                step_number=1, goal="review", plan="check dependents",
+                step_number=1,
+                goal="review",
+                plan="check dependents",
                 tool_selected="traverse_dependency_graph",
-                observation=Observation(tool_name="traverse_dependency_graph", summary="2 downstream services."),
+                observation=Observation(
+                    tool_name="traverse_dependency_graph", summary="2 downstream services."
+                ),
                 decision="proceed",
             ),
         ],
@@ -211,9 +252,13 @@ async def test_review_agent_adapter_run_builds_correct_agent_output() -> None:
         patch("app.agents.review_adapter.get_driver", return_value=MagicMock()),
         patch("app.agents.review_adapter.Neo4jGraphRepository", return_value=MagicMock()),
         patch("app.agents.review_adapter.Neo4jImpactGraphReader", return_value=MagicMock()),
-        patch("app.agents.review_adapter.create_version_control_provider", return_value=MagicMock()),
+        patch(
+            "app.agents.review_adapter.create_version_control_provider", return_value=MagicMock()
+        ),
         patch("app.agents.review_adapter.create_llm_provider", return_value=MagicMock()),
-        patch("app.agents.review_adapter.InvestigationAgent", return_value=mock_investigation_agent),
+        patch(
+            "app.agents.review_adapter.InvestigationAgent", return_value=mock_investigation_agent
+        ),
     ):
         adapter = ReviewAgentAdapter()
         output = await adapter.run(context)
@@ -235,7 +280,9 @@ async def test_review_agent_adapter_run_builds_correct_agent_output() -> None:
 @pytest.mark.asyncio
 async def test_review_agent_adapter_run_raises_for_malformed_subject() -> None:
     """A non-PR subject must raise, never silently produce a wrong result."""
-    subject = Subject(subject_id="freetext:abc", subject_type="freetext", graph_node_ids=[], display_name="")
+    subject = Subject(
+        subject_id="freetext:abc", subject_type="freetext", graph_node_ids=[], display_name=""
+    )
     context = AgentContext(subject=subject, goal="review_pr", extras={"db": AsyncMock()})
 
     adapter = ReviewAgentAdapter()

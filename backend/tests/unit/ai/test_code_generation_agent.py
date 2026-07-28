@@ -27,7 +27,6 @@ from app.agents.code_generation.agent import (
 from app.agents.code_generation.manifest import CODE_GENERATION_MANIFEST
 from app.agents.code_generation.schemas import GeneratedCodeResult, GeneratedFile
 
-
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------

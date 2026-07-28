@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import TYPE_CHECKING
+from collections.abc import Callable
+from typing import TYPE_CHECKING, Any
 
-from app.tools.interfaces import ToolCategory
+from app.tools.interfaces import ITool, ToolCategory
 from app.tools.registry import ToolSpec, get_tool_registry
 
 if TYPE_CHECKING:
@@ -115,8 +116,11 @@ def register_all_tools() -> None:
             # Integrations only ever supplies one, per whichever transport
             # the Knowledge Connection was created with.
             auth_fields=[
-                "jira_base_url", "jira_email", "jira_api_token",
-                "jira_mcp_server_url", "jira_mcp_api_key",
+                "jira_base_url",
+                "jira_email",
+                "jira_api_token",
+                "jira_mcp_server_url",
+                "jira_mcp_api_key",
             ],
             default_enabled=False,
             icon="📋",
@@ -134,9 +138,7 @@ def register_all_tools() -> None:
         ToolSpec(
             tool_id="confluence",
             display_name="Confluence",
-            description=(
-                "Fetches design documents, ADRs, and runbooks from Confluence."
-            ),
+            description=("Fetches design documents, ADRs, and runbooks from Confluence."),
             category=ToolCategory.DOCUMENTATION,
             capabilities=["design_documents", "adrs", "runbooks", "documentation"],
             factory=lambda cfg: ConfluenceTool(cfg),
@@ -145,8 +147,11 @@ def register_all_tools() -> None:
             # path yet — search needs a query DSL (CQL) this tool doesn't
             # build. MCP is the only working transport today.
             auth_fields=[
-                "confluence_base_url", "confluence_email", "confluence_api_token",
-                "confluence_mcp_server_url", "confluence_mcp_api_key",
+                "confluence_base_url",
+                "confluence_email",
+                "confluence_api_token",
+                "confluence_mcp_server_url",
+                "confluence_mcp_api_key",
             ],
             default_enabled=False,
             icon="📚",
@@ -184,24 +189,36 @@ def register_all_tools() -> None:
 # present). Adding a new MCP-backed source is: one more entry here, plus
 # whatever the tool implementation itself needs.
 _KNOWLEDGE_CONNECTION_TOOL_MAP: dict[tuple[str, str], tuple[str, dict[str, str]]] = {
-    ("jira", "rest"): ("jira", {
-        "base_url": "jira_base_url",
-        "email": "jira_email",
-        "api_token": "jira_api_token",
-    }),
-    ("jira", "mcp"): ("jira", {
-        "server_url": "jira_mcp_server_url",
-        "api_key": "jira_mcp_api_key",
-    }),
-    ("confluence", "rest"): ("confluence", {
-        "base_url": "confluence_base_url",
-        "email": "confluence_email",
-        "api_token": "confluence_api_token",
-    }),
-    ("confluence", "mcp"): ("confluence", {
-        "server_url": "confluence_mcp_server_url",
-        "api_key": "confluence_mcp_api_key",
-    }),
+    ("jira", "rest"): (
+        "jira",
+        {
+            "base_url": "jira_base_url",
+            "email": "jira_email",
+            "api_token": "jira_api_token",
+        },
+    ),
+    ("jira", "mcp"): (
+        "jira",
+        {
+            "server_url": "jira_mcp_server_url",
+            "api_key": "jira_mcp_api_key",
+        },
+    ),
+    ("confluence", "rest"): (
+        "confluence",
+        {
+            "base_url": "confluence_base_url",
+            "email": "confluence_email",
+            "api_token": "confluence_api_token",
+        },
+    ),
+    ("confluence", "mcp"): (
+        "confluence",
+        {
+            "server_url": "confluence_mcp_server_url",
+            "api_key": "confluence_mcp_api_key",
+        },
+    ),
 }
 
 # Auto-wires a REST connection's own credential into the same tool's MCP
@@ -220,8 +237,8 @@ _MCP_AUTO_WIRE: dict[str, tuple[str, str, str]] = {
 
 
 def _build_tool_config(
-    source_type: str, transport: str, config: dict, credentials: dict
-) -> tuple[str, dict] | None:
+    source_type: str, transport: str, config: dict[str, Any], credentials: dict[str, Any]
+) -> tuple[str, dict[str, Any]] | None:
     """Translate one Knowledge Connection's generic fields into a tool's own
     config dict. Returns None when there's no matching tool, or the
     connection's required fields aren't all present yet. Shared by the
@@ -235,12 +252,16 @@ def _build_tool_config(
 
     merged = {**config, **credentials}
     tool_config = {
-        tool_key: merged[conn_key] for conn_key, tool_key in field_map.items() if merged.get(conn_key)
+        tool_key: merged[conn_key]
+        for conn_key, tool_key in field_map.items()
+        if merged.get(conn_key)
     }
     if len(tool_config) != len(field_map):
         logger.info(
             "tool_sync_incomplete_config tool=%s source_type=%s transport=%s",
-            tool_id, source_type, transport,
+            tool_id,
+            source_type,
+            transport,
         )
         return None
 
@@ -269,7 +290,7 @@ def _build_tool_config(
 
 
 def sync_knowledge_connection_to_tool(
-    source_type: str, transport: str, config: dict, credentials: dict
+    source_type: str, transport: str, config: dict[str, Any], credentials: dict[str, Any]
 ) -> None:
     """Activate the Tool Registry entry matching a Knowledge Connection, if any.
 
@@ -288,10 +309,10 @@ def sync_knowledge_connection_to_tool(
     )
 
 
-_TOOL_FACTORIES: dict[str, "Callable[[dict], object]"] = {}
+_TOOL_FACTORIES: dict[str, Callable[[dict[str, Any]], ITool]] = {}
 
 
-def _tool_factories() -> dict[str, "Callable[[dict], object]"]:
+def _tool_factories() -> dict[str, Callable[[dict[str, Any]], ITool]]:
     """Lazily built tool_id -> constructor map, for the ad-hoc path below.
     Local imports on first use, same reasoning as register_all_tools()."""
     if not _TOOL_FACTORIES:
@@ -304,8 +325,8 @@ def _tool_factories() -> dict[str, "Callable[[dict], object]"]:
 
 
 def build_tool_for_connection(
-    source_type: str, transport: str, config: dict, credentials: dict
-) -> object | None:
+    source_type: str, transport: str, config: dict[str, Any], credentials: dict[str, Any]
+) -> ITool | None:
     """Construct a fresh, throwaway tool instance for exactly this
     connection's own credentials — not the Tool Registry singleton.
 
@@ -325,7 +346,7 @@ def build_tool_for_connection(
     return factory(tool_config)
 
 
-async def sync_all_knowledge_connections_to_tools(db: "AsyncSession") -> None:
+async def sync_all_knowledge_connections_to_tools(db: AsyncSession) -> None:
     """Startup backfill: activate tools for Knowledge Connections created in
     an earlier process (before this sync existed, or before a restart)."""
     from sqlalchemy import select
@@ -335,14 +356,17 @@ async def sync_all_knowledge_connections_to_tools(db: "AsyncSession") -> None:
 
     rows = (await db.execute(select(KnowledgeConnection))).scalars().all()
     for row in rows:
-        credentials: dict = {}
+        credentials: dict[str, Any] = {}
         if row.encrypted_credentials:
             try:
                 credentials = json.loads(decrypt_secret(row.encrypted_credentials))
             except Exception:
                 logger.warning(
                     "tool_sync_decrypt_failed connection_id=%s source_type=%s",
-                    row.id, row.source_type,
+                    row.id,
+                    row.source_type,
                 )
                 continue
-        sync_knowledge_connection_to_tool(row.source_type, row.transport, row.config or {}, credentials)
+        sync_knowledge_connection_to_tool(
+            row.source_type, row.transport, row.config or {}, credentials
+        )

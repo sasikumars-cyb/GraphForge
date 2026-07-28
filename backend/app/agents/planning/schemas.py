@@ -6,6 +6,8 @@ the planning-specific fields don't bleed into the generic contract.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -166,7 +168,7 @@ class PlanningResult(BaseModel):
     risk_considerations: list[str] = Field(default_factory=list)
     graph_context_used: bool = False
     repositories_consulted: list[str] = Field(default_factory=list)
-    blueprint: dict | None = Field(default=None)
+    blueprint: dict[str, Any] | None = Field(default=None)
     prompt_version: str = "1.0"
 
     # Deterministic warnings the agent code produced itself (entity/tenant

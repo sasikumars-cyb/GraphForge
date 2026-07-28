@@ -16,6 +16,8 @@ from app.agents.code_generation.agent import CodeGenerationAgent
 from app.agents.code_generation.manifest import CODE_GENERATION_MANIFEST
 from app.agents.development.agent import DevelopmentAgent
 from app.agents.development.manifest import DEVELOPMENT_MANIFEST
+from app.agents.engineering_review.agent import EngineeringReviewAgent
+from app.agents.engineering_review.manifest import ENGINEERING_REVIEW_MANIFEST
 from app.agents.git_ops.commit_changes_agent import CommitChangesAgent
 from app.agents.git_ops.create_branch_agent import CreateBranchAgent
 from app.agents.git_ops.create_pull_request_agent import CreatePullRequestAgent
@@ -26,16 +28,14 @@ from app.agents.git_ops.manifests import (
     RUN_TESTS_MANIFEST,
 )
 from app.agents.git_ops.run_tests_agent import TestRunnerAgent
-from app.agents.engineering_review.agent import EngineeringReviewAgent
-from app.agents.engineering_review.manifest import ENGINEERING_REVIEW_MANIFEST
 from app.agents.planning.agent import PlanningAgent
-from app.agents.testing.agent import TestPlanningAgent
-from app.agents.testing.manifest import TESTING_MANIFEST
-
-logger = logging.getLogger(__name__)
 from app.agents.planning.manifest import PLANNING_MANIFEST
 from app.agents.review_adapter import REVIEW_MANIFEST, ReviewAgentAdapter
+from app.agents.testing.agent import TestPlanningAgent
+from app.agents.testing.manifest import TESTING_MANIFEST
 from app.orchestrator.registry import global_registry
+
+logger = logging.getLogger(__name__)
 
 
 def register_agents() -> None:

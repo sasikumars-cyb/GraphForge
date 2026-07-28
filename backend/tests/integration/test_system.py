@@ -7,7 +7,6 @@ from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.indexing_job import IndexingJob
-from app.models.repository import Repository
 
 pytestmark = pytest.mark.asyncio
 

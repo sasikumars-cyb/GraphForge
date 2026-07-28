@@ -16,6 +16,7 @@ import json
 import time
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, Depends, status
 from sqlalchemy import select
@@ -25,7 +26,7 @@ from app.api.v1.dependencies import require_admin
 from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.exceptions import NotFoundError
 from app.database.session import get_db_session
-from app.knowledge.registry import all_sources, require_source
+from app.knowledge.registry import KnowledgeSourceSpec, all_sources, require_source
 from app.models.github_connection import GitHubConnection
 from app.models.knowledge_connection import KnowledgeConnection
 from app.models.user import User
@@ -61,7 +62,7 @@ _HEALTH_DETAIL = {
 # ---------------------------------------------------------------------------
 
 
-def _source_to_info(spec, connection_count: int) -> KnowledgeSourceInfo:
+def _source_to_info(spec: KnowledgeSourceSpec, connection_count: int) -> KnowledgeSourceInfo:
     return KnowledgeSourceInfo(
         key=spec.key,
         label=spec.label,
@@ -145,7 +146,9 @@ async def overview(
     connections = [_row_to_info(r) for r in rows]
 
     github_connection = (
-        await db.execute(select(GitHubConnection).where(GitHubConnection.user_id == current_user.id))
+        await db.execute(
+            select(GitHubConnection).where(GitHubConnection.user_id == current_user.id)
+        )
     ).scalar_one_or_none()
     if github_connection is not None:
         connections.append(_github_connection_to_info(github_connection))
@@ -185,7 +188,9 @@ async def list_connections(
 
     if source_type is None or source_type == "github":
         github_connection = (
-            await db.execute(select(GitHubConnection).where(GitHubConnection.user_id == current_user.id))
+            await db.execute(
+                select(GitHubConnection).where(GitHubConnection.user_id == current_user.id)
+            )
         ).scalar_one_or_none()
         if github_connection is not None:
             connections.append(_github_connection_to_info(github_connection))
@@ -282,7 +287,7 @@ async def update_connection(
     await db.commit()
     await db.refresh(row)
 
-    credentials: dict = {}
+    credentials: dict[str, Any] = {}
     if row.encrypted_credentials:
         try:
             credentials = json.loads(decrypt_secret(row.encrypted_credentials))
@@ -346,14 +351,17 @@ async def check_health(
         github_row = await db.get(GitHubConnection, connection_id)
         if github_row is not None and github_row.user_id == current_user.id:
             return ConnectionHealthResponse(
-                id=github_row.id, status="healthy", status_detail="Connected via OAuth.", latency_ms=None
+                id=github_row.id,
+                status="healthy",
+                status_detail="Connected via OAuth.",
+                latency_ms=None,
             )
         raise NotFoundError("Connection not found.")
 
     now = datetime.now(UTC)
     start = time.monotonic()
 
-    credentials: dict = {}
+    credentials: dict[str, Any] = {}
     if row.encrypted_credentials:
         credentials = json.loads(decrypt_secret(row.encrypted_credentials))
 
@@ -367,13 +375,17 @@ async def check_health(
             row.status_detail = "Credentials not provided."
         else:
             row.status = "healthy"
-            row.status_detail = "Configuration valid (not live-checked — no probe implemented for this source)."
+            row.status_detail = (
+                "Configuration valid (not live-checked — no probe implemented for this source)."
+            )
             row.last_success_at = now
             row.latency_ms = 0
     else:
         health = await tool.health_check()
         row.status = health.value
-        row.status_detail = _HEALTH_DETAIL.get(health.value, health.value.replace("_", " ").capitalize())
+        row.status_detail = _HEALTH_DETAIL.get(
+            health.value, health.value.replace("_", " ").capitalize()
+        )
         row.latency_ms = int((time.monotonic() - start) * 1000)
         if health.value == "healthy":
             row.last_success_at = now

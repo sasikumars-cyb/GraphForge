@@ -274,8 +274,6 @@ async def test_oauth_state_token_is_rejected_as_bearer_auth(
     url = connect_response.json()["authorization_url"]
     state = url.split("state=")[1].split("&")[0]
 
-    response = await db_client.get(
-        "/api/v1/auth/me", headers={"Authorization": f"Bearer {state}"}
-    )
+    response = await db_client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {state}"})
 
     assert response.status_code == 401

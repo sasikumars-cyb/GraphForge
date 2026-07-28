@@ -84,7 +84,7 @@ class ToolExecutor:
             )
             return result
 
-        except asyncio.TimeoutError:
+        except TimeoutError:
             elapsed = (time.monotonic() - start) * 1000
             logger.warning(
                 "tool_executor_timeout tool=%s timeout_secs=%.1f", tool_id, self._timeout
@@ -99,9 +99,7 @@ class ToolExecutor:
 
         except Exception as exc:
             elapsed = (time.monotonic() - start) * 1000
-            logger.error(
-                "tool_executor_failed tool=%s error=%s", tool_id, exc, exc_info=True
-            )
+            logger.error("tool_executor_failed tool=%s error=%s", tool_id, exc, exc_info=True)
             return ToolResult(
                 tool_id=tool_id,
                 tool_name=display_name,

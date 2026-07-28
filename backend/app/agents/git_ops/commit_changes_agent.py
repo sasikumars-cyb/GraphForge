@@ -42,9 +42,7 @@ class CommitChangesAgent:
         subject_id = context.subject.subject_id
 
         if workflow is None:
-            raise CommitChangesExecutionError(
-                "commit_changes requires a workflow context."
-            )
+            raise CommitChangesExecutionError("commit_changes requires a workflow context.")
 
         # --- Read prior stage results ---
         code_result = get_stage_result(workflow, "generate_code")
@@ -80,9 +78,7 @@ class CommitChangesAgent:
         # --- Get access token ---
         user_id = context.extras.get("user_id")
         if user_id is None:
-            raise CommitChangesExecutionError(
-                "commit_changes requires user_id in context extras."
-            )
+            raise CommitChangesExecutionError("commit_changes requires user_id in context extras.")
         access_token = await get_decrypted_access_token(db, user_id)
         if access_token is None:
             raise CommitChangesExecutionError(
@@ -101,16 +97,19 @@ class CommitChangesAgent:
             if existing_message == commit_message:
                 logger.info(
                     "commit_changes_idempotent branch=%s commit=%s already applied",
-                    branch_name, head_sha[:8],
+                    branch_name,
+                    head_sha[:8],
                 )
-                evidence.append(Evidence(
-                    kind="tool_call",
-                    reference="github_get_commit",
-                    summary=(
-                        f"Branch '{branch_name}' HEAD ({head_sha[:8]}) already has "
-                        f"commit message matching. Reused."
-                    ),
-                ))
+                evidence.append(
+                    Evidence(
+                        kind="tool_call",
+                        reference="github_get_commit",
+                        summary=(
+                            f"Branch '{branch_name}' HEAD ({head_sha[:8]}) already has "
+                            f"commit message matching. Reused."
+                        ),
+                    )
+                )
 
                 result = CommitInfo(
                     repository=repository,
@@ -135,9 +134,7 @@ class CommitChangesAgent:
                 )
         except GitHubApiError as exc:
             # If we can't check, proceed with the commit
-            logger.warning(
-                "commit_changes_idempotency_check_failed error=%s", str(exc)
-            )
+            logger.warning("commit_changes_idempotency_check_failed error=%s", str(exc))
 
         # --- Build file entries for the Git Data API ---
         api_files = []
@@ -151,11 +148,13 @@ class CommitChangesAgent:
             else:
                 api_files.append({"path": path, "content": content})
 
-        evidence.append(Evidence(
-            kind="tool_call",
-            reference="prepare_file_tree",
-            summary=f"Prepared {len(api_files)} file(s) for commit.",
-        ))
+        evidence.append(
+            Evidence(
+                kind="tool_call",
+                reference="prepare_file_tree",
+                summary=f"Prepared {len(api_files)} file(s) for commit.",
+            )
+        )
 
         # --- Create atomic commit ---
         try:
@@ -167,11 +166,13 @@ class CommitChangesAgent:
                 f"Failed to create commit on '{branch_name}': {exc}"
             ) from exc
 
-        evidence.append(Evidence(
-            kind="tool_call",
-            reference="github_create_commit",
-            summary=f"Created commit {commit_sha[:8]} on '{branch_name}'.",
-        ))
+        evidence.append(
+            Evidence(
+                kind="tool_call",
+                reference="github_create_commit",
+                summary=f"Created commit {commit_sha[:8]} on '{branch_name}'.",
+            )
+        )
 
         result = CommitInfo(
             repository=repository,
@@ -180,14 +181,16 @@ class CommitChangesAgent:
             files_changed=len(api_files),
             commit_message=commit_message,
             executive_summary=(
-                f"Committed {len(api_files)} file(s) to '{branch_name}' "
-                f"({commit_sha[:8]})."
+                f"Committed {len(api_files)} file(s) to '{branch_name}' " f"({commit_sha[:8]})."
             ),
         )
 
         logger.info(
             "commit_changes_completed repo=%s branch=%s sha=%s files=%d",
-            repository, branch_name, commit_sha[:8], len(api_files),
+            repository,
+            branch_name,
+            commit_sha[:8],
+            len(api_files),
         )
 
         return AgentOutput(

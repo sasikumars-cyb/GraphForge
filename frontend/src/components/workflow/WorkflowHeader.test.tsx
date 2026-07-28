@@ -9,6 +9,7 @@ function makeWorkflow(overrides: Partial<WorkflowDetail> = {}): WorkflowDetail {
   return {
     workflow_id: "wf-1",
     title: "Add rate limiting",
+    original_prompt: "Add rate limiting to the public API",
     workflow_type: "planning",
     current_stage: "engineering_review",
     status: "in_progress",
@@ -25,6 +26,9 @@ function makeWorkflow(overrides: Partial<WorkflowDetail> = {}): WorkflowDetail {
     created_at: "2026-01-01T10:00:00Z",
     updated_at: "2026-01-01T10:05:00Z",
     approved_by: null,
+    version: 1,
+    parent_workflow_id: null,
+    refinement_note: null,
     ...overrides,
   };
 }

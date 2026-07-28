@@ -11,7 +11,6 @@ profiles. GraphForge never stores or handles AWS secret keys directly.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
 
@@ -40,9 +39,9 @@ try:
         ReadTimeoutError,
     )
 except ImportError:  # pragma: no cover - boto3 is a required dependency
-    boto3 = None  # type: ignore[assignment]
-    BotoConfig = None  # type: ignore[assignment, misc]
-    ClientError = EndpointConnectionError = ReadTimeoutError = Exception  # type: ignore[assignment, misc]
+    boto3 = None
+    BotoConfig = None
+    ClientError = EndpointConnectionError = ReadTimeoutError = Exception
 
 logger = logging.getLogger(__name__)
 
@@ -103,8 +102,7 @@ class BedrockProvider(BaseAnalysisProvider):
 
         if boto3 is None:
             raise AIProviderError(
-                "boto3 is required for the Bedrock provider. "
-                "Install it with: pip install boto3"
+                "boto3 is required for the Bedrock provider. " "Install it with: pip install boto3"
             )
 
         boto_config = BotoConfig(
@@ -348,18 +346,18 @@ class BedrockProvider(BaseAnalysisProvider):
                 "ExpiredTokenException",
                 "AccessDeniedException",
             ):
-                ai_error = AIProviderAuthError(
+                auth_error = AIProviderAuthError(
                     error_message or "Authentication or authorization failed."
                 )
-                ai_error.provider_error = error_meta
-                raise ai_error from exc
+                auth_error.provider_error = error_meta
+                raise auth_error from exc
 
             if error_code in ("ThrottlingException", "TooManyRequestsException"):
-                ai_error = AIProviderRateLimitError(
+                rate_limit_error = AIProviderRateLimitError(
                     error_message or "AI provider rate limit exceeded."
                 )
-                ai_error.provider_error = error_meta
-                raise ai_error from exc
+                rate_limit_error.provider_error = error_meta
+                raise rate_limit_error from exc
 
             if error_code in ("ModelNotReadyException", "ModelTimeoutException"):
                 timeout_error = AIProviderTimeoutError(
@@ -380,9 +378,7 @@ class BedrockProvider(BaseAnalysisProvider):
                 raise response_error from exc
 
             if error_code == "ServiceUnavailableException":
-                ai_error_generic = AIProviderError(
-                    error_message or "Bedrock service unavailable."
-                )
+                ai_error_generic = AIProviderError(error_message or "Bedrock service unavailable.")
                 ai_error_generic.status_code = 503
                 ai_error_generic.provider_error = error_meta
                 raise ai_error_generic from exc

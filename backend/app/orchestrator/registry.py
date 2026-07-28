@@ -49,7 +49,9 @@ class AgentRegistry:
 
     def all_manifests(self) -> list[AgentManifest]:
         """Return all registered manifests, ordered by agent_id."""
-        return [manifest for manifest, _ in sorted(self._store.values(), key=lambda t: t[0].agent_id)]
+        return [
+            manifest for manifest, _ in sorted(self._store.values(), key=lambda t: t[0].agent_id)
+        ]
 
     def is_enabled(self, agent_id: str) -> bool:
         """False only if `disable(agent_id)` was called and not since

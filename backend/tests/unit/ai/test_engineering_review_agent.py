@@ -12,7 +12,7 @@ Testing results via get_stage_result() rather than the old, lossy
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -42,7 +42,7 @@ def _make_run(stage: str, status: str, result: dict | None) -> SimpleNamespace:
         workflow_stage=stage,
         status=status,
         steps=[_make_step(result)] if result is not None else [],
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
 

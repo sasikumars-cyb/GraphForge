@@ -14,7 +14,7 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -55,7 +55,7 @@ def _make_run(
         workflow_stage=stage,
         status=status,
         steps=[_make_step(result)] if result is not None else [],
-        created_at=created_at or datetime.now(timezone.utc),
+        created_at=created_at or datetime.now(UTC),
     )
 
 
@@ -243,8 +243,8 @@ async def test_reuses_existing_locally_tracked_pull_request() -> None:
         head_ref="graphforge/exec-12345678",
         head_sha="abc123",
         base_ref="main",
-        github_created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        github_updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        github_created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        github_updated_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     db = _db_with_results(_repo_row(), existing)
     context = _make_context(workflow=workflow, db=db)

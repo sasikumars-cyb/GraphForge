@@ -7,11 +7,11 @@ only through these types — implementation classes are never imported by agents
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 
-class ToolCategory(str, Enum):
+class ToolCategory(StrEnum):
     GRAPH = "graph"
     CODE_INTELLIGENCE = "code_intelligence"
     PROJECT_MANAGEMENT = "project_management"
@@ -22,7 +22,7 @@ class ToolCategory(str, Enum):
     CUSTOM = "custom"
 
 
-class ToolHealth(str, Enum):
+class ToolHealth(StrEnum):
     HEALTHY = "healthy"
     UNCONFIGURED = "unconfigured"
     OFFLINE = "offline"

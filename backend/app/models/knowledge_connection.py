@@ -15,6 +15,7 @@ can access (selected repos, project keys, spaces, etc.).
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Boolean, DateTime, Integer, String, Text, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
@@ -44,14 +45,14 @@ class KnowledgeConnection(Base):
 
     # Transport-specific configuration (base_url, region, endpoint, etc.).
     # Never contains secrets — those go in encrypted_credentials.
-    config: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict[str, Any], nullable=False)
 
     # Encrypted credentials blob (JSON serialized then Fernet-encrypted).
     # Contains tokens, passwords, private keys — never logged or returned.
     encrypted_credentials: Mapped[str | None] = mapped_column(String(4096), nullable=True)
 
     # What this connection provides access to (repos, projects, spaces).
-    scope: Mapped[dict] = mapped_column(JSONB, default=dict, nullable=False)
+    scope: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict[str, Any], nullable=False)
 
     # Operational state.
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)

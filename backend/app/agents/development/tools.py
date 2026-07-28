@@ -66,11 +66,13 @@ class RepositoryDiscoveryTool:
             indexed: list[dict[str, str]] = []
             for repo in all_repos:
                 if await self._graph_repository.has_graph(str(repo.id)):
-                    indexed.append({
-                        "id": str(repo.id),
-                        "name": repo.name,
-                        "owner": repo.owner,
-                    })
+                    indexed.append(
+                        {
+                            "id": str(repo.id),
+                            "name": repo.name,
+                            "owner": repo.owner,
+                        }
+                    )
 
             summary = (
                 f"Discovered {len(indexed)} indexed repositor{'y' if len(indexed) == 1 else 'ies'} "
@@ -107,9 +109,7 @@ class ComponentDiscoveryTool:
     def __init__(self, graph_repository: IGraphRepository) -> None:
         self._graph_repository = graph_repository
 
-    async def execute(
-        self, repositories: list[dict[str, str]]
-    ) -> DevelopmentObservation:
+    async def execute(self, repositories: list[dict[str, str]]) -> DevelopmentObservation:
         if not repositories:
             return DevelopmentObservation(
                 tool_name=self.name,
@@ -125,36 +125,37 @@ class ComponentDiscoveryTool:
             repo_id = repo["id"]
             repo_name = repo["name"]
             try:
-                components = await self._graph_repository.get_nodes_by_label(
-                    repo_id, "Component"
-                )
+                components = await self._graph_repository.get_nodes_by_label(repo_id, "Component")
                 for node in components:
-                    all_components.append({
-                        "id": node.id,
-                        "name": node.properties.get("name", node.id),
-                        "type": next(
-                            (la for la in node.labels if la != "Component"),
-                            "Component",
-                        ),
-                        "repository": repo_name,
-                        "file_path": node.properties.get("file_path", ""),
-                    })
+                    all_components.append(
+                        {
+                            "id": node.id,
+                            "name": node.properties.get("name", node.id),
+                            "type": next(
+                                (la for la in node.labels if la != "Component"),
+                                "Component",
+                            ),
+                            "repository": repo_name,
+                            "file_path": node.properties.get("file_path", ""),
+                        }
+                    )
 
-                topics = await self._graph_repository.get_nodes_by_label(
-                    repo_id, "KafkaTopic"
-                )
+                topics = await self._graph_repository.get_nodes_by_label(repo_id, "KafkaTopic")
                 for node in topics:
-                    all_topics.append({
-                        "id": node.id,
-                        "name": node.properties.get("name", node.id),
-                        "repository": repo_name,
-                    })
+                    all_topics.append(
+                        {
+                            "id": node.id,
+                            "name": node.properties.get("name", node.id),
+                            "repository": repo_name,
+                        }
+                    )
 
             except Exception as exc:
                 errors.append(f"{repo_name}: {exc}")
                 logger.warning(
                     "dev_tool_discover_components_failed repo=%s error=%s",
-                    repo_name, str(exc),
+                    repo_name,
+                    str(exc),
                 )
 
         # Kafka detection only exists for Java/Spring Boot (see
@@ -195,9 +196,7 @@ class DependencyTraversalTool:
     def __init__(self, graph_repository: IGraphRepository) -> None:
         self._graph_repository = graph_repository
 
-    async def execute(
-        self, repositories: list[dict[str, str]]
-    ) -> DevelopmentObservation:
+    async def execute(self, repositories: list[dict[str, str]]) -> DevelopmentObservation:
         if not repositories:
             return DevelopmentObservation(
                 tool_name=self.name,
@@ -227,7 +226,8 @@ class DependencyTraversalTool:
                 errors.append(f"{repo_name}: {exc}")
                 logger.warning(
                     "dev_tool_traverse_deps_failed repo=%s error=%s",
-                    repo_name, str(exc),
+                    repo_name,
+                    str(exc),
                 )
 
         # Identify cross-repository edges (edges referencing nodes from different repos)
@@ -245,12 +245,14 @@ class DependencyTraversalTool:
             for prod_repo in producers:
                 for cons_repo in consumers:
                     if prod_repo != cons_repo:
-                        cross_repo_edges.append({
-                            "topic": topic_id,
-                            "producer_repo": prod_repo,
-                            "consumer_repo": cons_repo,
-                            "type": "CROSS_REPO_KAFKA",
-                        })
+                        cross_repo_edges.append(
+                            {
+                                "topic": topic_id,
+                                "producer_repo": prod_repo,
+                                "consumer_repo": cons_repo,
+                                "type": "CROSS_REPO_KAFKA",
+                            }
+                        )
 
         summary = (
             f"Traversed {len(all_edges)} edge(s) across "
@@ -326,14 +328,19 @@ def format_graph_context(
         for e in edges:
             edge_types[e["type"]] = edge_types.get(e["type"], 0) + 1
         edge_summary = ", ".join(f"{k}: {v}" for k, v in sorted(edge_types.items()))
-        parts.append(f"**Dependency edges**: {deps_obs.data.get('total_edges', len(edges))} total ({edge_summary})")
+        total_edges = deps_obs.data.get("total_edges", len(edges))
+        parts.append(f"**Dependency edges**: {total_edges} total ({edge_summary})")
 
         # Show key relationships
-        key_edges = [e for e in edges if e["type"] in ("CALLS", "PRODUCES_TO", "CONSUMES_FROM")][:20]
+        key_edges = [e for e in edges if e["type"] in ("CALLS", "PRODUCES_TO", "CONSUMES_FROM")][
+            :20
+        ]
         if key_edges:
             rel_lines = []
             for e in key_edges:
-                rel_lines.append(f"  {e['source']} —[{e['type']}]→ {e['target']} ({e['repository']})")
+                rel_lines.append(
+                    f"  {e['source']} —[{e['type']}]→ {e['target']} ({e['repository']})"
+                )
             parts.append("**Key relationships**:\n" + "\n".join(rel_lines))
     else:
         parts.append("**Dependency edges**: none indexed yet")

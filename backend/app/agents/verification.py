@@ -50,12 +50,49 @@ _ACRONYM_SHAPE = re.compile(r"^[A-Z]{2,6}$")
 # tenant identity — excluded so the check doesn't fire on every ticket that
 # happens to mention an ID format or a protocol. Deliberately short and
 # generic (not domain-specific to any one repo or customer).
-_GENERIC_ACRONYM_STOPWORDS = frozenset({
-    "ID", "IDS", "URL", "URI", "API", "APIS", "JSON", "XML", "CSV", "TSV",
-    "SQL", "ETL", "UI", "UIS", "QA", "PR", "OK", "NA", "TBD", "FAQ",
-    "HTTP", "HTTPS", "REST", "SDK", "CLI", "CPU", "GPU", "RAM", "AWS",
-    "GCP", "IO", "OS", "DB", "PK", "FK", "UUID", "JWT", "SSO", "PII",
-})
+_GENERIC_ACRONYM_STOPWORDS = frozenset(
+    {
+        "ID",
+        "IDS",
+        "URL",
+        "URI",
+        "API",
+        "APIS",
+        "JSON",
+        "XML",
+        "CSV",
+        "TSV",
+        "SQL",
+        "ETL",
+        "UI",
+        "UIS",
+        "QA",
+        "PR",
+        "OK",
+        "NA",
+        "TBD",
+        "FAQ",
+        "HTTP",
+        "HTTPS",
+        "REST",
+        "SDK",
+        "CLI",
+        "CPU",
+        "GPU",
+        "RAM",
+        "AWS",
+        "GCP",
+        "IO",
+        "OS",
+        "DB",
+        "PK",
+        "FK",
+        "UUID",
+        "JWT",
+        "SSO",
+        "PII",
+    }
+)
 
 
 def _extract_acronym_tokens(text: str) -> set[str]:
@@ -65,10 +102,7 @@ def _extract_acronym_tokens(text: str) -> set[str]:
     for the acronym shape only, not full words like "Alabama Power".
     """
     tokens = _TOKEN_SPLIT_PATTERN.split(text)
-    return {
-        t for t in tokens
-        if _ACRONYM_SHAPE.match(t) and t not in _GENERIC_ACRONYM_STOPWORDS
-    }
+    return {t for t in tokens if _ACRONYM_SHAPE.match(t) and t not in _GENERIC_ACRONYM_STOPWORDS}
 
 
 def _name_tokens(name: str) -> set[str]:

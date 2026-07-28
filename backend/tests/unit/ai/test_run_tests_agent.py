@@ -17,7 +17,7 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -32,7 +32,6 @@ from app.agents.git_ops.run_tests_agent import (
 )
 from app.agents.git_ops.schemas import TestRunInfo
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -46,12 +45,14 @@ def _make_step(result: dict | None) -> SimpleNamespace:
     return SimpleNamespace(result=result)
 
 
-def _make_run(stage: str, status: str, result: dict | None, created_at: datetime | None = None) -> SimpleNamespace:
+def _make_run(
+    stage: str, status: str, result: dict | None, created_at: datetime | None = None
+) -> SimpleNamespace:
     return SimpleNamespace(
         workflow_stage=stage,
         status=status,
         steps=[_make_step(result)] if result is not None else [],
-        created_at=created_at or datetime.now(timezone.utc),
+        created_at=created_at or datetime.now(UTC),
     )
 
 
@@ -245,13 +246,18 @@ class TestTestRunnerAgent:
     async def test_ci_success(self):
         """CI passes on first poll — happy path."""
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
@@ -274,21 +280,28 @@ class TestTestRunnerAgent:
     async def test_ci_failure(self):
         """CI fails — agent reports failure, does not crash."""
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
-            vcs.get_check_runs = AsyncMock(return_value=[
-                _check_run(conclusion="success"),
-                _check_run(name="test", conclusion="failure", run_id=456),
-            ])
+            vcs.get_check_runs = AsyncMock(
+                return_value=[
+                    _check_run(conclusion="success"),
+                    _check_run(name="test", conclusion="failure", run_id=456),
+                ]
+            )
 
             agent = TestRunnerAgent()
             output = await agent.run(ctx)
@@ -300,22 +313,31 @@ class TestTestRunnerAgent:
     async def test_ci_queued_then_completes(self):
         """CI starts queued, then completes on second poll."""
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow, timeout=5.0)
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
-            patch("app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch(
+                "app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock
+            ) as mock_sleep,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
-            vcs.get_check_runs = AsyncMock(side_effect=[
-                [_check_run(status="queued", conclusion=None)],
-                [_check_run(status="completed", conclusion="success")],
-            ])
+            vcs.get_check_runs = AsyncMock(
+                side_effect=[
+                    [_check_run(status="queued", conclusion=None)],
+                    [_check_run(status="completed", conclusion="success")],
+                ]
+            )
 
             agent = TestRunnerAgent()
             output = await agent.run(ctx)
@@ -327,47 +349,66 @@ class TestTestRunnerAgent:
     async def test_ci_in_progress_then_completes(self):
         """CI in_progress, then completes."""
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow, timeout=5.0)
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
-            patch("app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch(
+                "app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock
+            ) as mock_sleep,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
-            vcs.get_check_runs = AsyncMock(side_effect=[
-                [_check_run(status="in_progress", conclusion=None)],
-                [_check_run(status="completed", conclusion="success")],
-            ])
+            vcs.get_check_runs = AsyncMock(
+                side_effect=[
+                    [_check_run(status="in_progress", conclusion=None)],
+                    [_check_run(status="completed", conclusion="success")],
+                ]
+            )
 
             agent = TestRunnerAgent()
             output = await agent.run(ctx)
 
         assert output.result["status"] == "success"
+        # One in_progress result before the completed one means exactly one
+        # poll-loop sleep, same shape as test_ci_in_progress_with_backoff below.
+        mock_sleep.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_timeout_does_not_fail_workflow(self):
         """Timeout returns status=timeout, not an exception."""
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         # Very short timeout
         ctx = _make_context(workflow=workflow, timeout=0.0)
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
-            vcs.get_check_runs = AsyncMock(return_value=[
-                _check_run(status="in_progress", conclusion=None),
-            ])
+            vcs.get_check_runs = AsyncMock(
+                return_value=[
+                    _check_run(status="in_progress", conclusion=None),
+                ]
+            )
 
             agent = TestRunnerAgent()
             output = await agent.run(ctx)
@@ -380,13 +421,18 @@ class TestTestRunnerAgent:
     async def test_no_check_runs_returns_unknown(self):
         """No CI configured — returns unknown."""
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow, timeout=0.0)
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
@@ -417,9 +463,11 @@ class TestTestRunnerAgent:
     @pytest.mark.asyncio
     async def test_invalid_repository_raises(self):
         commit = _commit_result(repository="no-slash")
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         agent = TestRunnerAgent()
         with pytest.raises(TestRunnerExecutionError, match="Invalid repository"):
@@ -428,9 +476,11 @@ class TestTestRunnerAgent:
     @pytest.mark.asyncio
     async def test_missing_user_id_raises(self):
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow, user_id=None)
         agent = TestRunnerAgent()
         with pytest.raises(TestRunnerExecutionError, match="requires user_id"):
@@ -439,12 +489,16 @@ class TestTestRunnerAgent:
     @pytest.mark.asyncio
     async def test_missing_access_token_raises(self):
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
 
-        with patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token:
+        with patch(
+            "app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock
+        ) as mock_token:
             mock_token.return_value = None
             agent = TestRunnerAgent()
             with pytest.raises(TestRunnerExecutionError, match="No GitHub connection"):
@@ -455,13 +509,18 @@ class TestTestRunnerAgent:
         from app.integrations.github import GitHubApiError
 
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
@@ -478,9 +537,11 @@ class TestTestRunnerAgent:
     async def test_exponential_backoff(self):
         """Verify sleep intervals increase exponentially."""
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         # Large enough timeout for 3 polls
         ctx = _make_context(
             workflow=workflow,
@@ -490,17 +551,24 @@ class TestTestRunnerAgent:
         )
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
-            patch("app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch(
+                "app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock
+            ) as mock_sleep,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
-            vcs.get_check_runs = AsyncMock(side_effect=[
-                [_check_run(status="in_progress", conclusion=None)],
-                [_check_run(status="in_progress", conclusion=None)],
-                [_check_run(status="completed", conclusion="success")],
-            ])
+            vcs.get_check_runs = AsyncMock(
+                side_effect=[
+                    [_check_run(status="in_progress", conclusion=None)],
+                    [_check_run(status="in_progress", conclusion=None)],
+                    [_check_run(status="completed", conclusion="success")],
+                ]
+            )
 
             agent = TestRunnerAgent()
             output = await agent.run(ctx)
@@ -515,9 +583,11 @@ class TestTestRunnerAgent:
     async def test_backoff_capped_at_max(self):
         """Backoff doesn't exceed max_poll_interval."""
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(
             workflow=workflow,
             poll_interval=5.0,
@@ -526,20 +596,27 @@ class TestTestRunnerAgent:
         )
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
-            patch("app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock) as mock_sleep,
+            patch(
+                "app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock
+            ) as mock_sleep,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
-            vcs.get_check_runs = AsyncMock(side_effect=[
-                [_check_run(status="in_progress", conclusion=None)],
-                [_check_run(status="in_progress", conclusion=None)],
-                [_check_run(status="completed", conclusion="success")],
-            ])
+            vcs.get_check_runs = AsyncMock(
+                side_effect=[
+                    [_check_run(status="in_progress", conclusion=None)],
+                    [_check_run(status="in_progress", conclusion=None)],
+                    [_check_run(status="completed", conclusion="success")],
+                ]
+            )
 
             agent = TestRunnerAgent()
-            output = await agent.run(ctx)
+            await agent.run(ctx)
 
         sleep_calls = [call.args[0] for call in mock_sleep.await_args_list]
         assert sleep_calls[0] == 5.0
@@ -549,13 +626,18 @@ class TestTestRunnerAgent:
     async def test_idempotent_rerun_only_observes(self):
         """Re-running never dispatches Actions — only reads check runs."""
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
@@ -576,27 +658,34 @@ class TestTestRunnerAgent:
     @pytest.mark.asyncio
     async def test_result_matches_test_run_info_schema(self):
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
-            vcs.get_check_runs = AsyncMock(return_value=[
-                _check_run(
-                    name="CI",
-                    conclusion="success",
-                    run_id=42,
-                    html_url="https://github.com/acme/my-repo/runs/42",
-                    started_at="2024-01-01T00:00:00Z",
-                    completed_at="2024-01-01T00:05:00Z",
-                ),
-            ])
+            vcs.get_check_runs = AsyncMock(
+                return_value=[
+                    _check_run(
+                        name="CI",
+                        conclusion="success",
+                        run_id=42,
+                        html_url="https://github.com/acme/my-repo/runs/42",
+                        started_at="2024-01-01T00:00:00Z",
+                        completed_at="2024-01-01T00:05:00Z",
+                    ),
+                ]
+            )
 
             agent = TestRunnerAgent()
             output = await agent.run(ctx)
@@ -611,9 +700,11 @@ class TestTestRunnerAgent:
     @pytest.mark.asyncio
     async def test_missing_branch_name_raises(self):
         commit = _commit_result(branch_name="")
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         agent = TestRunnerAgent()
         with pytest.raises(TestRunnerExecutionError, match="Missing branch_name"):
@@ -622,9 +713,11 @@ class TestTestRunnerAgent:
     @pytest.mark.asyncio
     async def test_missing_commit_sha_raises(self):
         commit = _commit_result(commit_sha="")
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
         agent = TestRunnerAgent()
         with pytest.raises(TestRunnerExecutionError, match="Missing commit_sha"):
@@ -633,22 +726,29 @@ class TestTestRunnerAgent:
     @pytest.mark.asyncio
     async def test_multiple_check_runs_all_pass(self):
         commit = _commit_result()
-        workflow = _make_workflow(runs=[
-            _make_run("commit_changes", "completed", commit),
-        ])
+        workflow = _make_workflow(
+            runs=[
+                _make_run("commit_changes", "completed", commit),
+            ]
+        )
         ctx = _make_context(workflow=workflow)
 
         with (
-            patch("app.agents.git_ops.run_tests_agent.get_decrypted_access_token", new_callable=AsyncMock) as mock_token,
+            patch(
+                "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
+                new_callable=AsyncMock,
+            ) as mock_token,
             patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
-            vcs.get_check_runs = AsyncMock(return_value=[
-                _check_run(name="lint", conclusion="success"),
-                _check_run(name="test", conclusion="success"),
-                _check_run(name="build", conclusion="success"),
-            ])
+            vcs.get_check_runs = AsyncMock(
+                return_value=[
+                    _check_run(name="lint", conclusion="success"),
+                    _check_run(name="test", conclusion="success"),
+                    _check_run(name="build", conclusion="success"),
+                ]
+            )
 
             agent = TestRunnerAgent()
             output = await agent.run(ctx)

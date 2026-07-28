@@ -19,7 +19,6 @@ import re
 
 from app.agents._contract import Subject
 
-
 # ---------------------------------------------------------------------------
 # Recognised intent patterns — closed vocabulary per AGENT_FRAMEWORK.md
 # ---------------------------------------------------------------------------

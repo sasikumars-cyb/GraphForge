@@ -51,7 +51,11 @@ from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.prompt_utils import render_prompt_template
 from app.agents.stage_context import (
     format_development_block as _format_development_block,
+)
+from app.agents.stage_context import (
     format_planning_block as _format_planning_block,
+)
+from app.agents.stage_context import (
     format_testing_block as _format_testing_block,
 )
 from app.ai.providers.base import LLMRequestOptions, ResponseFormat
@@ -119,8 +123,7 @@ def _build_blueprint_context(
             "## Pre-existing Verification Warnings (deterministic, not LLM-generated)\n"
             "These were flagged by each stage's own code against its own tool evidence "
             "before this review ever ran — weigh them as real, already-established facts, "
-            "not claims to re-judge:\n"
-            + "\n".join(f"- {w}" for w in verification_warnings)
+            "not claims to re-judge:\n" + "\n".join(f"- {w}" for w in verification_warnings)
         )
     context = "\n\n".join(sections)
     if len(context) > _MAX_BLUEPRINT_CONTEXT_CHARS:
@@ -325,7 +328,8 @@ class EngineeringReviewAgent:
             ]
             logger.warning(
                 "engineering_review_agent_downgraded_ready subject_id=%s warning_count=%d",
-                subject_id, len(prior_verification_warnings),
+                subject_id,
+                len(prior_verification_warnings),
             )
 
         evidence.append(

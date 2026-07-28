@@ -63,6 +63,14 @@ python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
 
+# boto3/botocore ship no inline types and no stub package is installed
+# (adding boto3-stubs is a much heavier dependency than this one provider
+# file justifies). Scoped to exactly these two packages, not a blanket
+# ignore_missing_imports, so a real missing-stub issue elsewhere still fails.
+[[tool.mypy.overrides]]
+module = ["boto3.*", "botocore.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 # One event loop for the whole session, not one per test: app.database.session

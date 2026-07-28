@@ -258,7 +258,9 @@ class TestPlanningAgent:
 
         logger.info(
             "testing_agent_started subject_id=%s task=%.80s model=%s",
-            subject_id, task_description, context.model,
+            subject_id,
+            task_description,
+            context.model,
         )
 
         db: AsyncSession = context.extras["db"]
@@ -286,7 +288,10 @@ class TestPlanningAgent:
         if workflow is not None:
             found = [
                 label
-                for label, result in (("Planning", planning_result), ("Development", development_result))
+                for label, result in (
+                    ("Planning", planning_result),
+                    ("Development", development_result),
+                )
                 if result is not None
             ]
             evidence.append(
@@ -294,7 +299,8 @@ class TestPlanningAgent:
                     kind="tool_call",
                     reference="read_prior_stage_context",
                     summary=(
-                        f"Read the full {' and '.join(found)} stage result(s) via get_stage_result()."
+                        f"Read the full {' and '.join(found)} stage result(s) "
+                        "via get_stage_result()."
                         if found
                         else "No completed prior stage results were available to read."
                     ),
@@ -322,7 +328,8 @@ class TestPlanningAgent:
         topic_count = len(components_obs.data.get("kafka_topics", []))
         logger.info(
             "testing_agent_step2 component_count=%d topic_count=%d",
-            component_count, topic_count,
+            component_count,
+            topic_count,
         )
 
         # ------------------------------------------------------------------
@@ -337,7 +344,9 @@ class TestPlanningAgent:
         cross_repo_count = len(deps_obs.data.get("cross_repo_edges", []))
         logger.info(
             "testing_agent_step3 edge_count=%d integration_points=%d cross_repo=%d",
-            edge_count, integration_count, cross_repo_count,
+            edge_count,
+            integration_count,
+            cross_repo_count,
         )
 
         # ------------------------------------------------------------------
@@ -368,13 +377,16 @@ class TestPlanningAgent:
         # ------------------------------------------------------------------
         graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs)
         prompt_task_description = (
-            f"{task_description}\n\n{prior_stage_context}" if prior_stage_context else task_description
+            f"{task_description}\n\n{prior_stage_context}"
+            if prior_stage_context
+            else task_description
         )
         prompt = _render_prompt(prompt_task_description, graph_context_text)
 
         logger.info(
             "testing_agent_synthesizing has_graph_data=%s graph_context_chars=%d",
-            has_graph_data, len(graph_context_text),
+            has_graph_data,
+            len(graph_context_text),
         )
 
         try:
@@ -492,8 +504,11 @@ class TestPlanningAgent:
         logger.info(
             "testing_agent_completed subject_id=%s confidence=%.2f "
             "evidence_count=%d regression=%d integration=%d edge_cases=%d",
-            subject_id, confidence_score, len(evidence),
-            len(test_plan.regression_tests), len(test_plan.integration_tests),
+            subject_id,
+            confidence_score,
+            len(evidence),
+            len(test_plan.regression_tests),
+            len(test_plan.integration_tests),
             len(test_plan.edge_cases),
         )
 

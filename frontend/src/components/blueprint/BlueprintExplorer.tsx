@@ -501,19 +501,27 @@ export function BlueprintExplorer({
   const implementationSteps = implementationStepsCount ?? stats.implementationSteps;
   const affectedComponents = affectedComponentsCount ?? stats.affectedComponents;
   const risks = risksCount ?? stats.risks;
-  const statItems = [
+  // Explicitly typed so every element (before filtering) shares the same
+  // `value: string | number` shape — without this, TS infers each object
+  // literal's `value` at its own narrow type (number here, the template
+  // string there), and a type predicate can only narrow that inferred
+  // union, never widen it back to `string | number`.
+  const statItems: (false | { label: string; value: string | number })[] = [
     implementationSteps != null && { label: "Implementation Steps", value: implementationSteps },
     affectedComponents != null && { label: "Affected Components", value: affectedComponents },
     risks != null && { label: "Risks Identified", value: risks },
     stats.confidencePct != null && { label: "Confidence", value: `${stats.confidencePct}%` },
-  ].filter((x): x is { label: string; value: string | number } => Boolean(x));
+  ];
+  const visibleStatItems = statItems.filter(
+    (x): x is { label: string; value: string | number } => Boolean(x),
+  );
 
   return (
     <div className="flex flex-col gap-0">
       {/* ── Executive summary strip — the glanceable numbers, before any diagram ── */}
-      {statItems.length > 0 && (
+      {visibleStatItems.length > 0 && (
         <div className="mb-3 flex flex-wrap gap-2">
-          {statItems.map((s) => (
+          {visibleStatItems.map((s) => (
             <div
               key={s.label}
               className="flex items-baseline gap-1.5 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-1.5"

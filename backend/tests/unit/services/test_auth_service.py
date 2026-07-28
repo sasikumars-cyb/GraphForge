@@ -39,9 +39,11 @@ async def test_register_user_concurrent_duplicate_raises_conflict_not_a_crash(
     )
     await auth_service.register_user(db_session, request)
 
-    with patch.object(auth_service, "get_user_by_email", new=AsyncMock(return_value=None)):
-        with pytest.raises(ConflictError):
-            await auth_service.register_user(db_session, request)
+    with (
+        patch.object(auth_service, "get_user_by_email", new=AsyncMock(return_value=None)),
+        pytest.raises(ConflictError),
+    ):
+        await auth_service.register_user(db_session, request)
 
     # The session must still be usable afterward — a failed commit that
     # isn't rolled back leaves it unusable for the rest of the request.

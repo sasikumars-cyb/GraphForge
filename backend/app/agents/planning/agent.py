@@ -22,33 +22,29 @@ empty results (empty = real graph query, just no data yet).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
 import time
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents import verification
 from app.agents._contract import (
     AgentContext,
     AgentOutput,
     Confidence,
     Evidence,
 )
-from app.agents.prompt_utils import render_prompt_template, wrap_untrusted_content
-from app.core.redact import redact_secrets
-from app.ai.providers.base import LLMRequestOptions, ResponseFormat
-from app.ai.providers.factory import create_llm_provider
-from app.ai.providers.pricing import estimate_cost_usd
-from app.core.config import get_settings
-
-logger = logging.getLogger(__name__)
-
-from app.agents import verification
 from app.agents.blueprint.factory import BlueprintFactory
 from app.agents.planning.classifier import PlanningProfile, analyse, pattern_for_key
-from app.agents.planning.confluence_context import gather_confluence_context, get_confluence_mcp_config
+from app.agents.planning.confluence_context import (
+    gather_confluence_context,
+    get_confluence_mcp_config,
+)
 from app.agents.planning.schemas import (
     ArchitectureLayer,
     DataEntity,
@@ -60,11 +56,19 @@ from app.agents.planning.schemas import (
     RepositoryUsage,
     RiskItem,
 )
-from app.agents.planning.tools import stars_for_rank, to_evidence, PlanningObservation
+from app.agents.planning.tools import PlanningObservation, stars_for_rank, to_evidence
+from app.agents.prompt_utils import render_prompt_template, wrap_untrusted_content
+from app.ai.providers.base import LLMRequestOptions, ResponseFormat
+from app.ai.providers.factory import create_llm_provider
+from app.ai.providers.pricing import estimate_cost_usd
+from app.core.config import get_settings
 from app.core.exceptions import AppError
+from app.core.redact import redact_secrets
 from app.tools import ContextBuilder, ToolExecutor, ToolInput, get_tool_registry
 from app.tools.implementations.github_tool import GitHubTool, extract_pr_or_issue_ref
 from app.tools.implementations.jira_tool import extract_issue_key
+
+logger = logging.getLogger(__name__)
 
 _PROMPT_VERSION = "1.0"
 _PROMPT_DIR = Path(__file__).parent / "prompts"
@@ -121,7 +125,7 @@ def _other_configured_providers(exclude: str) -> list[str]:
 
 
 async def _call_llm(
-    user_prompt: str, model: str | None = None, _metadata_out: dict | None = None
+    user_prompt: str, model: str | None = None, _metadata_out: dict[str, Any] | None = None
 ) -> str:
     """Send a single JSON-mode completion through the configured AI
     provider and return the raw content string.
@@ -184,12 +188,14 @@ async def _call_llm(
             try:
                 logger.warning(
                     "planning_agent_provider_fallback from=%s to=%s reason=rate_limit",
-                    primary_key, fallback_key,
+                    primary_key,
+                    fallback_key,
                 )
                 return await _complete(fallback_key)
             except AppError:
                 logger.warning(
-                    "planning_agent_provider_fallback_failed provider=%s", fallback_key,
+                    "planning_agent_provider_fallback_failed provider=%s",
+                    fallback_key,
                     exc_info=True,
                 )
                 continue
@@ -207,9 +213,7 @@ async def _call_llm(
 # ---------------------------------------------------------------------------
 
 
-def _render_prompt(
-    task_description: str, graph_context: str, profile: PlanningProfile
-) -> str:
+def _render_prompt(task_description: str, graph_context: str, profile: PlanningProfile) -> str:
     """Render the planning.md template with the given variables.
 
     The capability placeholders are substituted here rather than in
@@ -244,12 +248,11 @@ def _find_quality_gaps(result: PlanningResult, has_graph_data: bool) -> list[str
     """
     gaps: list[str] = []
     if not result.implementation_steps:
-        gaps.append(
-            "implementation_steps is empty — a plan must have at least one concrete step"
-        )
+        gaps.append("implementation_steps is empty — a plan must have at least one concrete step")
     if not result.risk_considerations and not result.risks:
         gaps.append(
-            "no risks were identified — name at least one real risk, or state explicitly why there are none"
+            "no risks were identified — name at least one real risk, "
+            "or state explicitly why there are none"
         )
     if has_graph_data and not result.affected_components:
         gaps.append(
@@ -259,7 +262,7 @@ def _find_quality_gaps(result: PlanningResult, has_graph_data: bool) -> list[str
     return gaps
 
 
-def _safe_list(raw_data: object, model_cls: type) -> list:
+def _safe_list(raw_data: object, model_cls: type) -> list[Any]:
     """Parse a list of dicts from LLM output into model instances.
 
     Silently skips items that are not dicts or fail model validation —
@@ -272,10 +275,8 @@ def _safe_list(raw_data: object, model_cls: type) -> list:
     for item in raw_data:
         if not isinstance(item, dict):
             continue
-        try:
+        with contextlib.suppress(Exception):
             result.append(model_cls(**item))
-        except Exception:
-            pass
     return result
 
 
@@ -389,7 +390,9 @@ class PlanningAgent:
 
         logger.info(
             "planning_agent_started subject_id=%s task=%.80s model=%s",
-            subject_id, task_description, context.model,
+            subject_id,
+            task_description,
+            context.model,
         )
 
         db: AsyncSession = context.extras["db"]
@@ -424,7 +427,8 @@ class PlanningAgent:
                     "jira", redact_secrets(jira_result.data.get("context_text", ""))
                 )
                 logger.info(
-                    "planning_agent_jira_enriched issue_key=%s", issue_key,
+                    "planning_agent_jira_enriched issue_key=%s",
+                    issue_key,
                 )
 
                 # ----------------------------------------------------------
@@ -453,12 +457,14 @@ class PlanningAgent:
                             "confluence", redact_secrets(confluence_text)
                         )
                         logger.info(
-                            "planning_agent_confluence_enriched issue_key=%s", issue_key,
+                            "planning_agent_confluence_enriched issue_key=%s",
+                            issue_key,
                         )
             else:
                 logger.info(
                     "planning_agent_jira_fetch_failed issue_key=%s error=%s",
-                    issue_key, jira_result.error,
+                    issue_key,
+                    jira_result.error,
                 )
 
         # ------------------------------------------------------------------
@@ -486,11 +492,13 @@ class PlanningAgent:
             else:
                 from app.core.config import get_settings
 
-                github_tool = GitHubTool({
-                    "github_token": github_token,
-                    "github_mcp_server_url": get_settings().github_mcp_default_server_url,
-                    "github_mcp_api_key": github_token,
-                })
+                github_tool = GitHubTool(
+                    {
+                        "github_token": github_token,
+                        "github_mcp_server_url": get_settings().github_mcp_default_server_url,
+                        "github_mcp_api_key": github_token,
+                    }
+                )
                 github_result = await executor.execute_instance(
                     github_tool, "github", "GitHub", ToolInput(query=task_description)
                 )
@@ -510,7 +518,8 @@ class PlanningAgent:
                 else:
                     logger.info(
                         "planning_agent_github_fetch_failed ref=%s error=%s",
-                        gh_ref, github_result.error,
+                        gh_ref,
+                        github_result.error,
                     )
 
         # ------------------------------------------------------------------
@@ -525,7 +534,8 @@ class PlanningAgent:
         profile = analyse(task_description)
         logger.info(
             "planning_agent_analysed pattern=%s capabilities=%s",
-            profile.key, ",".join(c.key for c in profile.capabilities) or "none",
+            profile.key,
+            ",".join(c.key for c in profile.capabilities) or "none",
         )
 
         # ------------------------------------------------------------------
@@ -554,7 +564,9 @@ class PlanningAgent:
         # Re-derive Evidence from the ToolResult's embedded observation summaries
         # (preserving the "tool_call" / "graph_traversal" kinds the contract requires).
         repos_succeeded: bool = graph_result.data.get("_repos_succeeded", graph_result.success)
-        traverse_succeeded: bool = graph_result.data.get("_traverse_succeeded", graph_result.success)
+        traverse_succeeded: bool = graph_result.data.get(
+            "_traverse_succeeded", graph_result.success
+        )
         repos_summary: str = graph_result.data.get("_repos_summary", graph_result.summary)
         traverse_summary: str = graph_result.data.get("_traverse_summary", graph_result.summary)
 
@@ -583,12 +595,14 @@ class PlanningAgent:
         component_count: int = graph_result.data.get("_component_count", 0)
         topic_count: int = graph_result.data.get("_topic_count", 0)
         ranked_repo_names: list[str] = graph_result.data.get("ranked_repositories", [])
-        graph_components: list[dict] = graph_result.data.get("components", [])
-        graph_topics: list[dict] = graph_result.data.get("kafka_topics", [])
+        graph_components: list[dict[str, Any]] = graph_result.data.get("components", [])
+        graph_topics: list[dict[str, Any]] = graph_result.data.get("kafka_topics", [])
 
         logger.info(
             "planning_agent_tool_execution indexed_repo_count=%d component_count=%d topic_count=%d",
-            len(indexed_repos), component_count, topic_count,
+            len(indexed_repos),
+            component_count,
+            topic_count,
         )
 
         # ------------------------------------------------------------------
@@ -611,7 +625,8 @@ class PlanningAgent:
                 )
                 logger.warning(
                     "planning_agent_entity_mismatch repo=%s warning=%s",
-                    ranked_repo_names[0], mismatch,
+                    ranked_repo_names[0],
+                    mismatch,
                 )
 
         evidence_pool = verification.build_evidence_pool(
@@ -624,9 +639,7 @@ class PlanningAgent:
         # ------------------------------------------------------------------
         # Observe: determine confidence based on what the graph returned
         # ------------------------------------------------------------------
-        graph_unavailable = not repos_succeeded or (
-            bool(indexed_repos) and not traverse_succeeded
-        )
+        graph_unavailable = not repos_succeeded or (bool(indexed_repos) and not traverse_succeeded)
         has_graph_data = (
             not graph_unavailable
             and bool(indexed_repos)
@@ -650,11 +663,13 @@ class PlanningAgent:
 
         logger.info(
             "planning_agent_synthesizing has_graph_data=%s graph_context_chars=%d pattern=%s",
-            has_graph_data, len(graph_context_text), profile.key,
+            has_graph_data,
+            len(graph_context_text),
+            profile.key,
         )
 
         llm_started = time.monotonic()
-        llm_metadata: dict = {}
+        llm_metadata: dict[str, Any] = {}
         try:
             raw_response = await _call_llm(
                 user_prompt=prompt, model=context.model, _metadata_out=llm_metadata
@@ -684,21 +699,31 @@ class PlanningAgent:
                 "Produce a corrected JSON response, fixing every gap above, in the same schema."
             )
             try:
-                refined_metadata: dict = {}
+                refined_metadata: dict[str, Any] = {}
                 refined_raw = await _call_llm(
                     user_prompt=refine_prompt, model=context.model, _metadata_out=refined_metadata
                 )
-                refined_result = _parse_llm_response(refined_raw, original_task_description, profile)
+                refined_result = _parse_llm_response(
+                    refined_raw, original_task_description, profile
+                )
                 # Both calls cost real money regardless of which draft wins —
                 # sum token counts across both rather than reporting only
                 # the final one, so the trace reflects actual spend for
                 # this run, not just the surviving draft's share of it.
                 for tok_field in ("prompt_tokens", "completion_tokens", "total_tokens"):
                     if refined_metadata.get(tok_field) is not None:
-                        llm_metadata[tok_field] = (llm_metadata.get(tok_field) or 0) + refined_metadata[tok_field]
+                        llm_metadata[tok_field] = (
+                            llm_metadata.get(tok_field) or 0
+                        ) + refined_metadata[tok_field]
                 if not _find_quality_gaps(refined_result, has_graph_data):
-                    prompt, raw_response, planning_result = refine_prompt, refined_raw, refined_result
-                    llm_metadata["provider"] = refined_metadata.get("provider", llm_metadata.get("provider"))
+                    prompt, raw_response, planning_result = (
+                        refine_prompt,
+                        refined_raw,
+                        refined_result,
+                    )
+                    llm_metadata["provider"] = refined_metadata.get(
+                        "provider", llm_metadata.get("provider")
+                    )
                     llm_metadata["model"] = refined_metadata.get("model", llm_metadata.get("model"))
                     evidence.append(
                         Evidence(
@@ -782,7 +807,9 @@ class PlanningAgent:
                     "this run's indexed component data — unverified."
                 )
 
-        components_check = verification.verify_claims(planning_result.affected_components, evidence_pool)
+        components_check = verification.verify_claims(
+            planning_result.affected_components, evidence_pool
+        )
         for name in components_check.unverified:
             verification_warnings.append(
                 f"Affected component '{name}' does not appear in this run's graph "
@@ -836,9 +863,10 @@ class PlanningAgent:
                 "Plan is grounded in real graph data."
             )
         else:
+            repo_word = "y" if len(indexed_repos) == 1 else "ies"
             confidence_reasoning = (
                 f"Graph is healthy but contains no architecture data "
-                f"({len(indexed_repos)} indexed repositor{'y' if len(indexed_repos) == 1 else 'ies'}, "
+                f"({len(indexed_repos)} indexed repositor{repo_word}, "
                 f"0 components, 0 topics). "
                 "Plan uses general engineering practices."
             )
@@ -859,9 +887,13 @@ class PlanningAgent:
             confidence_score = min(confidence_score + 0.05, 1.0)
 
         logger.info(
-            "planning_agent_completed subject_id=%s confidence=%.2f evidence_count=%d step_count=%d graph_context_used=%s",
-            subject_id, confidence_score, len(evidence),
-            len(planning_result.implementation_steps), has_graph_data,
+            "planning_agent_completed subject_id=%s confidence=%.2f "
+            "evidence_count=%d step_count=%d graph_context_used=%s",
+            subject_id,
+            confidence_score,
+            len(evidence),
+            len(planning_result.implementation_steps),
+            has_graph_data,
         )
 
         return AgentOutput(

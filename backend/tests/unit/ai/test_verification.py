@@ -13,9 +13,12 @@ from app.agents.verification import (
 
 class TestCheckEntityMismatch:
     def test_no_op_when_ticket_has_no_acronym(self):
-        assert check_entity_mismatch(
-            "fix null handling in the export job", "ds-databricks-soco-gpc-c2m-rcs-dataingest"
-        ) is None
+        assert (
+            check_entity_mismatch(
+                "fix null handling in the export job", "ds-databricks-soco-gpc-c2m-rcs-dataingest"
+            )
+            is None
+        )
 
     def test_flags_mismatch_when_ticket_token_absent_from_repo_name(self):
         # The exact scenario this was built for: ticket names APC, the
@@ -29,9 +32,12 @@ class TestCheckEntityMismatch:
         assert "ds-databricks-soco-gpc-c2m-rcs-dataingest" in warning
 
     def test_no_warning_when_token_matches_repo_name(self):
-        assert check_entity_mismatch(
-            "Soco_C2M_GPC_RCS -> some bug", "ds-databricks-soco-gpc-c2m-rcs-dataingest"
-        ) is None
+        assert (
+            check_entity_mismatch(
+                "Soco_C2M_GPC_RCS -> some bug", "ds-databricks-soco-gpc-c2m-rcs-dataingest"
+            )
+            is None
+        )
 
     def test_no_op_with_no_selected_repo(self):
         assert check_entity_mismatch("Soco_C2M_APC_RCS ticket", "") is None
@@ -39,10 +45,13 @@ class TestCheckEntityMismatch:
     def test_ignores_generic_stopword_acronyms(self):
         # "ETL", "API", "UIS" etc. should never trigger a false mismatch on
         # their own — they're generic technical acronyms, not tenant codes.
-        assert check_entity_mismatch(
-            "Fix the ETL job so the API returns UIS export correctly",
-            "ds-databricks-some-other-dataingest",
-        ) is None
+        assert (
+            check_entity_mismatch(
+                "Fix the ETL job so the API returns UIS export correctly",
+                "ds-databricks-some-other-dataingest",
+            )
+            is None
+        )
 
 
 class TestVerifyClaims:

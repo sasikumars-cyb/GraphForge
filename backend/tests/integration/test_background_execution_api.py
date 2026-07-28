@@ -87,7 +87,9 @@ async def _register_and_get_token(client: AsyncClient) -> str:
     return login.json()["access_token"]
 
 
-async def _poll_until(client: AsyncClient, url: str, headers: dict[str, str], predicate, timeout: float = 5.0):
+async def _poll_until(
+    client: AsyncClient, url: str, headers: dict[str, str], predicate, timeout: float = 5.0
+):
     loop = asyncio.get_event_loop()
     deadline = loop.time() + timeout
     last_body = None
@@ -110,7 +112,10 @@ async def test_create_agent_run_returns_before_agent_completes(
     resp = await client.post(
         "/api/v1/agent-runs",
         headers=headers,
-        json={"subject_reference": "freetext:Add a rate limiter to the payment API", "goal": "plan_freeform"},
+        json={
+            "subject_reference": "freetext:Add a rate limiter to the payment API",
+            "goal": "plan_freeform",
+        },
     )
     assert resp.status_code == 202
     body = resp.json()

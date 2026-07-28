@@ -8,6 +8,8 @@ PUT  /api/v1/tools/{id}     → enable/disable + update config (not yet persiste
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
@@ -47,7 +49,7 @@ class HealthCheckResponse(BaseModel):
 
 class ConfigureToolRequest(BaseModel):
     enabled: bool
-    config: dict = {}
+    config: dict[str, Any] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -108,7 +110,9 @@ async def check_health(tool_id: str, _: User = Depends(require_admin)) -> Health
 
 
 @router.put("/{tool_id}", response_model=ToolResponse)
-async def configure_tool(tool_id: str, body: ConfigureToolRequest, _: User = Depends(require_admin)) -> ToolResponse:
+async def configure_tool(
+    tool_id: str, body: ConfigureToolRequest, _: User = Depends(require_admin)
+) -> ToolResponse:
     """Enable or disable a tool and apply runtime configuration.
 
     Note: in this release configuration is applied in-memory only and is

@@ -311,6 +311,7 @@ describe("deriveWorkflowState", () => {
     return {
       workflow_id: "wf-1",
       title: "Add rate limiting",
+      original_prompt: "Add rate limiting to the public API",
       workflow_type: "planning",
       current_stage: "testing",
       status: "in_progress",
@@ -324,6 +325,9 @@ describe("deriveWorkflowState", () => {
       created_at: "2026-01-01T10:00:00Z",
       updated_at: "2026-01-01T10:00:00Z",
       approved_by: null,
+      version: 1,
+      parent_workflow_id: null,
+      refinement_note: null,
       ...overrides,
     };
   }

@@ -79,6 +79,7 @@ async def get_confluence_mcp_config(db: AsyncSession) -> tuple[str, str, str] | 
     auth_token = credentials.get("api_key", "")
     return server_url, auth_token, cloud_id
 
+
 _MAX_TOOL_TURNS = 4
 
 _SYSTEM_PROMPT = (

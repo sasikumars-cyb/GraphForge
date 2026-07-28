@@ -11,14 +11,11 @@ Uses `db_client` fixture (rolled-back transaction) — no persistent data.
 from __future__ import annotations
 
 import uuid
-from collections.abc import AsyncGenerator
-from datetime import datetime, timezone
 
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User
 from app.models.workflow import Workflow
 
 pytestmark = pytest.mark.asyncio
@@ -38,9 +35,7 @@ async def auth_headers(db_client: AsyncClient) -> dict[str, str]:
         "/api/v1/auth/register",
         json={"email": email, "password": password, "full_name": "Test User"},
     )
-    login = await db_client.post(
-        "/api/v1/auth/login", json={"email": email, "password": password}
-    )
+    login = await db_client.post("/api/v1/auth/login", json={"email": email, "password": password})
     token = login.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 

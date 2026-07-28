@@ -17,6 +17,7 @@ its docs) and override via config if it differs.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from app.tools.interfaces import (
     ToolCategory,
@@ -47,7 +48,7 @@ class ConfluenceTool:
         "documentation",
     ]
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         # REST transport config — stored and health-checked, but execute()
         # has no REST path yet (see module docstring).
         self._base_url: str = config.get("confluence_base_url", "")

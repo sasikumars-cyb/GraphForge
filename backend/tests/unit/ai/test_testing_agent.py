@@ -20,19 +20,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.agents._contract import AgentContext, Subject
-from app.agents.testing.agent import TestPlanningAgent, TestingLLMError
+from app.agents.testing.agent import TestingLLMError, TestPlanningAgent
 from app.agents.testing.manifest import TESTING_MANIFEST
 from app.agents.testing.schemas import TestPlan
 from app.agents.testing.tools import (
     TestComponentDiscoveryTool,
     TestDependencyTraversalTool,
-    TestRepositoryDiscoveryTool,
     TestingObservation,
+    TestRepositoryDiscoveryTool,
     format_graph_context,
     to_evidence,
 )
 from app.graph.models import GraphEdge, GraphNode, GraphPayload
-
 
 # ---------------------------------------------------------------------------
 # Observation unit tests
@@ -215,9 +214,7 @@ async def test_component_discovery_finds_components() -> None:
 @pytest.mark.asyncio
 async def test_component_discovery_all_repos_fail() -> None:
     mock_graph_repo = AsyncMock()
-    mock_graph_repo.get_nodes_by_label = AsyncMock(
-        side_effect=Exception("Neo4j down")
-    )
+    mock_graph_repo.get_nodes_by_label = AsyncMock(side_effect=Exception("Neo4j down"))
 
     tool = TestComponentDiscoveryTool(graph_repository=mock_graph_repo)
     obs = await tool.execute([{"id": "r1", "name": "order-service", "owner": "acme"}])
@@ -264,20 +261,26 @@ async def test_dependency_traversal_detects_cross_repo_coupling() -> None:
 
     payload1 = GraphPayload(
         nodes=[],
-        edges=[GraphEdge(source_id="svc-1", target_id="topic-1", type="PRODUCES_TO", properties={})],
+        edges=[
+            GraphEdge(source_id="svc-1", target_id="topic-1", type="PRODUCES_TO", properties={})
+        ],
     )
     payload2 = GraphPayload(
         nodes=[],
-        edges=[GraphEdge(source_id="topic-1", target_id="svc-2", type="CONSUMES_FROM", properties={})],
+        edges=[
+            GraphEdge(source_id="topic-1", target_id="svc-2", type="CONSUMES_FROM", properties={})
+        ],
     )
 
     mock_graph_repo.get_full_graph = AsyncMock(side_effect=[payload1, payload2])
 
     tool = TestDependencyTraversalTool(graph_repository=mock_graph_repo)
-    obs = await tool.execute([
-        {"id": "r1", "name": "order-service", "owner": "acme"},
-        {"id": "r2", "name": "inventory-service", "owner": "acme"},
-    ])
+    obs = await tool.execute(
+        [
+            {"id": "r1", "name": "order-service", "owner": "acme"},
+            {"id": "r2", "name": "inventory-service", "owner": "acme"},
+        ]
+    )
 
     assert obs.succeeded is True
     assert len(obs.data["cross_repo_edges"]) == 1
@@ -338,7 +341,13 @@ def test_format_graph_context_with_data() -> None:
         summary="2 comps.",
         data={
             "components": [
-                {"id": "c1", "name": "OrderController", "type": "Controller", "repository": "order-service", "file_path": ""},
+                {
+                    "id": "c1",
+                    "name": "OrderController",
+                    "type": "Controller",
+                    "repository": "order-service",
+                    "file_path": "",
+                },
             ],
             "kafka_topics": [
                 {"id": "t1", "name": "order.created", "repository": "order-service"},
@@ -351,13 +360,28 @@ def test_format_graph_context_with_data() -> None:
         summary="3 edges.",
         data={
             "edges": [
-                {"source": "svc-1", "target": "topic-1", "type": "PRODUCES_TO", "repository": "order-service"},
+                {
+                    "source": "svc-1",
+                    "target": "topic-1",
+                    "type": "PRODUCES_TO",
+                    "repository": "order-service",
+                },
             ],
             "cross_repo_edges": [
-                {"topic": "topic-1", "producer_repo": "order-service", "consumer_repo": "payment-service", "type": "CROSS_REPO_KAFKA"},
+                {
+                    "topic": "topic-1",
+                    "producer_repo": "order-service",
+                    "consumer_repo": "payment-service",
+                    "type": "CROSS_REPO_KAFKA",
+                },
             ],
             "integration_points": [
-                {"source": "svc-1", "target": "topic-1", "type": "PRODUCES_TO", "repository": "order-service"},
+                {
+                    "source": "svc-1",
+                    "target": "topic-1",
+                    "type": "PRODUCES_TO",
+                    "repository": "order-service",
+                },
             ],
             "total_edges": 3,
         },
@@ -374,7 +398,9 @@ def test_format_graph_context_with_data() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _make_testing_context(display_name: str = "Test strategy for JWT authentication") -> AgentContext:
+def _make_testing_context(
+    display_name: str = "Test strategy for JWT authentication",
+) -> AgentContext:
     subject = Subject(
         subject_id="freetext:test123",
         subject_type="freetext",
@@ -389,91 +415,93 @@ def _make_testing_context(display_name: str = "Test strategy for JWT authenticat
 
 
 def _make_testing_llm_response() -> str:
-    return json.dumps({
-        "executive_summary": "Comprehensive test strategy for JWT authentication.",
-        "test_scope": {
-            "in_scope": ["Authentication flow", "Token validation"],
-            "out_of_scope": ["UI styling", "Performance at scale"],
-        },
-        "affected_repositories": ["order-service", "payment-service"],
-        "affected_components": ["OrderController", "PaymentService"],
-        "regression_tests": [
-            {
-                "component": "OrderController",
-                "description": "Existing order creation still works with auth",
-                "priority": "critical",
-                "automated": True,
+    return json.dumps(
+        {
+            "executive_summary": "Comprehensive test strategy for JWT authentication.",
+            "test_scope": {
+                "in_scope": ["Authentication flow", "Token validation"],
+                "out_of_scope": ["UI styling", "Performance at scale"],
             },
-        ],
-        "integration_tests": [
-            {
-                "source_component": "OrderController",
-                "target_component": "AuthService",
-                "relationship": "CALLS",
-                "description": "JWT token validation on order creation",
-                "priority": "critical",
-            },
-        ],
-        "edge_cases": [
-            {
-                "description": "Expired token with valid signature",
-                "component": "OrderController",
-                "severity": "high",
-                "category": "boundary",
-            },
-        ],
-        "environment_requirements": [
-            {
-                "name": "Integration",
-                "description": "Full service stack with auth provider",
-                "services_required": ["order-service", "auth-service"],
-            },
-        ],
-        "execution_order": [
-            {
-                "order": 1,
-                "title": "Unit Tests",
-                "description": "Token parsing and validation logic",
-                "test_types": ["unit"],
-                "depends_on_phases": [],
-            },
-            {
-                "order": 2,
-                "title": "Integration Tests",
-                "description": "Auth middleware with real service calls",
-                "test_types": ["integration"],
-                "depends_on_phases": [1],
-            },
-        ],
-        "automation_candidates": [
-            {
-                "description": "JWT token expiry validation",
-                "component": "AuthService",
-                "test_type": "unit",
-                "reason": "Deterministic, fast, high value",
-            },
-        ],
-        "manual_validations": [
-            {
-                "description": "OAuth flow UX across browsers",
-                "component": "LoginPage",
-                "reason": "Browser-specific rendering",
-            },
-        ],
-        "risks": [
-            {
-                "description": "Token rotation may break cached sessions",
-                "severity": "medium",
-                "affected_component": "OrderController",
-                "mitigation": "Test with short-lived tokens",
-            },
-        ],
-        "recommendations": [
-            "Start with unit tests for token parsing",
-            "Run integration tests against a staging auth provider",
-        ],
-        "graph_context_used": True,
-    })
+            "affected_repositories": ["order-service", "payment-service"],
+            "affected_components": ["OrderController", "PaymentService"],
+            "regression_tests": [
+                {
+                    "component": "OrderController",
+                    "description": "Existing order creation still works with auth",
+                    "priority": "critical",
+                    "automated": True,
+                },
+            ],
+            "integration_tests": [
+                {
+                    "source_component": "OrderController",
+                    "target_component": "AuthService",
+                    "relationship": "CALLS",
+                    "description": "JWT token validation on order creation",
+                    "priority": "critical",
+                },
+            ],
+            "edge_cases": [
+                {
+                    "description": "Expired token with valid signature",
+                    "component": "OrderController",
+                    "severity": "high",
+                    "category": "boundary",
+                },
+            ],
+            "environment_requirements": [
+                {
+                    "name": "Integration",
+                    "description": "Full service stack with auth provider",
+                    "services_required": ["order-service", "auth-service"],
+                },
+            ],
+            "execution_order": [
+                {
+                    "order": 1,
+                    "title": "Unit Tests",
+                    "description": "Token parsing and validation logic",
+                    "test_types": ["unit"],
+                    "depends_on_phases": [],
+                },
+                {
+                    "order": 2,
+                    "title": "Integration Tests",
+                    "description": "Auth middleware with real service calls",
+                    "test_types": ["integration"],
+                    "depends_on_phases": [1],
+                },
+            ],
+            "automation_candidates": [
+                {
+                    "description": "JWT token expiry validation",
+                    "component": "AuthService",
+                    "test_type": "unit",
+                    "reason": "Deterministic, fast, high value",
+                },
+            ],
+            "manual_validations": [
+                {
+                    "description": "OAuth flow UX across browsers",
+                    "component": "LoginPage",
+                    "reason": "Browser-specific rendering",
+                },
+            ],
+            "risks": [
+                {
+                    "description": "Token rotation may break cached sessions",
+                    "severity": "medium",
+                    "affected_component": "OrderController",
+                    "mitigation": "Test with short-lived tokens",
+                },
+            ],
+            "recommendations": [
+                "Start with unit tests for token parsing",
+                "Run integration tests against a staging auth provider",
+            ],
+            "graph_context_used": True,
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -484,11 +512,13 @@ async def test_testing_agent_happy_path() -> None:
     mock_graph_repo = MagicMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=True)
     component_node = GraphNode(
-        id="c1", labels=["Component", "Controller"],
+        id="c1",
+        labels=["Component", "Controller"],
         properties={"name": "OrderController"},
     )
     topic_node = GraphNode(
-        id="t1", labels=["KafkaTopic"],
+        id="t1",
+        labels=["KafkaTopic"],
         properties={"name": "order.created"},
     )
     mock_graph_repo.get_nodes_by_label = AsyncMock(
@@ -515,7 +545,10 @@ async def test_testing_agent_happy_path() -> None:
     with (
         patch("app.agents.testing.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.testing.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
-        patch("app.agents.testing.agent._call_llm", new=AsyncMock(return_value=_make_testing_llm_response())),
+        patch(
+            "app.agents.testing.agent._call_llm",
+            new=AsyncMock(return_value=_make_testing_llm_response()),
+        ),
     ):
         agent = TestPlanningAgent()
         output = await agent.run(context)
@@ -550,9 +583,7 @@ async def test_testing_agent_no_indexed_repos() -> None:
     mock_graph_repo = MagicMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=False)
     mock_graph_repo.get_nodes_by_label = AsyncMock(return_value=[])
-    mock_graph_repo.get_full_graph = AsyncMock(
-        return_value=GraphPayload(nodes=[], edges=[])
-    )
+    mock_graph_repo.get_full_graph = AsyncMock(return_value=GraphPayload(nodes=[], edges=[]))
 
     mock_db = context.extras["db"]
     mock_repo = MagicMock()
@@ -566,7 +597,10 @@ async def test_testing_agent_no_indexed_repos() -> None:
     with (
         patch("app.agents.testing.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.testing.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
-        patch("app.agents.testing.agent._call_llm", new=AsyncMock(return_value=_make_testing_llm_response())),
+        patch(
+            "app.agents.testing.agent._call_llm",
+            new=AsyncMock(return_value=_make_testing_llm_response()),
+        ),
     ):
         agent = TestPlanningAgent()
         output = await agent.run(context)
@@ -585,7 +619,10 @@ async def test_testing_agent_graph_unavailable() -> None:
     with (
         patch("app.agents.testing.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.testing.agent.Neo4jGraphRepository", return_value=MagicMock()),
-        patch("app.agents.testing.agent._call_llm", new=AsyncMock(return_value=_make_testing_llm_response())),
+        patch(
+            "app.agents.testing.agent._call_llm",
+            new=AsyncMock(return_value=_make_testing_llm_response()),
+        ),
     ):
         agent = TestPlanningAgent()
         output = await agent.run(context)
@@ -609,7 +646,10 @@ async def test_testing_agent_graph_context_used_overridden_when_graph_fails() ->
     with (
         patch("app.agents.testing.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.testing.agent.Neo4jGraphRepository", return_value=MagicMock()),
-        patch("app.agents.testing.agent._call_llm", new=AsyncMock(return_value=_make_testing_llm_response())),
+        patch(
+            "app.agents.testing.agent._call_llm",
+            new=AsyncMock(return_value=_make_testing_llm_response()),
+        ),
     ):
         agent = TestPlanningAgent()
         output = await agent.run(context)
@@ -624,9 +664,7 @@ async def test_testing_agent_llm_failure_raises() -> None:
     mock_graph_repo = MagicMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=False)
     mock_graph_repo.get_nodes_by_label = AsyncMock(return_value=[])
-    mock_graph_repo.get_full_graph = AsyncMock(
-        return_value=GraphPayload(nodes=[], edges=[])
-    )
+    mock_graph_repo.get_full_graph = AsyncMock(return_value=GraphPayload(nodes=[], edges=[]))
 
     mock_db = context.extras["db"]
     mock_result = MagicMock()
@@ -636,7 +674,10 @@ async def test_testing_agent_llm_failure_raises() -> None:
     with (
         patch("app.agents.testing.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.testing.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
-        patch("app.agents.testing.agent._call_llm", new=AsyncMock(side_effect=TestingLLMError("Timeout"))),
+        patch(
+            "app.agents.testing.agent._call_llm",
+            new=AsyncMock(side_effect=TestingLLMError("Timeout")),
+        ),
     ):
         agent = TestPlanningAgent()
         with pytest.raises(TestingLLMError):
@@ -721,14 +762,63 @@ def test_test_plan_with_full_data() -> None:
         test_scope=TestScope(in_scope=["Auth flow"], out_of_scope=["UI tests"]),
         affected_repositories=["order-service"],
         affected_components=["OrderController"],
-        regression_tests=[RegressionTest(component="OrderController", description="Order creation works", priority="critical", automated=True)],
-        integration_tests=[IntegrationTest(source_component="OrderController", target_component="AuthService", relationship="CALLS", description="Token validation", priority="high")],
-        edge_cases=[EdgeCase(description="Expired token", component="OrderController", severity="high", category="boundary")],
-        environment_requirements=[EnvironmentRequirement(name="Staging", description="Full stack", services_required=["auth-service"])],
-        execution_order=[ExecutionPhase(order=1, title="Unit Tests", description="Token logic", test_types=["unit"], depends_on_phases=[])],
-        automation_candidates=[AutomationCandidate(description="Token expiry", component="AuthService", test_type="unit", reason="Fast")],
-        manual_validations=[ManualValidation(description="OAuth UX", component="LoginPage", reason="Browser-specific")],
-        risks=[TestRisk(description="Token rotation", severity="medium", affected_component="OrderController", mitigation="Short-lived tokens")],
+        regression_tests=[
+            RegressionTest(
+                component="OrderController",
+                description="Order creation works",
+                priority="critical",
+                automated=True,
+            )
+        ],
+        integration_tests=[
+            IntegrationTest(
+                source_component="OrderController",
+                target_component="AuthService",
+                relationship="CALLS",
+                description="Token validation",
+                priority="high",
+            )
+        ],
+        edge_cases=[
+            EdgeCase(
+                description="Expired token",
+                component="OrderController",
+                severity="high",
+                category="boundary",
+            )
+        ],
+        environment_requirements=[
+            EnvironmentRequirement(
+                name="Staging", description="Full stack", services_required=["auth-service"]
+            )
+        ],
+        execution_order=[
+            ExecutionPhase(
+                order=1,
+                title="Unit Tests",
+                description="Token logic",
+                test_types=["unit"],
+                depends_on_phases=[],
+            )
+        ],
+        automation_candidates=[
+            AutomationCandidate(
+                description="Token expiry", component="AuthService", test_type="unit", reason="Fast"
+            )
+        ],
+        manual_validations=[
+            ManualValidation(
+                description="OAuth UX", component="LoginPage", reason="Browser-specific"
+            )
+        ],
+        risks=[
+            TestRisk(
+                description="Token rotation",
+                severity="medium",
+                affected_component="OrderController",
+                mitigation="Short-lived tokens",
+            )
+        ],
         recommendations=["Start with unit tests"],
         graph_context_used=True,
         repositories_consulted=["order-service"],

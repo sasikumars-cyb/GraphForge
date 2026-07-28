@@ -141,8 +141,13 @@ async def test_create_agent_run_happy_path(client: AsyncClient) -> None:
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
-        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+        ),
     ):
         response = await client.post(
             "/api/v1/agent-runs",
@@ -184,8 +189,13 @@ async def test_list_agent_runs_filters_by_subject_id(db_client: AsyncClient) -> 
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
-        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+        ),
     ):
         first = await db_client.post(
             "/api/v1/agent-runs",
@@ -226,8 +236,13 @@ async def test_create_workflow_happy_path(client: AsyncClient) -> None:
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
-        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+        ),
     ):
         response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
@@ -254,8 +269,13 @@ async def test_continue_workflow_happy_path(client: AsyncClient) -> None:
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
-        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+        ),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
@@ -277,7 +297,9 @@ async def test_continue_workflow_happy_path(client: AsyncClient) -> None:
         assert continue_response.status_code == 202
         assert continue_response.json()["stage"] == "development"
 
-        detail = await _poll_workflow_stage_until_terminal(client, workflow_id, "development", headers)
+        detail = await _poll_workflow_stage_until_terminal(
+            client, workflow_id, "development", headers
+        )
 
     assert detail["current_stage"] == "testing"
     stages_by_name = {s["stage"]: s for s in detail["stages"]}
@@ -300,8 +322,13 @@ async def test_continue_workflow_failed_stage_is_linked_to_workflow(client: Asyn
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
-        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+        ),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
@@ -322,7 +349,9 @@ async def test_continue_workflow_failed_stage_is_linked_to_workflow(client: Asyn
         )
         assert continue_response.status_code == 202
 
-        detail = await _poll_workflow_stage_until_terminal(client, workflow_id, "development", headers)
+        detail = await _poll_workflow_stage_until_terminal(
+            client, workflow_id, "development", headers
+        )
 
     stages_by_name = {s["stage"]: s for s in detail["stages"]}
 
@@ -332,9 +361,7 @@ async def test_continue_workflow_failed_stage_is_linked_to_workflow(client: Asyn
     assert stages_by_name["development"]["run_id"] is not None
 
     failed_run_id = stages_by_name["development"]["run_id"]
-    run_detail = (
-        await client.get(f"/api/v1/agent-runs/{failed_run_id}", headers=headers)
-    ).json()
+    run_detail = (await client.get(f"/api/v1/agent-runs/{failed_run_id}", headers=headers)).json()
     assert run_detail["status"] == "failed"
     assert run_detail["workflow_id"] == workflow_id
     assert "LLM provider unavailable" in (run_detail["error_message"] or "")
@@ -365,7 +392,9 @@ async def test_create_workflow_planning_failure_is_linked_and_error_preserved(
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
         patch(
             "app.agents.planning.agent._call_llm",
             new=AsyncMock(side_effect=PlanningLLMError(rate_limit_message)),
@@ -391,9 +420,7 @@ async def test_create_workflow_planning_failure_is_linked_and_error_preserved(
     # Original AppError message is preserved on the run (not swallowed or
     # replaced with a generic message).
     failed_run_id = stages_by_name["planning"]["run_id"]
-    run_detail = (
-        await client.get(f"/api/v1/agent-runs/{failed_run_id}", headers=headers)
-    ).json()
+    run_detail = (await client.get(f"/api/v1/agent-runs/{failed_run_id}", headers=headers)).json()
     assert run_detail["status"] == "failed"
     assert run_detail["error_message"] == rate_limit_message
 
@@ -422,8 +449,13 @@ async def test_workflow_not_visible_or_mutable_by_a_different_user(client: Async
 
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
-        patch("app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()),
-        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE)),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+        ),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Owner-only workflow"}, headers=owner_headers
@@ -477,7 +509,9 @@ async def test_run_not_visible_or_mutable_by_a_different_user(client: AsyncClien
     get_response = await client.get(f"/api/v1/agent-runs/{run_id}", headers=other_headers)
     assert get_response.status_code == 404
 
-    cancel_response = await client.post(f"/api/v1/agent-runs/{run_id}/cancel", headers=other_headers)
+    cancel_response = await client.post(
+        f"/api/v1/agent-runs/{run_id}/cancel", headers=other_headers
+    )
     assert cancel_response.status_code == 404
 
     delete_response = await client.delete(f"/api/v1/agent-runs/{run_id}", headers=other_headers)

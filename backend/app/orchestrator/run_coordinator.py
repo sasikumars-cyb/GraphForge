@@ -13,22 +13,22 @@ across calls beyond the single (subject, goal) it's given.
 
 from __future__ import annotations
 
+import logging
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
-
-import logging
+from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
-
-logger = logging.getLogger(__name__)
 
 from app.agents._contract import AgentContext, AgentOutput, Subject
 from app.models.agent_step import AgentStep
 from app.models.run import Run
 from app.orchestrator.registry import AgentRegistry
 from app.orchestrator.selector import AgentSelector
+
+logger = logging.getLogger(__name__)
 
 
 class RunCoordinator:
@@ -56,7 +56,7 @@ class RunCoordinator:
         subject: Subject,
         goal: str,
         model: str | None = None,
-        extras: dict | None = None,
+        extras: dict[str, Any] | None = None,
     ) -> Run:
         """Select the agent for `goal`, run it against `subject`, and
         persist a Run + AgentStep. Returns the completed Run row.
@@ -94,7 +94,9 @@ class RunCoordinator:
         and re-raises — matching `execute()`'s error behavior exactly.
         """
         if self._selector is None:
-            raise ValueError("create_pending_run requires a selector; construct RunCoordinator with one.")
+            raise ValueError(
+                "create_pending_run requires a selector; construct RunCoordinator with one."
+            )
 
         run = Run(
             id=uuid.uuid4(),
@@ -117,15 +119,21 @@ class RunCoordinator:
 
         entry = self._registry.get(agent_id)
         if entry is None:
-            await self._fail_run(run, f"Agent '{agent_id}' is registered in the Selector but not in the Registry.")
+            await self._fail_run(
+                run, f"Agent '{agent_id}' is registered in the Selector but not in the Registry."
+            )
             await self._db.commit()
             from app.core.exceptions import NotFoundError
+
             raise NotFoundError(f"Agent '{agent_id}' selected but not found in registry.")
 
         if not self._registry.is_enabled(agent_id):
-            await self._fail_run(run, f"Agent '{agent_id}' is currently disabled by an administrator.")
+            await self._fail_run(
+                run, f"Agent '{agent_id}' is currently disabled by an administrator."
+            )
             await self._db.commit()
             from app.core.exceptions import AgentDisabledError
+
             raise AgentDisabledError(f"Agent '{agent_id}' is disabled.")
 
         _manifest, agent = entry
@@ -139,7 +147,7 @@ class RunCoordinator:
         subject: Subject,
         goal: str,
         model: str | None = None,
-        extras: dict | None = None,
+        extras: dict[str, Any] | None = None,
         on_pre_commit: Callable[[AsyncSession, Run], Awaitable[None]] | None = None,
     ) -> Run:
         """Phase 2: run the resolved `agent` against `subject` and persist
@@ -172,12 +180,15 @@ class RunCoordinator:
         self._db.add(step)
 
         run.status = "running"
-        run.started_at = datetime.now(timezone.utc)
+        run.started_at = datetime.now(UTC)
         await self._db.flush()
 
         logger.info(
             "agent_run_started run_id=%s agent_id=%s subject_id=%s goal=%s",
-            str(run.id), agent_id, subject.subject_id, goal,
+            str(run.id),
+            agent_id,
+            subject.subject_id,
+            goal,
         )
 
         # Inject db session via extras so agents can do Postgres queries
@@ -186,7 +197,7 @@ class RunCoordinator:
         # time execution starts (see agent_runs.py), and agents need it to
         # resolve per-user credentials (e.g. a GitHub OAuth connection)
         # rather than an install-wide config.
-        ctx_extras: dict = {"db": self._db, "user_id": run.user_id}
+        ctx_extras: dict[str, Any] = {"db": self._db, "user_id": run.user_id}
         if extras:
             ctx_extras.update(extras)
         context = AgentContext(subject=subject, goal=goal, model=model, extras=ctx_extras)
@@ -201,12 +212,14 @@ class RunCoordinator:
             await self._commit_with_hook(run, on_pre_commit)
             logger.error(
                 "agent_run_failed run_id=%s agent_id=%s error=%s",
-                str(run.id), agent_id, str(exc),
+                str(run.id),
+                agent_id,
+                str(exc),
             )
             raise
 
         latency_ms = int((time.monotonic() - start_ms) * 1000)
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
 
         # Persist AgentOutput into the step row
         step.status = "completed"
@@ -226,9 +239,14 @@ class RunCoordinator:
         await self._commit_with_hook(run, on_pre_commit)
 
         logger.info(
-            "agent_run_completed run_id=%s agent_id=%s subject_id=%s confidence=%.2f evidence_count=%d latency_ms=%d",
-            str(run.id), agent_id, subject.subject_id, output.confidence.score,
-            len(output.evidence), latency_ms,
+            "agent_run_completed run_id=%s agent_id=%s subject_id=%s "
+            "confidence=%.2f evidence_count=%d latency_ms=%d",
+            str(run.id),
+            agent_id,
+            subject.subject_id,
+            output.confidence.score,
+            len(output.evidence),
+            latency_ms,
         )
 
         return run
@@ -249,18 +267,16 @@ class RunCoordinator:
         try:
             await on_pre_commit(self._db, run)
         except Exception:
-            logger.exception(
-                "run_coordinator_pre_commit_hook_failed run_id=%s", str(run.id)
-            )
+            logger.exception("run_coordinator_pre_commit_hook_failed run_id=%s", str(run.id))
             await self._db.commit()
 
     async def _fail_step(self, step: AgentStep, error: str, latency_ms: int) -> None:
         step.status = "failed"
         step.error_message = error
         step.latency_ms = latency_ms
-        step.completed_at = datetime.now(timezone.utc)
+        step.completed_at = datetime.now(UTC)
 
     async def _fail_run(self, run: Run, error: str) -> None:
         run.status = "failed"
         run.error_message = error
-        run.completed_at = datetime.now(timezone.utc)
+        run.completed_at = datetime.now(UTC)

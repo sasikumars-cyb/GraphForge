@@ -45,6 +45,13 @@ const REPOS: TrackedRepository[] = [
   },
 ];
 
+// A fixed calendar date here is a time bomb: useDashboardData's
+// highRiskThisWeekCount only counts PRs updated within the last 7 days of
+// *whenever the test happens to run*, so a literal date eventually falls
+// outside that rolling window and the count silently drops to 0 with no
+// code change. One day ago, computed at test-run time, is always "this week."
+const ONE_DAY_AGO = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+
 function pr(overrides: Partial<PullRequest>): PullRequest {
   return {
     id: "pr-1",
@@ -56,8 +63,8 @@ function pr(overrides: Partial<PullRequest>): PullRequest {
     html_url: "https://example.invalid",
     head_ref: "pr-1",
     base_ref: "main",
-    github_created_at: "2026-07-20T00:00:00Z",
-    github_updated_at: "2026-07-20T00:00:00Z",
+    github_created_at: ONE_DAY_AGO,
+    github_updated_at: ONE_DAY_AGO,
     ...overrides,
   };
 }

@@ -11,7 +11,7 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -19,9 +19,9 @@ import pytest
 from app.models.run import Run
 from app.models.workflow import Workflow
 from app.services.workflow_service import (
-    STAGES,
     STAGE_GOALS,
     STAGE_LABELS,
+    STAGES,
     WORKFLOW_TYPE_STAGES,
     _summarize_previous_output,
     build_stage_context,
@@ -149,7 +149,7 @@ def _make_run(result: dict | None = None, goal: str = "plan_freeform") -> Run:
         display_name="Test task",
         goal=goal,
         status="completed",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     step = MagicMock()
     step.result = result
@@ -198,7 +198,7 @@ def test_summarize_previous_output_no_steps() -> None:
         display_name="Test",
         goal="plan_freeform",
         status="completed",
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
     run.steps = []
     assert _summarize_previous_output(run) == ""
@@ -255,7 +255,7 @@ def test_build_stage_context_third_stage_accumulates() -> None:
     )
     planning_run.workflow_stage = "planning"
     planning_run.workflow_id = workflow.id
-    planning_run.created_at = datetime(2026, 7, 23, 10, 0, tzinfo=timezone.utc)
+    planning_run.created_at = datetime(2026, 7, 23, 10, 0, tzinfo=UTC)
 
     dev_run = _make_run(
         result={"executive_summary": "Dev plan: 3 phases, 5 components."},
@@ -263,7 +263,7 @@ def test_build_stage_context_third_stage_accumulates() -> None:
     )
     dev_run.workflow_stage = "development"
     dev_run.workflow_id = workflow.id
-    dev_run.created_at = datetime(2026, 7, 23, 11, 0, tzinfo=timezone.utc)
+    dev_run.created_at = datetime(2026, 7, 23, 11, 0, tzinfo=UTC)
 
     workflow.runs = [planning_run, dev_run]
 
@@ -666,8 +666,8 @@ def test_workflow_api_continue_request_validation() -> None:
 def test_workflow_api_detail_response_shape() -> None:
     from app.api.v1.routers.workflows import (
         WorkflowDetailResponse,
-        WorkflowStageResponse,
         WorkflowRunResponse,
+        WorkflowStageResponse,
     )
 
     stage = WorkflowStageResponse(
@@ -877,9 +877,7 @@ async def test_create_auto_execution_requires_source_workflow_id() -> None:
     mock_db.flush = AsyncMock()
 
     with pytest.raises(AppError) as exc_info:
-        await create_workflow(
-            mock_db, title="Auto exec", workflow_type="auto_execution"
-        )
+        await create_workflow(mock_db, title="Auto exec", workflow_type="auto_execution")
     assert exc_info.value.status_code == 400
     assert exc_info.value.error_code == "missing_source_workflow"
 
@@ -1012,7 +1010,7 @@ def test_build_stage_context_with_source_workflow() -> None:
     )
     dev_run.workflow_stage = "development"
     dev_run.workflow_id = source.id
-    dev_run.created_at = datetime(2026, 7, 23, 10, 0, tzinfo=timezone.utc)
+    dev_run.created_at = datetime(2026, 7, 23, 10, 0, tzinfo=UTC)
     source.runs = [dev_run]
 
     workflow = Workflow(
@@ -1161,7 +1159,7 @@ def _pr_result_run(pull_request_id: str, title: str = "feat: add caching") -> ob
         workflow_stage="create_pull_request",
         status="completed",
         steps=[step],
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
 

@@ -235,7 +235,9 @@ _SPECS: tuple[ProviderSpec, ...] = (
             ModelSpec("us.amazon.nova-pro-v1:0", "Amazon Nova Pro", 300_000),
             ModelSpec("us.amazon.nova-lite-v1:0", "Amazon Nova Lite", 300_000),
             ModelSpec("us.amazon.nova-micro-v1:0", "Amazon Nova Micro", 128_000),
-            ModelSpec("us.meta.llama4-maverick-17b-instruct-v1:0", "Meta Llama 4 Maverick", 128_000),
+            ModelSpec(
+                "us.meta.llama4-maverick-17b-instruct-v1:0", "Meta Llama 4 Maverick", 128_000
+            ),
             ModelSpec("us.meta.llama4-scout-17b-instruct-v1:0", "Meta Llama 4 Scout", 128_000),
         ),
         default_model="us.anthropic.claude-sonnet-4-20250514",

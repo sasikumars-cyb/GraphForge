@@ -33,7 +33,6 @@ from app.agents.development.tools import (
 )
 from app.graph.models import GraphEdge, GraphNode, GraphPayload
 
-
 # ---------------------------------------------------------------------------
 # DevelopmentObservation unit tests
 # ---------------------------------------------------------------------------
@@ -281,17 +280,19 @@ async def test_dependency_traversal_detects_cross_repo_coupling() -> None:
     # Repo 1: produces to topic-1
     payload1 = GraphPayload(
         nodes=[],
-        edges=[GraphEdge(source_id="svc-1", target_id="topic-1", type="PRODUCES_TO", properties={})],
+        edges=[
+            GraphEdge(source_id="svc-1", target_id="topic-1", type="PRODUCES_TO", properties={})
+        ],
     )
     # Repo 2: consumes from topic-1
     payload2 = GraphPayload(
         nodes=[],
-        edges=[GraphEdge(source_id="topic-1", target_id="svc-2", type="CONSUMES_FROM", properties={})],
+        edges=[
+            GraphEdge(source_id="topic-1", target_id="svc-2", type="CONSUMES_FROM", properties={})
+        ],
     )
 
-    mock_graph_repo.get_full_graph = AsyncMock(
-        side_effect=[payload1, payload2]
-    )
+    mock_graph_repo.get_full_graph = AsyncMock(side_effect=[payload1, payload2])
 
     tool = DependencyTraversalTool(graph_repository=mock_graph_repo)
     repos = [
@@ -309,9 +310,7 @@ async def test_dependency_traversal_detects_cross_repo_coupling() -> None:
 @pytest.mark.asyncio
 async def test_dependency_traversal_all_repos_fail() -> None:
     mock_graph_repo = AsyncMock()
-    mock_graph_repo.get_full_graph = AsyncMock(
-        side_effect=Exception("Neo4j unavailable")
-    )
+    mock_graph_repo.get_full_graph = AsyncMock(side_effect=Exception("Neo4j unavailable"))
 
     tool = DependencyTraversalTool(graph_repository=mock_graph_repo)
     obs = await tool.execute([{"id": "r1", "name": "order-service", "owner": "acme"}])
@@ -362,8 +361,20 @@ def test_format_graph_context_with_data() -> None:
         summary="3 components.",
         data={
             "components": [
-                {"id": "c1", "name": "OrderController", "type": "Controller", "repository": "order-service", "file_path": "src/OrderController.java"},
-                {"id": "c2", "name": "PaymentService", "type": "Service", "repository": "payment-service", "file_path": ""},
+                {
+                    "id": "c1",
+                    "name": "OrderController",
+                    "type": "Controller",
+                    "repository": "order-service",
+                    "file_path": "src/OrderController.java",
+                },
+                {
+                    "id": "c2",
+                    "name": "PaymentService",
+                    "type": "Service",
+                    "repository": "payment-service",
+                    "file_path": "",
+                },
             ],
             "kafka_topics": [
                 {"id": "t1", "name": "order.created", "repository": "order-service"},
@@ -376,11 +387,26 @@ def test_format_graph_context_with_data() -> None:
         summary="5 edges.",
         data={
             "edges": [
-                {"source": "svc-1", "target": "topic-1", "type": "PRODUCES_TO", "repository": "order-service"},
-                {"source": "topic-1", "target": "svc-2", "type": "CONSUMES_FROM", "repository": "payment-service"},
+                {
+                    "source": "svc-1",
+                    "target": "topic-1",
+                    "type": "PRODUCES_TO",
+                    "repository": "order-service",
+                },
+                {
+                    "source": "topic-1",
+                    "target": "svc-2",
+                    "type": "CONSUMES_FROM",
+                    "repository": "payment-service",
+                },
             ],
             "cross_repo_edges": [
-                {"topic": "topic-1", "producer_repo": "order-service", "consumer_repo": "payment-service", "type": "CROSS_REPO_KAFKA"},
+                {
+                    "topic": "topic-1",
+                    "producer_repo": "order-service",
+                    "consumer_repo": "payment-service",
+                    "type": "CROSS_REPO_KAFKA",
+                },
             ],
             "total_edges": 5,
         },
@@ -412,68 +438,70 @@ def _make_development_context(display_name: str = "Implement JWT authentication"
 
 
 def _make_development_llm_response() -> str:
-    return json.dumps({
-        "executive_summary": "Implement JWT auth across all services.",
-        "repositories": [
-            {"name": "order-service", "owner": "acme", "reason": "Needs auth middleware"},
-            {"name": "payment-service", "owner": "acme", "reason": "Needs token validation"},
-        ],
-        "components": [
-            {
-                "name": "OrderController",
-                "component_type": "Controller",
-                "repository": "order-service",
-                "file_path": "src/OrderController.java",
-                "change_description": "Add JWT filter",
-            },
-        ],
-        "dependencies": [
-            {
-                "source": "OrderController",
-                "target": "AuthService",
-                "relationship": "CALLS",
-                "risk_note": "New dependency introduced",
-            },
-        ],
-        "reusable_implementations": [
-            {
-                "name": "PaymentAuthFilter",
-                "repository": "payment-service",
-                "reason": "Already implements JWT validation pattern",
-            },
-        ],
-        "implementation_phases": [
-            {
-                "order": 1,
-                "title": "Create shared auth library",
-                "description": "Build JWT validation as a shared module.",
-                "affected_components": ["AuthService"],
-                "estimated_complexity": "medium",
-                "depends_on_phases": [],
-            },
-            {
-                "order": 2,
-                "title": "Integrate auth into order-service",
-                "description": "Add JWT filter to all controllers.",
-                "affected_components": ["OrderController"],
-                "estimated_complexity": "low",
-                "depends_on_phases": [1],
-            },
-        ],
-        "risks": [
-            {
-                "description": "Token expiry handling may cause cascading failures",
-                "severity": "medium",
-                "affected_component": "OrderController",
-                "mitigation": "Implement graceful token refresh",
-            },
-        ],
-        "recommendations": [
-            "Start with order-service as pilot before rolling out to all services",
-            "Reuse PaymentAuthFilter pattern",
-        ],
-        "graph_context_used": True,
-    })
+    return json.dumps(
+        {
+            "executive_summary": "Implement JWT auth across all services.",
+            "repositories": [
+                {"name": "order-service", "owner": "acme", "reason": "Needs auth middleware"},
+                {"name": "payment-service", "owner": "acme", "reason": "Needs token validation"},
+            ],
+            "components": [
+                {
+                    "name": "OrderController",
+                    "component_type": "Controller",
+                    "repository": "order-service",
+                    "file_path": "src/OrderController.java",
+                    "change_description": "Add JWT filter",
+                },
+            ],
+            "dependencies": [
+                {
+                    "source": "OrderController",
+                    "target": "AuthService",
+                    "relationship": "CALLS",
+                    "risk_note": "New dependency introduced",
+                },
+            ],
+            "reusable_implementations": [
+                {
+                    "name": "PaymentAuthFilter",
+                    "repository": "payment-service",
+                    "reason": "Already implements JWT validation pattern",
+                },
+            ],
+            "implementation_phases": [
+                {
+                    "order": 1,
+                    "title": "Create shared auth library",
+                    "description": "Build JWT validation as a shared module.",
+                    "affected_components": ["AuthService"],
+                    "estimated_complexity": "medium",
+                    "depends_on_phases": [],
+                },
+                {
+                    "order": 2,
+                    "title": "Integrate auth into order-service",
+                    "description": "Add JWT filter to all controllers.",
+                    "affected_components": ["OrderController"],
+                    "estimated_complexity": "low",
+                    "depends_on_phases": [1],
+                },
+            ],
+            "risks": [
+                {
+                    "description": "Token expiry handling may cause cascading failures",
+                    "severity": "medium",
+                    "affected_component": "OrderController",
+                    "mitigation": "Implement graceful token refresh",
+                },
+            ],
+            "recommendations": [
+                "Start with order-service as pilot before rolling out to all services",
+                "Reuse PaymentAuthFilter pattern",
+            ],
+            "graph_context_used": True,
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -484,11 +512,13 @@ async def test_development_agent_happy_path() -> None:
     mock_graph_repo = MagicMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=True)
     component_node = GraphNode(
-        id="c1", labels=["Component", "Controller"],
+        id="c1",
+        labels=["Component", "Controller"],
         properties={"name": "OrderController", "file_path": "src/OrderController.java"},
     )
     topic_node = GraphNode(
-        id="t1", labels=["KafkaTopic"],
+        id="t1",
+        labels=["KafkaTopic"],
         properties={"name": "order.created"},
     )
     mock_graph_repo.get_nodes_by_label = AsyncMock(
@@ -515,7 +545,10 @@ async def test_development_agent_happy_path() -> None:
     with (
         patch("app.agents.development.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.development.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
-        patch("app.agents.development.agent._call_llm", new=AsyncMock(return_value=_make_development_llm_response())),
+        patch(
+            "app.agents.development.agent._call_llm",
+            new=AsyncMock(return_value=_make_development_llm_response()),
+        ),
     ):
         agent = DevelopmentAgent()
         output = await agent.run(context)
@@ -555,9 +588,7 @@ async def test_development_agent_no_indexed_repos() -> None:
     mock_graph_repo = MagicMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=False)
     mock_graph_repo.get_nodes_by_label = AsyncMock(return_value=[])
-    mock_graph_repo.get_full_graph = AsyncMock(
-        return_value=GraphPayload(nodes=[], edges=[])
-    )
+    mock_graph_repo.get_full_graph = AsyncMock(return_value=GraphPayload(nodes=[], edges=[]))
 
     mock_db = context.extras["db"]
     mock_repo = MagicMock()
@@ -571,7 +602,10 @@ async def test_development_agent_no_indexed_repos() -> None:
     with (
         patch("app.agents.development.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.development.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
-        patch("app.agents.development.agent._call_llm", new=AsyncMock(return_value=_make_development_llm_response())),
+        patch(
+            "app.agents.development.agent._call_llm",
+            new=AsyncMock(return_value=_make_development_llm_response()),
+        ),
     ):
         agent = DevelopmentAgent()
         output = await agent.run(context)
@@ -593,7 +627,10 @@ async def test_development_agent_graph_unavailable() -> None:
     with (
         patch("app.agents.development.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.development.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
-        patch("app.agents.development.agent._call_llm", new=AsyncMock(return_value=_make_development_llm_response())),
+        patch(
+            "app.agents.development.agent._call_llm",
+            new=AsyncMock(return_value=_make_development_llm_response()),
+        ),
     ):
         agent = DevelopmentAgent()
         output = await agent.run(context)
@@ -622,7 +659,10 @@ async def test_development_agent_graph_context_used_overridden_when_graph_fails(
     with (
         patch("app.agents.development.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.development.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
-        patch("app.agents.development.agent._call_llm", new=AsyncMock(return_value=_make_development_llm_response())),
+        patch(
+            "app.agents.development.agent._call_llm",
+            new=AsyncMock(return_value=_make_development_llm_response()),
+        ),
     ):
         agent = DevelopmentAgent()
         output = await agent.run(context)
@@ -638,9 +678,7 @@ async def test_development_agent_llm_failure_raises() -> None:
     mock_graph_repo = MagicMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=False)
     mock_graph_repo.get_nodes_by_label = AsyncMock(return_value=[])
-    mock_graph_repo.get_full_graph = AsyncMock(
-        return_value=GraphPayload(nodes=[], edges=[])
-    )
+    mock_graph_repo.get_full_graph = AsyncMock(return_value=GraphPayload(nodes=[], edges=[]))
 
     mock_db = context.extras["db"]
     mock_result = MagicMock()
@@ -650,7 +688,10 @@ async def test_development_agent_llm_failure_raises() -> None:
     with (
         patch("app.agents.development.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.development.agent.Neo4jGraphRepository", return_value=mock_graph_repo),
-        patch("app.agents.development.agent._call_llm", new=AsyncMock(side_effect=DevelopmentLLMError("Timeout"))),
+        patch(
+            "app.agents.development.agent._call_llm",
+            new=AsyncMock(side_effect=DevelopmentLLMError("Timeout")),
+        ),
     ):
         agent = DevelopmentAgent()
         with pytest.raises(DevelopmentLLMError):
@@ -743,12 +784,49 @@ def test_development_plan_with_full_data() -> None:
     plan = DevelopmentPlan(
         goal="Split OrderService",
         executive_summary="Decompose into command and query services.",
-        repositories=[AffectedRepository(name="order-service", owner="acme", reason="Primary target")],
-        components=[AffectedComponent(name="OrderController", component_type="Controller", repository="order-service", file_path="src/OrderController.java", change_description="Split into two controllers")],
-        dependencies=[Dependency(source="OrderController", target="OrderService", relationship="CALLS", risk_note="Tight coupling")],
-        reusable_implementations=[ReusableImplementation(name="PaymentQueryService", repository="payment-service", reason="Already CQRS")],
-        implementation_phases=[ImplementationPhase(order=1, title="Phase 1", description="Extract queries", affected_components=["OrderController"], estimated_complexity="high", depends_on_phases=[])],
-        risks=[Risk(description="Data consistency", severity="high", affected_component="OrderService", mitigation="Use eventual consistency")],
+        repositories=[
+            AffectedRepository(name="order-service", owner="acme", reason="Primary target")
+        ],
+        components=[
+            AffectedComponent(
+                name="OrderController",
+                component_type="Controller",
+                repository="order-service",
+                file_path="src/OrderController.java",
+                change_description="Split into two controllers",
+            )
+        ],
+        dependencies=[
+            Dependency(
+                source="OrderController",
+                target="OrderService",
+                relationship="CALLS",
+                risk_note="Tight coupling",
+            )
+        ],
+        reusable_implementations=[
+            ReusableImplementation(
+                name="PaymentQueryService", repository="payment-service", reason="Already CQRS"
+            )
+        ],
+        implementation_phases=[
+            ImplementationPhase(
+                order=1,
+                title="Phase 1",
+                description="Extract queries",
+                affected_components=["OrderController"],
+                estimated_complexity="high",
+                depends_on_phases=[],
+            )
+        ],
+        risks=[
+            Risk(
+                description="Data consistency",
+                severity="high",
+                affected_component="OrderService",
+                mitigation="Use eventual consistency",
+            )
+        ],
         recommendations=["Start with read model"],
         graph_context_used=True,
         repositories_consulted=["order-service", "payment-service"],

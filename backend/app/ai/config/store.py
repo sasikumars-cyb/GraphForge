@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -77,8 +78,8 @@ class ConfigSnapshot:
     default_model: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
-    stage_overrides: dict = field(default_factory=dict)
-    fallback_order: list = field(default_factory=list)
+    stage_overrides: dict[str, Any] = field(default_factory=dict[str, Any])
+    fallback_order: list[Any] = field(default_factory=list[Any])
     fallback_enabled: bool = False
     loaded: bool = False
 

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 # ---------------------------------------------------------------------------
 # Source catalog (static, from registry)
@@ -52,8 +52,8 @@ class ConnectionInfo(BaseModel):
     name: str
     transport: str
     auth_method: str
-    config: dict = Field(default_factory=dict)
-    scope: dict = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict[str, Any])
+    scope: dict[str, Any] = Field(default_factory=dict[str, Any])
     enabled: bool = True
     credentials_configured: bool = False
 
@@ -75,9 +75,9 @@ class ConnectionCreateRequest(BaseModel):
     name: str
     transport: str
     auth_method: str
-    config: dict = Field(default_factory=dict)
-    credentials: dict = Field(default_factory=dict)  # write-only
-    scope: dict = Field(default_factory=dict)
+    config: dict[str, Any] = Field(default_factory=dict[str, Any])
+    credentials: dict[str, Any] = Field(default_factory=dict[str, Any])  # write-only
+    scope: dict[str, Any] = Field(default_factory=dict[str, Any])
 
 
 class ConnectionUpdateRequest(BaseModel):
@@ -88,9 +88,9 @@ class ConnectionUpdateRequest(BaseModel):
     name: str | None = None
     transport: str | None = None
     auth_method: str | None = None
-    config: dict | None = None
-    credentials: dict | None = None  # write-only; omit to keep current
-    scope: dict | None = None
+    config: dict[str, Any] | None = None
+    credentials: dict[str, Any] | None = None  # write-only; omit to keep current
+    scope: dict[str, Any] | None = None
     enabled: bool | None = None
 
 

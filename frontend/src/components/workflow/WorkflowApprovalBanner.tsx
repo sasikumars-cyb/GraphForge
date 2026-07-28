@@ -20,10 +20,10 @@ interface WorkflowApprovalBannerProps {
  * Engineering Review completes, a human decides whether the whole
  * blueprint is ready, not whether to continue to one more stage (that's
  * ApprovalGateBanner's job, a level down). Approve/Reject call the real
- * /approve and /reject endpoints — unlike ApprovalGateBanner's per-stage
- * "Reject" (deliberately local-only, since rejecting one stage there just
- * leaves the workflow as-is), rejecting a blueprint here is a genuine,
- * persisted, terminal decision. */
+ * /approve and /reject endpoints — the same pattern ApprovalGateBanner's
+ * per-stage Approve/Reject already use (both call their caller's
+ * onApprove/onReject straight through to the real backend mutation), just
+ * scoped to the whole workflow rather than one stage. */
 export function WorkflowApprovalBanner({
   workflowTitle,
   workflowId,

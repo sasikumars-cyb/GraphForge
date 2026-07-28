@@ -305,22 +305,29 @@ def resolve(
 
     provider_key, source = _pick_provider_key(snapshot, cfg, provider, stage)
     spec = require_provider_spec(provider_key)
-    record = snapshot.provider(spec.key)
+    # Deliberately a distinct name from the ProfileRecord `record` above:
+    # this is a ProviderRecord, a different type. Reusing `record` here
+    # type-checked incorrectly (mypy inferred a single static type for the
+    # name across the whole function) even though the two blocks are on
+    # disjoint code paths — the first always returns before reaching this
+    # line — so it was never a runtime bug, but the shared name made that
+    # true only by the accident of an early return, not by the type system.
+    provider_record = snapshot.provider(spec.key)
 
     resolved_model = _pick_model(spec, snapshot, cfg, model, stage)
 
     env_key, _ = _env_credentials(spec.key, cfg)
-    api_key = (record.api_key if record else None) or env_key
+    api_key = (provider_record.api_key if provider_record else None) or env_key
 
     temperature = (
         _stage_number(snapshot, stage, "temperature")
-        or (record.temperature if record else None)
+        or (provider_record.temperature if provider_record else None)
         or snapshot.temperature
         or cfg.openai_temperature
     )
     max_tokens = (
         _stage_number(snapshot, stage, "max_tokens")
-        or (record.max_tokens if record else None)
+        or (provider_record.max_tokens if provider_record else None)
         or snapshot.max_tokens
         or _default_max_tokens(spec.key, cfg)
     )
@@ -332,8 +339,9 @@ def resolve(
             model=resolved_model,
             temperature=float(temperature),
             max_tokens=int(max_tokens),
-            base_url=(record.base_url if record else None) or spec.default_base_url,
-            provider_options=_resolve_provider_options(spec.key, record, cfg),
+            base_url=(provider_record.base_url if provider_record else None)
+            or spec.default_base_url,
+            provider_options=_resolve_provider_options(spec.key, provider_record, cfg),
         ),
         source=source,
     )

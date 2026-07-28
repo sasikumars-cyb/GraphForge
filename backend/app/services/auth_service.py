@@ -47,7 +47,7 @@ async def register_user(db: AsyncSession, request: UserRegisterRequest) -> User:
         # email is supposed to produce. The session must be rolled back
         # before it can be used again (a failed commit leaves it unusable).
         await db.rollback()
-        raise ConflictError("An account with this email already exists.")
+        raise ConflictError("An account with this email already exists.") from None
     await db.refresh(user)
     return user
 

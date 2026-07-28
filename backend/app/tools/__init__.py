@@ -17,6 +17,8 @@ Public API:
     ContextBuilder        → merges tool results into LLM-ready context
 """
 
+from app.tools.context_builder import ContextBuilder, PlanningContext
+from app.tools.executor import ToolExecutor
 from app.tools.interfaces import (
     ITool,
     ToolCategory,
@@ -25,8 +27,6 @@ from app.tools.interfaces import (
     ToolResult,
 )
 from app.tools.registry import ToolSpec, get_tool_registry
-from app.tools.executor import ToolExecutor
-from app.tools.context_builder import ContextBuilder, PlanningContext
 
 __all__ = [
     "ITool",

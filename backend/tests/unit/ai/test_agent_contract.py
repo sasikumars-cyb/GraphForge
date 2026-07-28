@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from app.agents._contract import (
     AgentContext,
@@ -12,7 +13,6 @@ from app.agents._contract import (
     Evidence,
     Subject,
 )
-
 
 # ---------------------------------------------------------------------------
 # Subject
@@ -42,7 +42,11 @@ def test_subject_with_nodes() -> None:
 
 
 def test_evidence_graph_traversal() -> None:
-    e = Evidence(kind="graph_traversal", reference="traverse_architecture_graph", summary="Found 5 components.")
+    e = Evidence(
+        kind="graph_traversal",
+        reference="traverse_architecture_graph",
+        summary="Found 5 components.",
+    )
     assert e.kind == "graph_traversal"
 
 
@@ -67,12 +71,12 @@ def test_confidence_within_bounds() -> None:
 
 
 def test_confidence_score_below_zero_raises() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Confidence(score=-0.1)
 
 
 def test_confidence_score_above_one_raises() -> None:
-    with pytest.raises(Exception):
+    with pytest.raises(ValidationError):
         Confidence(score=1.1)
 
 
@@ -99,7 +103,11 @@ def test_agent_output_with_evidence() -> None:
         subject_id="freetext:abc",
         confidence=Confidence(score=0.85, reasoning="Graph data found."),
         evidence=[
-            Evidence(kind="graph_traversal", reference="traverse_architecture_graph", summary="3 components."),
+            Evidence(
+                kind="graph_traversal",
+                reference="traverse_architecture_graph",
+                summary="3 components.",
+            ),
             Evidence(kind="tool_call", reference="get_indexed_repositories", summary="2 repos."),
         ],
         result={"executive_summary": "Plan here"},

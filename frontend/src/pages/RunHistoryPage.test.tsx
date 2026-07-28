@@ -82,6 +82,7 @@ function makeWorkflow(overrides: Partial<WorkflowDetail> = {}): WorkflowDetail {
   return {
     workflow_id: "wf-1",
     title: "Add rate limiting",
+    original_prompt: "Add rate limiting to the public API",
     workflow_type: "planning",
     current_stage: "development",
     status: "in_progress",
@@ -95,6 +96,9 @@ function makeWorkflow(overrides: Partial<WorkflowDetail> = {}): WorkflowDetail {
     created_at: "2026-01-01T10:00:00Z",
     updated_at: "2026-01-01T10:00:02Z",
     approved_by: null,
+    version: 1,
+    parent_workflow_id: null,
+    refinement_note: null,
     ...overrides,
   };
 }
@@ -145,11 +149,16 @@ describe("RunHistoryPage grouping", () => {
     vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(makeWorkflow());
 
     renderWithAuth();
-    const summary = await screen.findByText("Add rate limiting");
+    // The title itself is a real <Link> to the workflow (with its own
+    // stopPropagation, so clicking it navigates instead of also toggling
+    // the row) — the toggle target is the <summary> row around it, not the
+    // title text/link.
+    const titleLink = await screen.findByText("Add rate limiting");
+    const summaryRow = titleLink.closest("summary")!;
     const details = () => screen.getByText("Planning").closest("details");
     expect(details()).toHaveProperty("open", false);
 
-    await user.click(summary);
+    await user.click(summaryRow);
     expect(details()).toHaveProperty("open", true);
   });
 

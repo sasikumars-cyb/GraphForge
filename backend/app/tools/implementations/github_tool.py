@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 import httpx
 
@@ -44,9 +45,7 @@ logger = logging.getLogger(__name__)
 
 # "owner/repo#42" or a github.com/.../pull|issues/42 URL — captures
 # (owner, repo, kind, number) so REST/MCP can both use the right endpoint.
-_URL_PATTERN = re.compile(
-    r"github\.com/([\w.-]+)/([\w.-]+)/(pull|issues)/(\d+)"
-)
+_URL_PATTERN = re.compile(r"github\.com/([\w.-]+)/([\w.-]+)/(pull|issues)/(\d+)")
 _SHORTHAND_PATTERN = re.compile(r"\b([\w.-]+)/([\w.-]+)#(\d+)\b")
 
 
@@ -88,7 +87,7 @@ class GitHubTool:
         "code_reviews",
     ]
 
-    def __init__(self, config: dict) -> None:
+    def __init__(self, config: dict[str, Any]) -> None:
         # REST transport config
         self._token: str = config.get("github_token", "")
         self._api_url: str = config.get("github_api_url", "https://api.github.com").rstrip("/")
@@ -139,7 +138,9 @@ class GitHubTool:
             # working REST connection.
             if result.success or not self._uses_rest:
                 return result
-            logger.info("github_tool_mcp_fallback_to_rest owner=%s repo=%s number=%s", owner, repo, number)
+            logger.info(
+                "github_tool_mcp_fallback_to_rest owner=%s repo=%s number=%s", owner, repo, number
+            )
             return await self._execute_via_rest(owner, repo, number)
         return await self._execute_via_rest(owner, repo, number)
 
@@ -160,12 +161,19 @@ class GitHubTool:
             response.raise_for_status()
             payload = response.json()
         except GitHubApiError as exc:
-            logger.warning("github_tool_fetch_failed ref=%s/%s#%s error=%s", owner, repo, number, str(exc))
+            logger.warning(
+                "github_tool_fetch_failed ref=%s/%s#%s error=%s", owner, repo, number, str(exc)
+            )
             return ToolResult(
-                tool_id=self.tool_id, tool_name=self.display_name, success=False, error=str(exc),
+                tool_id=self.tool_id,
+                tool_name=self.display_name,
+                success=False,
+                error=str(exc),
             )
         except httpx.HTTPError as exc:
-            logger.warning("github_tool_http_error ref=%s/%s#%s error=%s", owner, repo, number, str(exc))
+            logger.warning(
+                "github_tool_http_error ref=%s/%s#%s error=%s", owner, repo, number, str(exc)
+            )
             return ToolResult(
                 tool_id=self.tool_id,
                 tool_name=self.display_name,
@@ -175,7 +183,9 @@ class GitHubTool:
 
         is_pr = "pull_request" in payload
         return self._build_result(
-            owner, repo, number,
+            owner,
+            repo,
+            number,
             title=str(payload.get("title") or ""),
             body=str(payload.get("body") or ""),
             state=str(payload.get("state") or ""),
@@ -204,13 +214,20 @@ class GitHubTool:
                 text = str(exc).lower()
                 if is_pr and ("not found" in text or "no pull request" in text):
                     continue  # fall through to the issue tool
-                logger.warning("github_tool_mcp_failed ref=%s/%s#%s error=%s", owner, repo, number, str(exc))
+                logger.warning(
+                    "github_tool_mcp_failed ref=%s/%s#%s error=%s", owner, repo, number, str(exc)
+                )
                 return ToolResult(
-                    tool_id=self.tool_id, tool_name=self.display_name, success=False, error=str(exc),
+                    tool_id=self.tool_id,
+                    tool_name=self.display_name,
+                    success=False,
+                    error=str(exc),
                 )
 
             return self._build_result(
-                owner, repo, number,
+                owner,
+                repo,
+                number,
                 title=str(payload.get("title") or ""),
                 body=str(payload.get("body") or payload.get("description") or ""),
                 state=str(payload.get("state") or ""),
@@ -227,15 +244,22 @@ class GitHubTool:
         )
 
     def _build_result(
-        self, owner: str, repo: str, number: int, *,
-        title: str, body: str, state: str, is_pr: bool, labels: list[str], url: str,
+        self,
+        owner: str,
+        repo: str,
+        number: int,
+        *,
+        title: str,
+        body: str,
+        state: str,
+        is_pr: bool,
+        labels: list[str],
+        url: str,
     ) -> ToolResult:
         kind = "Pull Request" if is_pr else "Issue"
-        context_text = (
-            f"GitHub {kind} {owner}/{repo}#{number} — {title}\n"
-            f"State: {state}" + (f" | Labels: {', '.join(labels)}" if labels else "") + "\n"
-            + (f"\n{body}" if body else "")
-        )
+        context_text = f"GitHub {kind} {owner}/{repo}#{number} — {title}\n" f"State: {state}" + (
+            f" | Labels: {', '.join(labels)}" if labels else ""
+        ) + "\n" + (f"\n{body}" if body else "")
         return ToolResult(
             tool_id=self.tool_id,
             tool_name=self.display_name,

@@ -9,6 +9,7 @@ Create Date: 2026-07-27 00:30:00.000000
 from collections.abc import Sequence
 
 import sqlalchemy as sa
+
 from alembic import op
 
 # revision identifiers, used by Alembic.
@@ -27,7 +28,12 @@ def upgrade() -> None:
         sa.Column("agent_id", sa.String(length=64), nullable=False),
         sa.Column("confidence_score", sa.Float(), nullable=False),
         sa.Column("decision", sa.String(length=16), nullable=False),
-        sa.Column("decided_at", sa.DateTime(timezone=True), server_default=sa.text("now()"), nullable=False),
+        sa.Column(
+            "decided_at",
+            sa.DateTime(timezone=True),
+            server_default=sa.text("now()"),
+            nullable=False,
+        ),
         sa.ForeignKeyConstraint(["workflow_id"], ["workflows.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["run_id"], ["agent_runs.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
@@ -35,9 +41,7 @@ def upgrade() -> None:
     op.create_index(
         "ix_confidence_calibrations_workflow_id", "confidence_calibrations", ["workflow_id"]
     )
-    op.create_index(
-        "ix_confidence_calibrations_agent_id", "confidence_calibrations", ["agent_id"]
-    )
+    op.create_index("ix_confidence_calibrations_agent_id", "confidence_calibrations", ["agent_id"])
 
 
 def downgrade() -> None:

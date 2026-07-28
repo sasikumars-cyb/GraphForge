@@ -27,7 +27,6 @@ function StatusDot({ connected }: { connected: boolean }) {
 export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPanelProps) {
   const reposIndexed = (result?.repositories_consulted?.length ?? 0) > 0;
   const graphUsed = result?.graph_context_used ?? false;
-  const graphEmpty = reposIndexed && !graphUsed;
 
   const sources: SourceRow[] = [
     {
