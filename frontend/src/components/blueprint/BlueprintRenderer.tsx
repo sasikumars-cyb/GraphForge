@@ -613,6 +613,29 @@ function RiskHeatmapRenderer({ diagram }: { diagram: Diagram }) {
                 {sev}
               </div>
               <p className="leading-snug">{node.label}</p>
+              {/* Likelihood/impact/mitigation/evidence used to be flattened
+                  into `node.label` as one run-on string — unreadable as a
+                  matrix, since nothing distinguished what happened from how
+                  likely it is or what to do about it. They arrive as their
+                  own metadata fields; rendered as separate rows here instead
+                  of re-joining them into a paragraph. */}
+              {Boolean(node.metadata?.likelihood || node.metadata?.impact) && (
+                <p className="mt-1.5 text-xs opacity-70">
+                  Likelihood: {String(node.metadata?.likelihood ?? "—")} · Impact:{" "}
+                  {String(node.metadata?.impact ?? "—")}
+                </p>
+              )}
+              {Boolean(node.metadata?.mitigation) && (
+                <p className="mt-1 text-xs opacity-70">
+                  <span className="font-medium">Mitigation:</span>{" "}
+                  {String(node.metadata?.mitigation)}
+                </p>
+              )}
+              {Boolean(node.metadata?.evidence) && (
+                <p className="mt-1 text-xs opacity-60">
+                  <span className="font-medium">Evidence:</span> {String(node.metadata?.evidence)}
+                </p>
+              )}
             </div>
           );
         })}

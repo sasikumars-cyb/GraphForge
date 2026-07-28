@@ -117,15 +117,7 @@ function FullscreenPortal({ children, onClose }: { children: ReactNode; onClose:
 
 export function DiagramCard({ diagram, minHeight = 320, index = 0 }: DiagramCardProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isVisible, setIsVisible] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
-
-  // Entrance animation: fade + lift, staggered by index
-  useEffect(() => {
-    const delay = index * 55;
-    const timer = setTimeout(() => setIsVisible(true), delay);
-    return () => clearTimeout(timer);
-  }, [index]);
 
   const badgeClass = DIAGRAM_TYPE_COLORS[diagram.type] ?? "text-slate-400 bg-slate-800 ring-slate-700";
   const confidence = typeof diagram.confidence === "number" ? confidenceBadge(diagram.confidence) : null;
@@ -239,9 +231,9 @@ export function DiagramCard({ diagram, minHeight = 320, index = 0 }: DiagramCard
       ref={cardRef}
       className="flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60"
       style={{
-        opacity: isVisible ? 1 : 0,
-        transform: isVisible ? "translateY(0)" : "translateY(10px)",
-        transition: "opacity 0.45s ease-out, transform 0.45s ease-out, box-shadow 0.2s ease, transform 0.2s ease",
+        animation: "diagram-card-in 0.45s ease-out backwards",
+        animationDelay: `${index * 55}ms`,
+        transition: "box-shadow 0.2s ease, transform 0.2s ease",
       }}
       onMouseEnter={handleHoverEnter}
       onMouseLeave={handleHoverLeave}

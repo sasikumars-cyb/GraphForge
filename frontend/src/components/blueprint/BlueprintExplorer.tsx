@@ -10,7 +10,7 @@
  * - Works for Planning and Development blueprints without changes
  */
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -310,7 +310,16 @@ export function BlueprintExplorer({
   implementationStepsCount,
   risksCount,
 }: BlueprintExplorerProps) {
-  const sections = groupIntoSections(blueprint.diagrams);
+  // `groupIntoSections` is a pure function of `blueprint.diagrams`, but was
+  // called unmemoized directly in the render body — a fresh
+  // BlueprintSection[] (and fresh `.diagrams` sub-arrays) on every render,
+  // including ones triggered by unrelated state in this same component
+  // (`collapsed`, `presentationMode`, `slideIndex`). Memoizing means every
+  // consumer below that keys or diffs off `sections` — the DiagramCard
+  // list, the IntersectionObserver setup, the localStorage-sync effect —
+  // sees the same array identity across an unrelated re-render instead of
+  // a same-content-different-identity replacement.
+  const sections = useMemo(() => groupIntoSections(blueprint.diagrams), [blueprint.diagrams]);
   const storageKey = `graphforge.blueprint.expanded.${blueprint.agent_id}.${blueprint.stage}`;
 
   const [collapsed, setCollapsed] = useState<Set<string>>(() => {

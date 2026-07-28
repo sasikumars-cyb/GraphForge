@@ -372,9 +372,25 @@ def _term_weights(terms: list[str], components: list[dict[str, Any]]) -> dict[st
     if not term_tokens:
         return {}
     token_sets = [_tokenize(_match_text(c)) for c in components]
-    return {
-        t: 1.0 / (1 + math.log1p(sum(1 for ts in token_sets if t in ts))) for t in term_tokens
-    }
+    weights: dict[str, float] = {}
+    for t in term_tokens:
+        df = sum(1 for ts in token_sets if t in ts)
+        # A term matching zero components in this pool wasn't measured as
+        # rare — it wasn't measured at all, and its IDF math (log1p(0)==0)
+        # would otherwise land it at the *maximum* possible weight, 1.0,
+        # the same value a component-scoring call could never legitimately
+        # produce. That's silently unreachable here (nothing in
+        # `components` can match a token with df=0 against `components`
+        # itself), but this same weights dict is also handed to
+        # `_relevance` for scoring bare *repository names* — text that
+        # never went into the df count — where a df=0 term COULD still
+        # match and would cash in that undeserved maximum. Pin it to 0.0
+        # explicitly rather than counting on `_relevance`'s `.get(t, 1.0)`
+        # fallback to ever agree; an *absent* key still resolves to 1.0
+        # there, so leaving df=0 terms out of this dict is not the same
+        # fix as this.
+        weights[t] = 0.0 if df == 0 else 1.0 / (1 + math.log1p(df))
+    return weights
 
 
 def rank_repositories(
@@ -493,7 +509,7 @@ def format_graph_context(
         # does not assume these are the only repositories that exist.
         plural = "y" if omitted == 1 else "ies"
         header += (
-            f" ({omitted} further indexed repositor{plural} " "less relevant to these capabilities)"
+            f" ({omitted} further indexed repositor{plural} less relevant to these capabilities)"
         )
     parts.append(header)
 

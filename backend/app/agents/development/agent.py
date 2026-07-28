@@ -379,10 +379,13 @@ class DevelopmentAgent:
                 Evidence(
                     kind="tool_call",
                     reference="claim_verification",
+                    # The actual warning text, not a pointer to the field
+                    # name — see the identical note in
+                    # app.agents.planning.agent for why.
                     summary=(
                         f"{len(verification_warnings)} claim(s) in this implementation "
                         "blueprint could not be verified against this run's own tool "
-                        "evidence — see verification_warnings."
+                        "evidence: " + "; ".join(verification_warnings)
                     ),
                 )
             )

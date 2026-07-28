@@ -42,6 +42,24 @@ def _slug(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", text.lower()).strip("_")[:40]
 
 
+def _truncate_at_word(text: str, limit: int) -> str:
+    """Truncate to at most `limit` characters without cutting a word in
+    half, and mark that it happened with an ellipsis.
+
+    A bare `text[:limit]` slice — the previous implementation — has no
+    idea where a word ends, so a deliverable one character over the limit
+    reads as finished ("...from job run 7") when it was actually cut off
+    mid-sentence, with no visual sign anything is missing. Rewinding to
+    the last whitespace before the cut, and appending "…" only when a cut
+    actually happened, keeps both the truncation point and the fact that
+    truncation occurred honest.
+    """
+    if len(text) <= limit:
+        return text
+    cut = text[:limit].rsplit(" ", 1)[0].rstrip(",.;: ")
+    return f"{cut}…" if cut else f"{text[:limit].rstrip()}…"
+
+
 def _risk_level(text: str) -> str:
     """Heuristic severity for a risk string — keyword scan, no LLM."""
     t = text.lower()
@@ -275,12 +293,22 @@ def _build_grounded_architecture(
     for dir_path, comps_in_dir in sorted(by_dir.items()):
         has_affected = any(_is_affected(c) for c in comps_in_dir)
         dir_id = f"dir_{_slug(dir_path)}"
+        detail = f"{len(comps_in_dir)} component(s) indexed here"
+        if has_affected:
+            detail += " — contains affected file(s) below"
         nodes.append(
             DiagramNode(
                 id=dir_id,
                 label=dir_path,
-                type="risk" if has_affected else "component",
-                properties={"affected_component": f"{len(comps_in_dir)} component(s) indexed here"},
+                # A directory is a structural container, not a risk — it was
+                # previously typed "risk" (orange/red, the same styling a
+                # genuinely risky *file* node gets) merely for holding one,
+                # which mislabels plain folders like `scripts` or
+                # `tests/unittest` as themselves risky. The actual affected
+                # *file* nodes below (type="risk") already carry that
+                # signal; a directory just needs to say it contains one.
+                type="component",
+                properties={"affected_component": detail},
                 metadata={"kind": "directory", "has_affected": has_affected},
             )
         )
@@ -464,12 +492,31 @@ def _build_repository_reuse(repo_usage: list[dict[str, Any]]) -> Diagram | None:
     for r in valid:
         reuse_pct = int(r.get("estimated_reuse_pct", 0) or 0)
         components = r.get("reusable_components", [])
+        files_affected = r.get("files_affected", [])
+        # `verified` (set deterministically in agent.py's verification
+        # block, never LLM-free-generated — see RepositoryUsage.verified)
+        # used to reach this diagram nowhere at all: a repository whose
+        # every files_affected claim was fabricated rendered identically to
+        # one that checked out, distinguished only by the star count, which
+        # measures ranking relevance, not evidence. `verify_note` is folded
+        # into the same sub-line the frontend already renders
+        # (`properties.affected_component`) rather than a new property key,
+        # since this diagram has no per-node detail panel for a new field
+        # to appear in — a reader only ever sees what's on the node itself.
+        verified = bool(r.get("verified", False))
+        if verified:
+            verify_note = "✓ verified"
+        elif files_affected:
+            verify_note = f"⚠ unverified — {len(files_affected)} file(s) unconfirmed"
+        else:
+            verify_note = "⚠ unverified"
         # The sub-label carries the reuse decision at a glance: what we get
         # back and how much of it. Falls back to the component list alone for
         # v2 results that predate estimated_reuse_pct.
         detail = ", ".join(components)[:70]
         if reuse_pct > 0:
             detail = f"{reuse_pct}% reuse · {detail}" if detail else f"{reuse_pct}% reuse"
+        detail = f"{detail} — {verify_note}" if detail else verify_note
         repo_nodes.append(
             DiagramNode(
                 id=f"repo_{_slug(r['name'])}",
@@ -484,8 +531,9 @@ def _build_repository_reuse(repo_usage: list[dict[str, Any]]) -> Diagram | None:
                     "estimated_reuse_pct": reuse_pct,
                     "confidence": r.get("confidence", "medium"),
                     "reusable_components": components,
-                    "files_affected": r.get("files_affected", []),
+                    "files_affected": files_affected,
                     "alternatives": r.get("alternatives", []),
+                    "verified": verified,
                 },
             )
         )
@@ -555,6 +603,21 @@ def _build_data_model(entities: list[dict[str, Any]]) -> Diagram | None:
                 # Auto-create any entity referenced in a relationship but absent
                 # from the LLM-provided list — prevents dangling relationships
                 # that would leave the source entity as an isolated island.
+                #
+                # These are ghost nodes: `target_name` is copied verbatim from
+                # a free-text relationship string ("has_many OrderItems"), so
+                # it's whatever the LLM happened to type there — no key
+                # attributes, no independent declaration, sometimes not even
+                # the same name as the concept it's standing in for (a real
+                # run produced entities like "ManifestEntries" this way,
+                # never once declared as an actual entity). `synthesized:
+                # True` was already recorded in metadata but nothing on the
+                # frontend reads node metadata for this diagram type, so
+                # every ghost rendered pixel-identical to a real declared
+                # entity. Marking it in the label and the always-rendered
+                # `affected_component` sub-line is what actually makes it
+                # visible without needing a detail panel this diagram
+                # doesn't have.
                 new_id = f"entity_{_slug(target_name)}"
                 if not _slug(target_name):
                     continue
@@ -562,9 +625,14 @@ def _build_data_model(entities: list[dict[str, Any]]) -> Diagram | None:
                 nodes.append(
                     DiagramNode(
                         id=new_id,
-                        label=target_name,
+                        label=f"{target_name} (inferred)",
                         type="entity",
-                        properties={"affected_component": ""},
+                        properties={
+                            "affected_component": (
+                                "Not declared as an entity — inferred from a "
+                                "relationship reference only"
+                            )
+                        },
                         metadata={"attributes": [], "synthesized": True},
                     )
                 )
@@ -614,7 +682,7 @@ def _build_implementation_roadmap(phases: list[dict[str, Any]]) -> Diagram | Non
             label=p["name"],
             type="phase",
             properties={
-                "steps": [d[:80] for d in p.get("deliverables", [])],
+                "steps": [_truncate_at_word(d, 80) for d in p.get("deliverables", [])],
                 "description": f"{len(p.get('deliverables', []))} deliverable(s)",
             },
         )
@@ -666,20 +734,22 @@ def _build_risk_matrix(risks: list[dict[str, Any]]) -> Diagram | None:
         severity = _risk_severity(likelihood, impact)
         category = str(r.get("category", "") or "")
         evidence = r.get("evidence", "")
-        # Build a structured label the renderer can display in one pass.
-        # Category leads so risks read as classified rather than generic.
-        head = (
+        # The label is the risk statement alone — category-prefixed so it
+        # reads as classified rather than generic. Likelihood, impact,
+        # mitigation, and evidence used to be flattened into this same
+        # string with " — " separators, producing one run-on paragraph per
+        # risk with no visual distinction between what happened, how
+        # likely it is, and what to do about it — the opposite of a
+        # matrix. Those fields already exist as their own `metadata`
+        # entries below; RiskHeatmapRenderer renders them as separate
+        # structured rows instead of re-flattening them here.
+        label = (
             f"[{category.replace('_', ' ')}] {r['description']}" if category else r["description"]
         )
-        label_parts = [head, f"Likelihood: {likelihood} | Impact: {impact}"]
-        if mitigation:
-            label_parts.append(f"Mitigation: {mitigation}")
-        if evidence:
-            label_parts.append(f"Evidence: {evidence}")
         nodes.append(
             DiagramNode(
                 id=f"risk_{i}",
-                label=" — ".join(label_parts),
+                label=_truncate_at_word(label, 140),
                 type="risk",
                 metadata={
                     "severity": severity,
@@ -731,7 +801,7 @@ def _build_implementation_flow(steps: list[dict[str, Any]]) -> Diagram:
     nodes = [
         DiagramNode(
             id=f"step_{s['order']}",
-            label=s["description"][:70],
+            label=_truncate_at_word(s["description"], 70),
             type=(
                 "default"
                 if 0 < s["order"] < len(steps)
@@ -834,7 +904,7 @@ def _build_risk_heatmap(risks: list[str]) -> Diagram:
     nodes = [
         DiagramNode(
             id=f"risk_{i}",
-            label=risk[:100],
+            label=_truncate_at_word(risk, 100),
             type="risk",
             metadata={"severity": _risk_level(risk), "index": i},
         )
@@ -868,7 +938,7 @@ def _build_implementation_timeline(steps: list[dict[str, Any]]) -> Diagram:
                 label=f"Phase {order}",
                 type="phase",
                 properties={
-                    "steps": [s.get("description", "")[:60] for s in chunk],
+                    "steps": [_truncate_at_word(s.get("description", ""), 60) for s in chunk],
                     "components": list(
                         {
                             s.get("affected_component", "")
@@ -939,7 +1009,7 @@ def _build_dev_overview(
             id=f"repo_{_slug(r['name'])}",
             label=r["name"],
             type="input",
-            properties={"affected_component": r.get("reason", "")[:60]},
+            properties={"affected_component": _truncate_at_word(r.get("reason", ""), 60)},
         )
         for r in repos[:8]
         if r.get("name")
@@ -1076,7 +1146,7 @@ def _build_component_dependency_graph(dependencies: list[dict[str, Any]]) -> Dia
     ]
     edges = [
         DiagramEdge(
-            id=f"dep_{_slug(d.get('source',''))}_to_{_slug(d.get('target',''))}",
+            id=f"dep_{_slug(d.get('source', ''))}_to_{_slug(d.get('target', ''))}",
             source=f"dep_{_slug(d['source'])}",
             target=f"dep_{_slug(d['target'])}",
             label=d.get("relationship", "")[:20],
@@ -1113,7 +1183,7 @@ def _build_dev_implementation_flow(phases: list[dict[str, Any]]) -> Diagram | No
             type="phase",
             properties={
                 "steps": p.get("affected_components", [])[:5],
-                "description": (p.get("description", "") or "")[:60],
+                "description": _truncate_at_word(p.get("description", "") or "", 60),
             },
             metadata={"complexity": p.get("estimated_complexity", "")},
         )
@@ -1234,7 +1304,7 @@ def _build_test_strategy(
         )
     if has_cross_repo:
         cross = [
-            f"{d.get('source','')} → {d.get('target','')}"
+            f"{d.get('source', '')} → {d.get('target', '')}"
             for d in dependencies
             if d.get("risk_note")
         ]
@@ -1337,6 +1407,28 @@ def _build_dev_risk_matrix(risks: list[dict[str, Any]]) -> Diagram | None:
             ),
         },
     )
+
+
+def _require_grounded_flag(diagrams: list[Diagram]) -> list[Diagram]:
+    """Every diagram must carry an explicit `grounded` bool in its
+    metadata, so the frontend can chip a diagram as "illustrative" without
+    depending on each of the ~20 builder functions above remembering to
+    set it themselves.
+
+    Only two builders (`_build_grounded_architecture`,
+    `_build_solution_architecture`) ever set this explicitly; the rest —
+    including "End-to-End Data Flow" and "Data Model", which are 100%
+    LLM narrative with no graph traversal behind them at all — silently
+    carried no flag, which the frontend would have had to treat as
+    "ungrounded" anyway (`Boolean(undefined)` is falsy) but with no
+    record of that being deliberate rather than an oversight in whichever
+    builder produced it. This backstop makes the absence explicit and
+    fails closed: any diagram a builder doesn't positively mark `True`
+    reads as `False`, never as unmarked-therefore-trustworthy.
+    """
+    for d in diagrams:
+        d.metadata.setdefault("grounded", False)
+    return diagrams
 
 
 # ---------------------------------------------------------------------------
@@ -1449,7 +1541,7 @@ class BlueprintFactory:
         return BlueprintArtifact(
             agent_id="planning",
             stage="planning",
-            diagrams=diagrams,
+            diagrams=_require_grounded_flag(diagrams),
         )
 
     @staticmethod
@@ -1500,5 +1592,5 @@ class BlueprintFactory:
         return BlueprintArtifact(
             agent_id="development",
             stage="development",
-            diagrams=diagrams,
+            diagrams=_require_grounded_flag(diagrams),
         )

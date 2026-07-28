@@ -75,11 +75,14 @@ class RepositoryUsage(BaseModel):
     confidence: str = "medium"  # low | medium | high
     files_affected: list[str] = Field(default_factory=list)
     alternatives: list[str] = Field(default_factory=list)
-    # False when this repository name was not found among the repositories
-    # the graph traversal actually returned this run (see
-    # app.agents.verification.verify_claims) — an LLM-invented or stale
-    # repository name, surfaced rather than silently trusted.
-    verified: bool = True
+    # True only when the agent explicitly confirmed this repository name
+    # exists among what the graph traversal returned *and* every one of
+    # its files_affected claims checked out against that repository's own
+    # evidence (see app.agents.verification) — never the field's own
+    # default. Fails closed: a result that somehow reached the frontend
+    # without the agent's verification block running (e.g. a hand-built
+    # fixture in a test) reads as unverified rather than silently trusted.
+    verified: bool = False
 
 
 class DataEntity(BaseModel):

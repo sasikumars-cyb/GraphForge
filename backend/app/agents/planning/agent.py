@@ -214,7 +214,19 @@ async def _call_llm(
 
 
 def _render_prompt(task_description: str, graph_context: str, profile: PlanningProfile) -> str:
-    """Render the planning.md template with the given variables.
+    """Render the planning prompt template with the given variables.
+
+    Picks between two template files based on `profile.task_mode` (see
+    `app.agents.planning.classifier.detect_task_mode`). `planning.md`
+    frames the request as new-system design — "design the architecture,
+    then check the inventory" is its very first instruction — which is
+    right for genuinely new work and wrong for a bug fix: a real ticket
+    titled "pipeline change to address bigger manifest" produced an
+    invented 8-layer architecture ending in layers the actual pipeline
+    doesn't have, because the prompt asked for one regardless of what the
+    ticket was actually about. `planning_brownfield.md` leads with
+    "locate the real code and explain the mechanism" instead, and treats
+    proposing new architecture as the exception rather than the default.
 
     The capability placeholders are substituted here rather than in
     `render_prompt_template` because that helper is shared by five agents and
@@ -222,8 +234,9 @@ def _render_prompt(task_description: str, graph_context: str, profile: PlanningP
     detected capabilities alone, so its size scales with the brief instead of
     being a fixed block per project type.
     """
+    template_name = "planning.md" if profile.task_mode == "greenfield" else "planning_brownfield.md"
     body = render_prompt_template(
-        _PROMPT_DIR / "planning.md", task_description, graph_context, _MAX_GRAPH_CONTEXT_CHARS
+        _PROMPT_DIR / template_name, task_description, graph_context, _MAX_GRAPH_CONTEXT_CHARS
     )
     capabilities = ", ".join(profile.capability_labels) or "none detected — derive from the brief"
     body = body.replace("{{ architecture_pattern }}", profile.label)
@@ -235,6 +248,43 @@ def _render_prompt(task_description: str, graph_context: str, profile: PlanningP
 # ---------------------------------------------------------------------------
 # PlanningResult parsing
 # ---------------------------------------------------------------------------
+
+
+_REUSE_SENTENCE_PERCENT_RE = re.compile(r"\b(\d{1,3})\s*%")
+
+
+def _reuse_percent_mismatch(
+    executive_summary: str, repository_usage: list[RepositoryUsage]
+) -> str | None:
+    """Flag a reuse percentage the executive summary states in prose that
+    disagrees with `repository_usage`'s own `estimated_reuse_pct` — the
+    same structured field the summary is supposedly describing.
+
+    A real run's summary said "~40% of required capabilities exist in
+    ds-databricks-soco-gpc..." while `repository_usage` for that same
+    repository said `estimated_reuse_pct: 75` — two different numbers for
+    the same claim, with nothing checking they agreed. Deliberately
+    scoped to sentences that actually mention reuse/existing coverage
+    (not just any sentence with a `%` in it — "reduces latency by 20%"
+    is not a reuse claim) and tolerant of rounding (+-5 points), so this
+    only fires on a genuine contradiction, not a coincidental number.
+    """
+    actual_pcts = {u.estimated_reuse_pct for u in repository_usage if u.estimated_reuse_pct}
+    if not actual_pcts:
+        return None
+    for sentence in re.split(r"(?<=[.!?])\s+", executive_summary):
+        low = sentence.lower()
+        if "reuse" not in low and "exist" not in low:
+            continue
+        for stated in (int(m) for m in _REUSE_SENTENCE_PERCENT_RE.findall(sentence)):
+            if not any(abs(stated - actual) <= 5 for actual in actual_pcts):
+                actual_label = ", ".join(f"{a}%" for a in sorted(actual_pcts))
+                return (
+                    f"Executive summary states {stated}% reuse/existing coverage, but "
+                    f"repository_usage's own estimated_reuse_pct is {actual_label} — "
+                    "these describe the same thing and must agree."
+                )
+    return None
 
 
 def _find_quality_gaps(result: PlanningResult, has_graph_data: bool) -> list[str]:
@@ -636,6 +686,39 @@ class PlanningAgent:
             [t.get("name", "") for t in graph_topics],
         )
 
+        # Per-repository evidence pools — the same component data, split by
+        # which repository each one actually belongs to. `evidence_pool`
+        # above answers "does this exist anywhere this run looked"; these
+        # answer "does this exist in the specific repository it was
+        # claimed for", which is what actually caught the failure that
+        # motivated this: a run whose `affected_components` cited four
+        # components that genuinely exist — each in a repository other
+        # than the one the plan was about — and every one of them passed
+        # the pooled check, because pooling evidence across every indexed
+        # repo makes "this component exists somewhere" indistinguishable
+        # from "this component exists here".
+        components_by_repo: dict[str, list[dict[str, Any]]] = {}
+        for c in graph_components:
+            components_by_repo.setdefault(c.get("repository", ""), []).append(c)
+        per_repo_pool: dict[str, set[str]] = {
+            repo: verification.build_evidence_pool(
+                [c.get("name", "") for c in comps],
+                [c.get("file_path", "") for c in comps],
+            )
+            for repo, comps in components_by_repo.items()
+        }
+
+        def _owning_repo(claim: str, exclude: str | None) -> str | None:
+            """Which OTHER indexed repository's own pool actually supports
+            this claim, if any — lets a misattribution warning name the
+            real owner instead of just saying "not found"."""
+            for repo, pool in per_repo_pool.items():
+                if repo == exclude:
+                    continue
+                if verification.verify_claims([claim], pool).all_verified:
+                    return repo
+            return None
+
         # ------------------------------------------------------------------
         # Observe: determine confidence based on what the graph returned
         # ------------------------------------------------------------------
@@ -781,39 +864,97 @@ class PlanningAgent:
         # ------------------------------------------------------------------
         # Verify the LLM's repository_usage claims against ground truth
         # (see app.agents.verification): `stars` is replaced with the
-        # deterministic rank-based value (never LLM-free-generated),
-        # `verified` reflects whether the repo name actually came back from
-        # this run's graph traversal, and `files_affected` claims that don't
-        # appear anywhere in this run's evidence are flagged, not deleted —
-        # visibility over silent trust.
+        # deterministic rank-based value (never LLM-free-generated), and
+        # `files_affected` is checked against *this repository's own*
+        # evidence pool, not the pool of every indexed repository combined
+        # — a file that's real but belongs to a different repo must not
+        # verify just because it's real somewhere. `verified` is true only
+        # when the name is indexed AND every file claim checked out; it
+        # fails closed (see schemas.py) rather than defaulting to trusted.
         # ------------------------------------------------------------------
         indexed_repo_names = {r["name"] for r in indexed_repos}
         verified_file_paths: list[str] = []
         for usage in planning_result.repository_usage:
-            usage.verified = usage.name in indexed_repo_names
+            name_indexed = usage.name in indexed_repo_names
             if usage.name in ranked_repo_names:
                 usage.stars = stars_for_rank(ranked_repo_names.index(usage.name))
-            elif not usage.verified:
+            elif not name_indexed:
                 verification_warnings.append(
                     f"Repository '{usage.name}' cited in repository_usage was not "
                     "found among the repositories this run's graph traversal actually "
                     "returned — treat its stars/reuse estimate as unverified."
                 )
-            files_check = verification.verify_claims(usage.files_affected, evidence_pool)
+
+            files_check = verification.verify_claims(
+                usage.files_affected, per_repo_pool.get(usage.name, set())
+            )
             verified_file_paths.extend(files_check.verified)
             for path in files_check.unverified:
-                verification_warnings.append(
-                    f"File '{path}' claimed for '{usage.name}' does not appear in "
-                    "this run's indexed component data — unverified."
-                )
+                owner = _owning_repo(path, exclude=usage.name)
+                if owner:
+                    verification_warnings.append(
+                        f"File '{path}' claimed for '{usage.name}' is indexed under "
+                        f"'{owner}', not '{usage.name}' — likely misattributed to the "
+                        "wrong repository."
+                    )
+                else:
+                    verification_warnings.append(
+                        f"File '{path}' claimed for '{usage.name}' does not appear in "
+                        "this run's indexed component data — unverified."
+                    )
+            usage.verified = name_indexed and files_check.all_verified
 
+        reuse_mismatch = _reuse_percent_mismatch(
+            planning_result.executive_summary, planning_result.repository_usage
+        )
+        if reuse_mismatch:
+            verification_warnings.append(reuse_mismatch)
+
+        # `affected_components` is plan-wide rather than per-repository, so
+        # it's checked against the top-ranked (target) repository's own
+        # pool — the repository the plan is actually about — falling back
+        # to the pooled evidence only when nothing was ranked at all.
+        target_repo = ranked_repo_names[0] if ranked_repo_names else None
+        target_pool = per_repo_pool.get(target_repo, set()) if target_repo else evidence_pool
         components_check = verification.verify_claims(
-            planning_result.affected_components, evidence_pool
+            planning_result.affected_components, target_pool
         )
         for name in components_check.unverified:
+            owner = _owning_repo(name, exclude=target_repo)
+            if owner:
+                verification_warnings.append(
+                    f"Affected component '{name}' is indexed under '{owner}', not "
+                    f"under the target repository '{target_repo}' — likely "
+                    "misattributed to the wrong repository."
+                )
+            else:
+                verification_warnings.append(
+                    f"Affected component '{name}' does not appear in this run's graph "
+                    "traversal results — unverified."
+                )
+
+        # Repository-shaped tokens the plan's own narrative names but that
+        # were never indexed — e.g. a phase deliverable that says "also
+        # replicate to MPC" when MPC was never selected, scored, or seen
+        # by anything else in this verification pass (see
+        # find_unindexed_sibling_references's docstring for why this needs
+        # its own check rather than being caught above).
+        narrative_text = "\n".join(
+            [
+                planning_result.executive_summary,
+                *(s.description for s in planning_result.implementation_steps),
+                *(d for phase in planning_result.implementation_phases for d in phase.deliverables),
+                *(r.description for r in planning_result.risks),
+            ]
+        )
+        for token in verification.find_unindexed_sibling_references(
+            narrative_text, [r["name"] for r in indexed_repos]
+        ):
             verification_warnings.append(
-                f"Affected component '{name}' does not appear in this run's graph "
-                "traversal results — unverified."
+                f"Plan references '{token}', which matches the naming pattern of "
+                "indexed repositories but is not itself indexed — verify whether "
+                "this repository exists and needs indexing before treating it as "
+                "available."
             )
 
         planning_result.verification_warnings = verification_warnings
@@ -822,10 +963,19 @@ class PlanningAgent:
                 Evidence(
                     kind="tool_call",
                     reference="claim_verification",
+                    # The actual warning text, not a pointer to the
+                    # `verification_warnings` field name — that field
+                    # wasn't rendered anywhere in the UI for a long time,
+                    # so this line was a dead end for anyone reading the
+                    # Evidence tab. Now it's rendered directly (see
+                    # VerificationWarnings.tsx), but this stays
+                    # self-contained rather than referencing where else to
+                    # look — the Evidence tab shouldn't require finding
+                    # another tab to read a claim it already knows about.
                     summary=(
                         f"{len(verification_warnings)} claim(s) in this plan could not be "
-                        "verified against this run's own tool evidence — see "
-                        "verification_warnings."
+                        "verified against this run's own tool evidence: "
+                        + "; ".join(verification_warnings)
                     ),
                 )
             )

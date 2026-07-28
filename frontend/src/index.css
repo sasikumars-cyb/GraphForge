@@ -59,6 +59,25 @@
   }
 }
 
+/* Blueprint diagram cards' staggered entrance (see DiagramCard.tsx).
+ * CSS-driven rather than a JS `isVisible` state flipped by `setTimeout`:
+ * that pattern mounted the diagram's ReactFlow tree into a container the
+ * app itself held at `opacity: 0` until a timer fired — inert if the
+ * timer never runs (a backgrounded tab throttles it), and a second full
+ * render pass per card regardless. This animates from first paint with
+ * no JS gating the content's presence; `animation-delay` (set inline per
+ * card) reproduces the same stagger. */
+@keyframes diagram-card-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.001ms !important;

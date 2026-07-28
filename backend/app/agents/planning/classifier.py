@@ -74,6 +74,13 @@ class PlanningProfile:
     # architecture (they must never shape `playbook()`'s layers), only about
     # which already-indexed code is worth showing the model.
     ticket_terms: tuple[str, ...] = ()
+    # bugfix | enhancement | greenfield — see `detect_task_mode`. Selects
+    # which prompt template `_render_prompt` uses: the greenfield template
+    # frames "design the architecture, then check the inventory" as its
+    # very first instruction, which is right for new work and wrong for a
+    # one-line bug fix, where it reliably produces an invented 8-layer
+    # architecture instead of a patch (see planning_brownfield.md).
+    task_mode: str = "greenfield"
 
     @property
     def key(self) -> str:
@@ -494,6 +501,84 @@ def detect_capabilities(task_description: str) -> tuple[Capability, ...]:
     return tuple(cap for _, cap in found)
 
 
+# Bugfix/enhancement verbs checked before greenfield ones, and bugfix
+# checked before enhancement: the narrower, more specific reading wins a
+# tie, since a brownfield framing is the safer default when a brief is
+# ambiguous (its prompt still permits proposing new architecture where
+# genuinely needed — it just doesn't force one).
+#
+# "address" is here deliberately: a real ticket titled "pipeline change
+# to address bigger manifest" is the exact motivating case — a one-line
+# bug fix that, under the greenfield-only prompt, came back as an 8-layer
+# invented architecture ending in "Curated & Warehouse" and "Analytics &
+# BI" layers the actual pipeline doesn't have.
+_BUGFIX_KEYWORDS = (
+    "fix",
+    "fails",
+    "failing",
+    "failure",
+    "broken",
+    "bug",
+    "regression",
+    "crash",
+    "crashes",
+    "incorrect",
+    "not working",
+    "doesn't work",
+    "does not work",
+    "exception",
+    "address",
+    "resolve",
+    "hotfix",
+)
+_ENHANCEMENT_KEYWORDS = (
+    "add support for",
+    "extend",
+    "enhance",
+    "improve",
+    "add a new",
+    "allow",
+    "enable",
+    "upgrade",
+)
+_GREENFIELD_KEYWORDS = (
+    "build a new",
+    "build a",
+    "create a new",
+    "greenfield",
+    "from scratch",
+    "design a",
+    "new system",
+    "introduce a",
+    "migrate",
+    "migration",
+    "prototype",
+)
+
+
+def detect_task_mode(task_description: str) -> str:
+    """Classify a brief as `bugfix`, `enhancement`, or `greenfield` —
+    selects which prompt template `_render_prompt` uses.
+
+    Deliberately the same style as `detect_capabilities`: a fixed keyword
+    list, word-boundary matched, no LLM call. Ties resolve toward the
+    narrower reading (bugfix over enhancement over greenfield) — see the
+    keyword list comments for why. A brief with no signal at all defaults
+    to `greenfield`, preserving this module's original behavior for an
+    ordinary new-work request.
+    """
+    text = (task_description or "").lower()
+    if not text.strip():
+        return "greenfield"
+    if any(_matches(kw, text) for kw in _BUGFIX_KEYWORDS):
+        return "bugfix"
+    if any(_matches(kw, text) for kw in _ENHANCEMENT_KEYWORDS):
+        return "enhancement"
+    if any(_matches(kw, text) for kw in _GREENFIELD_KEYWORDS):
+        return "greenfield"
+    return "greenfield"
+
+
 def derive_pattern(capabilities: tuple[Capability, ...]) -> ArchitecturePattern:
     """Pick the architecture backbone implied by the detected capabilities."""
     if not capabilities:
@@ -557,6 +642,7 @@ def strip_locators(text: str) -> str:
     space so surrounding words don't fuse. See `_URL_RE`/`_FS_PATH_RE` for
     why locators are dropped rather than down-weighted."""
     return _FS_PATH_RE.sub(" ", _URL_RE.sub(" ", text))
+
 
 # Generic English function words, plus the app's own fixed prompt-wrapper
 # vocabulary (see app.agents.prompt_utils.wrap_untrusted_content), plus the
@@ -768,6 +854,7 @@ def analyse(task_description: str) -> PlanningProfile:
         pattern=derive_pattern(capabilities),
         capabilities=capabilities,
         ticket_terms=ticket_terms,
+        task_mode=detect_task_mode(task_description),
     )
 
 

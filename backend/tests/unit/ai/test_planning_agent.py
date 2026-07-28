@@ -18,13 +18,21 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.agents._contract import AgentContext, Subject
-from app.agents.planning.agent import PlanningAgent, PlanningLLMError
-from app.agents.planning.classifier import analyse, extract_key_terms
+from app.agents.planning.agent import (
+    PlanningAgent,
+    PlanningLLMError,
+    _render_prompt,
+    _reuse_percent_mismatch,
+)
+from app.agents.planning.classifier import analyse, detect_task_mode, extract_key_terms
+from app.agents.planning.schemas import RepositoryUsage
 from app.agents.planning.tools import (
     GetIndexedRepositoriesTool,
     PlanningObservation,
     TraverseArchitectureGraphTool,
+    _term_weights,
     format_graph_context,
+    rank_repositories,
     to_evidence,
 )
 from app.graph.models import GraphNode
@@ -378,6 +386,97 @@ def test_ranking_uses_file_path_so_generic_names_are_reachable() -> None:
     )
 
 
+class TestDetectTaskMode:
+    """E1/E8 regression: a real ticket titled "pipeline change to address
+    bigger manifest" — a one-line bug fix — was planned with a prompt
+    whose first instruction was "design the architecture", and it
+    produced exactly that: an invented 8-layer architecture ending in
+    layers ("Curated & Warehouse", "Analytics & BI") the actual pipeline
+    doesn't have. `detect_task_mode` is what routes a brief like this to
+    the brownfield template instead.
+    """
+
+    def test_bugfix_keyword_is_detected(self):
+        assert detect_task_mode("Pipeline change to address bigger manifest") == "bugfix"
+        assert detect_task_mode("Fix null handling in the export job") == "bugfix"
+        assert detect_task_mode("Job fails when the manifest exceeds 200 files") == "bugfix"
+
+    def test_greenfield_keyword_is_detected(self):
+        assert detect_task_mode("Build a new event-driven order pipeline") == "greenfield"
+        assert detect_task_mode("Design a greenfield ingestion system") == "greenfield"
+
+    def test_enhancement_keyword_is_detected(self):
+        assert detect_task_mode("Add support for CSV exports in the reporting service") == (
+            "enhancement"
+        )
+
+    def test_no_signal_defaults_to_greenfield(self):
+        # Preserves existing behavior for an ordinary new-work brief with
+        # no bugfix/enhancement/greenfield verb at all.
+        assert detect_task_mode("Plan a new Kafka consumer for order events") == "greenfield"
+
+    def test_empty_text_defaults_to_greenfield(self):
+        assert detect_task_mode("") == "greenfield"
+
+    def test_bugfix_wins_over_enhancement_on_a_tie(self):
+        # The narrower reading wins when a brief carries both signals —
+        # brownfield framing still permits new architecture where the
+        # prompt genuinely calls for it, so it's the safer default.
+        assert detect_task_mode("Fix the bug and add support for retries") == "bugfix"
+
+
+class TestRenderPromptPicksTemplateByTaskMode:
+    def test_bugfix_brief_uses_the_brownfield_template(self):
+        profile = analyse("Pipeline change to address bigger manifest")
+        assert profile.task_mode == "bugfix"
+        prompt = _render_prompt("Pipeline change to address bigger manifest", "", profile)
+        assert "Senior Engineer" in prompt
+        assert "greenfield work" in prompt
+        assert "Principal Solution Architect" not in prompt
+
+    def test_greenfield_brief_uses_the_original_template(self):
+        profile = analyse("Build a new event-driven order pipeline")
+        assert profile.task_mode == "greenfield"
+        prompt = _render_prompt("Build a new event-driven order pipeline", "", profile)
+        assert "Principal Solution Architect" in prompt
+        assert "Senior Engineer" not in prompt
+
+
+class TestReusePercentMismatch:
+    """E2 regression: a real run's executive summary said "~40% of
+    required capabilities exist in ds-databricks-soco-gpc..." while
+    `repository_usage` for that same repository said
+    `estimated_reuse_pct: 75` — two different numbers for the same claim.
+    """
+
+    def test_flags_a_genuine_mismatch(self):
+        usage = [RepositoryUsage(name="repo-a", estimated_reuse_pct=75)]
+        warning = _reuse_percent_mismatch(
+            "Roughly 40% of required capabilities already exist in repo-a.", usage
+        )
+        assert warning is not None
+        assert "40%" in warning
+        assert "75%" in warning
+
+    def test_matching_percentage_is_not_flagged(self):
+        usage = [RepositoryUsage(name="repo-a", estimated_reuse_pct=75)]
+        assert _reuse_percent_mismatch("About 75% of this already exists in repo-a.", usage) is None
+
+    def test_close_percentage_within_tolerance_is_not_flagged(self):
+        usage = [RepositoryUsage(name="repo-a", estimated_reuse_pct=75)]
+        assert _reuse_percent_mismatch("Roughly 73% already exists.", usage) is None
+
+    def test_unrelated_percentage_is_not_flagged(self):
+        # A sentence with a `%` that has nothing to do with reuse must not
+        # trigger this — only sentences that actually discuss reuse/existing
+        # coverage are in scope.
+        usage = [RepositoryUsage(name="repo-a", estimated_reuse_pct=75)]
+        assert _reuse_percent_mismatch("This change reduces latency by 40%.", usage) is None
+
+    def test_no_repository_usage_is_not_flagged(self):
+        assert _reuse_percent_mismatch("Roughly 40% of this already exists.", []) is None
+
+
 def test_relevance_requires_whole_token_match_not_substring() -> None:
     """ "process" must not match "processed", and "page" must not match
     "pagination" — a search term is a real word, not an arbitrary substring
@@ -388,6 +487,52 @@ def test_relevance_requires_whole_token_match_not_substring() -> None:
     assert _relevance("test_s3_pagination_fetches_pages", ["page"]) == 0
     # But a real whole-word match still counts.
     assert _relevance("process_batch", ["process"]) == 1
+
+
+def test_term_weights_pins_zero_document_frequency_terms_to_zero() -> None:
+    """A7 regression: a term matching no component in the pool must not
+    receive the *maximum* possible weight. `1/(1+log1p(0))` evaluates to
+    `1/(1+0) == 1.0` — the same value a term matching exactly one
+    component out of thousands would get, for a term that was never
+    actually measured as rare, just never measured at all."""
+    components = [
+        {"name": "WidgetLoader", "type": "Class", "file_path": "svc/widget_loader.py"},
+    ]
+    weights = _term_weights(["internal", "widget"], components)
+    assert weights["internal"] == 0.0
+    assert weights["widget"] > 0.0
+
+
+def test_rank_repositories_does_not_reward_a_zero_df_term_matching_only_a_repo_name() -> None:
+    """A7 regression, black-box: `_term_weights`' df is measured over the
+    *component* pool, but the same weights dict also scores bare
+    repository-name text — text that never contributed to that df count.
+    Before the fix, a repository with zero real component evidence could
+    still outrank one with genuine matches, purely because a search term
+    happened to appear in its own name and had never been measured
+    against anything, so it scored as if it were maximally rare.
+    """
+    indexed_repos = [
+        # Zero components below belong to this repo — "internal" matches
+        # nothing in the component pool (df=0) but matches this repo's
+        # own name directly.
+        {"name": "internal-tools-service"},
+        {"name": "widget-service"},
+    ]
+    components = [
+        {
+            "id": "c1",
+            "name": "WidgetLoader",
+            "type": "Class",
+            "repository": "widget-service",
+            "file_path": "widget-service/widget_loader.py",
+        },
+    ]
+    ranked = rank_repositories(indexed_repos, components, relevance_terms=["internal", "widget"])
+    assert ranked[0][1] == "widget-service", (
+        "the repository with a real, indexed component match must outrank one "
+        "whose only 'match' is an unmeasured term appearing in its bare name"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -718,6 +863,45 @@ async def test_planning_agent_result_includes_real_llm_trace() -> None:
     assert context.subject.display_name in trace["prompt"]
     assert trace["latency_ms"] is not None
     assert trace["latency_ms"] >= 0
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_end_to_end_uses_brownfield_prompt_for_a_bugfix_brief() -> None:
+    """E1/E8 regression, full pipeline: a bugfix-shaped brief must reach
+    the LLM with the brownfield template, not the one whose first
+    instruction is "design the architecture". Exercised through the real
+    agent, not just `_render_prompt` in isolation, so this also proves
+    `profile.task_mode` from `analyse()` actually reaches `_render_prompt`
+    unchanged through the run() pipeline.
+    """
+    context = _make_planning_context(display_name="Fix the null pointer crash in the export job")
+
+    mock_graph_repo = MagicMock()
+    mock_graph_repo.has_graph = AsyncMock(return_value=True)
+    mock_graph_repo.get_nodes_by_label = AsyncMock(return_value=[])
+
+    mock_db = context.extras["db"]
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    mock_db.execute.return_value = mock_result
+
+    llm_response = _make_llm_response()
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    prompt = output.result["llm_trace"]["prompt"]
+    assert "Senior Engineer" in prompt
+    assert "Principal Solution Architect" not in prompt
+    assert "Design the architecture" not in prompt
 
 
 @pytest.mark.asyncio
@@ -1068,9 +1252,9 @@ async def test_planning_agent_graph_unavailable_confidence_reasoning() -> None:
         output = await agent.run(context)
 
     # Confidence must be lower than the healthy-empty case (0.45)
-    assert (
-        output.confidence.score <= 0.35
-    ), f"Graph unavailable should give very low confidence, got {output.confidence.score}"
+    assert output.confidence.score <= 0.35, (
+        f"Graph unavailable should give very low confidence, got {output.confidence.score}"
+    )
     assert "unavailable" in output.confidence.reasoning.lower()
 
 
@@ -1111,8 +1295,202 @@ async def test_planning_agent_graph_empty_confidence_reasoning() -> None:
         output = await agent.run(context)
 
     # Should be healthy-empty confidence (0.45 + possible step bump)
-    assert (
-        0.40 <= output.confidence.score <= 0.55
-    ), f"Healthy-empty graph should give moderate confidence, got {output.confidence.score}"
+    assert 0.40 <= output.confidence.score <= 0.55, (
+        f"Healthy-empty graph should give moderate confidence, got {output.confidence.score}"
+    )
     assert "healthy" in output.confidence.reasoning.lower()
     assert "unavailable" not in output.confidence.reasoning.lower()
+
+
+# ---------------------------------------------------------------------------
+# Cross-repository verification (B1/B3/B4/B6 regression)
+# ---------------------------------------------------------------------------
+
+
+def _make_two_repo_context() -> tuple[AgentContext, MagicMock]:
+    """A brief naming a component unique to one of two indexed repos, so
+    ranking deterministically prefers that repo as the target — needed so
+    the ownership-attribution assertions below don't depend on tie-break
+    order between two equally-generic repos."""
+    context = _make_planning_context(
+        display_name="Fix the ZulutronManifestWidget bug in the pipeline"
+    )
+
+    mock_graph_repo = MagicMock()
+    mock_graph_repo.has_graph = AsyncMock(return_value=True)
+
+    target_component = GraphNode(
+        id="c-target",
+        labels=["Component", "Class"],
+        properties={
+            "name": "ZulutronManifestWidget",
+            "file_path": "target_repo/zulutron_manifest_widget.py",
+        },
+    )
+    other_component = GraphNode(
+        id="c-other",
+        labels=["Component", "Class"],
+        properties={
+            "name": "OtherRepoOnlyComponent",
+            "file_path": "other_repo/other_repo_only_component.py",
+        },
+    )
+
+    def _nodes_for(repo_id: str, label: str) -> list[GraphNode]:
+        if label != "Component":
+            return []
+        return {"repo-target": [target_component], "repo-other": [other_component]}.get(repo_id, [])
+
+    mock_graph_repo.get_nodes_by_label = AsyncMock(side_effect=_nodes_for)
+
+    mock_db = context.extras["db"]
+    # `MagicMock(name=...)` is reserved (sets the mock's own debug name, not
+    # an attribute) — assign `.name` after construction, per the existing
+    # single-repo fixtures above.
+    mock_target_repo = MagicMock(id="repo-target", owner="acme")
+    mock_target_repo.name = "ds-team-apc-svc"
+    mock_other_repo = MagicMock(id="repo-other", owner="acme")
+    mock_other_repo.name = "ds-team-gpc-svc"
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [mock_target_repo, mock_other_repo]
+    mock_db.execute.return_value = mock_result
+
+    return context, mock_graph_repo
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_flags_component_misattributed_to_wrong_repo() -> None:
+    """Regression test for the mechanism that let 4 of 7 affected_components
+    in a real run belong to three unrelated repositories and pass
+    verification with zero warnings: the evidence pool was pooled across
+    every indexed repository, so "this component exists somewhere" was
+    indistinguishable from "this component exists in the repo it was
+    claimed for". `OtherRepoOnlyComponent` genuinely exists — just not in
+    the target repo — and must now be flagged by name, naming its real owner.
+    """
+    context, mock_graph_repo = _make_two_repo_context()
+
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Fix the widget.",
+            "implementation_steps": [],
+            "affected_components": ["ZulutronManifestWidget", "OtherRepoOnlyComponent"],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": True,
+        }
+    )
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    warnings = output.result["verification_warnings"]
+    misattribution = [w for w in warnings if "OtherRepoOnlyComponent" in w]
+    assert misattribution, f"expected a misattribution warning, got: {warnings}"
+    assert "ds-team-gpc-svc" in misattribution[0], "warning must name the real owning repository"
+    assert "ds-team-apc-svc" in misattribution[0], (
+        "warning must name the wrongly-claimed repository"
+    )
+    # The genuinely-owned component must not be caught in the same net.
+    assert not any("ZulutronManifestWidget" in w for w in warnings)
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_repository_usage_verified_false_on_misattributed_file() -> None:
+    """B1/B4 regression: `verified` must reflect the specific repository's
+    own files_affected claims, not just whether the repo name is indexed —
+    and must default to unverified (fails closed) rather than trusted."""
+    context, mock_graph_repo = _make_two_repo_context()
+
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Fix the widget.",
+            "implementation_steps": [],
+            "affected_components": ["ZulutronManifestWidget"],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": True,
+            "repository_usage": [
+                {
+                    "name": "ds-team-apc-svc",
+                    "purpose": "Widget processing",
+                    "files_affected": ["other_repo/other_repo_only_component.py"],
+                }
+            ],
+        }
+    )
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    usage = output.result["repository_usage"][0]
+    assert usage["verified"] is False, (
+        "a repository whose only files_affected claim belongs to a different "
+        "repository must not read as verified"
+    )
+    warnings = output.result["verification_warnings"]
+    assert any("other_repo_only_component.py" in w and "ds-team-gpc-svc" in w for w in warnings), (
+        f"expected a file-misattribution warning naming the real owner, got: {warnings}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_flags_unindexed_sibling_repo_reference() -> None:
+    """B6 regression: a repository the plan's own narrative names — in a
+    phase deliverable, not in repository_usage — that was never indexed
+    and never scored must still be flagged, not silently treated as if it
+    exists. Mirrors a real run that planned work against "MPC" purely in
+    prose; MPC was never selected, never indexed, and nothing else in
+    verification ever looked at it.
+    """
+    context, mock_graph_repo = _make_two_repo_context()
+
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Fix the widget.",
+            "implementation_steps": [],
+            "affected_components": ["ZulutronManifestWidget"],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": True,
+            "implementation_phases": [
+                {
+                    "name": "Rollout",
+                    "order": 1,
+                    "deliverables": ["Also replicate this fix to the MPC repository"],
+                }
+            ],
+        }
+    )
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    warnings = output.result["verification_warnings"]
+    assert any("MPC" in w and "not itself indexed" in w for w in warnings), (
+        f"expected an unindexed-sibling-repo warning, got: {warnings}"
+    )

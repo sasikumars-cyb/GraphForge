@@ -95,13 +95,34 @@ _GENERIC_ACRONYM_STOPWORDS = frozenset(
 )
 
 
+# The literal boilerplate `app.agents.prompt_utils.wrap_untrusted_content`
+# fences fetched Jira/GitHub/Confluence content with — always a single
+# line, always this shape. Stripped before acronym extraction so the
+# wrapper's own scaffolding ("BEGIN", "END", "UNTRUSTED", "CONTENT", and
+# the source name it upper-cases into the marker, e.g. "JIRA") is never
+# mistaken for a tenant/entity code found *in* the content it's fencing.
+# A real run flagged BEGIN/END/JIRA as unmatched entity tokens precisely
+# because this wasn't stripped — false positives from GraphForge's own
+# prompt, not from anything the ticket said.
+_WRAPPER_MARKER_RE = re.compile(r"-{2,}\s*(?:BEGIN|END) UNTRUSTED [A-Z]+ CONTENT[^\n]*-{2,}")
+
+# A ticket-ID-shaped reference ("PROT-5723", "NPT-6") always precedes a
+# run number with a hyphen — acronym-shaped by coincidence, but it names
+# the ticket, not a tenant or business unit. Stripped the same way as the
+# wrapper markers, for the same reason: it's boilerplate this run itself
+# introduced (the ticket key), not tenant identity signal from the ticket
+# body.
+_TICKET_KEY_RE = re.compile(r"\b[A-Z]{2,10}-\d+\b")
+
+
 def _extract_acronym_tokens(text: str) -> set[str]:
     """Short, all-caps, acronym-shaped tokens from free text.
 
     Deliberately narrow (see module docstring's limitation notes): tuned
     for the acronym shape only, not full words like "Alabama Power".
     """
-    tokens = _TOKEN_SPLIT_PATTERN.split(text)
+    cleaned = _TICKET_KEY_RE.sub(" ", _WRAPPER_MARKER_RE.sub(" ", text))
+    tokens = _TOKEN_SPLIT_PATTERN.split(cleaned)
     return {t for t in tokens if _ACRONYM_SHAPE.match(t) and t not in _GENERIC_ACRONYM_STOPWORDS}
 
 
@@ -111,6 +132,12 @@ def _name_tokens(name: str) -> set[str]:
     c2m-rcs-dataingest" or "com.example.soco.gpc.service", no language
     assumption either way."""
     return {t for t in re.split(r"[^a-zA-Z0-9]+", name.lower()) if t}
+
+
+def _ordered_name_tokens(name: str) -> tuple[str, ...]:
+    """Same split as `_name_tokens`, but positional — needed to find which
+    token position varies across sibling repository names."""
+    return tuple(t for t in re.split(r"[^a-zA-Z0-9]+", name.lower()) if t)
 
 
 def check_entity_mismatch(ticket_text: str, selected_repo_name: str) -> str | None:
@@ -145,13 +172,84 @@ def check_entity_mismatch(ticket_text: str, selected_repo_name: str) -> str | No
     )
 
 
+def find_unindexed_sibling_references(text: str, indexed_repo_names: list[str]) -> list[str]:
+    """Tenant/business-unit codes mentioned in a plan's own narrative text
+    that don't belong to any indexed repository, detected from the naming
+    pattern of repositories that already exist as siblings — e.g. an
+    indexed "...-soco-gpc-..." and "...-soco-apc-..." pair, differing only
+    by a 3-letter tenant code, teaches this what that code's shape looks
+    like at that position.
+
+    This is distinct from `check_entity_mismatch`: that check compares the
+    *ticket* against the *selected* repository. This one catches a repo
+    the LLM's own output *names* — in a phase deliverable, a risk, the
+    executive summary — that was never indexed and never reached
+    `repository_usage` at all, so nothing else in verification ever sees
+    it. A real run planned work against "MPC" this way: never selected,
+    never scored, just asserted to exist in prose.
+
+    Narrow by construction, like `check_entity_mismatch`: it only fires
+    when the indexed set actually contains a sibling family to learn a
+    pattern from (so a single indexed repo, or an unrelated set, produces
+    no warnings at all), and only flags tokens matching that family's
+    varying-slot code length — not every acronym in a paragraph.
+    """
+    if not indexed_repo_names:
+        return []
+    token_lists = [_ordered_name_tokens(n) for n in indexed_repo_names]
+    slot_codes: dict[tuple[str, ...], set[str]] = {}
+    for tokens in token_lists:
+        for i in range(len(tokens)):
+            shape = tokens[:i] + ("*",) + tokens[i + 1 :]
+            slot_codes.setdefault(shape, set()).add(tokens[i])
+    sibling_codes = {code for codes in slot_codes.values() if len(codes) >= 2 for code in codes}
+    if not sibling_codes:
+        return []  # no sibling family among the indexed repos — nothing to pattern-match
+    code_lengths = {len(c) for c in sibling_codes}
+    all_indexed_tokens = {t for tokens in token_lists for t in tokens}
+    found = {
+        tok
+        for tok in _extract_acronym_tokens(text)
+        if tok.lower() not in all_indexed_tokens and len(tok) in code_lengths
+    }
+    return sorted(found)
+
+
 # ---------------------------------------------------------------------------
 # 2. Claim-vs-evidence verification
 # ---------------------------------------------------------------------------
 
 
+_TOKEN_BOUNDARY_RE = re.compile(r"[^a-z0-9]+")
+_CAMEL_BOUNDARY_RE = re.compile(r"([a-z0-9])([A-Z])")
+
+
 def _normalize(s: str) -> str:
-    return re.sub(r"\s+", " ", s.strip().lower())
+    """Case/whitespace-fold, and split camelCase boundaries with an
+    underscore before lowercasing — not after.
+
+    Lowercasing first and camelCase-splitting second (the order
+    `_tokenize` alone would produce if it received an already-normalized
+    string) destroys the very information the split needs: "Transform
+    ManifestParser" only has a detectable boundary while the "M" is still
+    uppercase. Doing it here means both the exact-match path and the
+    token-containment path in `_claim_supported` see "transform_manifest_
+    parser" for a component genuinely named `TransformManifestParser`,
+    instead of a single glued token no claim could ever match against.
+    """
+    spaced = _CAMEL_BOUNDARY_RE.sub(r"\1_\2", s)
+    return re.sub(r"\s+", " ", spaced.strip().lower())
+
+
+def _tokenize(s: str) -> frozenset[str]:
+    """Split into sub-word tokens on snake_case/dotted/slash/camelCase
+    boundaries — the same tokenization `app.agents.planning.tools` uses for
+    ranking, kept as a local copy rather than a shared import so this
+    module stays dependency-free (see the module docstring). Tokens under
+    3 characters are dropped: they are exactly the generic fragments
+    (`id`, `db`, `is`) that make token-set containment gameable."""
+    spaced = _CAMEL_BOUNDARY_RE.sub(r"\1_\2", s)
+    return frozenset(t for t in _TOKEN_BOUNDARY_RE.split(spaced.lower()) if len(t) >= 3)
 
 
 def build_evidence_pool(*groups: list[str]) -> set[str]:
@@ -167,19 +265,48 @@ def build_evidence_pool(*groups: list[str]) -> set[str]:
 
 
 def _claim_supported(claim: str, evidence_pool: set[str]) -> bool:
-    """A claim is supported if it matches an evidence string exactly, or is
-    a substring/superstring of one — case- and whitespace-insensitive.
+    """A claim is supported if it matches an evidence string exactly, is a
+    path-segment-anchored match, or its tokens are fully contained in a
+    single evidence item's tokens — case- and whitespace-insensitive.
 
-    Substring matching (not exact-only) tolerates the LLM citing a bare
-    filename ("pipeline_config.py") when the evidence pool holds a full
-    path ("soco_ingest/src/config/pipeline_config.py"), without requiring
-    an exact path match. Pure string comparison — no parsing.
+    This used to also accept `evidence in claim_n` — evidence as a bare
+    substring anywhere inside the claim — which made verification close to
+    vacuous: any evidence string short enough to appear inside a longer
+    fabricated claim would "verify" it. That direction is exactly what let
+    four components from three unrelated repositories (avangrid, pseg-nj)
+    pass verification with zero warnings in a real run — each one shared
+    enough incidental characters with *something* in the pooled evidence to
+    match on a bare `in` check.
+
+    Only two directions survive, both anchored rather than raw substring:
+
+    - `claim_n in evidence`, but only when `claim_n` is the evidence's
+      trailing path segment (or dot-suffix) — tolerates the LLM citing a
+      bare filename ("pipeline_config.py") against a full path
+      ("soco_ingest/src/config/pipeline_config.py") without accepting an
+      arbitrary fragment match.
+    - Token-set containment: every token of the claim (snake_case/dotted/
+      camelCase-split, 3+ chars) must appear among a single evidence item's
+      tokens. Tolerates reordering and case/separator differences between
+      how the LLM names something and how the indexer stored it, without
+      letting one short generic word carry an otherwise-unrelated claim —
+      a claim with only one token that itself doesn't already exact- or
+      path-match gets no benefit from this path.
     """
     claim_n = _normalize(claim)
     if not claim_n:
         return True  # nothing to check
+    claim_tokens = _tokenize(claim_n)
     for evidence in evidence_pool:
-        if claim_n == evidence or claim_n in evidence or evidence in claim_n:
+        if claim_n == evidence:
+            return True
+        if claim_n and (
+            evidence.endswith("/" + claim_n)
+            or evidence.endswith("\\" + claim_n)
+            or evidence.endswith("." + claim_n)
+        ):
+            return True
+        if len(claim_tokens) >= 2 and claim_tokens.issubset(_tokenize(evidence)):
             return True
     return False
 
