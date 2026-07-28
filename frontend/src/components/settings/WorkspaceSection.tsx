@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Card } from "../Card";
+import { ThemeSelector } from "../../theme/ThemeSelector";
 
 function ToggleRow({
   label,
@@ -81,6 +82,10 @@ export function WorkspaceSection() {
             defaultChecked
           />
         </div>
+      </Card>
+
+      <Card title="Appearance" description="Choose how GraphForge looks on this device">
+        <ThemeSelector />
       </Card>
 
       <Card

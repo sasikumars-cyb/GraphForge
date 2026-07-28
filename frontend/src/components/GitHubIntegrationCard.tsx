@@ -187,7 +187,7 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
                 type="button"
                 onClick={() => void handleConnect()}
                 disabled={isConnecting || isLoadingStatus}
-                className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-sky-500/50"
+                className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-sky-500/50"
               >
                 {isConnecting ? "Connecting…" : "Connect"}
               </button>
@@ -214,7 +214,7 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
                 type="button"
                 onClick={() => void handleSaveSelection()}
                 disabled={isSaving || isLoadingRepos || !availableRepos}
-                className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-sky-500/50"
+                className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-sky-500/50"
               >
                 {isSaving ? "Saving…" : "Save selection"}
               </button>

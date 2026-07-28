@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routes } from "./router";
 import { AiModelProvider } from "./AiModelContext";
 import { AuthProvider } from "./AuthContext";
+import { ThemeProvider } from "../theme/ThemeProvider";
 import * as authApi from "../lib/api/auth";
 import * as githubApi from "../lib/api/github";
 import * as systemApi from "../lib/api/system";
@@ -28,11 +29,13 @@ const FAKE_USER: User = {
 function renderApp(initialPath = "/") {
   const router = createMemoryRouter(routes, { initialEntries: [initialPath] });
   return render(
-    <AuthProvider>
-      <AiModelProvider>
-        <RouterProvider router={router} />
-      </AiModelProvider>
-    </AuthProvider>,
+    <ThemeProvider>
+      <AuthProvider>
+        <AiModelProvider>
+          <RouterProvider router={router} />
+        </AiModelProvider>
+      </AuthProvider>
+    </ThemeProvider>,
   );
 }
 

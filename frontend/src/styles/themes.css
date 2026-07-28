@@ -1,0 +1,571 @@
+/**
+ * Theme palettes — the entire design-token layer for GraphForge's theming
+ * system (see docs/theming.md).
+ *
+ * How this works: every color utility already used across the app
+ * (`bg-slate-900`, `text-emerald-400`, `border-brand-500`, ...) is generated
+ * by Tailwind v4 from a `--color-*` theme variable. The `@theme inline`
+ * block below aliases each of those to a plain custom property (`--gf-*`)
+ * instead of a literal value. Re-declaring the `--gf-*` custom properties
+ * under a `:root[data-theme="..."]` selector therefore re-themes every
+ * existing component using those utilities — no component file needs to
+ * change when a new theme is added or an existing one is retuned.
+ *
+ * `:root` (no `data-theme` attribute) holds the Light theme's values, since
+ * Light is this app's default — ThemeProvider (see src/theme/ThemeContext.tsx)
+ * always stamps a concrete `data-theme` attribute once it mounts, but the
+ * bare fallback still needs to be correct for the flash of unstyled content
+ * before that happens.
+ *
+ * Only the shades actually referenced somewhere in `src/**\/*.tsx` are
+ * declared per family (checked via grep) — declaring unused shades would
+ * just be dead weight.
+ */
+
+:root {
+  /* ---- Light (default) ---------------------------------------------- */
+  --gf-slate-50: #020617;
+  --gf-slate-100: #0f172a;
+  --gf-slate-200: #1e293b;
+  --gf-slate-300: #334155;
+  --gf-slate-400: #475569;
+  --gf-slate-500: #64748b;
+  --gf-slate-600: #94a3b8;
+  --gf-slate-700: #cbd5e1;
+  --gf-slate-800: #e2e8f0;
+  --gf-slate-900: #f1f5f9;
+  --gf-slate-950: #f8fafc;
+
+  --gf-brand-50: #26075a;
+  --gf-brand-100: #3f0f85;
+  --gf-brand-200: #4d0ea8;
+  --gf-brand-300: #5f0fd1;
+  --gf-brand-400: #7114f0;
+  --gf-brand-500: #8425ff;
+  --gf-brand-600: #9d5fff;
+  --gf-brand-700: #bd94ff;
+  --gf-brand-800: #d9c2ff;
+  --gf-brand-900: #ebe0ff;
+  --gf-brand-950: #f5f0ff;
+  --gf-brand-glow: #2f8fd1;
+
+  --gf-sky-300: #0369a1;
+  --gf-sky-400: #0284c7;
+  --gf-sky-500: #0284c7;
+  --gf-sky-600: #075985;
+  --gf-sky-700: #0c4a6e;
+
+  --gf-emerald-100: #d1fae5;
+  --gf-emerald-200: #a7f3d0;
+  --gf-emerald-300: #065f46;
+  --gf-emerald-400: #047857;
+  --gf-emerald-500: #047857;
+  --gf-emerald-600: #065f46;
+
+  --gf-amber-100: #fef3c7;
+  --gf-amber-200: #fde68a;
+  --gf-amber-300: #b45309;
+  --gf-amber-400: #92400e;
+  --gf-amber-500: #92400e;
+  --gf-amber-700: #78350f;
+  --gf-amber-950: #451a03;
+
+  --gf-rose-100: #ffe4e6;
+  --gf-rose-200: #fecdd3;
+  --gf-rose-300: #be123c;
+  --gf-rose-400: #9f1239;
+  --gf-rose-500: #9f1239;
+
+  --gf-blue-200: #bfdbfe;
+  --gf-blue-300: #1d4ed8;
+  --gf-blue-400: #1e40af;
+  --gf-blue-500: #1e40af;
+  --gf-blue-700: #1e3a8a;
+
+  --gf-indigo-400: #4338ca;
+  --gf-indigo-500: #3730a3;
+
+  --gf-violet-300: #6d28d9;
+  --gf-violet-400: #5b21b6;
+  --gf-violet-500: #5b21b6;
+  --gf-violet-600: #4c1d95;
+
+  --gf-orange-300: #c2410c;
+  --gf-orange-400: #9a3412;
+  --gf-orange-500: #9a3412;
+
+  --gf-red-300: #b91c1c;
+  --gf-red-400: #991b1b;
+  --gf-red-500: #991b1b;
+
+  --gf-yellow-400: #a16207;
+  --gf-yellow-500: #854d0e;
+
+  --gf-teal-200: #99f6e4;
+  --gf-teal-300: #0f766e;
+  --gf-teal-400: #115e59;
+  --gf-teal-500: #115e59;
+  --gf-teal-600: #134e4a;
+
+  --gf-pink-400: #be185d;
+  --gf-pink-500: #9d174d;
+}
+
+/* ---- Dark — the original, unchanged shipped look --------------------- */
+:root[data-theme="dark"] {
+  --gf-slate-50: #f8fafc;
+  --gf-slate-100: #f1f5f9;
+  --gf-slate-200: #e2e8f0;
+  --gf-slate-300: #cbd5e1;
+  --gf-slate-400: #94a3b8;
+  --gf-slate-500: #64748b;
+  --gf-slate-600: #475569;
+  --gf-slate-700: #334155;
+  --gf-slate-800: #1e293b;
+  --gf-slate-900: #0f172a;
+  --gf-slate-950: #020617;
+
+  --gf-brand-50: #f5f0ff;
+  --gf-brand-100: #ebe0ff;
+  --gf-brand-200: #d9c2ff;
+  --gf-brand-300: #bd94ff;
+  --gf-brand-400: #9d5fff;
+  --gf-brand-500: #8425ff;
+  --gf-brand-600: #7114f0;
+  --gf-brand-700: #5f0fd1;
+  --gf-brand-800: #4d0ea8;
+  --gf-brand-900: #3f0f85;
+  --gf-brand-950: #26075a;
+  --gf-brand-glow: #47bfff;
+
+  --gf-sky-300: #7dd3fc;
+  --gf-sky-400: #38bdf8;
+  --gf-sky-500: #0ea5e9;
+  --gf-sky-600: #0284c7;
+  --gf-sky-700: #0369a1;
+
+  --gf-emerald-100: #d1fae5;
+  --gf-emerald-200: #a7f3d0;
+  --gf-emerald-300: #6ee7b7;
+  --gf-emerald-400: #34d399;
+  --gf-emerald-500: #10b981;
+  --gf-emerald-600: #059669;
+
+  --gf-amber-100: #fef3c7;
+  --gf-amber-200: #fde68a;
+  --gf-amber-300: #fcd34d;
+  --gf-amber-400: #fbbf24;
+  --gf-amber-500: #f59e0b;
+  --gf-amber-700: #b45309;
+  --gf-amber-950: #451a03;
+
+  --gf-rose-100: #ffe4e6;
+  --gf-rose-200: #fecdd3;
+  --gf-rose-300: #fda4af;
+  --gf-rose-400: #fb7185;
+  --gf-rose-500: #f43f5e;
+
+  --gf-blue-200: #bfdbfe;
+  --gf-blue-300: #93c5fd;
+  --gf-blue-400: #60a5fa;
+  --gf-blue-500: #3b82f6;
+  --gf-blue-700: #1d4ed8;
+
+  --gf-indigo-400: #818cf8;
+  --gf-indigo-500: #6366f1;
+
+  --gf-violet-300: #c4b5fd;
+  --gf-violet-400: #a78bfa;
+  --gf-violet-500: #8b5cf6;
+  --gf-violet-600: #7c3aed;
+
+  --gf-orange-300: #fdba74;
+  --gf-orange-400: #fb923c;
+  --gf-orange-500: #f97316;
+
+  --gf-red-300: #fca5a5;
+  --gf-red-400: #f87171;
+  --gf-red-500: #ef4444;
+
+  --gf-yellow-400: #facc15;
+  --gf-yellow-500: #eab308;
+
+  --gf-teal-200: #99f6e4;
+  --gf-teal-300: #5eead4;
+  --gf-teal-400: #2dd4bf;
+  --gf-teal-500: #14b8a6;
+  --gf-teal-600: #0d9488;
+
+  --gf-pink-400: #f472b6;
+  --gf-pink-500: #ec4899;
+}
+
+/* ---- Midnight — deeper, cooler, blue-violet-tinted near-black -------- */
+:root[data-theme="midnight"] {
+  --gf-slate-50: #f8fafc;
+  --gf-slate-100: #eef1fb;
+  --gf-slate-200: #dde2f5;
+  --gf-slate-300: #b9c2e0;
+  --gf-slate-400: #7c85ab;
+  --gf-slate-500: #545e82;
+  --gf-slate-600: #333b5c;
+  --gf-slate-700: #20264a;
+  --gf-slate-800: #141936;
+  --gf-slate-900: #0a0e24;
+  --gf-slate-950: #02040f;
+
+  --gf-brand-50: #f5f0ff;
+  --gf-brand-100: #ebe0ff;
+  --gf-brand-200: #d9c2ff;
+  --gf-brand-300: #bd94ff;
+  --gf-brand-400: #9d5fff;
+  --gf-brand-500: #9147ff;
+  --gf-brand-600: #7c2ff5;
+  --gf-brand-700: #651fd6;
+  --gf-brand-800: #4f14ad;
+  --gf-brand-900: #360d7a;
+  --gf-brand-950: #1c0640;
+  --gf-brand-glow: #38e8ff;
+
+  /* Same dark-friendly accent set as Dark — Midnight only retunes the
+     structural neutrals + brand, not the status/accent palette. */
+  --gf-sky-300: #7dd3fc;
+  --gf-sky-400: #38bdf8;
+  --gf-sky-500: #0ea5e9;
+  --gf-sky-600: #0284c7;
+  --gf-sky-700: #0369a1;
+
+  --gf-emerald-100: #d1fae5;
+  --gf-emerald-200: #a7f3d0;
+  --gf-emerald-300: #6ee7b7;
+  --gf-emerald-400: #34d399;
+  --gf-emerald-500: #10b981;
+  --gf-emerald-600: #059669;
+
+  --gf-amber-100: #fef3c7;
+  --gf-amber-200: #fde68a;
+  --gf-amber-300: #fcd34d;
+  --gf-amber-400: #fbbf24;
+  --gf-amber-500: #f59e0b;
+  --gf-amber-700: #b45309;
+  --gf-amber-950: #451a03;
+
+  --gf-rose-100: #ffe4e6;
+  --gf-rose-200: #fecdd3;
+  --gf-rose-300: #fda4af;
+  --gf-rose-400: #fb7185;
+  --gf-rose-500: #f43f5e;
+
+  --gf-blue-200: #bfdbfe;
+  --gf-blue-300: #93c5fd;
+  --gf-blue-400: #60a5fa;
+  --gf-blue-500: #3b82f6;
+  --gf-blue-700: #1d4ed8;
+
+  --gf-indigo-400: #818cf8;
+  --gf-indigo-500: #6366f1;
+
+  --gf-violet-300: #c4b5fd;
+  --gf-violet-400: #a78bfa;
+  --gf-violet-500: #8b5cf6;
+  --gf-violet-600: #7c3aed;
+
+  --gf-orange-300: #fdba74;
+  --gf-orange-400: #fb923c;
+  --gf-orange-500: #f97316;
+
+  --gf-red-300: #fca5a5;
+  --gf-red-400: #f87171;
+  --gf-red-500: #ef4444;
+
+  --gf-yellow-400: #facc15;
+  --gf-yellow-500: #eab308;
+
+  --gf-teal-200: #99f6e4;
+  --gf-teal-300: #5eead4;
+  --gf-teal-400: #2dd4bf;
+  --gf-teal-500: #14b8a6;
+  --gf-teal-600: #0d9488;
+
+  --gf-pink-400: #f472b6;
+  --gf-pink-500: #ec4899;
+}
+
+/* ---- Modern Blue — steel-blue neutrals + a vivid blue brand ramp ------ */
+:root[data-theme="modern-blue"] {
+  --gf-slate-50: #f4f8ff;
+  --gf-slate-100: #e6edf9;
+  --gf-slate-200: #cdd9ef;
+  --gf-slate-300: #a3b7d9;
+  --gf-slate-400: #6f88ab;
+  --gf-slate-500: #4c6386;
+  --gf-slate-600: #374b68;
+  --gf-slate-700: #26374f;
+  --gf-slate-800: #182338;
+  --gf-slate-900: #0d1626;
+  --gf-slate-950: #040a14;
+
+  /* Modern Blue's namesake touch: the brand ramp itself becomes blue
+     instead of the app's default violet, so nav highlights, links and
+     primary actions read distinctly "blue" without touching a single
+     component — they all already reference `brand-*`. */
+  --gf-brand-50: #eef6ff;
+  --gf-brand-100: #dbeeff;
+  --gf-brand-200: #b8ddff;
+  --gf-brand-300: #84c5ff;
+  --gf-brand-400: #4da8ff;
+  --gf-brand-500: #1c86ff;
+  --gf-brand-600: #0d6efd;
+  --gf-brand-700: #0a56c7;
+  --gf-brand-800: #0a4494;
+  --gf-brand-900: #0c3872;
+  --gf-brand-950: #081f42;
+  --gf-brand-glow: #66d9ff;
+
+  --gf-sky-300: #7dd3fc;
+  --gf-sky-400: #38bdf8;
+  --gf-sky-500: #0ea5e9;
+  --gf-sky-600: #0284c7;
+  --gf-sky-700: #0369a1;
+
+  --gf-emerald-100: #d1fae5;
+  --gf-emerald-200: #a7f3d0;
+  --gf-emerald-300: #6ee7b7;
+  --gf-emerald-400: #34d399;
+  --gf-emerald-500: #10b981;
+  --gf-emerald-600: #059669;
+
+  --gf-amber-100: #fef3c7;
+  --gf-amber-200: #fde68a;
+  --gf-amber-300: #fcd34d;
+  --gf-amber-400: #fbbf24;
+  --gf-amber-500: #f59e0b;
+  --gf-amber-700: #b45309;
+  --gf-amber-950: #451a03;
+
+  --gf-rose-100: #ffe4e6;
+  --gf-rose-200: #fecdd3;
+  --gf-rose-300: #fda4af;
+  --gf-rose-400: #fb7185;
+  --gf-rose-500: #f43f5e;
+
+  --gf-blue-200: #bfdbfe;
+  --gf-blue-300: #93c5fd;
+  --gf-blue-400: #60a5fa;
+  --gf-blue-500: #3b82f6;
+  --gf-blue-700: #1d4ed8;
+
+  --gf-indigo-400: #818cf8;
+  --gf-indigo-500: #6366f1;
+
+  --gf-violet-300: #c4b5fd;
+  --gf-violet-400: #a78bfa;
+  --gf-violet-500: #8b5cf6;
+  --gf-violet-600: #7c3aed;
+
+  --gf-orange-300: #fdba74;
+  --gf-orange-400: #fb923c;
+  --gf-orange-500: #f97316;
+
+  --gf-red-300: #fca5a5;
+  --gf-red-400: #f87171;
+  --gf-red-500: #ef4444;
+
+  --gf-yellow-400: #facc15;
+  --gf-yellow-500: #eab308;
+
+  --gf-teal-200: #99f6e4;
+  --gf-teal-300: #5eead4;
+  --gf-teal-400: #2dd4bf;
+  --gf-teal-500: #14b8a6;
+  --gf-teal-600: #0d9488;
+
+  --gf-pink-400: #f472b6;
+  --gf-pink-500: #ec4899;
+}
+
+/* ---- High Contrast — pure black/white + fully saturated accents ------ */
+:root[data-theme="high-contrast"] {
+  --gf-slate-50: #000000;
+  --gf-slate-100: #111111;
+  --gf-slate-200: #1a1a1a;
+  --gf-slate-300: #2b2b2b;
+  --gf-slate-400: #4d4d4d;
+  --gf-slate-500: #717171;
+  --gf-slate-600: #a3a3a3;
+  --gf-slate-700: #cfcfcf;
+  --gf-slate-800: #e6e6e6;
+  --gf-slate-900: #f5f5f5;
+  --gf-slate-950: #ffffff;
+
+  --gf-brand-50: #14002e;
+  --gf-brand-100: #290059;
+  --gf-brand-200: #3d0080;
+  --gf-brand-300: #5200a3;
+  --gf-brand-400: #6b00cc;
+  --gf-brand-500: #7a00e6;
+  --gf-brand-600: #8425ff;
+  --gf-brand-700: #5c00b3;
+  --gf-brand-800: #330066;
+  --gf-brand-900: #1a0033;
+  --gf-brand-950: #000000;
+  --gf-brand-glow: #00aaff;
+
+  --gf-sky-300: #0c4a6e;
+  --gf-sky-400: #0369a1;
+  --gf-sky-500: #075985;
+  --gf-sky-600: #0c4a6e;
+  --gf-sky-700: #082f49;
+
+  --gf-emerald-100: #bbf7d0;
+  --gf-emerald-200: #86efac;
+  --gf-emerald-300: #15803d;
+  --gf-emerald-400: #166534;
+  --gf-emerald-500: #14532d;
+  --gf-emerald-600: #052e16;
+
+  --gf-amber-100: #fde68a;
+  --gf-amber-200: #fcd34d;
+  --gf-amber-300: #92400e;
+  --gf-amber-400: #78350f;
+  --gf-amber-500: #78350f;
+  --gf-amber-700: #451a03;
+  --gf-amber-950: #1c0a00;
+
+  --gf-rose-100: #fecdd3;
+  --gf-rose-200: #fda4af;
+  --gf-rose-300: #9f1239;
+  --gf-rose-400: #881337;
+  --gf-rose-500: #881337;
+
+  --gf-blue-200: #93c5fd;
+  --gf-blue-300: #1e40af;
+  --gf-blue-400: #1e3a8a;
+  --gf-blue-500: #1e3a8a;
+  --gf-blue-700: #172554;
+
+  --gf-indigo-400: #3730a3;
+  --gf-indigo-500: #312e81;
+
+  --gf-violet-300: #5b21b6;
+  --gf-violet-400: #4c1d95;
+  --gf-violet-500: #4c1d95;
+  --gf-violet-600: #3b0764;
+
+  --gf-orange-300: #9a3412;
+  --gf-orange-400: #7c2d12;
+  --gf-orange-500: #7c2d12;
+
+  --gf-red-300: #991b1b;
+  --gf-red-400: #7f1d1d;
+  --gf-red-500: #7f1d1d;
+
+  --gf-yellow-400: #854d0e;
+  --gf-yellow-500: #713f12;
+
+  --gf-teal-200: #5eead4;
+  --gf-teal-300: #0f766e;
+  --gf-teal-400: #134e4a;
+  --gf-teal-500: #134e4a;
+  --gf-teal-600: #042f2e;
+
+  --gf-pink-400: #9d174d;
+  --gf-pink-500: #831843;
+}
+
+@theme inline {
+  --color-slate-50: var(--gf-slate-50);
+  --color-slate-100: var(--gf-slate-100);
+  --color-slate-200: var(--gf-slate-200);
+  --color-slate-300: var(--gf-slate-300);
+  --color-slate-400: var(--gf-slate-400);
+  --color-slate-500: var(--gf-slate-500);
+  --color-slate-600: var(--gf-slate-600);
+  --color-slate-700: var(--gf-slate-700);
+  --color-slate-800: var(--gf-slate-800);
+  --color-slate-900: var(--gf-slate-900);
+  --color-slate-950: var(--gf-slate-950);
+
+  --color-brand-50: var(--gf-brand-50);
+  --color-brand-100: var(--gf-brand-100);
+  --color-brand-200: var(--gf-brand-200);
+  --color-brand-300: var(--gf-brand-300);
+  --color-brand-400: var(--gf-brand-400);
+  --color-brand-500: var(--gf-brand-500);
+  --color-brand-600: var(--gf-brand-600);
+  --color-brand-700: var(--gf-brand-700);
+  --color-brand-800: var(--gf-brand-800);
+  --color-brand-900: var(--gf-brand-900);
+  --color-brand-950: var(--gf-brand-950);
+  --color-brand-glow: var(--gf-brand-glow);
+
+  --color-sky-300: var(--gf-sky-300);
+  --color-sky-400: var(--gf-sky-400);
+  --color-sky-500: var(--gf-sky-500);
+  --color-sky-600: var(--gf-sky-600);
+  --color-sky-700: var(--gf-sky-700);
+
+  --color-emerald-100: var(--gf-emerald-100);
+  --color-emerald-200: var(--gf-emerald-200);
+  --color-emerald-300: var(--gf-emerald-300);
+  --color-emerald-400: var(--gf-emerald-400);
+  --color-emerald-500: var(--gf-emerald-500);
+  --color-emerald-600: var(--gf-emerald-600);
+
+  --color-amber-100: var(--gf-amber-100);
+  --color-amber-200: var(--gf-amber-200);
+  --color-amber-300: var(--gf-amber-300);
+  --color-amber-400: var(--gf-amber-400);
+  --color-amber-500: var(--gf-amber-500);
+  --color-amber-700: var(--gf-amber-700);
+  --color-amber-950: var(--gf-amber-950);
+
+  --color-rose-100: var(--gf-rose-100);
+  --color-rose-200: var(--gf-rose-200);
+  --color-rose-300: var(--gf-rose-300);
+  --color-rose-400: var(--gf-rose-400);
+  --color-rose-500: var(--gf-rose-500);
+
+  --color-blue-200: var(--gf-blue-200);
+  --color-blue-300: var(--gf-blue-300);
+  --color-blue-400: var(--gf-blue-400);
+  --color-blue-500: var(--gf-blue-500);
+  --color-blue-700: var(--gf-blue-700);
+
+  --color-indigo-400: var(--gf-indigo-400);
+  --color-indigo-500: var(--gf-indigo-500);
+
+  --color-violet-300: var(--gf-violet-300);
+  --color-violet-400: var(--gf-violet-400);
+  --color-violet-500: var(--gf-violet-500);
+  --color-violet-600: var(--gf-violet-600);
+
+  --color-orange-300: var(--gf-orange-300);
+  --color-orange-400: var(--gf-orange-400);
+  --color-orange-500: var(--gf-orange-500);
+
+  --color-red-300: var(--gf-red-300);
+  --color-red-400: var(--gf-red-400);
+  --color-red-500: var(--gf-red-500);
+
+  --color-yellow-400: var(--gf-yellow-400);
+  --color-yellow-500: var(--gf-yellow-500);
+
+  --color-teal-200: var(--gf-teal-200);
+  --color-teal-300: var(--gf-teal-300);
+  --color-teal-400: var(--gf-teal-400);
+  --color-teal-500: var(--gf-teal-500);
+  --color-teal-600: var(--gf-teal-600);
+
+  --color-pink-400: var(--gf-pink-400);
+  --color-pink-500: var(--gf-pink-500);
+}
+
+/* Smooth cross-fade on theme switch. Scoped to color-affecting properties
+   only (never `all`) to keep this cheap; `prefers-reduced-motion` already
+   zeroes every transition duration app-wide (see index.css). */
+* {
+  transition-property: background-color, border-color, color, fill, stroke, box-shadow;
+  transition-duration: 180ms;
+  transition-timing-function: ease;
+}

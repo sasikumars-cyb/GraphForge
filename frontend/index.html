@@ -19,6 +19,26 @@
     />
 
     <title>GraphForge | AI Engineering Intelligence Platform</title>
+
+    <script>
+      // Stamps `data-theme` before first paint so the correct theme's CSS
+      // variables are already active when React mounts — without this, the
+      // page would flash the bare `:root` (Light) fallback and then jump to
+      // the stored theme a frame later. Kept as a tiny inline script (no
+      // external file) so it can't be delayed by the module bundle loading.
+      (function () {
+        try {
+          var validThemes = ["light", "dark", "midnight", "modern-blue", "high-contrast"];
+          var stored = localStorage.getItem("graphforge.theme");
+          document.documentElement.setAttribute(
+            "data-theme",
+            validThemes.indexOf(stored) !== -1 ? stored : "light",
+          );
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "light");
+        }
+      })();
+    </script>
   </head>
 
   <body>

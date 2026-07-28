@@ -261,7 +261,7 @@ function AddConnectionForm({
         <button
           type="submit"
           disabled={saving || !name.trim()}
-          className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-slate-950 hover:bg-sky-400 disabled:bg-sky-500/50"
+          className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-sky-400 disabled:bg-sky-500/50"
         >
           {saving ? "Adding..." : "Add Connection"}
         </button>

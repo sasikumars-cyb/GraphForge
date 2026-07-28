@@ -13,6 +13,7 @@ import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
 import type { Graph } from "../../types/graph";
 import { primaryLabel, resolveLabelColors } from "./graphLabels";
+import { useTheme } from "../../theme/theme-context";
 
 const NODE_WIDTH = 190;
 const NODE_HEIGHT = 56;
@@ -67,9 +68,9 @@ function layoutGraph(
     target: edge.target_id,
     label: edge.type,
     animated: edge.type === "PRODUCES_TO" || edge.type === "CONSUMES_FROM",
-    markerEnd: { type: MarkerType.ArrowClosed, color: "#64748b" },
-    style: { stroke: "#64748b" },
-    labelStyle: { fill: "#94a3b8", fontSize: 10 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: "var(--gf-slate-500)" },
+    style: { stroke: "var(--gf-slate-500)" },
+    labelStyle: { fill: "var(--gf-slate-400)", fontSize: 10 },
   }));
 
   // Group nodes by owning repository (hierarchical clustering) so a merged,
@@ -98,7 +99,7 @@ function layoutGraph(
         border: `1px solid ${colors.border}`,
         borderRadius: 8,
         width: NODE_WIDTH,
-        color: "#e2e8f0",
+        color: "var(--gf-slate-200)",
         fontSize: 12,
         padding: 8,
       },
@@ -138,7 +139,7 @@ function layoutGraph(
         width: box.maxX - box.minX + GROUP_PADDING * 2,
         height: box.maxY - box.minY + GROUP_PADDING * 2 + 20,
         background: "rgba(148, 163, 184, 0.04)",
-        border: "1px dashed #475569",
+        border: "1px dashed var(--gf-slate-600)",
         borderRadius: 12,
       },
       data: {},
@@ -155,7 +156,7 @@ function layoutGraph(
       style: {
         background: "transparent",
         border: "none",
-        color: "#cbd5e1",
+        color: "var(--gf-slate-300)",
         fontSize: 11,
         fontWeight: 700,
         padding: 0,
@@ -193,7 +194,7 @@ function layoutGraph(
         border: `1px solid ${colors.border}`,
         borderRadius: 8,
         width: NODE_WIDTH,
-        color: "#e2e8f0",
+        color: "var(--gf-slate-200)",
         fontSize: 12,
         padding: 8,
       },
@@ -245,11 +246,11 @@ function overviewNode(repo: RepositorySummary, x: number, y: number): Node {
       ),
     },
     style: {
-      background: "#1e293b",
-      border: "1px solid #64748b",
+      background: "var(--gf-slate-800)",
+      border: "1px solid var(--gf-slate-500)",
       borderRadius: 10,
       width: OVERVIEW_NODE_WIDTH,
-      color: "#e2e8f0",
+      color: "var(--gf-slate-200)",
       fontSize: 12,
       padding: 10,
       cursor: "pointer",
@@ -278,6 +279,7 @@ export function RepositoryOverviewGraph({
   edges: RepositoryDependencyEdge[];
   onExpand: (repositoryId: string) => void;
 }) {
+  const { theme } = useTheme();
   const { nodes, edges } = useMemo(() => {
     if (dependencyEdges.length === 0) {
       // No known relationships yet - a plain grid is clearer than an
@@ -319,10 +321,10 @@ export function RepositoryOverviewGraph({
       label: (
         <span title={`Shared topics:\n${edge.topics.join("\n")}`}>{edge.topics.length}</span>
       ),
-      markerEnd: { type: MarkerType.ArrowClosed, color: "#64748b" },
-      style: { stroke: "#64748b" },
-      labelBgStyle: { fill: "#1e293b" },
-      labelStyle: { fill: "#e2e8f0", fontSize: 11 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "var(--gf-slate-500)" },
+      style: { stroke: "var(--gf-slate-500)" },
+      labelBgStyle: { fill: "var(--gf-slate-800)" },
+      labelStyle: { fill: "var(--gf-slate-200)", fontSize: 11 },
     }));
 
     return { nodes: laidOutNodes, edges: flowEdges };
@@ -335,7 +337,7 @@ export function RepositoryOverviewGraph({
         edges={edges}
         fitView
         proOptions={{ hideAttribution: true }}
-        colorMode="dark"
+        colorMode={theme.mode}
         onNodeClick={(_, node) => onExpand(node.id)}
       >
         <Background />
@@ -351,6 +353,7 @@ interface DependencyGraphProps {
 }
 
 export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphProps) {
+  const { theme } = useTheme();
   const { nodes: baseNodes, edges: baseEdges } = useMemo(
     () => layoutGraph(graph, repositoryNameById),
     [graph, repositoryNameById],
@@ -424,7 +427,7 @@ export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphPr
           opacity: isConnected ? 1 : FADED_OPACITY,
           strokeWidth: isConnected ? 2.5 : 1,
         },
-        markerEnd: { type: MarkerType.ArrowClosed, color: color ?? "#64748b" },
+        markerEnd: { type: MarkerType.ArrowClosed, color: color ?? "var(--gf-slate-500)" },
         labelStyle: { ...edge.labelStyle, opacity: isConnected ? 1 : FADED_OPACITY },
       };
     });
@@ -439,7 +442,7 @@ export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphPr
         edges={edges}
         fitView
         proOptions={{ hideAttribution: true }}
-        colorMode="dark"
+        colorMode={theme.mode}
         onNodeClick={(_, node) => {
           if (!realNodeIds.has(node.id)) return;
           setSelectedNodeId((current) => (current === node.id ? null : node.id));
@@ -448,7 +451,7 @@ export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphPr
       >
         <Background />
         <Controls />
-        <MiniMap pannable zoomable style={{ background: "#0f172a" }} />
+        <MiniMap pannable zoomable style={{ background: "var(--gf-slate-900)" }} />
       </ReactFlow>
     </div>
   );

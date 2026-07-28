@@ -31,6 +31,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
 import type { Diagram, DiagramNode, NodeType } from "../../types/blueprint";
+import { useTheme } from "../../theme/theme-context";
 
 // ---------------------------------------------------------------------------
 // Styling constants — node type → colour pair
@@ -40,10 +41,10 @@ const NODE_STYLES: Record<
   NodeType | "default",
   { bg: string; border: string; text: string }
 > = {
-  default:   { bg: "#1e293b", border: "#475569", text: "#e2e8f0" },
+  default:   { bg: "var(--gf-slate-800)", border: "var(--gf-slate-600)", text: "var(--gf-slate-200)" },
   input:     { bg: "#0c2744", border: "#38bdf8", text: "#bae6fd" },
   output:    { bg: "#052e16", border: "#34d399", text: "#a7f3d0" },
-  component: { bg: "#1e293b", border: "#818cf8", text: "#e0e7ff" },
+  component: { bg: "var(--gf-slate-800)", border: "#818cf8", text: "#e0e7ff" },
   topic:     { bg: "#2e1065", border: "#e879f9", text: "#f0abfc" },
   risk:      { bg: "#1c0a00", border: "#fb923c", text: "#fed7aa" },
   phase:     { bg: "#0c2744", border: "#60a5fa", text: "#bfdbfe" },
@@ -205,6 +206,7 @@ function NodeInternalsSync({ nodeIds }: { nodeIds: string[] }) {
 }
 
 function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
+  const { theme } = useTheme();
   const direction = diagram.layout?.direction ?? "LR";
 
   const { flowNodes, flowEdges } = useMemo(() => {
@@ -278,10 +280,10 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
       target: e.target,
       label: e.label || undefined,
       animated: e.type === "data_flow",
-      markerEnd: { type: MarkerType.ArrowClosed, color: "#64748b" },
-      style: { stroke: "#64748b", strokeWidth: 1.5 },
-      labelStyle: { fill: "#94a3b8", fontSize: 10 },
-      labelBgStyle: { fill: "#0f172a", fillOpacity: 0.8 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "var(--gf-slate-500)" },
+      style: { stroke: "var(--gf-slate-500)", strokeWidth: 1.5 },
+      labelStyle: { fill: "var(--gf-slate-400)", fontSize: 10 },
+      labelBgStyle: { fill: "var(--gf-slate-900)", fillOpacity: 0.8 },
     }));
 
     return { flowNodes, flowEdges };
@@ -362,10 +364,10 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
           ...e,
           style: {
             ...e.style,
-            stroke: color ?? "#64748b",
+            stroke: color ?? "var(--gf-slate-500)",
             opacity: dimmed ? 0.1 : 1,
           },
-          markerEnd: { type: MarkerType.ArrowClosed, color: color ?? "#64748b" },
+          markerEnd: { type: MarkerType.ArrowClosed, color: color ?? "var(--gf-slate-500)" },
         };
       }),
     };
@@ -434,7 +436,7 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
       minZoom={0.08}
       maxZoom={2}
       proOptions={{ hideAttribution: true }}
-      colorMode="dark"
+      colorMode={theme.mode}
       onNodeClick={onNodeClick}
       onPaneClick={() => setSelectedId(null)}
       onNodeMouseEnter={onNodeMouseEnter}
@@ -445,7 +447,7 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
       {!isSmallGraph && (
         <>
           <Controls />
-          <MiniMap pannable zoomable style={{ background: "#0f172a" }} />
+          <MiniMap pannable zoomable style={{ background: "var(--gf-slate-900)" }} />
         </>
       )}
     </ReactFlow>
