@@ -19,7 +19,7 @@ import pytest
 
 from app.agents._contract import AgentContext, Subject
 from app.agents.planning.agent import PlanningAgent, PlanningLLMError
-from app.agents.planning.classifier import analyse
+from app.agents.planning.classifier import analyse, extract_key_terms
 from app.agents.planning.tools import (
     GetIndexedRepositoriesTool,
     PlanningObservation,
@@ -236,6 +236,145 @@ def test_format_graph_context_ranks_specific_component_over_generic_noise() -> N
     assert rate_attribute_pos < noise_pos, (
         "the component matching the brief's own specific vocabulary should "
         "rank ahead of components that only share generic words"
+    )
+
+
+def test_key_terms_ignore_urls_and_absolute_paths_but_keep_repo_paths() -> None:
+    """Where a brief *points* must never outrank what it is *about*.
+
+    Regression test for a real failure (PROT-5723). The brief was one
+    sentence of subject matter wrapped around a Jira URL and an absolute
+    checkout path. Those two locators supplied 16 of the 25 extracted
+    terms, pushing the ticket's actual subject ("manifest") to position
+    23, and — because each locator token matched only one or two
+    components — `_term_weights` then scored them as the *most*
+    discriminating terms in the run. The resulting top-ranked components
+    were a Jira-comment helper and three path utilities.
+
+    A repository-relative path is the opposite case and must survive: a
+    brief that names the file is handing over the best term in it.
+    """
+    terms = extract_key_terms(
+        "Prepare implementation plan for https://acme.atlassian.net/browse/PROT-5723\n"
+        'The repo is already in my local "/home/adevuser/git_repositories/soco-ingest"\n'
+        "SOCO C2M RCS - Pipeline change to address bigger manifest"
+    )
+
+    for locator_token in ("https", "atlassian", "browse", "jira", "adevuser", "git_repositories"):
+        assert locator_token not in terms, f"{locator_token!r} is a locator, not subject matter"
+    assert "manifest" in terms
+    assert "pipeline" in terms
+
+    relative = extract_key_terms("The failure is in soco_ingest/src/parsers/manifest_parser.py")
+    assert "manifest_parser" in relative, "a repo-relative path is signal, not noise"
+
+
+def test_ranking_prefers_production_code_over_a_matching_test_module() -> None:
+    """One test module should not consume the whole prompt budget.
+
+    Tests inherit the vocabulary of whatever they exercise, and every
+    member of a test file scores identically once the file path is part
+    of the match text — so on any topical match they arrive as a block.
+    Observed directly on PROT-5723: eleven members of a single
+    `test_manifest_pipeline.py` took the top slots while the parser and
+    notebook the brief was actually about sat outside the cutoff.
+    """
+    repos_obs = PlanningObservation(
+        tool_name="get_indexed_repositories",
+        summary="1 repo.",
+        data={
+            "indexed_repositories": [{"id": "r1", "name": "soco-ingest", "owner": "acme"}],
+            "total_tracked": 1,
+        },
+    )
+    components = [
+        {
+            "id": "c1",
+            "name": "TransformManifestParser",
+            "type": "Class",
+            "repository": "soco-ingest",
+            "file_path": "soco_ingest/src/parsers/manifest_parser.py",
+        },
+    ] + [
+        {
+            "id": f"t{i}",
+            "name": name,
+            "type": "Function",
+            "repository": "soco-ingest",
+            "file_path": "tests/integration/test_manifest_pipeline.py",
+        }
+        for i, name in enumerate(
+            [
+                "FakeDbutils",
+                "FakeTaskValues",
+                "test_manifest_invalid_date_token",
+                "test_manifest_missing_metadata",
+                "test_manifest_pipeline_end_to_end",
+                "test_manifest_taskvalues_failure",
+                "test_manifest_unknown_filetype",
+            ]
+        )
+    ]
+    traverse_obs = PlanningObservation(
+        tool_name="traverse_architecture_graph",
+        summary=f"Found {len(components)} components.",
+        data={"components": components, "kafka_topics": [], "repository_count": 1},
+    )
+
+    profile = analyse("SOCO C2M RCS - Pipeline change to address bigger manifest")
+    ctx = format_graph_context(repos_obs, traverse_obs, relevance_terms=profile.search_terms)
+
+    parser_pos = ctx.find("TransformManifestParser")
+    assert parser_pos != -1, "the production class must reach the prompt at all"
+    first_test_pos = min(
+        pos for pos in (ctx.find("test_manifest_"), ctx.find("FakeDbutils")) if pos != -1
+    )
+    assert parser_pos < first_test_pos, (
+        "production code should outrank a test module that merely shares its vocabulary"
+    )
+
+
+def test_ranking_uses_file_path_so_generic_names_are_reachable() -> None:
+    """A function called `main` in `notebooks/parse_manifest.py` is
+    invisible to name-only matching, yet it is exactly what a brief about
+    manifests needs. The path is often the only place the domain
+    vocabulary appears."""
+    repos_obs = PlanningObservation(
+        tool_name="get_indexed_repositories",
+        summary="1 repo.",
+        data={
+            "indexed_repositories": [{"id": "r1", "name": "soco-ingest", "owner": "acme"}],
+            "total_tracked": 1,
+        },
+    )
+    components = [
+        {
+            "id": "c1",
+            "name": "declare_widgets",
+            "type": "Function",
+            "repository": "soco-ingest",
+            "file_path": "soco_ingest/notebooks/parse_manifest.py",
+        },
+        {
+            "id": "c2",
+            "name": "helper",
+            "type": "Function",
+            "repository": "soco-ingest",
+            "file_path": "soco_ingest/src/util/strings.py",
+        },
+    ]
+    traverse_obs = PlanningObservation(
+        tool_name="traverse_architecture_graph",
+        summary="Found 2 components.",
+        data={"components": components, "kafka_topics": [], "repository_count": 1},
+    )
+
+    profile = analyse("Pipeline change to address bigger manifest")
+    ctx = format_graph_context(repos_obs, traverse_obs, relevance_terms=profile.search_terms)
+
+    assert ctx.find("declare_widgets") != -1
+    assert ctx.find("declare_widgets") < ctx.find("helper"), (
+        "a generically-named component in a topically-named file should still rank"
     )
 
 

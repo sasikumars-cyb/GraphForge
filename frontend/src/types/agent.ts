@@ -172,6 +172,13 @@ export interface PlanningResult {
   risk_considerations: string[];
   graph_context_used: boolean;
   repositories_consulted?: string[];
+  // Deterministic, backend-computed list of claims in this result that
+  // could not be matched against the run's own tool evidence (see
+  // app.agents.verification). Produced by every planning-family agent and,
+  // until now, displayed by none of them — a plan could show a green
+  // "verified" badge beside a file path that exists nowhere in the graph.
+  // Always render these; an unsurfaced caveat is the same as no caveat.
+  verification_warnings?: string[];
   blueprint?: import("./blueprint").BlueprintArtifact | null;
   // v2 architect-level fields — optional, empty when agent version is older
   architecture_layers?: ArchitectureLayer[];
@@ -241,6 +248,13 @@ export interface DevelopmentPlanResult {
   recommendations: string[];
   graph_context_used: boolean;
   repositories_consulted?: string[];
+  // Deterministic, backend-computed list of claims in this result that
+  // could not be matched against the run's own tool evidence (see
+  // app.agents.verification). Produced by every planning-family agent and,
+  // until now, displayed by none of them — a plan could show a green
+  // "verified" badge beside a file path that exists nowhere in the graph.
+  // Always render these; an unsurfaced caveat is the same as no caveat.
+  verification_warnings?: string[];
   blueprint?: import("./blueprint").BlueprintArtifact | null;
 }
 
@@ -324,6 +338,13 @@ export interface TestPlanResult {
   recommendations: string[];
   graph_context_used: boolean;
   repositories_consulted?: string[];
+  // Deterministic, backend-computed list of claims in this result that
+  // could not be matched against the run's own tool evidence (see
+  // app.agents.verification). Produced by every planning-family agent and,
+  // until now, displayed by none of them — a plan could show a green
+  // "verified" badge beside a file path that exists nowhere in the graph.
+  // Always render these; an unsurfaced caveat is the same as no caveat.
+  verification_warnings?: string[];
 }
 
 // --- Workflow Types ---

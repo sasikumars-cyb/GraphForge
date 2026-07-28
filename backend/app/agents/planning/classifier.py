@@ -514,6 +514,50 @@ def derive_pattern(capabilities: tuple[Capability, ...]) -> ArchitecturePattern:
 
 _TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_]{3,}")
 
+# Locators — URLs and absolute filesystem paths — name *where something
+# lives*, never *what the work is about*. They are also the densest source
+# of 4+ character tokens in a typical brief, so left in place they crowd
+# out the domain vocabulary twice over: once by consuming the `max_terms`
+# budget, and again by contributing tokens so rare that `_term_weights`
+# scores them as the most discriminating terms in the run.
+#
+# Both effects were observed together on a real brief. "Prepare
+# implementation plan for https://<host>/browse/PROT-5723 / The repo is
+# already in my local /home/<user>/git_repositories/..." spent 16 of its
+# 25 term slots on the URL and the path, pushing the ticket's actual
+# subject ("manifest") to position 23; and the four surviving locator
+# tokens then out-scored it, because a token matching one component
+# scores 1/(1+1) while "manifest" — matching 108 — scored 1/(1+108).
+# The top-ranked components for that run were consequently a Jira-comment
+# helper and three path-manipulation utilities, none of which had
+# anything to do with the ticket.
+#
+# Stripping locators wholesale is safe in a way that stopwording their
+# tokens individually is not: the noise is per-user and per-host
+# (usernames, directory names, ticket-tracker domains), so no fixed word
+# list can anticipate it. Any identifier that genuinely matters will also
+# appear in the prose — briefs name the thing they are about.
+#
+# Only *absolute* paths are stripped (leading `/`, `~`, or a drive
+# letter). A repo-relative path is the opposite of noise: a brief that
+# says the bug is in `soco_ingest/src/parsers/manifest_parser.py` has
+# handed over the single most useful retrieval term in the whole
+# document, and that must survive intact.
+_URL_RE = re.compile(r"\b[a-z][a-z0-9+.-]*://\S+|\bwww\.\S+", re.IGNORECASE)
+# The lookbehind is what makes "absolute only" actually hold. Without it
+# the regex still matches the *tail* of a relative path — given
+# `soco_ingest/src/parsers/manifest_parser.py` it would match from the
+# first slash onward and strip everything but `soco_ingest`, throwing
+# away the filename that was the whole point of citing the path.
+_FS_PATH_RE = re.compile(r"(?<![\w.\-@+])(?:[A-Za-z]:|~)?[/\\](?:[\w.\-@+]+[/\\]){2,}[\w.\-@+]*")
+
+
+def strip_locators(text: str) -> str:
+    """Remove URLs and absolute filesystem paths from free text, leaving a
+    space so surrounding words don't fuse. See `_URL_RE`/`_FS_PATH_RE` for
+    why locators are dropped rather than down-weighted."""
+    return _FS_PATH_RE.sub(" ", _URL_RE.sub(" ", text))
+
 # Generic English function words, plus the app's own fixed prompt-wrapper
 # vocabulary (see app.agents.prompt_utils.wrap_untrusted_content), plus the
 # handful of nouns/verbs so common across *any* bug report or work item
@@ -656,11 +700,35 @@ _GENERIC_STOPWORDS = frozenset(
         "cases",
         "having",
         "getting",
+        # Locator vocabulary that survives `strip_locators` because it was
+        # written as prose rather than inside a URL or path — "the Jira
+        # ticket", "the repo is already in my local checkout". These name
+        # the tools and places the work is *described* in, never the work.
+        "http",
+        "https",
+        "atlassian",
+        "jira",
+        "browse",
+        "github",
+        "gitlab",
+        "bitbucket",
+        "repo",
+        "repos",
+        "repository",
+        "repositories",
+        "branch",
+        "local",
+        "folder",
+        "directory",
+        "already",
+        "attached",
+        "link",
+        "above",
     }
 )
 
 
-def extract_key_terms(text: str, max_terms: int = 25) -> tuple[str, ...]:
+def extract_key_terms(text: str, max_terms: int = 40) -> tuple[str, ...]:
     """Pull the significant identifiers/nouns out of free text — field
     names, function names, entity names — so they can be matched against
     the Knowledge Graph's own component names.
@@ -678,7 +746,7 @@ def extract_key_terms(text: str, max_terms: int = 25) -> tuple[str, ...]:
     if not text:
         return ()
     seen: list[str] = []
-    for match in _TOKEN_RE.finditer(text.lower()):
+    for match in _TOKEN_RE.finditer(strip_locators(text).lower()):
         token = match.group(0)
         if token in _GENERIC_STOPWORDS or token in seen:
             continue

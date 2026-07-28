@@ -12,6 +12,7 @@ agents never write to the graph directly (GraphWriter rule from AGENT_FRAMEWORK.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -281,6 +282,63 @@ def _relevance(text: str, terms: list[str], weights: dict[str, float] | None = N
     return sum(weights.get(t, 1.0) for t in matched)
 
 
+def _match_text(component: dict[str, Any]) -> str:
+    """The text a component is ranked on: its name, its kind, and the file
+    it lives in.
+
+    The path is not decoration — it is often the only place the domain
+    vocabulary appears. A function called `main` or `run` inside
+    `notebooks/parse_manifest.py` is *entirely* invisible to name-only
+    matching, and a brief about manifests will never surface it. Including
+    the path also lets directory conventions carry their real meaning
+    (`notebooks/`, `loaders/`, `parsers/`), which is exactly the structure
+    an engineer uses to navigate an unfamiliar repository.
+
+    Used for both the ranking score and the document frequencies it is
+    normalized against, so the two always agree on what "matched" means.
+    """
+    return f"{component['name']} {component['type']} {component.get('file_path', '')}"
+
+
+_TEST_PATH_RE = re.compile(r"(^|/)tests?(/|_)|(^|/)test_|_test\.py$|(^|/)conftest\.py$")
+
+# How much a test component's score is discounted relative to production
+# code. Not zero: a test is often the clearest executable description of
+# the behaviour a brief is about, and `test_manifest_taskvalues_failure`
+# genuinely tells you something. But tests outnumber production code
+# heavily in these repositories — 949 of one repo's 1232 components — and
+# they inherit the vocabulary of whatever they exercise, so on any
+# name-and-path match they arrive as a *block*: every helper, fixture and
+# case in one test module scores identically and, being alphabetically
+# dense, sweeps a top-N cutoff entirely.
+#
+# Observed directly: after locator stripping and path matching were
+# added, the top 12 components for a manifest-sizing brief were eleven
+# members of a single `test_manifest_pipeline.py` plus one config module,
+# with the parser, the notebook and the transform class it was actually
+# about sitting at #13, #30, #35 and #36. The discount is what lets
+# production code win a tie it should never have been losing.
+_TEST_RELEVANCE_FACTOR = 0.3
+
+
+def _is_test_component(component: dict[str, Any]) -> bool:
+    """Whether this component is test code, by path or by name."""
+    path = str(component.get("file_path", ""))
+    name = str(component.get("name", ""))
+    return bool(_TEST_PATH_RE.search(path)) or name.split(".")[-1].startswith("test_")
+
+
+def rank_score(
+    component: dict[str, Any], terms: list[str], weights: dict[str, float] | None = None
+) -> float:
+    """A component's ranking score: token-overlap relevance, discounted if
+    it is test code. The single scoring function for both repository
+    ranking and per-repository component selection, so the prompt and the
+    repository order can never disagree about what scored well."""
+    score = _relevance(_match_text(component), terms, weights)
+    return score * _TEST_RELEVANCE_FACTOR if _is_test_component(component) else score
+
+
 def _term_weights(terms: list[str], components: list[dict[str, Any]]) -> dict[str, float]:
     """Inverse-document-frequency weight for each search-term token over the
     *current* component pool: a token that matches almost every component is
@@ -298,12 +356,25 @@ def _term_weights(terms: list[str], components: list[dict[str, Any]]) -> dict[st
     that without needing to hand-classify which list a term came from, and
     self-calibrates to whatever this repository set's own vocabulary is —
     no fixed thresholds, no stopword tuning per domain.
+
+    The falloff is logarithmic, not linear. A raw `1/(1+df)` is far too
+    steep to use as a ranking weight: over a 2039-component pool it scored
+    a token matching one component at 0.5 and "manifest" — matching 108,
+    and the actual subject of the brief — at 0.0092, a **54x** penalty for
+    being the right word. Rarity should break ties between plausible
+    terms, not overrule topicality outright. `1/(1+log1p(df))` keeps the
+    same ordering while compressing that gap to ~3x, so a genuinely
+    on-topic term stays competitive against an incidental one and a
+    component matching two domain tokens outranks one matching a single
+    rare token.
     """
     term_tokens = _tokenize(" ".join(terms))
     if not term_tokens:
         return {}
-    token_sets = [_tokenize(f"{c['name']} {c['type']}") for c in components]
-    return {t: 1.0 / (1 + sum(1 for ts in token_sets if t in ts)) for t in term_tokens}
+    token_sets = [_tokenize(_match_text(c)) for c in components]
+    return {
+        t: 1.0 / (1 + math.log1p(sum(1 for ts in token_sets if t in ts))) for t in term_tokens
+    }
 
 
 def rank_repositories(
@@ -330,13 +401,30 @@ def rank_repositories(
             return 0.0
         total = _relevance(name, terms, weights) * 2
         for comp in by_repo.get(name, []):
-            total += _relevance(f"{comp['name']} {comp['type']}", terms, weights)
+            total += rank_score(comp, terms, weights)
         return total
 
     return sorted(
         ((score(r["name"]), r["name"]) for r in indexed_repos),
         key=lambda pair: (-pair[0], pair[1]),
     )
+
+
+def _component_budget(repo_component_count: int) -> int:
+    """How many components from one repository reach the prompt.
+
+    A flat cutoff cannot serve both ends of the range: five components is
+    a reasonable summary of a 40-component service and a rounding error
+    on a 1232-component monorepo, where the five best-scoring entries are
+    routinely all members of a single file. Scaling with repository size
+    keeps small repositories concise while giving a large one enough room
+    that a relevant *module* is represented by more than its constructor.
+
+    Bounded at both ends: never fewer than 8 (below that a tie inside one
+    file consumes the entire budget), never more than 20 (the prompt has
+    a token budget too, and past ~20 the tail stops being relevant).
+    """
+    return max(8, min(20, -(-repo_component_count // 100)))
 
 
 def stars_for_rank(rank_index: int) -> int:
@@ -352,7 +440,7 @@ def format_graph_context(
     traverse_observation: PlanningObservation,
     relevance_terms: list[str] | None = None,
     max_repos: int = 4,
-    max_components_per_repo: int = 5,
+    max_components_per_repo: int | None = None,
 ) -> str:
     """Format graph tool observations into a compact, LLM-readable context.
 
@@ -417,11 +505,20 @@ def format_graph_context(
                 comps = sorted(
                     comps,
                     key=lambda c: (
-                        -_relevance(f"{c['name']} {c['type']}", terms, weights),
+                        -rank_score(c, terms, weights),
+                        # Every component sharing a file scores identically
+                        # once the path is part of the match text, so the
+                        # tiebreak decides which of them the model actually
+                        # sees. Alphabetical order alone hands those slots
+                        # to `__init__` and other private members — real
+                        # code, but the least self-describing name in the
+                        # file. Prefer names that mean something.
+                        c["name"].split(".")[-1].startswith("_"),
                         c["name"],
                     ),
                 )
-            listed = [f"{c['name']} ({c['type']})" for c in comps[:max_components_per_repo]]
+            budget = max_components_per_repo or _component_budget(len(comps))
+            listed = [f"{c['name']} ({c['type']})" for c in comps[:budget]]
             if listed:
                 comp_lines.append(f"  {repo}: {', '.join(listed)}")
         parts.append(

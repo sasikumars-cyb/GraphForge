@@ -22,6 +22,8 @@ import {
   MiniMap,
   Position,
   MarkerType,
+  useStore,
+  useStoreApi,
   type Node,
   type Edge,
   type ReactFlowInstance,
@@ -57,6 +59,13 @@ const RISK_SEVERITY_COLORS: Record<string, { bg: string; border: string; text: s
 
 const NODE_W = 200;
 const NODE_H = 60;
+
+// Retry budget for the handle measurement in `NodeInternalsSync`. Bounded
+// because a diagram that genuinely cannot be measured should settle into a
+// node-only render, not spin: 10 tries at 100ms covers roughly a second of
+// mount settling, well past the point where anything is still moving.
+const MAX_MEASURE_ATTEMPTS = 10;
+const MEASURE_RETRY_MS = 100;
 
 // ---------------------------------------------------------------------------
 // dagre layout helper — with grid fallback and collision detection
@@ -124,6 +133,77 @@ function layoutDiagram(
 // FlowGraphRenderer — handles flow / architecture / dependency / sequence
 // ---------------------------------------------------------------------------
 
+/**
+ * Forces xyflow to measure each node's handles once the nodes are in the DOM.
+ *
+ * Edges are positioned from `node.internals.handleBounds`, which xyflow
+ * fills in during its own post-mount measurement pass. In these diagrams
+ * that pass never produced anything: `handleBounds` stayed `undefined`, so
+ * `getEdgePosition` returned null for every edge, `EdgeWrapper` bailed out
+ * at its `sourceX === null` guard, and each diagram rendered its full node
+ * set with **zero** edges — no console error, and unaffected by viewport
+ * resize, Fit View or fullscreen, because none of those re-run the pass.
+ * The backend was supplying 17/7/15/3 valid edges the whole time and none
+ * of them ever reached the screen.
+ *
+ * This drives the store's own `updateNodeInternals` rather than the
+ * `useUpdateNodeInternals` hook. The hook resolves each node's element
+ * from `store.getState().domNode` *synchronously*, at the moment it is
+ * called — so calling it from a mount effect, before the flow has
+ * registered its own container, silently builds an empty update map and
+ * the measurement never happens. Reading the store inside the frame
+ * instead means the lookup always sees a registered container.
+ */
+function NodeInternalsSync({ nodeIds }: { nodeIds: string[] }) {
+  const store = useStoreApi();
+
+  // Ask the flow's own store how many nodes still have no handle bounds,
+  // and drive the retry off that rather than firing once and hoping.
+  //
+  // A single post-mount attempt is not enough: the measurement needs the
+  // node elements in the DOM *and* the flow's `domNode` registered, and
+  // whichever of those settles last varies with how the surrounding card
+  // mounts. Selecting the outstanding count means each partial success
+  // re-triggers this effect for whatever is left, and reaching zero stops
+  // it — self-healing, and terminating without a timer or an attempt cap.
+  const unmeasured = useStore((s) => {
+    let count = 0;
+    for (const node of s.nodeLookup.values()) {
+      if (!node.internals?.handleBounds) count += 1;
+    }
+    return count;
+  });
+
+  // Depend on the joined ids, not the array: the parent rebuilds this array
+  // on every hover/selection change, and re-measuring on hover would be a
+  // needless layout read on every pointer move.
+  const key = nodeIds.join("|");
+  const [attempt, setAttempt] = useState(0);
+
+  useEffect(() => setAttempt(0), [key]);
+
+  useEffect(() => {
+    if (!nodeIds.length || unmeasured === 0 || attempt >= MAX_MEASURE_ATTEMPTS) return;
+    const timer = setTimeout(
+      () => {
+        const { domNode, updateNodeInternals } = store.getState();
+        const updates = new Map();
+        for (const id of nodeIds) {
+          const nodeElement = domNode?.querySelector(`.react-flow__node[data-id="${id}"]`);
+          if (nodeElement) updates.set(id, { id, nodeElement, force: true });
+        }
+        if (updates.size) updateNodeInternals(updates, { triggerFitView: false });
+        setAttempt((a) => a + 1);
+      },
+      attempt === 0 ? 0 : MEASURE_RETRY_MS,
+    );
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key, unmeasured, attempt, store]);
+
+  return null;
+}
+
 function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
   const direction = diagram.layout?.direction ?? "LR";
 
@@ -149,6 +229,16 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
       return {
         id: n.id,
         position: pos,
+        // Declare the box up front rather than waiting to be measured.
+        // xyflow keeps a node `visibility: hidden` until it has
+        // dimensions, and every node here was stuck that way. These are
+        // not estimates: `layoutDiagram` hands dagre exactly
+        // NODE_W x NODE_H, so declaring the same numbers is what keeps
+        // the rendered boxes and the positions dagre computed for them
+        // in agreement. See `NodeInternalsSync` for the separate reason
+        // edges were missing.
+        width: NODE_W,
+        height: NODE_H,
         data: {
           label: (
             <div style={{ lineHeight: 1.3 }}>
@@ -291,6 +381,8 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
   // A minimap/zoom-controls pair is only useful once a graph is big enough
   // to need panning — on a 1-2 node diagram it's a fixed-size dark box that
   // dwarfs the real content and reads as broken rendering, not chrome.
+  const nodeIds = useMemo(() => flowNodes.map((n) => n.id), [flowNodes]);
+
   const isSmallGraph = flowNodes.length <= 4;
 
   const fitPadding = isSmallGraph ? 0.4 : 0.2;
@@ -348,6 +440,7 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
       onNodeMouseEnter={onNodeMouseEnter}
       onNodeMouseLeave={onNodeMouseLeave}
     >
+      <NodeInternalsSync nodeIds={nodeIds} />
       <Background />
       {!isSmallGraph && (
         <>

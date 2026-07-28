@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, GitBranch, Layers, Recycle, Users, Zap } from "lucide-react";
 import { Card } from "../Card";
+import { VerificationWarnings } from "./VerificationWarnings";
 import type { DevelopmentPlanResult, PlanningResult, TestPlanResult } from "../../types/agent";
 
 /**
@@ -18,6 +19,8 @@ import type { DevelopmentPlanResult, PlanningResult, TestPlanResult } from "../.
 export function PlanningResultDetails({ result }: { result: PlanningResult }) {
   return (
     <>
+      <VerificationWarnings warnings={result.verification_warnings} subject="plan" />
+
       {result.executive_summary && (
         <Card title="Implementation Plan">
           <p className="text-sm text-slate-200">{result.executive_summary}</p>
@@ -120,6 +123,11 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
 export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanResult }) {
   return (
     <>
+      <VerificationWarnings
+        warnings={result.verification_warnings}
+        subject="implementation plan"
+      />
+
       {result.executive_summary && (
         <Card title="Implementation Blueprint">
           <p className="text-sm text-slate-200">{result.executive_summary}</p>
@@ -368,6 +376,8 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
 export function TestingResultDetails({ result }: { result: TestPlanResult }) {
   return (
     <>
+      <VerificationWarnings warnings={result.verification_warnings} subject="test plan" />
+
       {result.executive_summary && (
         <Card title="Test Strategy">
           <p className="text-sm text-slate-200">{result.executive_summary}</p>
