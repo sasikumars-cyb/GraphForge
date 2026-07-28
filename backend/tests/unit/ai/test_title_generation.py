@@ -114,3 +114,39 @@ async def test_generate_title_fallback_never_empty_for_empty_objective() -> None
         title = await generate_title("   ")
 
     assert title == "Untitled"
+
+
+@pytest.mark.asyncio
+async def test_generate_title_falls_back_when_provider_returns_a_refusal_sentence() -> None:
+    """Regression: given a bare Jira URL as the objective, the model has no
+    tools of its own to resolve it (only the Planning Agent that runs
+    afterward actually fetches ticket content) and can respond with a full
+    refusal sentence instead of a title. That response is non-empty, so it
+    used to pass straight through and become the workflow's literal title —
+    e.g. "I don't have access to external URLs or Jira tickets. Please
+    share the ticket details..." shown as the workflow's title in the UI."""
+    objective = "Prepare plan for https://uplightinc.atlassian.net/browse/PROT-5723"
+    refusal = (
+        "I don't have access to external URLs or Jira tickets. Please share "
+        "the ticket details or description, and I'll generate an appropriate "
+        "title for you."
+    )
+    with patch(
+        "app.agents.title_generation.create_llm_provider",
+        return_value=_mock_provider(refusal),
+    ):
+        title = await generate_title(objective)
+
+    assert title == "Prepare plan for…"  # word-boundary-truncated fallback
+    assert "I don't have access" not in title
+
+
+@pytest.mark.asyncio
+async def test_generate_title_falls_back_when_provider_returns_multiple_lines() -> None:
+    with patch(
+        "app.agents.title_generation.create_llm_provider",
+        return_value=_mock_provider("A Title\nWith extra commentary on a second line."),
+    ):
+        title = await generate_title("Add caching to the search service.")
+
+    assert title == "Add caching to the search service."

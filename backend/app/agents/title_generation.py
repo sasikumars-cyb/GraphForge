@@ -27,6 +27,24 @@ _SYSTEM_PROMPT = (
 
 _FALLBACK_MAX_CHARS = 60
 
+# A real title is "5 to 10 words" per the system prompt above — generous
+# upper bound for that, not a hard word count. Guards against the model
+# ignoring the instruction and returning a full sentence instead of a
+# title: seen in practice when `objective` is a bare URL/ticket reference
+# the model has no way to resolve itself (it has no tools; only the
+# Planning Agent that runs afterward actually fetches Jira content), and
+# it responds with something like "I don't have access to external URLs
+# or Jira tickets. Please share the ticket details..." — non-empty, so it
+# would otherwise pass straight through and become the workflow's title
+# verbatim. A single deterministic length check catches this regardless
+# of the exact wording, rather than pattern-matching every possible
+# refusal phrasing.
+_MAX_TITLE_CHARS = 80
+
+
+def _looks_like_a_title(text: str) -> bool:
+    return bool(text) and len(text) <= _MAX_TITLE_CHARS and "\n" not in text
+
 
 def _fallback_title(objective: str) -> str:
     """Word-boundary-truncated version of the objective — never cuts a
@@ -56,9 +74,12 @@ async def generate_title(objective: str, *, model: str | None = None) -> str:
             options=LLMRequestOptions(response_format=ResponseFormat.TEXT),
         )
         title = response.text.strip().strip('"').strip()
-        if title:
+        if _looks_like_a_title(title):
             return title
-        logger.warning("title_generation_empty_response falling back to truncated objective")
+        logger.warning(
+            "title_generation_unusable_response falling back to truncated objective: %.100r",
+            title,
+        )
     except AppError as exc:
         logger.warning("title_generation_failed error=%s falling back to truncated objective", exc)
     return _fallback_title(objective)
