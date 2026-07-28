@@ -162,7 +162,22 @@ function PlanningResultView({
   onNewPlan: () => void;
 }) {
   const step = run.steps[0];
-  const result = step?.result as unknown as PlanningResult | undefined;
+  // AgentStep.result is a JSON column defaulting to `{}` and is only ever
+  // populated on the success path (see RunCoordinator.execute_run) — a
+  // failed run's step keeps that empty default forever, not `null`. `{}`
+  // is truthy, so treating step.result as the result whenever it's merely
+  // *present* let every result-shaped section below render against an
+  // empty object once a run failed (e.g. expired Bedrock/AWS credentials
+  // mid-plan) — GreenfieldRecommendations crashed hardest since it calls
+  // `.map()` on `affected_components` with no guard, but every other
+  // result-consuming section here was one non-optional field away from
+  // the same failure. Requiring "completed" is what actually distinguishes
+  // a real result from that empty default; the "failed" banner below
+  // already covers user-facing error communication for every other status.
+  const result =
+    run.status === "completed"
+      ? (step?.result as unknown as PlanningResult | undefined)
+      : undefined;
   const evidence = step?.evidence ?? [];
   const blueprint = result?.blueprint as BlueprintArtifact | null | undefined;
   const hasBlueprint = Boolean(blueprint && blueprint.diagrams.length > 0);

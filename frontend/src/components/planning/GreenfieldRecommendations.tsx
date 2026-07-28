@@ -15,15 +15,20 @@ function slugify(name: string): string {
 }
 
 function deriveRepoSuggestions(result: PlanningResult): string[] {
+  // `?? []` even though PlanningResult types these as required: this
+  // component only ever sees a real, complete result (PlanningPage now
+  // gates on run.status === "completed" before passing one in at all),
+  // but a defensive default here is a one-line insurance policy against
+  // the same class of crash if that ever stops being true.
   // Use affected_components first — they're already service names
-  const fromComponents = result.affected_components
+  const fromComponents = (result.affected_components ?? [])
     .map(slugify)
     .filter((s) => s.length > 2);
 
   if (fromComponents.length >= 3) return fromComponents.slice(0, 6);
 
   // Fall back to step component references
-  const fromSteps = result.implementation_steps
+  const fromSteps = (result.implementation_steps ?? [])
     .map((s) => s.affected_component ?? "")
     .filter(Boolean)
     .map(slugify)
@@ -50,7 +55,7 @@ function deriveEpics(result: PlanningResult): string[] {
   }
 
   // Derive from implementation steps — group by order buckets
-  if (result.implementation_steps.length > 0) {
+  if (result.implementation_steps?.length > 0) {
     const steps = result.implementation_steps.slice(0, 8);
     return steps.map((s) => {
       const desc = s.description;
