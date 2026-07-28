@@ -28,6 +28,7 @@ GOAL_REVIEW_PR = "review_pr"
 GOAL_PLAN_FREEFORM = "plan_freeform"
 GOAL_DEVELOP_CHANGE_PLAN = "develop_change_plan"
 GOAL_PLAN_TESTS = "plan_tests"
+GOAL_PLAN_DOCUMENTATION = "plan_documentation"
 GOAL_REVIEW_READINESS = "review_readiness"
 
 

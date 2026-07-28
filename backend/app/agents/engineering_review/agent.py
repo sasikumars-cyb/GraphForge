@@ -2,7 +2,8 @@
 
 Implements the IAgent protocol for goal=review_readiness. Unlike Planning/
 Development/Testing, this agent runs no graph tools of its own — it
-synthesizes over the prior three stages' structured results.
+synthesizes over the prior four stages' structured results (Planning,
+Development, Testing, and Documentation Planning).
 
 Those results are read directly via get_stage_result() (the same
 structured-artifact-reader every deterministic execution agent already
@@ -53,6 +54,9 @@ from app.agents.stage_context import (
     format_development_block as _format_development_block,
 )
 from app.agents.stage_context import (
+    format_documentation_block as _format_documentation_block,
+)
+from app.agents.stage_context import (
     format_planning_block as _format_planning_block,
 )
 from app.agents.stage_context import (
@@ -85,6 +89,7 @@ def _collect_verification_warnings(
     planning_result: dict[str, Any] | None,
     development_result: dict[str, Any] | None,
     testing_result: dict[str, Any] | None,
+    documentation_result: dict[str, Any] | None,
 ) -> list[str]:
     """Pull each stage's own deterministic `verification_warnings` — never
     re-derived or judged by this agent's LLM call, just read straight out
@@ -93,6 +98,11 @@ def _collect_verification_warnings(
     ground-truth signal this agent previously had no access to: it could
     only compare the three stages' free text against each other, never
     against what those stages' own tool calls actually verified.
+
+    Documentation Planning also carries forward its own
+    `prior_verification_warnings` (not `verification_warnings` — it runs
+    no tools of its own either, see documentation_planning/agent.py), so
+    those are folded in here too rather than double-read separately.
     """
     warnings: list[str] = []
     for label, result in (
@@ -102,6 +112,9 @@ def _collect_verification_warnings(
     ):
         for w in (result or {}).get("verification_warnings", []) or []:
             warnings.append(f"[{label}] {w}")
+    for w in (documentation_result or {}).get("prior_verification_warnings", []) or []:
+        if w not in warnings:
+            warnings.append(w)
     return warnings
 
 
@@ -110,6 +123,7 @@ def _build_blueprint_context(
     planning_result: dict[str, Any] | None,
     development_result: dict[str, Any] | None,
     testing_result: dict[str, Any] | None,
+    documentation_result: dict[str, Any] | None,
     verification_warnings: list[str],
 ) -> str:
     sections = [
@@ -117,6 +131,7 @@ def _build_blueprint_context(
         _format_planning_block(planning_result),
         _format_development_block(development_result),
         _format_testing_block(testing_result),
+        _format_documentation_block(documentation_result),
     ]
     if verification_warnings:
         sections.append(
@@ -246,26 +261,31 @@ class EngineeringReviewAgent:
         planning_result = get_stage_result(workflow, "planning") if workflow else None
         development_result = get_stage_result(workflow, "development") if workflow else None
         testing_result = get_stage_result(workflow, "testing") if workflow else None
+        documentation_result = (
+            get_stage_result(workflow, "documentation_planning") if workflow else None
+        )
 
         prior_verification_warnings = _collect_verification_warnings(
-            planning_result, development_result, testing_result
+            planning_result, development_result, testing_result, documentation_result
         )
         blueprint_context = _build_blueprint_context(
             context.subject.display_name,
             planning_result,
             development_result,
             testing_result,
+            documentation_result,
             prior_verification_warnings,
         )
 
         logger.info(
             "engineering_review_agent_started subject_id=%s context_chars=%d "
-            "planning=%s development=%s testing=%s model=%s",
+            "planning=%s development=%s testing=%s documentation_planning=%s model=%s",
             subject_id,
             len(blueprint_context),
             planning_result is not None,
             development_result is not None,
             testing_result is not None,
+            documentation_result is not None,
             context.model,
         )
 
@@ -275,6 +295,7 @@ class EngineeringReviewAgent:
                 ("Planning", planning_result),
                 ("Development", development_result),
                 ("Testing", testing_result),
+                ("Documentation Planning", documentation_result),
             )
             if result is None
         ]
@@ -283,9 +304,10 @@ class EngineeringReviewAgent:
                 kind="tool_call",
                 reference="read_workflow_context",
                 summary=(
-                    "Read full structured results from the Planning, Development, and "
-                    "Testing stages via get_stage_result() — no summarization or "
-                    "truncation applied." + (f" Missing: {', '.join(missing)}." if missing else "")
+                    "Read full structured results from the Planning, Development, Testing, "
+                    "and Documentation Planning stages via get_stage_result() — no "
+                    "summarization or truncation applied."
+                    + (f" Missing: {', '.join(missing)}." if missing else "")
                 ),
             )
         ]

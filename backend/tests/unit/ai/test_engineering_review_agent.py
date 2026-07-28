@@ -197,12 +197,43 @@ def _make_llm_response(
     )
 
 
+def _documentation_planning_result() -> dict:
+    return {
+        "goal": "plan_documentation",
+        "executive_summary": "README and a new runbook are needed for the rate limiter.",
+        "documentation_impact": "medium",
+        "impact_explanation": "New service, no user-facing API change.",
+        "required_updates": [
+            {
+                "document": "README.md",
+                "category": "repository",
+                "current_status": "",
+                "action": "update",
+                "reason": "New RateLimiterService is not mentioned.",
+                "priority": "medium",
+                "owner": "Backend maintainer",
+                "estimated_effort": "small",
+                "dependencies": [],
+            },
+        ],
+        "new_documentation": [],
+        "existing_updates": [],
+        "risks": [],
+        "recommendations": [],
+        "release_notes_draft": [],
+        "checklist": [],
+    }
+
+
 def _full_workflow() -> SimpleNamespace:
     return _make_workflow(
         [
             _make_run("planning", "completed", _planning_result()),
             _make_run("development", "completed", _development_result()),
             _make_run("testing", "completed", _testing_result()),
+            _make_run(
+                "documentation_planning", "completed", _documentation_planning_result()
+            ),
         ]
     )
 
@@ -298,6 +329,9 @@ async def test_engineering_review_agent_prompt_contains_full_development_artifac
     assert "Regression tests cover" not in prompt  # sanity: not the LLM's own output
     # Testing's real fields also present, not dropped.
     assert "Requests over the limit are rejected with 429." in prompt
+    # Documentation Planning's real fields also present, not dropped.
+    assert "README.md" in prompt
+    assert "New RateLimiterService is not mentioned." in prompt
 
 
 @pytest.mark.asyncio
@@ -332,7 +366,10 @@ async def test_engineering_review_agent_missing_workflow_falls_back_gracefully()
 
     assert output.result["readiness_status"] == "ready"
     tool_evidence = next(e for e in output.evidence if e.kind == "tool_call")
-    assert "Missing: Planning, Development, Testing." in tool_evidence.summary
+    assert (
+        "Missing: Planning, Development, Testing, Documentation Planning."
+        in tool_evidence.summary
+    )
 
 
 @pytest.mark.asyncio
@@ -357,7 +394,7 @@ async def test_engineering_review_agent_partial_workflow_notes_missing_stages() 
     assert "(No completed Development stage result available.)" in captured_prompt["prompt"]
     assert "(No completed Testing stage result available.)" in captured_prompt["prompt"]
     tool_evidence = next(e for e in output.evidence if e.kind == "tool_call")
-    assert "Missing: Development, Testing." in tool_evidence.summary
+    assert "Missing: Development, Testing, Documentation Planning." in tool_evidence.summary
 
 
 # ---------------------------------------------------------------------------

@@ -4,11 +4,18 @@ import { EvidencePanel } from "../EvidencePanel";
 import { ExecutionLogPanel } from "../workflow/ExecutionLogPanel";
 import {
   DevelopmentResultDetails,
+  DocumentationPlanningResultDetails,
   PlanningResultDetails,
   TestingResultDetails,
 } from "../agents/StageResultDetails";
 import { BlueprintExplorer } from "../blueprint/BlueprintExplorer";
-import type { AgentStep, DevelopmentPlanResult, PlanningResult, TestPlanResult } from "../../types/agent";
+import type {
+  AgentStep,
+  DevelopmentPlanResult,
+  DocumentationPlanResult,
+  PlanningResult,
+  TestPlanResult,
+} from "../../types/agent";
 import type { BlueprintArtifact } from "../../types/blueprint";
 
 /**
@@ -68,7 +75,11 @@ export function StageResultPanel({
   const risksCount = planningResult?.risk_considerations?.length ?? developmentResult?.risks?.length;
 
   const hasBlueprint = Boolean(blueprint && blueprint.diagrams.length > 0);
-  const hasSummary = stage === "planning" || stage === "development" || stage === "testing";
+  const hasSummary =
+    stage === "planning" ||
+    stage === "development" ||
+    stage === "testing" ||
+    stage === "documentation_planning";
 
   const defaultTab: ResultTab = hasBlueprint ? "blueprint" : hasSummary ? "summary" : "evidence";
   const [activeTab, setActiveTab] = useState<ResultTab>(defaultTab);
@@ -184,6 +195,11 @@ export function StageResultPanel({
             )}
             {stage === "testing" && (
               <TestingResultDetails result={step.result as unknown as TestPlanResult} />
+            )}
+            {stage === "documentation_planning" && (
+              <DocumentationPlanningResultDetails
+                result={step.result as unknown as DocumentationPlanResult}
+              />
             )}
           </div>
         )}

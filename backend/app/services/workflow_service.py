@@ -41,7 +41,13 @@ STAGES = ("planning", "development", "testing", "review")
 
 WORKFLOW_TYPE_STAGES: dict[str, tuple[str, ...]] = {
     "legacy_sdlc": STAGES,
-    "planning": ("planning", "development", "testing", "engineering_review"),
+    "planning": (
+        "planning",
+        "development",
+        "testing",
+        "documentation_planning",
+        "engineering_review",
+    ),
     "auto_execution": (
         "generate_code",
         "create_branch",
@@ -65,6 +71,7 @@ STAGE_GOALS: dict[str, str] = {
     "development": "develop_change_plan",
     "testing": "plan_tests",
     "review": "review_pr",
+    "documentation_planning": "plan_documentation",
     "engineering_review": "review_readiness",
     "generate_code": "generate_code",
     "create_branch": "create_branch",
@@ -79,6 +86,7 @@ STAGE_LABELS: dict[str, str] = {
     "development": "Development",
     "testing": "Testing",
     "review": "Review",
+    "documentation_planning": "Documentation Planning",
     "engineering_review": "Engineering Review",
     "generate_code": "Generate Code",
     "create_branch": "Create Branch",

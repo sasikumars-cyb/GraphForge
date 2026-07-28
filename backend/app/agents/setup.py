@@ -16,6 +16,8 @@ from app.agents.code_generation.agent import CodeGenerationAgent
 from app.agents.code_generation.manifest import CODE_GENERATION_MANIFEST
 from app.agents.development.agent import DevelopmentAgent
 from app.agents.development.manifest import DEVELOPMENT_MANIFEST
+from app.agents.documentation_planning.agent import DocumentationPlanningAgent
+from app.agents.documentation_planning.manifest import DOCUMENTATION_PLANNING_MANIFEST
 from app.agents.engineering_review.agent import EngineeringReviewAgent
 from app.agents.engineering_review.manifest import ENGINEERING_REVIEW_MANIFEST
 from app.agents.git_ops.commit_changes_agent import CommitChangesAgent
@@ -62,6 +64,10 @@ def register_agents() -> None:
     if "testing" not in existing_ids:
         global_registry.register(TESTING_MANIFEST, TestPlanningAgent())
         logger.info("registered_testing_agent")
+
+    if "documentation_planning" not in existing_ids:
+        global_registry.register(DOCUMENTATION_PLANNING_MANIFEST, DocumentationPlanningAgent())
+        logger.info("registered_documentation_planning_agent")
 
     if "engineering_review" not in existing_ids:
         global_registry.register(ENGINEERING_REVIEW_MANIFEST, EngineeringReviewAgent())

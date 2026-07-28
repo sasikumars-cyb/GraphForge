@@ -347,9 +347,73 @@ export interface TestPlanResult {
   verification_warnings?: string[];
 }
 
+// --- Documentation Plan Result (agent-specific payload inside step.result) ---
+
+export interface RequiredDocumentationUpdateResult {
+  document: string;
+  category: string;
+  current_status: string;
+  action: string;
+  reason: string;
+  priority: string;
+  owner: string;
+  estimated_effort: string;
+  dependencies: string[];
+}
+
+export interface NewDocumentationItemResult {
+  name: string;
+  category: string;
+  purpose: string;
+  suggested_location: string;
+  owner: string;
+  priority: string;
+  estimated_effort: string;
+}
+
+export interface ExistingDocumentationUpdateResult {
+  file_path: string;
+  sections_affected: string[];
+  summary_of_changes: string;
+}
+
+export interface DocumentationRiskResult {
+  description: string;
+  severity: string;
+}
+
+export interface DocumentationChecklistItemResult {
+  label: string;
+  applicable: boolean;
+}
+
+export interface DocumentationPlanResult {
+  goal: string;
+  executive_summary: string;
+  documentation_impact: string;
+  impact_explanation: string;
+  required_updates: RequiredDocumentationUpdateResult[];
+  new_documentation: NewDocumentationItemResult[];
+  existing_updates: ExistingDocumentationUpdateResult[];
+  risks: DocumentationRiskResult[];
+  recommendations: string[];
+  release_notes_draft: string[];
+  checklist: DocumentationChecklistItemResult[];
+  // Deterministic verification_warnings carried forward from Planning/
+  // Development/Testing (see app.agents.verification) — this agent runs
+  // no tools of its own, same reasoning as TestPlanResult.verification_warnings.
+  prior_verification_warnings?: string[];
+}
+
 // --- Workflow Types ---
 
-export type WorkflowStage = "planning" | "development" | "testing" | "review";
+export type WorkflowStage =
+  | "planning"
+  | "development"
+  | "testing"
+  | "documentation_planning"
+  | "engineering_review"
+  | "review";
 export type WorkflowStatus =
   "in_progress" | "completed" | "awaiting_approval" | "approved" | "rejected";
 

@@ -110,6 +110,7 @@ def test_planning_sequence_ends_in_engineering_review_not_review() -> None:
         "planning",
         "development",
         "testing",
+        "documentation_planning",
         "engineering_review",
     )
     assert "review" not in stage_sequence("planning")
@@ -124,7 +125,8 @@ def test_stage_sequence_unknown_type_falls_back_to_legacy() -> None:
 
 
 def test_next_stage_respects_workflow_type() -> None:
-    assert next_stage("testing", "planning") == "engineering_review"
+    assert next_stage("testing", "planning") == "documentation_planning"
+    assert next_stage("documentation_planning", "planning") == "engineering_review"
     assert next_stage("engineering_review", "planning") is None
     # legacy_sdlc (the default) is unaffected — proves the two sequences
     # are genuinely independent, not one leaking into the other.
@@ -134,6 +136,11 @@ def test_next_stage_respects_workflow_type() -> None:
 def test_engineering_review_stage_metadata_registered() -> None:
     assert STAGE_GOALS["engineering_review"] == "review_readiness"
     assert STAGE_LABELS["engineering_review"] == "Engineering Review"
+
+
+def test_documentation_planning_stage_metadata_registered() -> None:
+    assert STAGE_GOALS["documentation_planning"] == "plan_documentation"
+    assert STAGE_LABELS["documentation_planning"] == "Documentation Planning"
 
 
 # ---------------------------------------------------------------------------
@@ -504,6 +511,36 @@ async def test_advance_planning_workflow_mid_sequence_still_advances_normally() 
         goal="plan_tests",
         status="completed",
         workflow_stage="testing",
+    )
+
+    await advance_workflow(mock_db, workflow, run)
+
+    assert workflow.current_stage == "documentation_planning"
+    assert workflow.status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_advance_planning_workflow_documentation_planning_advances_to_review() -> None:
+    from app.services.workflow_service import advance_workflow
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Test",
+        current_stage="documentation_planning",
+        status="in_progress",
+        workflow_type="planning",
+    )
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:test",
+        subject_type="freetext",
+        display_name="Test",
+        goal="plan_documentation",
+        status="completed",
+        workflow_stage="documentation_planning",
     )
 
     await advance_workflow(mock_db, workflow, run)

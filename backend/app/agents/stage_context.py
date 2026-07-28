@@ -132,6 +132,52 @@ def format_development_block(result: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+def format_documentation_block(result: dict[str, Any] | None) -> str:
+    if not result:
+        return (
+            "### Documentation Planning Stage\n"
+            "(No completed Documentation Planning stage result available.)"
+        )
+
+    lines = [
+        "### Documentation Planning Stage",
+        f"Summary: {result.get('executive_summary') or '(none)'}",
+    ]
+    if impact := result.get("documentation_impact"):
+        explanation = result.get("impact_explanation") or ""
+        suffix = f" — {explanation}" if explanation else ""
+        lines.append(f"Documentation impact: {impact}{suffix}")
+    if updates := result.get("required_updates"):
+        lines.append(
+            "Required updates: "
+            + _join(
+                updates,
+                lambda u: (
+                    f"{u.get('document', '?')} [{u.get('action', '')}, "
+                    f"{u.get('priority') or 'unspecified'} priority] — {u.get('reason', '')}"
+                ),
+            )
+        )
+    if new_docs := result.get("new_documentation"):
+        lines.append(
+            "New documentation: "
+            + _join(new_docs, lambda n: f"{n.get('name', '?')} — {n.get('purpose', '')}")
+        )
+    if risks := result.get("risks"):
+        lines.append(
+            "Documentation risks: "
+            + _join(
+                risks,
+                lambda r: f"{r.get('description', '')} [{r.get('severity') or 'unspecified'}]",
+            )
+        )
+    if recs := result.get("recommendations"):
+        lines.append("Recommendations: " + "; ".join(recs))
+    if notes := result.get("release_notes_draft"):
+        lines.append("Release notes draft: " + "; ".join(notes))
+    return "\n".join(lines)
+
+
 def format_testing_block(result: dict[str, Any] | None) -> str:
     if not result:
         return "### Testing Stage\n(No completed Testing stage result available.)"

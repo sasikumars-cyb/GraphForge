@@ -17,6 +17,7 @@ export const STAGE_AGENT_LABEL: Record<string, string> = {
   development: "Development Agent",
   testing: "Testing Agent",
   review: "Review Agent",
+  documentation_planning: "Documentation Planning Agent",
   engineering_review: "Engineering Review Agent",
 };
 
@@ -38,6 +39,7 @@ const GOAL_TO_STAGE: Record<string, string> = {
   plan_freeform: "planning",
   develop_change_plan: "development",
   plan_tests: "testing",
+  plan_documentation: "documentation_planning",
   review_readiness: "engineering_review",
 };
 
@@ -401,6 +403,12 @@ const ARTIFACT_FIELDS: Record<string, ArtifactField[]> = {
     { key: "risk_assessment", label: "Risk assessments" },
     { key: "dependency_assessment", label: "Dependency assessments" },
     { key: "blocking_issues", label: "Blocking issues" },
+    { key: "recommendations", label: "Recommendations" },
+  ],
+  documentation_planning: [
+    { key: "required_updates", label: "Documents to update" },
+    { key: "new_documentation", label: "New documentation" },
+    { key: "risks", label: "Documentation risks" },
     { key: "recommendations", label: "Recommendations" },
   ],
 };

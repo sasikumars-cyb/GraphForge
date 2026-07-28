@@ -1,7 +1,22 @@
-import { AlertTriangle, CheckCircle2, GitBranch, Layers, Recycle, Users, Zap } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  Circle,
+  FileText,
+  GitBranch,
+  Layers,
+  Recycle,
+  Users,
+  Zap,
+} from "lucide-react";
 import { Card } from "../Card";
 import { VerificationWarnings } from "./VerificationWarnings";
-import type { DevelopmentPlanResult, PlanningResult, TestPlanResult } from "../../types/agent";
+import type {
+  DevelopmentPlanResult,
+  DocumentationPlanResult,
+  PlanningResult,
+  TestPlanResult,
+} from "../../types/agent";
 
 /**
  * Full per-field rendering of each agent's structured result — extracted
@@ -694,6 +709,254 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
           ? "Test plan grounded in architecture graph data"
           : "No graph data available — general QA practices used"}
       </div>
+    </>
+  );
+}
+
+const DOCUMENTATION_IMPACT_STYLES: Record<string, string> = {
+  high: "bg-rose-500/10 text-rose-300",
+  medium: "bg-amber-500/10 text-amber-300",
+  low: "bg-sky-500/10 text-sky-300",
+  none: "bg-slate-800 text-slate-400",
+};
+
+const PRIORITY_STYLES: Record<string, string> = {
+  high: "bg-rose-500/10 text-rose-300",
+  medium: "bg-amber-500/10 text-amber-300",
+  low: "bg-slate-800 text-slate-400",
+};
+
+export function DocumentationPlanningResultDetails({
+  result,
+}: {
+  result: DocumentationPlanResult;
+}) {
+  return (
+    <>
+      <VerificationWarnings
+        warnings={result.prior_verification_warnings}
+        subject="documentation plan"
+      />
+
+      {result.executive_summary && (
+        <Card title="Documentation Plan">
+          <p className="text-sm text-slate-200">{result.executive_summary}</p>
+          {result.documentation_impact && (
+            <div className="mt-3 flex items-center gap-2">
+              <span
+                className={`rounded px-1.5 py-0.5 text-xs font-medium uppercase tracking-wide ${
+                  DOCUMENTATION_IMPACT_STYLES[result.documentation_impact] ??
+                  "bg-slate-800 text-slate-400"
+                }`}
+              >
+                {result.documentation_impact} impact
+              </span>
+              {result.impact_explanation && (
+                <span className="text-xs text-slate-400">{result.impact_explanation}</span>
+              )}
+            </div>
+          )}
+        </Card>
+      )}
+
+      {result.required_updates && result.required_updates.length > 0 && (
+        <Card
+          title="Required Documentation Updates"
+          description={`${result.required_updates.length} document${result.required_updates.length === 1 ? "" : "s"}`}
+        >
+          <ul className="space-y-2" role="list">
+            {result.required_updates.map((update, i) => (
+              <li
+                key={i}
+                className="rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                  <p className="flex-1 truncate text-sm font-medium text-slate-200">
+                    {update.document}
+                  </p>
+                  {update.action && (
+                    <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">
+                      {update.action}
+                    </span>
+                  )}
+                  {update.priority && (
+                    <span
+                      className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
+                        PRIORITY_STYLES[update.priority] ?? "bg-slate-800 text-slate-400"
+                      }`}
+                    >
+                      {update.priority}
+                    </span>
+                  )}
+                </div>
+                {update.reason && <p className="mt-1 text-xs text-slate-400">{update.reason}</p>}
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  {update.owner && <span>Owner: {update.owner}</span>}
+                  {update.estimated_effort && <span>Effort: {update.estimated_effort}</span>}
+                  {update.dependencies.length > 0 && (
+                    <span>Depends on: {update.dependencies.join(", ")}</span>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {result.new_documentation && result.new_documentation.length > 0 && (
+        <Card
+          title="New Documentation"
+          description={`${result.new_documentation.length} document${result.new_documentation.length === 1 ? "" : "s"}`}
+        >
+          <ul className="space-y-2" role="list">
+            {result.new_documentation.map((doc, i) => (
+              <li
+                key={i}
+                className="flex items-start gap-2 rounded-md border border-teal-500/20 bg-teal-500/5 px-3 py-2"
+              >
+                <Zap className="mt-0.5 h-4 w-4 shrink-0 text-teal-400" aria-hidden="true" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm text-teal-200">{doc.name}</p>
+                  {doc.purpose && <p className="mt-1 text-xs text-slate-400">{doc.purpose}</p>}
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    {doc.suggested_location && <span>{doc.suggested_location}</span>}
+                    {doc.owner && <span>Owner: {doc.owner}</span>}
+                    {doc.estimated_effort && <span>Effort: {doc.estimated_effort}</span>}
+                  </div>
+                </div>
+                {doc.priority && (
+                  <span
+                    className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
+                      PRIORITY_STYLES[doc.priority] ?? "bg-slate-800 text-slate-400"
+                    }`}
+                  >
+                    {doc.priority}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {result.existing_updates && result.existing_updates.length > 0 && (
+        <Card title="Section-Level Detail">
+          <ul className="space-y-2" role="list">
+            {result.existing_updates.map((update, i) => (
+              <li
+                key={i}
+                className="rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2"
+              >
+                <p className="text-sm font-medium text-slate-200">{update.file_path}</p>
+                {update.sections_affected.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {update.sections_affected.map((section) => (
+                      <span
+                        key={section}
+                        className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400"
+                      >
+                        {section}
+                      </span>
+                    ))}
+                  </div>
+                )}
+                {update.summary_of_changes && (
+                  <p className="mt-1 text-xs text-slate-400">{update.summary_of_changes}</p>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {result.risks && result.risks.length > 0 && (
+        <Card
+          title="Documentation Risks"
+          description={`${result.risks.length} risk${result.risks.length === 1 ? "" : "s"}`}
+        >
+          <ul className="space-y-2" role="list">
+            {result.risks.map((risk, i) => (
+              <li
+                key={i}
+                className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2"
+              >
+                <AlertTriangle
+                  className="mt-0.5 h-4 w-4 shrink-0 text-amber-400"
+                  aria-hidden="true"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm text-slate-200">{risk.description}</p>
+                </div>
+                {risk.severity && (
+                  <span
+                    className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
+                      risk.severity === "critical" || risk.severity === "high"
+                        ? "bg-rose-500/10 text-rose-300"
+                        : risk.severity === "medium"
+                          ? "bg-amber-500/10 text-amber-300"
+                          : "bg-slate-800 text-slate-400"
+                    }`}
+                  >
+                    {risk.severity}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {result.recommendations && result.recommendations.length > 0 && (
+        <Card title="Recommendations">
+          <ul className="space-y-2">
+            {result.recommendations.map((rec, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm text-slate-300">
+                <span
+                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-teal-400"
+                  aria-hidden="true"
+                />
+                {rec}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {result.release_notes_draft && result.release_notes_draft.length > 0 && (
+        <Card title="Release Notes Draft">
+          <ul className="space-y-2">
+            {result.release_notes_draft.map((note, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm text-slate-300">
+                <span
+                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400"
+                  aria-hidden="true"
+                />
+                {note}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+
+      {result.checklist && result.checklist.length > 0 && (
+        <Card title="Documentation Checklist">
+          <ul className="space-y-1.5" role="list">
+            {result.checklist.map((item, i) => (
+              <li
+                key={i}
+                className={`flex items-center gap-2 text-sm ${
+                  item.applicable ? "text-slate-200" : "text-slate-600 line-through"
+                }`}
+              >
+                <Circle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                {item.label}
+                {!item.applicable && <span className="text-xs">(not applicable)</span>}
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
     </>
   );
 }

@@ -10,7 +10,7 @@ You are reviewing PLANNING ARTIFACTS — a written plan, a written implementatio
 
 > {{ task_description }}
 
-The text above already contains the original engineering objective, followed by the Planning stage's summary, the Development stage's summary, and the Testing stage's summary, each clearly labeled. It may also contain a "Pre-existing Verification Warnings" section — those were found deterministically, by code, before this review ran (e.g. a cited file or repository that doesn't actually appear in that stage's own graph data). Treat them as established facts, not claims to independently verify; your job is to judge whether they were adequately addressed, not to decide whether they're real.
+The text above already contains the original engineering objective, followed by the Planning stage's summary, the Development stage's summary, the Testing stage's summary, and the Documentation Planning stage's summary, each clearly labeled. It may also contain a "Pre-existing Verification Warnings" section — those were found deterministically, by code, before this review ran (e.g. a cited file or repository that doesn't actually appear in that stage's own graph data). Treat them as established facts, not claims to independently verify; your job is to judge whether they were adequately addressed, not to decide whether they're real.
 
 ## Instructions
 
@@ -21,8 +21,9 @@ Review the blueprint like a Principal Engineer gatekeeping a design review:
 3. Is each identified risk actually addressed with a mitigation, or just named and left hanging?
 4. Are dependencies between components/services accounted for, with nothing load-bearing left unmentioned?
 5. Does the test strategy actually cover the repositories/components/risks the plan itself named?
-6. Are there any blocking issues that should stop a human from approving this as-is?
-7. If a Pre-existing Verification Warning is present, is it addressed anywhere in the later stages, or does it just sit unresolved? An unresolved warning about a repository/file/component that isn't real is a blocking issue, not a minor note.
+6. Is the documentation plan proportionate to the change — does it cover every category of documentation the Development/Testing stages' own content implies (e.g. an API change with no API documentation update planned is a gap), without proposing documentation work unrelated to what's actually changing?
+7. Are there any blocking issues that should stop a human from approving this as-is?
+8. If a Pre-existing Verification Warning is present, is it addressed anywhere in the later stages, or does it just sit unresolved? An unresolved warning about a repository/file/component that isn't real is a blocking issue, not a minor note.
 
 Rules:
 - Only reference repositories, components, risks, and tests that actually appear in the blueprint text above. Never invent one that wasn't mentioned.
