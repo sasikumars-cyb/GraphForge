@@ -161,7 +161,7 @@ def schedule_run_execution(
 
 
 async def recover_orphaned_runs(db: AsyncSession) -> int:
-    """Mark any Run left at status="running" as failed.
+    """Mark any Run left at status="running" or "queued" as failed.
 
     Call once at process startup (see app.main's lifespan). asyncio.create_
     task-based background execution (schedule_run_execution) does not
@@ -169,15 +169,26 @@ async def recover_orphaned_runs(db: AsyncSession) -> int:
     "running" is guaranteed orphaned, not actually still in progress, and
     would otherwise sit there forever with no task left to finish it.
 
+    "queued" is orphaned by the exact same mechanism and was missing here:
+    create_pending_run commits the row at status="queued" in the request's
+    own session *before* schedule_run_execution ever creates the asyncio
+    task that would advance it to "running" (see run_coordinator.py). A
+    restart landing in that gap — e.g. the dev server's --reload firing
+    while a request is in flight — leaves the row at "queued" forever:
+    never "running", so this function's WHERE clause skipped it, and no
+    task survives to pick it up either. Found via 7 real rows stuck this
+    way (started_at/completed_at both null, no error_message) after a
+    reload during active backend editing.
+
     Deliberately does not touch Workflow.status: "in_progress" is a
     workflow's normal steady state between stages, not a signal that a
     stage was actively executing when the process stopped — only a Run's
-    own "running" status means that. Leaving the workflow as-is lets the
-    user retry the failed stage via POST /workflows/{id}/continue.
+    own "running"/"queued" status means that. Leaving the workflow as-is
+    lets the user retry the failed stage via POST /workflows/{id}/continue.
 
     Returns the number of runs recovered (for logging/observability).
     """
-    result = await db.execute(select(Run).where(Run.status == "running"))
+    result = await db.execute(select(Run).where(Run.status.in_(("running", "queued"))))
     orphaned = list(result.scalars().all())
     for run in orphaned:
         run.status = "failed"
