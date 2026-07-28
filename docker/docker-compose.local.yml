@@ -1,0 +1,22 @@
+# Layers on top of docker-compose.yml to index repositories that only
+# exist on the local filesystem (no GitHub remote, can't be pushed/cloned
+# over the network) - mirrors docker-compose.demo.yml but points at
+# /home/sasikumars/git_repositories/Hackathon/repos instead of the bundled
+# demo/repositories, and doesn't set up any PR scenarios.
+#
+# Usage: docker compose -f docker/docker-compose.yml -f docker/docker-compose.local.yml up --build
+# (scripts/local-up.sh does this for you.)
+#
+# Never used by default - docker-compose.yml alone is unaffected.
+
+services:
+  backend:
+    environment:
+      VCS_PROVIDER: local_git
+      DEMO_REPOSITORIES_ROOT: /local-repos
+    volumes:
+      - /home/sasikumars/git_repositories/Hackathon/repos:/local-repos:ro
+      # Same "dubious ownership" issue as docker-compose.demo.yml: the repos
+      # are bind-mounted from the host under a different UID, so git inside
+      # the container refuses to clone/diff them unless explicitly trusted.
+      - ./demo-gitconfig:/root/.gitconfig:ro
