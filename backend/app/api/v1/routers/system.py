@@ -4,6 +4,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.ai.config.resolver import env_credentials_for
+from app.ai.providers.registry import all_providers, get_provider_spec
 from app.api.v1.dependencies import get_current_user
 from app.core.config import get_settings
 from app.database.session import get_db_session
@@ -29,28 +31,49 @@ async def system_status(
     settings = get_settings()
 
     # ── AI Providers ────────────────────────────────────────────────
-    active_provider = settings.ai_provider.lower()
-    providers = [
-        ProviderStatus(
-            name="openai",
-            configured=bool(settings.openai_api_key),
-            active=active_provider == "openai",
-            model=settings.openai_model if active_provider == "openai" else None,
-        ),
-        ProviderStatus(
-            name="gemini",
-            configured=bool(settings.gemini_api_key),
-            active=active_provider == "gemini",
-            model=settings.gemini_model if active_provider == "gemini" else None,
-        ),
-        ProviderStatus(
-            name="groq",
-            configured=bool(settings.groq_api_key),
-            active=active_provider == "groq",
-            model=settings.groq_model if active_provider == "groq" else None,
-        ),
-    ]
-    current_provider = next((p for p in providers if p.active), providers[0])
+    # Derived from the provider registry rather than a hardcoded list. The
+    # registry is explicitly "the single place a new AI provider is
+    # declared" (see app.ai.providers.registry), and this endpoint used to
+    # violate that with its own openai/gemini/groq triple. The cost was not
+    # theoretical: Bedrock — which needs no API key because it uses the AWS
+    # credential chain — was absent entirely, so a working Bedrock install
+    # fell through to `providers[0]` (openai, unconfigured) and the Control
+    # Center reported "Degraded / AI Provider: none" while every agent run
+    # was in fact succeeding. Reading the registry means any provider added
+    # there is reported here automatically.
+    active_spec = get_provider_spec(settings.ai_provider)
+    active_key = active_spec.key if active_spec else settings.ai_provider.strip().lower()
+
+    providers: list[ProviderStatus] = []
+    for spec in all_providers():
+        if not spec.implemented:
+            # Declared-but-unbuildable providers are roadmap entries, not
+            # health signals — listing them here would imply the platform
+            # is missing configuration it can't actually accept yet.
+            continue
+        api_key, env_model = env_credentials_for(spec.key, settings)
+        # A provider with no API key requirement (Bedrock's AWS credential
+        # chain, a local Ollama) is configured as soon as it's declared —
+        # there is no key to check, and the credential chain can only be
+        # validated by making a real call, which a status endpoint must not do.
+        configured = True if not spec.requires_api_key else bool(api_key)
+        is_active = spec.key == active_key
+        providers.append(
+            ProviderStatus(
+                name=spec.key,
+                configured=configured,
+                active=is_active,
+                model=(env_model or spec.resolve_default_model()) if is_active else None,
+            )
+        )
+
+    # Fall back to the *declared active* provider rather than whichever spec
+    # happens to sort first, so an unknown/misconfigured AI_PROVIDER value
+    # is reported as itself-unconfigured instead of silently blaming openai.
+    current_provider = next(
+        (p for p in providers if p.active),
+        ProviderStatus(name=active_key, configured=False, active=False, model=None),
+    )
 
     # ── Connections ─────────────────────────────────────────────────
     connections: list[ConnectionStatus] = []

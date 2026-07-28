@@ -3,10 +3,10 @@ import { useSearchParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import {
   DependencyGraph,
-  NODE_LABEL_COLORS,
   RepositoryOverviewGraph,
   type RepositorySummary,
 } from "../components/graph/DependencyGraph";
+import { legendLabelsFor, resolveLabelColors } from "../components/graph/graphLabels";
 import { useAuth } from "../app/auth-context";
 import { listTrackedRepositories } from "../lib/api/github";
 import {
@@ -16,17 +16,40 @@ import {
   getRepositoryGraph,
 } from "../lib/api/repositories";
 import { buildRepositoryDependencyEdges, mergeCrossRepositoryLinks } from "../lib/graph/mergeGraphs";
+import { summarizeRepositoryCounts } from "../lib/indexingSummary";
 import type { TrackedRepository } from "../types/github";
 import type { CrossRepositoryLink, Graph } from "../types/graph";
 
-const EDGE_LEGEND: { type: string; description: string }[] = [
-  { type: "CONTAINS", description: "Repository contains a component/dependency" },
-  { type: "EXPOSES", description: "Controller exposes an endpoint" },
-  { type: "CALLS", description: "Feign client calls a remote endpoint" },
-  { type: "PRODUCES_TO", description: "Publishes to a Kafka topic" },
-  { type: "CONSUMES_FROM", description: "Consumes from a Kafka topic" },
-  { type: "DEPENDS_ON", description: "Depends on a Maven artifact" },
-];
+/**
+ * Descriptions for every relationship the indexer can write (see backend
+ * `app/indexer/graph/builder.py`). Only the types present in the loaded
+ * graph are rendered — see `edgeLegendFor` — so this stays a lookup table,
+ * never the list itself. Wordings are language-neutral on purpose: the same
+ * `DEPENDS_ON` edge carries a Maven artifact for Java and a pip package for
+ * Python, and the previous "Depends on a Maven artifact" was simply wrong
+ * for every Python repository.
+ */
+const EDGE_DESCRIPTIONS: Record<string, string> = {
+  CONTAINS: "Contains a component or dependency",
+  EXPOSES: "Exposes an endpoint",
+  CALLS: "Calls another component or remote endpoint",
+  IMPORTS: "Imports another module",
+  INHERITS_FROM: "Inherits from a base class",
+  DEPENDS_ON: "Depends on an external package",
+  PRODUCES_TO: "Publishes to a messaging topic",
+  CONSUMES_FROM: "Consumes from a messaging topic",
+  READS_FROM: "Reads from a table or dataset",
+  WRITES_TO: "Writes to a table or dataset",
+};
+
+/** Relationship types actually present in this graph, most frequent first. */
+function edgeLegendFor(edges: { type: string }[]): { type: string; description: string }[] {
+  const counts = new Map<string, number>();
+  for (const edge of edges) counts.set(edge.type, (counts.get(edge.type) ?? 0) + 1);
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([type]) => ({ type, description: EDGE_DESCRIPTIONS[type] ?? "Relationship" }));
+}
 
 export function ArchitecturePage() {
   const { token } = useAuth();
@@ -142,23 +165,14 @@ export function ArchitecturePage() {
 
   const graph: Graph | null = selectedRepoId === "all" ? null : (graphsByRepoId[selectedRepoId] ?? null);
   const repositoryNameById = Object.fromEntries(repositories.map((r) => [r.id, r.full_name]));
-  const repositorySummaries: RepositorySummary[] = repositories.map((r) => {
-    const summary = summariesByRepoId[r.id];
-    return {
-      id: r.id,
-      name: r.full_name,
-      components:
-        summary && (summary.controllers ?? summary.services ?? summary.feign_clients) !== undefined
-          ? (summary.controllers ?? 0) + (summary.services ?? 0) + (summary.feign_clients ?? 0)
-          : undefined,
-      externalDependencies: summary?.maven_dependencies,
-      messagingTouchpoints:
-        summary && (summary.kafka_producers ?? summary.kafka_consumers) !== undefined
-          ? (summary.kafka_producers ?? 0) + (summary.kafka_consumers ?? 0)
-          : undefined,
-    };
-  });
+  const repositorySummaries: RepositorySummary[] = repositories.map((r) => ({
+    id: r.id,
+    name: r.full_name,
+    ...summarizeRepositoryCounts(summariesByRepoId[r.id]),
+  }));
   const repositoryDependencyEdges = allLinks ? buildRepositoryDependencyEdges(allLinks) : [];
+  const legendNodeLabels = graph ? legendLabelsFor(graph.nodes) : [];
+  const legendEdges = graph ? edgeLegendFor(graph.edges) : [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -242,34 +256,53 @@ export function ArchitecturePage() {
         )}
       </Card>
 
-      <Card title="Legend" description="Node and edge types">
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Nodes</p>
-            <ul className="flex flex-col gap-1.5 text-sm text-slate-300">
-              {Object.entries(NODE_LABEL_COLORS).map(([label, colors]) => (
-                <li key={label} className="flex items-center gap-2">
-                  <span
-                    className="h-3 w-3 rounded-sm"
-                    style={{ background: colors.background, border: `1px solid ${colors.border}` }}
-                  />
-                  {label}
-                </li>
-              ))}
-            </ul>
+      {/* Legend is built from the graph currently loaded, not a fixed list:
+          it previously advertised six Java/Spring node types and six edge
+          types regardless of what was indexed, so a Python repository got a
+          legend describing a system it had none of — and no entry for the
+          Module/Class/Function nodes it actually contained. Only rendered
+          once a graph is loaded, since there is nothing to describe until
+          then. */}
+      {legendNodeLabels.length > 0 && (
+        <Card title="Legend" description="Node and relationship types in this graph">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+                Nodes
+              </p>
+              <ul className="flex flex-col gap-1.5 text-sm text-slate-300">
+                {legendNodeLabels.map((label) => {
+                  const colors = resolveLabelColors(label);
+                  return (
+                    <li key={label} className="flex items-center gap-2">
+                      <span
+                        className="h-3 w-3 rounded-sm"
+                        style={{
+                          background: colors.background,
+                          border: `1px solid ${colors.border}`,
+                        }}
+                      />
+                      {label}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+            <div>
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+                Relationships
+              </p>
+              <ul className="flex flex-col gap-1.5 text-sm text-slate-300">
+                {legendEdges.map(({ type, description }) => (
+                  <li key={type}>
+                    <span className="font-mono text-xs text-slate-400">{type}</span> — {description}
+                  </li>
+                ))}
+              </ul>
+            </div>
           </div>
-          <div>
-            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">Edges</p>
-            <ul className="flex flex-col gap-1.5 text-sm text-slate-300">
-              {EDGE_LEGEND.map(({ type, description }) => (
-                <li key={type}>
-                  <span className="font-mono text-xs text-slate-400">{type}</span> — {description}
-                </li>
-              ))}
-            </ul>
-          </div>
-        </div>
-      </Card>
+        </Card>
+      )}
     </div>
   );
 }

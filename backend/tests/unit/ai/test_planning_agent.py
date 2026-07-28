@@ -262,7 +262,9 @@ async def test_get_indexed_repos_with_indexed_repos() -> None:
     mock_graph_repo = AsyncMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=True)
 
-    tool = GetIndexedRepositoriesTool(db=mock_db, graph_repository=mock_graph_repo)
+    tool = GetIndexedRepositoriesTool(
+        db=mock_db, graph_repository=mock_graph_repo, user_id="user-1"
+    )
     obs = await tool.execute()
 
     assert obs.succeeded is True
@@ -286,7 +288,9 @@ async def test_get_indexed_repos_none_indexed() -> None:
     mock_graph_repo = AsyncMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=False)
 
-    tool = GetIndexedRepositoriesTool(db=mock_db, graph_repository=mock_graph_repo)
+    tool = GetIndexedRepositoriesTool(
+        db=mock_db, graph_repository=mock_graph_repo, user_id="user-1"
+    )
     obs = await tool.execute()
 
     assert obs.succeeded is True
@@ -301,11 +305,54 @@ async def test_get_indexed_repos_db_failure() -> None:
 
     mock_graph_repo = AsyncMock()
 
-    tool = GetIndexedRepositoriesTool(db=mock_db, graph_repository=mock_graph_repo)
+    tool = GetIndexedRepositoriesTool(
+        db=mock_db, graph_repository=mock_graph_repo, user_id="user-1"
+    )
     obs = await tool.execute()
 
     assert obs.succeeded is False
     assert "DB unavailable" in obs.error
+
+
+@pytest.mark.asyncio
+async def test_get_indexed_repos_filters_by_owning_user() -> None:
+    """The repository read must be scoped to the run's own user.
+
+    `repositories` holds one row per (user, repo) tracking relationship, so
+    an unscoped read returns other accounts' repositories — which then reach
+    the LLM prompt, the evidence pool used to verify its claims, and the
+    user-visible "Found N indexed repositories" summary. Observed in
+    production as a plan reporting 5 repositories to a user who tracked 4,
+    with one repository listed twice (their own copy plus another account's).
+    """
+    mock_db = AsyncMock()
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = []
+    mock_db.execute.return_value = mock_result
+
+    tool = GetIndexedRepositoriesTool(
+        db=mock_db, graph_repository=AsyncMock(), user_id="user-1"
+    )
+    await tool.execute()
+
+    executed = mock_db.execute.await_args.args[0]
+    assert "WHERE" in str(executed), "repository query must be filtered, not a bare SELECT"
+    assert "user_id" in str(executed), "repository query must filter on user_id"
+
+
+@pytest.mark.asyncio
+async def test_neo4j_graph_tool_refuses_to_run_without_a_user_id() -> None:
+    """Fails closed: no user id means no scoping, and an unscoped
+    cross-tenant read is worse than returning no graph context at all."""
+    from app.tools.implementations.neo4j_tool import Neo4jGraphTool
+    from app.tools.interfaces import ToolInput
+
+    result = await Neo4jGraphTool(config={}).execute(
+        ToolInput(query="anything", parameters={"db": AsyncMock()})
+    )
+
+    assert result.success is False
+    assert "user_id" in (result.error or "")
 
 
 # ---------------------------------------------------------------------------
@@ -389,7 +436,11 @@ def _make_planning_context(display_name: str = "Plan a new Kafka consumer for or
     return AgentContext(
         subject=subject,
         goal="plan_freeform",
-        extras={"db": mock_db},
+        # `user_id` is always present in production (the run coordinator puts
+        # it there — see app.orchestrator.run_coordinator) and the graph tool
+        # now requires it, since repository rows are per-user and an unscoped
+        # read would pull other accounts' repositories into the plan.
+        extras={"db": mock_db, "user_id": "user-1"},
     )
 
 

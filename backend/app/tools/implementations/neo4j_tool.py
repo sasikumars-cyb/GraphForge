@@ -73,6 +73,20 @@ class Neo4jGraphTool:
                 error="ToolInput.parameters['db'] (AsyncSession) is required.",
             )
 
+        # Required, and validated before any query runs: repository rows are
+        # per-user (see GetIndexedRepositoriesTool), so executing without a
+        # user id would read every account's repositories into this run's
+        # prompt and evidence. Failing the tool is the safe outcome — an
+        # unscoped read is worse than no graph context at all.
+        user_id = input.parameters.get("user_id")
+        if user_id is None:
+            return ToolResult(
+                tool_id=self.tool_id,
+                tool_name=self.display_name,
+                success=False,
+                error="ToolInput.parameters['user_id'] is required to scope repository access.",
+            )
+
         graph_repo: IGraphRepository = input.parameters.get(
             "graph_repo"
         ) or Neo4jGraphRepository(get_driver())
@@ -80,7 +94,9 @@ class Neo4jGraphTool:
         relevance_terms: list[str] = input.parameters.get("relevance_terms") or []
 
         try:
-            repos_tool = GetIndexedRepositoriesTool(db=db, graph_repository=graph_repo)
+            repos_tool = GetIndexedRepositoriesTool(
+                db=db, graph_repository=graph_repo, user_id=user_id
+            )
             repos_obs = await repos_tool.execute()
 
             indexed_repos: list[dict] = repos_obs.data.get("indexed_repositories", [])

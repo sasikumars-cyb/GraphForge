@@ -536,6 +536,12 @@ class PlanningAgent:
             query=task_description,
             parameters={
                 "db": db,
+                # Scopes the repository read to this run's owner. Repository
+                # rows are per-user, so without it the graph tool would pull
+                # other accounts' repositories into this plan's prompt and
+                # evidence pool (the tool rejects the call rather than
+                # allowing that — see Neo4jGraphTool.execute).
+                "user_id": context.extras.get("user_id"),
                 "relevance_terms": profile.search_terms,
             },
         )

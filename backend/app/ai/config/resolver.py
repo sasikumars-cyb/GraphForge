@@ -92,6 +92,19 @@ def _env_credentials(spec_key: str, settings: Settings) -> tuple[str | None, str
     return getattr(settings, key_field, None), getattr(settings, model_field, None)
 
 
+def env_credentials_for(spec_key: str, settings: Settings) -> tuple[str | None, str | None]:
+    """Public read-only view of `_env_credentials` — the (api_key, model) a
+    provider would pick up from environment settings.
+
+    Exists so status/health surfaces (see app.api.v1.routers.system) can
+    report what a provider is configured with using the same field mapping
+    the resolver actually resolves against, instead of re-deriving
+    `settings.<provider>_api_key` themselves and drifting from it. Read-only
+    by design: this reports configuration, it never selects a provider.
+    """
+    return _env_credentials(spec_key, settings)
+
+
 def _default_max_tokens(spec_key: str, cfg: Settings) -> int:
     """Env-fallback max_tokens, per provider — used only when nothing more
     specific (stage/profile/stored config) set one. Gemini and Bedrock both

@@ -49,8 +49,19 @@ class PlanningObservation:
 
 
 class GetIndexedRepositoriesTool:
-    """Fetch all repositories that have been successfully indexed into the
-    Knowledge Graph.
+    """Fetch the repositories owned by `user_id` that have been successfully
+    indexed into the Knowledge Graph.
+
+    Scoping is mandatory, not optional. `repositories` holds one row per
+    (user, repo) tracking relationship — see app.models.repository — so two
+    users tracking the same GitHub repo each get their own row with their
+    own graph. An unscoped read therefore returns *other accounts'*
+    repositories, which then reach the LLM prompt, the evidence pool that
+    verifies its claims, and the run's visible "Found N indexed
+    repositories" summary. That is a cross-tenant read, so this deliberately
+    takes `user_id` as a required argument and fails closed rather than
+    defaulting to "all" — a missing caller should break loudly in tests, not
+    silently widen access in production.
 
     Evidence kind: tool_call
     Data: list of repository names and their IDs.
@@ -58,13 +69,21 @@ class GetIndexedRepositoriesTool:
 
     name = "get_indexed_repositories"
 
-    def __init__(self, db: AsyncSession, graph_repository: IGraphRepository) -> None:
+    def __init__(
+        self,
+        db: AsyncSession,
+        graph_repository: IGraphRepository,
+        user_id: object,
+    ) -> None:
         self._db = db
         self._graph_repository = graph_repository
+        self._user_id = user_id
 
     async def execute(self) -> PlanningObservation:
         try:
-            result = await self._db.execute(select(Repository))
+            result = await self._db.execute(
+                select(Repository).where(Repository.user_id == self._user_id)
+            )
             all_repos: list[Repository] = list(result.scalars().all())
 
             indexed: list[dict[str, str]] = []

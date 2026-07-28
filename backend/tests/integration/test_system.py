@@ -92,3 +92,48 @@ async def test_indexing_counts_are_scoped_per_user(
     assert knowledge_base["repositories_tracked"] == 1
     assert knowledge_base["repositories_indexed"] == 1
     assert knowledge_base["repositories_pending"] == 0
+
+
+async def test_keyless_provider_is_reported_configured_and_active(
+    db_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression test: the provider list was a hardcoded openai/gemini/groq
+    triple, so Bedrock — which needs no API key because it uses the AWS
+    credential chain — was missing entirely. A working Bedrock install fell
+    through to `providers[0]` (openai, unconfigured) and the Control Center
+    reported "Degraded / AI Provider: none" while every agent run succeeded.
+
+    The list is now derived from the provider registry, so this asserts the
+    general property rather than Bedrock specifically: a keyless provider
+    that is the configured `ai_provider` must report configured + active,
+    carry a model, and leave the platform healthy.
+    """
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    monkeypatch.setenv("AI_PROVIDER", "bedrock")
+    monkeypatch.setenv("BEDROCK_MODEL", "us.anthropic.claude-sonnet-4-20250514")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    token = await _register_and_get_token(db_client, USER_A)
+    try:
+        response = await db_client.get(
+            "/api/v1/system/status", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert response.status_code == 200
+        body = response.json()
+
+        by_name = {p["name"]: p for p in body["ai_providers"]}
+        assert "bedrock" in by_name, "registry-declared providers must all be reported"
+
+        assert body["ai_provider"]["name"] == "bedrock"
+        assert body["ai_provider"]["active"] is True
+        assert body["ai_provider"]["configured"] is True
+        assert body["ai_provider"]["model"] == "us.anthropic.claude-sonnet-4-20250514"
+        assert body["platform_status"] == "healthy"
+
+        # An unconfigured provider is still listed, just not active.
+        assert by_name["openai"]["active"] is False
+        assert by_name["openai"]["configured"] is False
+    finally:
+        get_settings.cache_clear()

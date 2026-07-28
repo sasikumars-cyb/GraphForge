@@ -12,29 +12,16 @@ import {
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
 import type { Graph } from "../../types/graph";
+import { primaryLabel, resolveLabelColors } from "./graphLabels";
 
 const NODE_WIDTH = 190;
 const NODE_HEIGHT = 56;
-
-export const NODE_LABEL_COLORS: Record<string, { background: string; border: string }> = {
-  Controller: { background: "#0c4a6e", border: "#38bdf8" },
-  Service: { background: "#164e3c", border: "#34d399" },
-  FeignClient: { background: "#3b2f0b", border: "#fbbf24" },
-  Endpoint: { background: "#1e1b4b", border: "#818cf8" },
-  KafkaTopic: { background: "#4a044e", border: "#e879f9" },
-  MavenDependency: { background: "#292524", border: "#a8a29e" },
-  Component: { background: "#1e293b", border: "#94a3b8" },
-};
 
 // Node-focused highlighting palette (DependencyGraph only).
 const SELECTED_COLOR = "#facc15"; // amber - the clicked node itself
 const INCOMING_COLOR = "#34d399"; // emerald - nodes/edges pointing into the selection
 const OUTGOING_COLOR = "#38bdf8"; // sky - nodes/edges the selection points out to
 const FADED_OPACITY = 0.15;
-
-function primaryLabel(labels: string[]): string {
-  return labels.find((label) => label in NODE_LABEL_COLORS) ?? "Component";
-}
 
 const GROUP_PADDING = 28;
 
@@ -62,7 +49,7 @@ function layoutGraph(
   const baseNodes = graph.nodes.map((node) => {
     const position = g.node(node.id);
     const label = primaryLabel(node.labels);
-    const colors = NODE_LABEL_COLORS[label];
+    const colors = resolveLabelColors(label);
     const name = String(node.properties.name ?? node.id);
     return {
       graphNode: node,
