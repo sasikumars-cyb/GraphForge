@@ -104,7 +104,11 @@ Unchanged — existing global `AppError` → JSON handler:
 {
   "kind": "graph_traversal" | "tool_call" | "graph_fact",
   "reference": "node-uuid-1",
-  "summary": "Traversed 2 downstream API dependents"
+  "summary": "Traversed 2 downstream API dependents",
+  // Optional. What actually happened, distinct from `kind` (which only
+  // says the category of evidence). Omitted/null for evidence that
+  // doesn't need the distinction (e.g. graph traversals).
+  "status": "success" | "not_found" | "unavailable" | "failed" | null
 }
 
 // Confidence

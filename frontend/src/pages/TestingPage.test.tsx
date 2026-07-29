@@ -9,6 +9,7 @@ import { TestingPage } from "./TestingPage";
 vi.mock("../lib/api/agentRuns", () => ({
   createAgentRun: vi.fn(),
   getAgentRun: vi.fn(),
+  listAgentRuns: vi.fn().mockResolvedValue({ items: [], page: 1, page_size: 10, total: 0, has_more: false }),
 }));
 
 function renderWithAuth(authValue?: Partial<AuthContextValue>) {

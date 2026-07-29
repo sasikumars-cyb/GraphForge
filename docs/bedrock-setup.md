@@ -224,7 +224,7 @@ uvicorn app.main:app --reload
 
 Create profiles that use Bedrock for specific workflow stages:
 
-1. Go to **Settings > AI Workspace > Profiles**
+1. Go to **Settings > AI Providers > Profiles**
 2. Create a profile (e.g., "Fast Planner") with:
    - Provider: Amazon Bedrock
    - Model: `us.anthropic.claude-sonnet-4-20250514`

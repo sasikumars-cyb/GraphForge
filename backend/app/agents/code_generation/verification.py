@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -239,7 +240,7 @@ def _is_safe_destination(path: str) -> bool:
 
 
 def validate_file_operations(
-    files: list[dict],
+    files: list[dict[str, Any]],
     repository: str,
     known_file_paths: dict[str, set[str]],
 ) -> list[FileOperationViolation]:

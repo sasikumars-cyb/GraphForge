@@ -1,5 +1,9 @@
 /**
- * API client for the AI Workspace — providers, profiles, validation.
+ * API client for the Settings → AI Providers tab — providers, profiles,
+ * validation. (Named "AI Workspace" in the backend's route/DTO history —
+ * see AIWorkspaceSettings below — but shown to users as "AI Providers" to
+ * distinguish it from the separate "AI Workspace" agent-execution catalog
+ * at /workspace.)
  */
 
 import { apiFetch } from "./client";

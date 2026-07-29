@@ -50,6 +50,15 @@ class Evidence(BaseModel):
     kind: Literal["graph_traversal", "tool_call", "graph_fact", "llm_reasoning"]
     reference: str  # graph node id, tool name, or fact id
     summary: str
+    # Optional, additive: what actually happened, distinct from `kind` (which
+    # only says what *category* of evidence this is). Added so a UI can tell
+    # "the provider was reached and found nothing relevant" apart from
+    # "the provider isn't configured" apart from "the call failed" without
+    # parsing `summary`'s free text — see `to_evidence()` (planning/tools.py)
+    # and ConfluenceProvider (context_pipeline/providers.py) for where this
+    # is populated. None for older/other evidence that predates this field
+    # or never needed the distinction (e.g. graph traversals).
+    status: Literal["success", "not_found", "unavailable", "failed"] | None = None
 
 
 class Confidence(BaseModel):

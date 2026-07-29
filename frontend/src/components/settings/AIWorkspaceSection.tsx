@@ -434,7 +434,8 @@ function ProviderList({
 }
 
 // ---------------------------------------------------------------------------
-// Main AI Workspace Section
+// Main AI Providers Section (Settings tab — configuration, not agent execution;
+// see src/pages/WorkspacePage.tsx for the "AI Workspace" agent-execution catalog)
 // ---------------------------------------------------------------------------
 
 export function AIWorkspaceSection() {
@@ -498,7 +499,7 @@ export function AIWorkspaceSection() {
         <div className="flex items-center gap-3 text-sm text-slate-400">
           <Clock className="h-4 w-4 text-slate-500" />
           <span>
-            Configure profiles in the AI Workspace to assign different models and parameters
+            Configure profiles under AI Providers to assign different models and parameters
             per workflow stage (Planning, Development, Review, Testing).
           </span>
         </div>

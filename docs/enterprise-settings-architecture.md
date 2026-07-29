@@ -8,7 +8,8 @@ GraphForge Settings is now structured as an enterprise administration console wi
 Settings
 ├── Workspace          (all users)     — Organization, notifications, preferences
 ├── Integrations       (all users)     — External systems (GitHub, Jira, Confluence, Neo4j)
-├── AI Workspace       (admin only)    — Providers, profiles, models, health, fallback
+├── AI Providers       (admin only)    — Providers, profiles, models, health, fallback
+│                                        (Settings tab; distinct from the /workspace agent-execution catalog)
 ├── Tool Registry      (admin only)    — Agent capabilities, health, enable/disable
 ├── Security           (admin only)    — Credentials, encryption, access control
 └── Advanced           (admin only)    — Diagnostics, feature flags, telemetry
@@ -51,7 +52,7 @@ async def require_admin(current_user: User = Depends(get_current_user)) -> User:
 
 | API Group | Dependency | Who Can Access |
 |-----------|-----------|----------------|
-| `/ai/*` (AI Workspace) | `require_admin` | Admins only |
+| `/ai/*` (Settings → AI Providers) | `require_admin` | Admins only |
 | `/tools/*` (Tool Registry) | `require_admin` | Admins only |
 | `/knowledge/*` (Integrations backend) | `get_current_user` | All authenticated users |
 | `/github/*` | `get_current_user` | All authenticated users |
@@ -94,7 +95,7 @@ const visibleTabs = TABS.filter((tab) => !tab.adminOnly || isAdmin);
 |-----|-------------|------------|
 | Workspace | `false` | Everyone |
 | Integrations | `false` | Everyone |
-| AI Workspace | `true` | Admin only |
+| AI Providers | `true` | Admin only |
 | Tool Registry | `true` | Admin only |
 | Security | `true` | Admin only |
 | Advanced | `true` | Admin only |
@@ -134,7 +135,7 @@ Existing APIs (`/ai/*`, `/tools/*`) now require admin role.
 | `get_current_user` dependency | Yes | Base auth, unchanged |
 | `encrypt_secret` / `decrypt_secret` | Yes | Credentials encryption for connections |
 | `knowledge_connections` table | Yes | Multi-connection storage from prior work |
-| AI Workspace API | Yes | Unchanged, just added `require_admin` |
+| AI Providers API (`/ai/*`) | Yes | Unchanged, just added `require_admin` |
 | Tool Registry API | Yes | Unchanged, just added `require_admin` |
 | GitHub service | Yes | Unchanged, still handles OAuth flow |
 | Card, StatusBadge components | Yes | Shared UI primitives |

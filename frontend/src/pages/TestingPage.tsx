@@ -7,6 +7,10 @@ import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { TestingResultDetails } from "../components/agents/StageResultDetails";
+import {
+  PlanningRunPicker,
+  StandaloneContextBanner,
+} from "../components/agents/StandalonePlanningContext";
 import { useAgentRun } from "../hooks/useAgentRun";
 import type { TestPlanResult } from "../types/agent";
 
@@ -19,13 +23,18 @@ const EXAMPLES = [
 
 export function TestingPage() {
   const [input, setInput] = useState("");
+  const [planningRunId, setPlanningRunId] = useState<string | null>(null);
   const { run, isSubmitting, error, submit, reset } = useAgentRun();
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
     if (!trimmed) return;
-    submit({ subject_reference: trimmed, goal: "plan_tests" });
+    submit({
+      subject_reference: trimmed,
+      goal: "plan_tests",
+      ...(planningRunId ? { planning_run_id: planningRunId } : {}),
+    });
   };
 
   const handleExampleClick = (example: string) => {
@@ -35,6 +44,7 @@ export function TestingPage() {
   const handleNewPlan = () => {
     reset();
     setInput("");
+    setPlanningRunId(null);
   };
 
   const hasResult =
@@ -70,6 +80,8 @@ export function TestingPage() {
       {!hasResult && (
         <Card>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <StandaloneContextBanner planningRunId={planningRunId} />
+
             <div>
               <label htmlFor="testing-input" className="block text-sm font-medium text-slate-200">
                 What change needs testing?
@@ -85,6 +97,12 @@ export function TestingPage() {
                 aria-required="true"
               />
             </div>
+
+            <PlanningRunPicker
+              value={planningRunId}
+              onChange={setPlanningRunId}
+              disabled={isSubmitting}
+            />
 
             {/* Examples */}
             {!isSubmitting && !run && (
@@ -145,7 +163,13 @@ export function TestingPage() {
       )}
 
       {/* Result */}
-      {hasResult && <TestPlanResultView run={run} onNewPlan={handleNewPlan} />}
+      {hasResult && (
+        <TestPlanResultView
+          run={run}
+          onNewPlan={handleNewPlan}
+          groundedInPlanningRunId={planningRunId}
+        />
+      )}
     </div>
   );
 }
@@ -157,9 +181,11 @@ export function TestingPage() {
 function TestPlanResultView({
   run,
   onNewPlan,
+  groundedInPlanningRunId,
 }: {
   run: NonNullable<ReturnType<typeof useAgentRun>["run"]>;
   onNewPlan: () => void;
+  groundedInPlanningRunId: string | null;
 }) {
   const step = run.steps[0];
   const result = step?.result as unknown as TestPlanResult | undefined;
@@ -172,6 +198,11 @@ function TestPlanResultView({
         <div className="flex items-center gap-3">
           <RunStatusBadge status={run.status} />
           {step?.confidence && <ConfidenceBadge confidence={step.confidence} showReasoning />}
+          {groundedInPlanningRunId && (
+            <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-300 ring-1 ring-inset ring-emerald-500/30">
+              Grounded in a Planning run
+            </span>
+          )}
         </div>
         <button
           type="button"

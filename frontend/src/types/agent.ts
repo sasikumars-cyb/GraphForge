@@ -15,6 +15,11 @@ export interface Evidence {
   kind: "graph_traversal" | "tool_call" | "graph_fact" | "llm_reasoning";
   reference: string;
   summary: string;
+  /** What actually happened, distinct from `kind` — lets a UI distinguish
+   * "found" from "connected but nothing relevant" from "not configured"
+   * from "the call failed" without parsing `summary`'s free text. Absent
+   * for evidence that doesn't need the distinction (e.g. graph traversals). */
+  status?: "success" | "not_found" | "unavailable" | "failed" | null;
 }
 
 export interface Confidence {
@@ -91,6 +96,9 @@ export interface CreateRunRequest {
   subject_reference: string;
   goal: string;
   model?: string;
+  /** Optional: ground a standalone Development/Testing run in a prior
+   * standalone Planning run's result. Omit for today's default behavior. */
+  planning_run_id?: string;
 }
 
 export interface CreateRunResponse {

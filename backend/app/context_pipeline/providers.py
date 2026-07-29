@@ -18,7 +18,7 @@ nothing in the Planning Agent, needs to change.
 from __future__ import annotations
 
 import logging
-from typing import Any, Protocol
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,16 +41,6 @@ from app.tools.implementations.github_tool import GitHubTool
 from app.tools.interfaces import ToolResult
 
 logger = logging.getLogger(__name__)
-
-
-class ReferenceProvider(Protocol):
-    """A provider that resolves one specific reference type."""
-
-    capability: ProviderCapability
-
-    def can_resolve(self, reference: Reference) -> bool: ...
-
-    async def resolve(self, reference: Reference, **kwargs: Any) -> ResolvedArtifact | None: ...
 
 
 class JiraProvider:
@@ -137,7 +127,24 @@ class ConfluenceProvider:
         followed a successful Jira fetch)."""
         mcp_config = await get_confluence_mcp_config(self._db)
         if mcp_config is None:
-            return None
+            # Confluence isn't configured as an MCP-transport Knowledge
+            # Connection at all — distinct from "we looked and found
+            # nothing" (status="not_found" below): nothing was looked up
+            # here because there's nowhere to look.
+            return ResolvedArtifact(
+                provider="confluence",
+                capability=self.capability,
+                reference=None,
+                title="Confluence",
+                text="",
+                evidence=Evidence(
+                    kind="tool_call",
+                    reference="confluence_context",
+                    summary="Confluence is not connected.",
+                    status="unavailable",
+                ),
+                raw={},
+            )
         server_url, auth_token, cloud_id = mcp_config
         text, evidence_entries = await gather_confluence_context(
             mcp_server_url=server_url,
@@ -149,6 +156,19 @@ class ConfluenceProvider:
             stage=stage,
         )
         if not text:
+            # `evidence_entries` is only populated once at least one MCP
+            # turn actually ran (see gather_confluence_context) — so its
+            # presence is what distinguishes "reached Confluence, found
+            # nothing relevant" from "never got to search at all" (the
+            # LLM call itself failing, or the provider not supporting
+            # tool-calling — see that function's own docstring), without
+            # parsing anything provider-specific out of free text.
+            status = "not_found" if evidence_entries else "unavailable"
+            summary = (
+                "No relevant Confluence content found."
+                if status == "not_found"
+                else "Confluence lookup could not be completed."
+            )
             return ResolvedArtifact(
                 provider="confluence",
                 capability=self.capability,
@@ -156,20 +176,27 @@ class ConfluenceProvider:
                 title="Confluence",
                 text="",
                 evidence=Evidence(
-                    kind="tool_call",
-                    reference="confluence_context",
-                    summary="No relevant Confluence content found.",
+                    kind="tool_call", reference="confluence_context", summary=summary, status=status
                 ),
-                raw={},
+                raw={"extra_evidence": evidence_entries},
             )
         logger.info("context_pipeline_confluence_enriched issue_key=%s", jira_issue_key)
         # gather_confluence_context already returns its own Evidence list
         # (one entry per MCP turn) — folded into a single artifact whose
         # `evidence` is the last (summary) entry; the rest are appended by
         # the pipeline directly (see pipeline.py) so none of that detail is
-        # lost.
-        primary_evidence = evidence_entries[-1] if evidence_entries else Evidence(
-            kind="tool_call", reference="confluence_context", summary="Confluence context gathered."
+        # lost. `status="success"` is set here (not by gather_confluence_
+        # context itself) since only this method knows the *overall*
+        # outcome — an individual turn's own evidence doesn't.
+        primary_evidence = (
+            evidence_entries[-1].model_copy(update={"status": "success"})
+            if evidence_entries
+            else Evidence(
+                kind="tool_call",
+                reference="confluence_context",
+                summary="Confluence context gathered.",
+                status="success",
+            )
         )
         return ResolvedArtifact(
             provider="confluence",

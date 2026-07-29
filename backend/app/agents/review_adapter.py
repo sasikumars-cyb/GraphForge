@@ -35,6 +35,7 @@ from app.ai.agent.investigation_agent import InvestigationAgent, InvestigationRe
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
 from app.core.config import get_settings
 from app.core.exceptions import NotFoundError
+from app.graph.interfaces import IGraphRepository
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
 from app.integrations.factory import create_version_control_provider
@@ -149,7 +150,7 @@ class ReviewAgentAdapter:
         db: AsyncSession,
         model: str | None,
         stage: str,
-        graph_repository: object | None = None,
+        graph_repository: IGraphRepository | None = None,
     ) -> InvestigationAgent:
         driver = get_driver()
         # Prefer the hop-budgeted repository RunCoordinator's Context

@@ -39,7 +39,7 @@ const TABS: SettingsTab[] = [
   },
   {
     id: "ai",
-    label: "AI Workspace",
+    label: "AI Providers",
     icon: Brain,
     description: "Providers, profiles, models, health",
     adminOnly: true,

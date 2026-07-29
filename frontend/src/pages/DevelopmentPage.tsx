@@ -7,6 +7,10 @@ import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { DevelopmentResultDetails } from "../components/agents/StageResultDetails";
+import {
+  PlanningRunPicker,
+  StandaloneContextBanner,
+} from "../components/agents/StandalonePlanningContext";
 import { useAgentRun } from "../hooks/useAgentRun";
 import type { DevelopmentPlanResult } from "../types/agent";
 
@@ -19,13 +23,18 @@ const EXAMPLES = [
 
 export function DevelopmentPage() {
   const [input, setInput] = useState("");
+  const [planningRunId, setPlanningRunId] = useState<string | null>(null);
   const { run, isSubmitting, error, submit, reset } = useAgentRun();
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = input.trim();
     if (!trimmed) return;
-    submit({ subject_reference: trimmed, goal: "develop_change_plan" });
+    submit({
+      subject_reference: trimmed,
+      goal: "develop_change_plan",
+      ...(planningRunId ? { planning_run_id: planningRunId } : {}),
+    });
   };
 
   const handleExampleClick = (example: string) => {
@@ -35,6 +44,7 @@ export function DevelopmentPage() {
   const handleNewPlan = () => {
     reset();
     setInput("");
+    setPlanningRunId(null);
   };
 
   const hasResult =
@@ -70,6 +80,8 @@ export function DevelopmentPage() {
       {!hasResult && (
         <Card>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            <StandaloneContextBanner planningRunId={planningRunId} />
+
             <div>
               <label
                 htmlFor="development-input"
@@ -88,6 +100,12 @@ export function DevelopmentPage() {
                 aria-required="true"
               />
             </div>
+
+            <PlanningRunPicker
+              value={planningRunId}
+              onChange={setPlanningRunId}
+              disabled={isSubmitting}
+            />
 
             {/* Examples */}
             {!isSubmitting && !run && (
@@ -148,7 +166,13 @@ export function DevelopmentPage() {
       )}
 
       {/* Result */}
-      {hasResult && <DevelopmentResultView run={run} onNewPlan={handleNewPlan} />}
+      {hasResult && (
+        <DevelopmentResultView
+          run={run}
+          onNewPlan={handleNewPlan}
+          groundedInPlanningRunId={planningRunId}
+        />
+      )}
     </div>
   );
 }
@@ -160,9 +184,11 @@ export function DevelopmentPage() {
 function DevelopmentResultView({
   run,
   onNewPlan,
+  groundedInPlanningRunId,
 }: {
   run: NonNullable<ReturnType<typeof useAgentRun>["run"]>;
   onNewPlan: () => void;
+  groundedInPlanningRunId: string | null;
 }) {
   const step = run.steps[0];
   const result = step?.result as unknown as DevelopmentPlanResult | undefined;
@@ -175,6 +201,11 @@ function DevelopmentResultView({
         <div className="flex items-center gap-3">
           <RunStatusBadge status={run.status} />
           {step?.confidence && <ConfidenceBadge confidence={step.confidence} showReasoning />}
+          {groundedInPlanningRunId && (
+            <span className="rounded-full bg-emerald-500/10 px-2.5 py-0.5 text-xs font-medium text-emerald-300 ring-1 ring-inset ring-emerald-500/30">
+              Grounded in a Planning run
+            </span>
+          )}
         </div>
         <button
           type="button"

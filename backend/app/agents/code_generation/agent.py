@@ -17,7 +17,11 @@ The result is persisted as an AgentStep via the standard Run infrastructure.
 from __future__ import annotations
 
 import logging
+import uuid
 from pathlib import Path
+from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import (
     AgentContext,
@@ -107,7 +111,7 @@ def _render_prompt(blueprint_context: str) -> str:
 
 def _stage_result(
     workflow: Workflow | None, source_workflow: Workflow | None, stage: str
-) -> dict | None:
+) -> dict[str, Any] | None:
     """`get_stage_result` for `stage`, preferring `source_workflow` (the
     approved blueprint an auto_execution workflow executes — see
     workflows.py's `source_workflow` extras key) and falling back to
@@ -275,8 +279,8 @@ class CodeGenerationAgent:
 
     async def run(self, context: AgentContext) -> AgentOutput:
         subject_id: str = context.subject.subject_id
-        workflow = context.extras.get("workflow")
-        source_workflow = context.extras.get("source_workflow")
+        workflow: Workflow | None = context.extras.get("workflow")
+        source_workflow: Workflow | None = context.extras.get("source_workflow")
         blueprint_context = _build_blueprint_context(context, workflow, source_workflow)
 
         logger.info(
@@ -334,10 +338,8 @@ class CodeGenerationAgent:
         # stages read this stage's result via get_stage_result and there
         # simply is no result to read if this raises).
         # ------------------------------------------------------------------
-        db = context.extras.get("db")
-        user_id = context.extras.get("user_id")
-        workflow = context.extras.get("workflow")
-        source_workflow = context.extras.get("source_workflow")
+        db: AsyncSession = context.extras["db"]
+        user_id: uuid.UUID | str | None = context.extras.get("user_id")
 
         repo_verification = await verify_repository(
             result.repository,

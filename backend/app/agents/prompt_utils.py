@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
 
 def render_prompt_template(
@@ -73,7 +74,7 @@ def strip_markdown_fence(raw: str) -> str:
     return match.group(1) if match else raw
 
 
-def parse_json_response(raw: str, error_cls: type[Exception]) -> dict:
+def parse_json_response(raw: str, error_cls: type[Exception]) -> dict[str, Any]:
     """Strip a markdown fence if present, then `json.loads` — the shared
     first step of every freeform-JSON agent's response parsing.
 

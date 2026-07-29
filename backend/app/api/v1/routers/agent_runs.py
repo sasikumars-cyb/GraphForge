@@ -31,7 +31,7 @@ from app.models.run import Run
 from app.models.user import User
 from app.models.workflow import Workflow
 from app.orchestrator.registry import global_registry
-from app.orchestrator.selector import AgentSelector
+from app.orchestrator.selector import GOAL_DEVELOP_CHANGE_PLAN, GOAL_PLAN_TESTS, AgentSelector
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +43,36 @@ router = APIRouter(prefix="/agent-runs", tags=["agent-runs"])
 # ---------------------------------------------------------------------------
 
 
+# Only these two goals ever read `context.extras["workflow"]` via
+# get_stage_result(workflow, "planning") — see development/agent.py and
+# testing/agent.py. Every other goal (including "plan_freeform" itself,
+# and "plan_documentation"/"review_readiness", which read *multiple*
+# prior stages and would only ever see this one) would silently ignore
+# or misuse a `planning_run_id`, so it's rejected outright rather than
+# accepted-and-ignored — see `_load_standalone_planning_context`.
+_PLANNING_CONTEXT_SUPPORTED_GOALS = frozenset({GOAL_DEVELOP_CHANGE_PLAN, GOAL_PLAN_TESTS})
+
+
 class CreateRunRequest(BaseModel):
     subject_reference: str = Field(..., min_length=1, max_length=512)
     goal: str = Field(..., min_length=1, max_length=128)
     model: str | None = None
+    planning_run_id: str | None = Field(
+        default=None,
+        description=(
+            "Ground a standalone run in a prior completed Planning run's "
+            "result — the same context a Workflow's Development/Testing "
+            "stage would read from the Planning stage before it. Optional; "
+            "omitting it preserves standalone execution exactly as before. "
+            f"Only valid when `goal` is one of: {sorted(_PLANNING_CONTEXT_SUPPORTED_GOALS)} "
+            "— every other goal either doesn't consume Planning context "
+            "(e.g. `plan_freeform`) or consumes more than just Planning "
+            "(e.g. `plan_documentation`, `review_readiness`), and rejects "
+            "this field with a 400 rather than silently ignoring it. Must "
+            "reference a run with `goal=plan_freeform` and `status=completed` "
+            "that the caller owns."
+        ),
+    )
 
 
 class SubjectResponse(BaseModel):
@@ -222,6 +248,72 @@ async def _get_owned_run(db: AsyncSession, run_id: uuid.UUID, user_id: uuid.UUID
     return run
 
 
+class _StandalonePlanningRun:
+    """Just enough of `Run`'s shape for `get_stage_result()` to treat this
+    as a completed "planning"-stage run — a standalone run's real
+    `workflow_stage` column is always None (it was never part of a
+    Workflow), so that one field is overridden; everything else
+    (`status`, `created_at`, `steps`) proxies straight through to the
+    real, already-loaded `Run` row. Deliberately not a change to
+    `get_stage_result()` or any agent — it's the caller (this router)
+    that adapts its input to the existing contract, not the reverse.
+    """
+
+    def __init__(self, run: Run) -> None:
+        self._run = run
+        self.workflow_stage = "planning"
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._run, name)
+
+
+class _StandalonePlanningContext:
+    """Duck-types the one attribute of `Workflow` that `get_stage_result()`
+    reads (`.runs`) — used only when a caller explicitly supplies
+    `planning_run_id`; nothing else in `RunCoordinator`, `Workflow`, or
+    the agents needs to know this isn't a real workflow."""
+
+    def __init__(self, planning_run: Run) -> None:
+        self.runs = [_StandalonePlanningRun(planning_run)]
+
+
+async def _load_standalone_planning_context(
+    db: AsyncSession, user_id: uuid.UUID, goal: str, planning_run_id: str
+) -> _StandalonePlanningContext:
+    """Validate and wrap a user-supplied `planning_run_id` for Phase 3's
+    "ground a standalone Development/Testing run in a prior Planning
+    run" capability. Raises AppError/NotFoundError with a clear message
+    on anything invalid — never silently ignored, so a stale or
+    mistyped id (or a goal this field doesn't apply to) is obvious to
+    the caller rather than quietly producing an ungrounded or
+    partially-grounded result."""
+    if goal not in _PLANNING_CONTEXT_SUPPORTED_GOALS:
+        raise AppError(
+            f"planning_run_id is not supported for goal '{goal}'. Supported goals: "
+            f"{sorted(_PLANNING_CONTEXT_SUPPORTED_GOALS)}.",
+            status_code=400,
+            error_code="planning_run_id_unsupported_goal",
+        )
+    try:
+        run_uuid = uuid.UUID(planning_run_id)
+    except ValueError as exc:
+        raise AppError(
+            f"Invalid planning_run_id: {planning_run_id}",
+            status_code=400,
+            error_code="invalid_planning_run_id",
+        ) from exc
+
+    run = await _get_owned_run(db, run_uuid, user_id)
+    if run.goal != "plan_freeform" or run.status != "completed":
+        raise AppError(
+            f"Run '{planning_run_id}' is not a completed Planning run "
+            f"(goal={run.goal}, status={run.status}).",
+            status_code=400,
+            error_code="invalid_planning_run_reference",
+        )
+    return _StandalonePlanningContext(run)
+
+
 async def _resolve_user_names(db: AsyncSession, runs: list[Run]) -> dict[uuid.UUID, str]:
     """Batch-lookup User.full_name for every distinct user_id present in `runs`."""
     ids = {r.user_id for r in runs if r.user_id is not None}
@@ -334,6 +426,14 @@ async def create_run(
         # Future: resolve PR URLs, Jira keys, etc.
         subject = resolve_freetext(ref)
 
+    # Validated before create_pending_run so an invalid reference never
+    # leaves a queued Run row behind — see _load_standalone_planning_context.
+    standalone_planning_context = (
+        await _load_standalone_planning_context(db, user.id, body.goal, body.planning_run_id)
+        if body.planning_run_id
+        else None
+    )
+
     selector = AgentSelector(global_registry)
     coordinator = RunCoordinator(db=db, registry=global_registry, selector=selector)
 
@@ -381,7 +481,12 @@ async def create_run(
         subject=subject,
         goal=body.goal,
         model=body.model,
-        extras=None,
+        # `context.extras["workflow"]` is exactly what Development/Testing's
+        # existing (unmodified) `get_stage_result(workflow, "planning")` call
+        # already reads — this only supplies that key when the caller asked
+        # for it, so every existing caller (extras=None) is byte-for-byte
+        # unaffected.
+        extras={"workflow": standalone_planning_context} if standalone_planning_context else None,
         agent_id=agent_id,
         registry=global_registry,
     )

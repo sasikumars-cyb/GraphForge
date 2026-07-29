@@ -717,9 +717,16 @@ async def continue_workflow(
     if workflow.source_workflow_id:
         source_workflow = await workflow_service.get_workflow(db, workflow.source_workflow_id)
 
+    # `workflow.original_prompt` — the full verbatim request — not
+    # `workflow.title` (an AI-generated 5-10 word summary, see
+    # models/workflow.py's docstring on each field). Every later stage's
+    # prompt was being built from the short title instead of the actual
+    # brief; `create_workflow`'s own build_stage_context calls above
+    # already use the full text (`body.title`, which — despite the name —
+    # is the full engineering objective on that request schema).
     enriched_ref = workflow_service.build_stage_context(
         workflow,
-        original_request=workflow.title,
+        original_request=workflow.original_prompt,
         target_stage=target_stage,
         source_workflow=source_workflow,
     )

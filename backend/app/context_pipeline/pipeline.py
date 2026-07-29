@@ -20,6 +20,7 @@ agent; it only ever sees the `EnrichedPlanningRequest` this returns.
 from __future__ import annotations
 
 import logging
+import uuid
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -61,7 +62,7 @@ class ContextResolutionPipeline:
         raw_request: str,
         db: AsyncSession,
         graph_repo_override: Any,
-        user_id: object,
+        user_id: uuid.UUID | None,
         model: str | None,
         extras: dict[str, Any],
     ) -> EnrichedPlanningRequest:
@@ -235,6 +236,21 @@ class ContextResolutionPipeline:
         component_count = len(graph_components)
         topic_count = len(graph_topics)
         graph_context_text = ContextBuilder().build([graph_result]).context_text
+
+        # LOCAL_REPOSITORY detection needs the indexed repository names to
+        # match against, which are only known once graph retrieval above
+        # has run — so it re-checks here rather than in the reference
+        # detection pass at the top of this method. Only the local-repo
+        # matches are merged in (Jira/Confluence/GitHub were already found
+        # against the raw/enriched text and must not be duplicated).
+        if indexed_repos:
+            local_refs = detect_references(
+                enriched_text,
+                known_repo_names=frozenset(r["name"] for r in indexed_repos),
+            )
+            references.extend(
+                r for r in local_refs if r.type == ReferenceType.LOCAL_REPOSITORY
+            )
 
         repos_succeeded = repos_obs.succeeded
         traverse_succeeded = traverse_obs.succeeded

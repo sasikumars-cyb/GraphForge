@@ -569,15 +569,21 @@ def to_evidence(observation: PlanningObservation, kind: str) -> Evidence:
     ``"tool_call"`` with a failure-prefixed summary — never
     ``"graph_traversal"`` or the requested ``kind``, because that would
     imply a successful traversal/call that did not happen (P0-1).
+
+    `status` is set directly from `observation.succeeded` — a UI can key
+    off this instead of parsing the `summary` text (see `Evidence.status`'s
+    own docstring for why that distinction exists).
     """
     if not observation.succeeded:
         return Evidence(
             kind="tool_call",
             reference=observation.tool_name,
             summary=f"FAILED: {observation.summary}",
+            status="failed",
         )
     return Evidence(
         kind=kind,
         reference=observation.tool_name,
         summary=observation.summary,
+        status="success",
     )

@@ -127,6 +127,7 @@ async def test_jira_provider_resolves_a_successful_fetch() -> None:
     assert artifact.capability == ProviderCapability.ISSUE_TRACKER
     assert artifact.text == "Ticket body"
     assert artifact.evidence.kind == "tool_call"
+    assert artifact.evidence.status == "success"
 
 
 @pytest.mark.asyncio
@@ -153,6 +154,7 @@ async def test_jira_provider_resolves_a_failed_fetch_without_text() -> None:
     # summary, never silently reporting success.
     assert artifact.evidence.kind == "tool_call"
     assert artifact.evidence.summary.startswith("FAILED")
+    assert artifact.evidence.status == "failed"
 
 
 @pytest.mark.asyncio
@@ -180,10 +182,14 @@ async def test_github_provider_resolves_a_successful_fetch() -> None:
     assert artifact is not None
     assert artifact.capability == ProviderCapability.SOURCE_CONTROL
     assert artifact.text == "PR description"
+    assert artifact.evidence.status == "success"
 
 
 @pytest.mark.asyncio
-async def test_confluence_provider_returns_none_without_mcp_config() -> None:
+async def test_confluence_provider_reports_unavailable_without_mcp_config() -> None:
+    """Not configured at all — distinct from "searched, found nothing"
+    (status="not_found", tested below): nothing was looked up because
+    there's nowhere to look."""
     db = AsyncMock()
     with patch(
         "app.context_pipeline.providers.get_confluence_mcp_config", new=AsyncMock(return_value=None)
@@ -191,7 +197,64 @@ async def test_confluence_provider_returns_none_without_mcp_config() -> None:
         artifact = await ConfluenceProvider(db).resolve_for_issue(
             jira_issue_key="NPT-6", task_description="fix it", model=None, stage="planning"
         )
-    assert artifact is None
+
+    assert artifact is not None
+    assert artifact.text == ""
+    assert artifact.evidence.status == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_confluence_provider_reports_not_found_when_nothing_relevant_but_turns_ran() -> None:
+    from app.agents._contract import Evidence
+
+    db = AsyncMock()
+    with (
+        patch(
+            "app.context_pipeline.providers.get_confluence_mcp_config",
+            new=AsyncMock(return_value=("https://mcp.example", "token", "cloud-1")),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context",
+            new=AsyncMock(
+                return_value=(
+                    None,
+                    [Evidence(kind="tool_call", reference="getTeamworkGraphContext", summary="ok")],
+                )
+            ),
+        ),
+    ):
+        artifact = await ConfluenceProvider(db).resolve_for_issue(
+            jira_issue_key="NPT-6", task_description="fix it", model=None, stage="planning"
+        )
+
+    assert artifact is not None
+    assert artifact.text == ""
+    assert artifact.evidence.status == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_confluence_provider_reports_unavailable_when_no_turns_ran_at_all() -> None:
+    """No MCP turns ran at all (LLM call itself failed, or the active
+    provider doesn't support tool-calling — see gather_confluence_context's
+    own docstring) — this is "couldn't complete the lookup," not "searched
+    and found nothing," so it gets the same status as no-config."""
+    db = AsyncMock()
+    with (
+        patch(
+            "app.context_pipeline.providers.get_confluence_mcp_config",
+            new=AsyncMock(return_value=("https://mcp.example", "token", "cloud-1")),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context",
+            new=AsyncMock(return_value=(None, [])),
+        ),
+    ):
+        artifact = await ConfluenceProvider(db).resolve_for_issue(
+            jira_issue_key="NPT-6", task_description="fix it", model=None, stage="planning"
+        )
+
+    assert artifact is not None
+    assert artifact.evidence.status == "unavailable"
 
 
 @pytest.mark.asyncio
@@ -221,6 +284,7 @@ async def test_confluence_provider_normalizes_gathered_context_into_an_artifact(
     assert artifact is not None
     assert artifact.capability == ProviderCapability.DOCUMENTATION
     assert artifact.text == "Design doc content"
+    assert artifact.evidence.status == "success"
 
 
 def test_graph_provider_derives_observations_preserving_evidence_kinds() -> None:
@@ -370,6 +434,39 @@ async def test_pipeline_resolves_a_jira_reference_into_the_enriched_request() ->
     # requirement is satisfied by the pipeline alone.
     assert any(e.kind == "graph_traversal" for e in request.evidence)
     assert any(e.kind == "tool_call" for e in request.evidence)
+
+
+@pytest.mark.asyncio
+async def test_pipeline_detects_a_local_repository_mentioned_by_name() -> None:
+    """LOCAL_REPOSITORY detection needs the indexed repository names,
+    which are only known after graph retrieval — the pipeline re-checks
+    for it once those names are available rather than skipping it
+    entirely (previously `known_repo_names` was never supplied at all)."""
+
+    async def fake_execute_all(calls):
+        return [_graph_tool_result()]  # indexed_repositories includes "svc-a"
+
+    with (
+        patch("app.context_pipeline.pipeline.get_tool_registry", return_value=MagicMock()),
+        patch(
+            "app.context_pipeline.pipeline.ToolExecutor.execute_all",
+            new=AsyncMock(side_effect=fake_execute_all),
+        ),
+    ):
+        request = await ContextResolutionPipeline().resolve(
+            raw_request="Fix the ingestion bug in svc-a",
+            db=AsyncMock(),
+            graph_repo_override=None,
+            user_id="user-1",
+            model=None,
+            extras={},
+        )
+
+    local_refs = [
+        r for r in request.resolved_references if r.type == ReferenceType.LOCAL_REPOSITORY
+    ]
+    assert local_refs and local_refs[0].normalized_value == "svc-a"
+    assert "local_repository" in request.planning_metadata["detected_reference_types"]
 
 
 @pytest.mark.asyncio

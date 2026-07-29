@@ -8,31 +8,90 @@ interface KnowledgeSourcesPanelProps {
   evidence: Evidence[];
 }
 
+type SourceStatus = "success" | "not_found" | "unavailable" | "failed" | "unreferenced";
+
 interface SourceRow {
   icon: typeof GitBranch;
   label: string;
-  connected: boolean;
+  status: SourceStatus;
   detail: string;
 }
 
-function StatusDot({ connected }: { connected: boolean }) {
+const STATUS_DOT_TONE: Record<SourceStatus, string> = {
+  success: "bg-emerald-400",
+  not_found: "bg-slate-500",
+  unavailable: "bg-slate-600",
+  failed: "bg-rose-400",
+  unreferenced: "bg-slate-600",
+};
+
+const STATUS_ICON_TONE: Record<SourceStatus, string> = {
+  success: "text-emerald-400",
+  not_found: "text-slate-400",
+  unavailable: "text-slate-600",
+  failed: "text-rose-400",
+  unreferenced: "text-slate-600",
+};
+
+function StatusDot({ status }: { status: SourceStatus }) {
   return (
-    <span
-      className={`h-2 w-2 shrink-0 rounded-full ${connected ? "bg-emerald-400" : "bg-slate-600"}`}
-      aria-hidden="true"
-    />
+    <span className={`h-2 w-2 shrink-0 rounded-full ${STATUS_DOT_TONE[status]}`} aria-hidden="true" />
   );
+}
+
+// The Context Resolution Pipeline records one of these `reference` values
+// per source it actually resolved (see app/context_pipeline/providers.py
+// on the backend) — matched here by name rather than exposing the
+// pipeline's internal tool/provider names to the user, per "do not expose
+// unnecessary implementation details."
+const JIRA_REFS = ["fetch_jira_issue"];
+const CONFLUENCE_REFS = ["getTeamworkGraphContext", "getTeamworkGraphObject", "confluence_context"];
+const GITHUB_REFS = ["fetch_github_reference"];
+
+function findLatest(evidence: Evidence[], refs: string[]): Evidence | undefined {
+  // Last match wins — a source can appear more than once (e.g. Confluence's
+  // multi-turn discovery loop); the final entry is the one with the actual
+  // outcome for this run.
+  for (let i = evidence.length - 1; i >= 0; i--) {
+    if (refs.includes(evidence[i].reference)) return evidence[i];
+  }
+  return undefined;
+}
+
+// `status` is the source of truth going forward (set by the backend — see
+// Evidence.status). Runs persisted before that field existed have no
+// `status` in their stored evidence JSON, so this falls back to the old
+// text-based heuristic only for that legacy data, rather than showing
+// "unavailable" for a run that actually succeeded.
+function deriveStatus(ev: Evidence | undefined): SourceStatus {
+  if (ev === undefined) return "unreferenced";
+  if (ev.status) return ev.status;
+  if (ev.summary.startsWith("FAILED:")) return "failed";
+  if (ev.summary.toLowerCase().includes("no relevant")) return "not_found";
+  return "success";
+}
+
+function cleanSummary(ev: Evidence): string {
+  return ev.summary.startsWith("FAILED:") ? ev.summary.slice("FAILED:".length).trim() : ev.summary;
 }
 
 export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPanelProps) {
   const reposIndexed = (result?.repositories_consulted?.length ?? 0) > 0;
   const graphUsed = result?.graph_context_used ?? false;
 
+  const jiraEvidence = findLatest(evidence, JIRA_REFS);
+  const confluenceEvidence = findLatest(evidence, CONFLUENCE_REFS);
+  const githubEvidence = findLatest(evidence, GITHUB_REFS);
+
+  const jiraStatus = deriveStatus(jiraEvidence);
+  const confluenceStatus = deriveStatus(confluenceEvidence);
+  const githubStatus = deriveStatus(githubEvidence);
+
   const sources: SourceRow[] = [
     {
       icon: GitBranch,
       label: "Repository Graph",
-      connected: graphUsed,
+      status: graphUsed ? "success" : reposIndexed ? "not_found" : "unreferenced",
       detail: graphUsed
         ? `${result?.repositories_consulted?.length ?? 0} repo${(result?.repositories_consulted?.length ?? 0) === 1 ? "" : "s"} indexed`
         : reposIndexed
@@ -42,25 +101,28 @@ export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPane
     {
       icon: ListTodo,
       label: "Jira",
-      connected: false,
-      detail: "Not connected",
+      status: jiraStatus,
+      detail: jiraEvidence ? cleanSummary(jiraEvidence) : "No Jira reference in this request",
     },
     {
       icon: FileText,
       label: "Confluence",
-      connected: false,
-      detail: "Not connected",
+      status: confluenceStatus,
+      detail: confluenceEvidence
+        ? cleanSummary(confluenceEvidence)
+        : jiraStatus === "success"
+          ? "No relevant Confluence content found"
+          : "No Jira reference to anchor a Confluence lookup",
     },
     {
       icon: LayoutGrid,
-      label: "Architecture Graph",
-      connected: graphUsed,
-      detail: graphUsed ? "Architecture data available" : "Empty — no components traversed",
+      label: "GitHub",
+      status: githubStatus,
+      detail: githubEvidence ? cleanSummary(githubEvidence) : "No GitHub reference in this request",
     },
   ];
 
-  const isGreenfield =
-    !graphUsed && !reposIndexed;
+  const isGreenfield = !graphUsed && !reposIndexed;
 
   const planningMode = isGreenfield
     ? { label: "Greenfield", tone: "text-amber-300 bg-amber-500/10 ring-amber-500/30" }
@@ -71,8 +133,12 @@ export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPane
     (e) => e.kind === "graph_traversal" || e.kind === "graph_fact"
   ).length;
 
+  const anyExternalSource = [jiraStatus, confluenceStatus, githubStatus].some(
+    (s) => s === "success"
+  );
+
   return (
-    <Card title="Knowledge Sources">
+    <Card title="Context Sources">
       <div className="flex flex-col gap-3">
         {/* Planning mode badge */}
         <div className="flex items-center justify-between">
@@ -91,15 +157,17 @@ export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPane
           {sources.map((src) => {
             const Icon = src.icon;
             return (
-              <li key={src.label} className="flex items-center gap-2.5">
+              <li key={src.label} className="flex items-start gap-2.5">
                 <Icon
-                  className={`h-3.5 w-3.5 shrink-0 ${src.connected ? "text-emerald-400" : "text-slate-600"}`}
+                  className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${STATUS_ICON_TONE[src.status]}`}
                   aria-hidden="true"
                 />
-                <StatusDot connected={src.connected} />
+                <StatusDot status={src.status} />
                 <div className="min-w-0 flex-1">
                   <span className="text-xs font-medium text-slate-300">{src.label}</span>
-                  <span className="ml-1.5 text-xs text-slate-500">{src.detail}</span>
+                  <p className="mt-0.5 text-xs text-slate-500" title={src.detail}>
+                    {src.detail}
+                  </p>
                 </div>
               </li>
             );
@@ -115,12 +183,12 @@ export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPane
           </>
         )}
 
-        {isGreenfield && (
+        {isGreenfield && !anyExternalSource && (
           <>
             <div className="h-px bg-slate-800" />
             <p className="text-xs text-slate-500">
               Connect GitHub, Jira, or Confluence in{" "}
-              <span className="text-sky-400">Settings → Tool Registry</span> to ground future
+              <span className="text-sky-400">Settings → Integrations</span> to ground future
               plans in real engineering data.
             </p>
           </>
