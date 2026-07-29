@@ -31,6 +31,7 @@ from app.agents._contract import (
     Confidence,
     Evidence,
 )
+from app.agents.confidence import WeightedEvidence, calculate_weighted_confidence
 from app.agents.documentation_planning.schemas import (
     DocumentationChecklistItem,
     DocumentationPlan,
@@ -64,13 +65,21 @@ _MAX_CONTEXT_CHARS = 8_000
 # graph_context of its own, so this is the only real cap on prompt size.
 _MAX_BLUEPRINT_CONTEXT_CHARS = 24_000
 
-_IMPACT_CONFIDENCE = {
-    "high": 0.85,
-    "medium": 0.75,
-    "low": 0.7,
-    "none": 0.6,
+# Confidence weights — evidence-based (see app.agents.confidence), not
+# keyed by the LLM's own `documentation_impact` label. That label used to
+# BE the confidence score via a fixed lookup table, which meant the model
+# was choosing the value that then determined how much to trust it — the
+# LLM's `documentation_impact` still drives its own domain output (which
+# docs to update), it just no longer drives confidence. A fully-verified
+# run (all three prior stages present, none of them flagged a deterministic
+# verification problem) scores 1.0; each missing stage or existing warning
+# set lowers it.
+_CONFIDENCE_WEIGHTS: dict[str, float] = {
+    "planning_context_available": 0.3,
+    "development_context_available": 0.3,
+    "testing_context_available": 0.2,
+    "no_prior_verification_warnings": 0.2,
 }
-_DEFAULT_CONFIDENCE = 0.5
 
 
 def _collect_verification_warnings(
@@ -341,13 +350,16 @@ class DocumentationPlanningAgent:
             )
         )
 
-        confidence_score = _IMPACT_CONFIDENCE.get(plan.documentation_impact, _DEFAULT_CONFIDENCE)
-        confidence_reasoning = (
-            f"Documentation impact '{plan.documentation_impact or 'unknown'}' derived from "
-            f"{len(plan.required_updates)} required update(s), "
-            f"{len(plan.new_documentation)} new documentation item(s), and "
-            f"{len(plan.risks)} documentation risk(s) against the Planning/Development/"
-            "Testing blueprint."
+        confidence_score, confidence_reasoning = calculate_weighted_confidence(
+            WeightedEvidence(
+                flags={
+                    "planning_context_available": planning_result is not None,
+                    "development_context_available": development_result is not None,
+                    "testing_context_available": testing_result is not None,
+                    "no_prior_verification_warnings": not prior_verification_warnings,
+                },
+                weights=_CONFIDENCE_WEIGHTS,
+            )
         )
 
         logger.info(

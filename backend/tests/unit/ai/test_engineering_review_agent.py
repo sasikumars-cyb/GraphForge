@@ -295,6 +295,170 @@ async def test_engineering_review_agent_confidence_tracks_readiness_status() -> 
     assert output.confidence.score <= 0.4
 
 
+@pytest.mark.asyncio
+async def test_engineering_review_agent_confidence_penalized_by_verification_warnings() -> None:
+    """Two runs both landing on the same readiness verdict must not read as
+    equally confident if one carries forward real, deterministic
+    verification warnings and the other doesn't — the categorical
+    downgrade below protects the dangerous case (a false "ready"), but the
+    numeric score also reflects warning volume."""
+    planning_with_warnings = _planning_result()
+    planning_with_warnings["verification_warnings"] = [
+        "Repository 'billing-service' cited in this plan was not found among the "
+        "repositories this run's graph traversal actually returned — unverified.",
+        "Component 'PaymentValidator' cited was not found — unverified.",
+    ]
+    workflow = _make_workflow(
+        [
+            _make_run("planning", "completed", planning_with_warnings),
+            _make_run("development", "completed", _development_result()),
+            _make_run("testing", "completed", _testing_result()),
+            _make_run("documentation_planning", "completed", _documentation_planning_result()),
+        ]
+    )
+    context = _make_context(workflow=workflow)
+
+    with patch(
+        "app.agents.engineering_review.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(readiness_status="needs_revision")),
+    ):
+        output = await EngineeringReviewAgent().run(context)
+
+    assert output.result["readiness_status"] == "needs_revision"
+    # base 0.6 - min(0.2, 0.05*2) = 0.5
+    assert output.confidence.score == 0.5
+    assert "carried-forward deterministic verification warning" in output.confidence.reasoning
+
+
+# ---------------------------------------------------------------------------
+# Confidence now via the shared engine (app.agents.confidence) — Delta
+# Report follow-up: Engineering Review used to compute this with local
+# arithmetic instead of calculate_weighted_confidence, the one architectural
+# inconsistency left across the three evidence-based agents. These tests
+# lock in bit-for-bit equivalence with the pre-refactor formula.
+# ---------------------------------------------------------------------------
+
+
+class TestConfidenceMatchesSharedEngine:
+    """`round(max(0.0, base - penalty), 2)` was the exact pre-refactor
+    formula; every case here reproduces it via
+    `calculate_weighted_confidence` instead and asserts the same result."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "readiness_status,warning_count,expected",
+        [
+            ("ready", 0, 0.9),  # no warnings: override never triggers
+            ("needs_revision", 0, 0.6),
+            ("needs_revision", 2, 0.5),
+            ("needs_revision", 10, 0.4),  # penalty capped at 0.2
+            ("not_ready", 0, 0.3),
+            ("not_ready", 1, 0.25),
+        ],
+    )
+    async def test_confidence_value(self, readiness_status, warning_count, expected) -> None:
+        planning_result = _planning_result()
+        if warning_count:
+            planning_result["verification_warnings"] = [
+                f"unverified claim #{i}" for i in range(warning_count)
+            ]
+        workflow = _make_workflow(
+            [
+                _make_run("planning", "completed", planning_result),
+                _make_run("development", "completed", _development_result()),
+                _make_run("testing", "completed", _testing_result()),
+                _make_run(
+                    "documentation_planning", "completed", _documentation_planning_result()
+                ),
+            ]
+        )
+        context = _make_context(workflow=workflow)
+
+        with patch(
+            "app.agents.engineering_review.agent._call_llm",
+            new=AsyncMock(return_value=_make_llm_response(readiness_status=readiness_status)),
+        ):
+            output = await EngineeringReviewAgent().run(context)
+
+        assert output.confidence.score == expected
+
+    @pytest.mark.asyncio
+    async def test_confidence_reflects_the_downgraded_status_not_the_llms_original_ready(
+        self,
+    ) -> None:
+        """Confidence is computed AFTER the deterministic 'ready' downgrade
+        (Requirement 4) — an LLM verdict of 'ready' with 1 carried-forward
+        warning must score as 'needs_revision' minus the warning penalty
+        (0.6 - 0.05 = 0.55), never as 'ready' (0.9)."""
+        planning_with_warning = _planning_result()
+        planning_with_warning["verification_warnings"] = ["unverified claim"]
+        workflow = _make_workflow(
+            [
+                _make_run("planning", "completed", planning_with_warning),
+                _make_run("development", "completed", _development_result()),
+                _make_run("testing", "completed", _testing_result()),
+                _make_run(
+                    "documentation_planning", "completed", _documentation_planning_result()
+                ),
+            ]
+        )
+        context = _make_context(workflow=workflow)
+
+        with patch(
+            "app.agents.engineering_review.agent._call_llm",
+            new=AsyncMock(return_value=_make_llm_response(readiness_status="ready")),
+        ):
+            output = await EngineeringReviewAgent().run(context)
+
+        assert output.result["readiness_status"] == "needs_revision"  # downgraded
+        assert output.confidence.score == 0.55
+
+    @pytest.mark.asyncio
+    async def test_unrecognized_readiness_status_falls_back_to_0_5(self) -> None:
+        """readiness_status has no enum constraint in the schema (a plain
+        `str`) — an LLM response outside the documented three values must
+        still resolve to the same 0.5 fallback the old `dict.get(status,
+        0.5)` produced, not silently become 0.0."""
+        context = _make_context(workflow=_full_workflow())
+
+        with patch(
+            "app.agents.engineering_review.agent._call_llm",
+            new=AsyncMock(return_value=_make_llm_response(readiness_status="something_else")),
+        ):
+            output = await EngineeringReviewAgent().run(context)
+
+        assert output.confidence.score == 0.5
+
+    @pytest.mark.asyncio
+    async def test_reasoning_comes_from_shared_engine(self) -> None:
+        """The reasoning string format is now the shared engine's own
+        auditable output, not this agent's bespoke sentence — an
+        intentional, non-functional change (see task deliverable)."""
+        context = _make_context(workflow=_full_workflow())
+
+        with patch(
+            "app.agents.engineering_review.agent._call_llm",
+            new=AsyncMock(return_value=_make_llm_response(readiness_status="ready")),
+        ):
+            output = await EngineeringReviewAgent().run(context)
+
+        assert "Deterministic confidence" in output.confidence.reasoning
+        assert "ready=True" in output.confidence.reasoning
+
+    def test_no_local_confidence_arithmetic_remains(self) -> None:
+        """Regression guard for the Delta Report finding: the module must
+        no longer compute a base-minus-penalty score by hand — only via
+        the shared engine."""
+        import inspect
+
+        from app.agents.engineering_review import agent as eng_review_agent
+
+        source = inspect.getsource(eng_review_agent)
+        assert "calculate_weighted_confidence" in source
+        # The old hand-rolled formula shape — must not reappear.
+        assert "base_confidence - warning_penalty" not in source
+
+
 # ---------------------------------------------------------------------------
 # The actual regression this rewrite exists to cover: full structured
 # artifacts reach the LLM prompt, not a 256-char freetext cut.

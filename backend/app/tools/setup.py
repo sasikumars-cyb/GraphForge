@@ -211,7 +211,11 @@ def _build_tool_config(
     if source_spec is None:
         return None
     transport_spec = next((t for t in source_spec.transports if t.transport == transport), None)
-    if transport_spec is None or transport_spec.tool_id is None or not transport_spec.credential_field_map:
+    if (
+        transport_spec is None
+        or transport_spec.tool_id is None
+        or not transport_spec.credential_field_map
+    ):
         return None
     tool_id = transport_spec.tool_id
     field_map = transport_spec.credential_field_map

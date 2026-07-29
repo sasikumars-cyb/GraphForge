@@ -1,23 +1,33 @@
 """Planning Agent — PW-4.
 
 Implements the IAgent protocol for goal=plan_freeform. Every run:
-1. Calls GetIndexedRepositoriesTool to list indexed repos (tool_call evidence).
-2. Calls TraverseArchitectureGraphTool to traverse the Knowledge Graph
-   for components and Kafka topics (graph_traversal evidence).
+1. Hands the raw request to `ContextResolutionPipeline.resolve()`, which
+   detects references (Jira/Confluence/GitHub/repository), resolves them
+   through the matching provider, retrieves Knowledge Graph context, and
+   returns a single `EnrichedPlanningRequest` — the tool_call and
+   graph_traversal Evidence entries below are produced by that pipeline,
+   not by this agent.
+2. Runs deterministic verification of the resolved graph data against
+   whatever the LLM later claims (still owned by this agent — it's part
+   of judging the *plan*, not part of resolving context).
 3. Synthesizes an implementation plan using the LLM, grounded in the
-   real graph context gathered in steps 1-2 (llm_reasoning evidence).
+   pipeline's graph context (llm_reasoning evidence).
 
-The agent's own Plan -> Select Tool -> Execute -> Observe -> Decide loop
-is explicit inline in run() below — the same five-state shape the Review
-Agent uses internally, applied here to a different tool set and domain.
-No retry is implemented in this phase (unlike the Review Agent's
-confidence-triggered retry) — a single pass always runs to completion.
+This agent has no reference-detection, provider-selection, or tool-
+dispatch code of its own anymore (see `app.context_pipeline` for all of
+that) — its own Plan -> Select Tool -> Execute -> Observe -> Decide loop
+is now scoped entirely to reasoning over an already-enriched request,
+the same five-state shape the Review Agent uses internally, applied here
+to planning rather than review. No retry is implemented in this phase
+(unlike the Review Agent's confidence-triggered retry) — a single pass
+always runs to completion, aside from the bounded reflection pass below.
 
 The key demonstration requirement (RAJAN_PACKAGE.md): at least one
 Evidence entry must be kind="graph_traversal" or kind="tool_call". This
-is guaranteed: step 1 always produces a tool_call entry and step 2
-always produces a graph_traversal entry, even if those queries return
-empty results (empty = real graph query, just no data yet).
+is guaranteed: the pipeline's repository lookup always produces a
+tool_call entry and its graph traversal always produces a
+graph_traversal entry, even if those queries return empty results
+(empty = real graph query, just no data yet).
 """
 
 from __future__ import annotations
@@ -41,10 +51,6 @@ from app.agents._contract import (
 from app.agents.blueprint.factory import BlueprintFactory
 from app.agents.llm import STAGE_PLANNING, invoke_llm_json, stage_for
 from app.agents.planning.classifier import PlanningProfile, analyse, pattern_for_key
-from app.agents.planning.confluence_context import (
-    gather_confluence_context,
-    get_confluence_mcp_config,
-)
 from app.agents.planning.schemas import (
     ArchitectureLayer,
     DataEntity,
@@ -56,19 +62,13 @@ from app.agents.planning.schemas import (
     RepositoryUsage,
     RiskItem,
 )
-from app.agents.planning.tools import PlanningObservation, stars_for_rank, to_evidence
-from app.agents.prompt_utils import (
-    parse_json_response,
-    render_prompt_template,
-    wrap_untrusted_content,
-)
+from app.agents.planning.tools import stars_for_rank
+from app.agents.prompt_utils import parse_json_response, render_prompt_template
 from app.agents.reflection import run_with_reflection
 from app.ai.providers.pricing import estimate_cost_usd
+from app.context_pipeline import ContextResolutionPipeline
 from app.core.exceptions import AppError
 from app.core.redact import redact_secrets
-from app.tools import ContextBuilder, ToolExecutor, ToolInput, get_tool_registry
-from app.tools.implementations.github_tool import GitHubTool, extract_pr_or_issue_ref
-from app.tools.implementations.jira_tool import extract_issue_key
 
 logger = logging.getLogger(__name__)
 
@@ -366,18 +366,23 @@ class PlanningAgent:
     """
 
     async def run(self, context: AgentContext) -> AgentOutput:
-        task_description: str = context.subject.display_name
-        # What the user actually typed/pasted — kept separate from
-        # `task_description` (which gets the real Jira content appended
-        # below) so the UI's "Task Description" field shows the original
-        # request, not a multi-paragraph ticket dump.
-        original_task_description = task_description
+        # What the user actually typed/pasted — never mutated, so the UI's
+        # "Task Description" field shows the original request, not a
+        # multi-paragraph ticket dump. Everything downstream of the raw
+        # request (reference detection, Jira/Confluence/GitHub enrichment,
+        # capability classification, graph retrieval) now happens in the
+        # Context Resolution Pipeline (see app.context_pipeline) — this
+        # agent consumes only its output, `EnrichedPlanningRequest`, and
+        # has no idea whether any given artifact came from Jira,
+        # Confluence, GitHub, the Knowledge Graph, or a provider that
+        # doesn't exist yet.
+        original_task_description: str = context.subject.display_name
         subject_id: str = context.subject.subject_id
 
         logger.info(
             "planning_agent_started subject_id=%s task=%.80s model=%s",
             subject_id,
-            task_description,
+            original_task_description,
             context.model,
         )
 
@@ -386,218 +391,34 @@ class PlanningAgent:
         # workflow_stage when it has one, else this agent's own default.
         stage = stage_for(context.extras, STAGE_PLANNING)
 
-        evidence: list[Evidence] = []
-
-        # ------------------------------------------------------------------
-        # Jira enrichment — if the goal references a Jira issue (a bare key
-        # like "NPT-6" or a full /browse/ URL), fetch its real summary and
-        # description and use THAT for analysis and the LLM prompt instead
-        # of the literal string the user pasted. Without this, a goal that's
-        # just a ticket URL plans against the URL text itself — the ticket's
-        # actual description, the whole reason the URL was pasted, was
-        # never read.
-        # ------------------------------------------------------------------
-        registry = get_tool_registry()
-        executor = ToolExecutor(registry=registry)
-
-        issue_key = extract_issue_key(task_description)
-        if issue_key is not None:
-            jira_result = await executor.execute("jira", ToolInput(query=task_description))
-            jira_obs = PlanningObservation(
-                tool_name="fetch_jira_issue",
-                summary=jira_result.summary or (jira_result.error or ""),
-                data=jira_result.data,
-                succeeded=jira_result.success,
-                error=jira_result.error or "",
-            )
-            evidence.append(to_evidence(jira_obs, "tool_call"))
-            if jira_result.success:
-                task_description = task_description + wrap_untrusted_content(
-                    "jira", redact_secrets(jira_result.data.get("context_text", ""))
-                )
-                logger.info(
-                    "planning_agent_jira_enriched issue_key=%s",
-                    issue_key,
-                )
-
-                # ----------------------------------------------------------
-                # Confluence enrichment — anchored on the Jira issue we just
-                # confirmed exists. Atlassian's official MCP server exposes
-                # only graph-traversal tools (discover, then fetch), not a
-                # search tool, so this hands those tools to the LLM itself
-                # and lets it drive a bounded multi-step loop rather than
-                # GraphForge guessing what's relevant — see
-                # confluence_context.py's module docstring for why.
-                # ----------------------------------------------------------
-                confluence_mcp = await get_confluence_mcp_config(db)
-                if confluence_mcp is not None:
-                    server_url, auth_token, cloud_id = confluence_mcp
-                    confluence_text, confluence_evidence = await gather_confluence_context(
-                        mcp_server_url=server_url,
-                        mcp_auth_token=auth_token,
-                        cloud_id=cloud_id,
-                        jira_issue_key=issue_key,
-                        task_description=original_task_description,
-                        model=context.model,
-                        stage=stage,
-                    )
-                    evidence.extend(confluence_evidence)
-                    if confluence_text:
-                        task_description = task_description + wrap_untrusted_content(
-                            "confluence", redact_secrets(confluence_text)
-                        )
-                        logger.info(
-                            "planning_agent_confluence_enriched issue_key=%s",
-                            issue_key,
-                        )
-            else:
-                logger.info(
-                    "planning_agent_jira_fetch_failed issue_key=%s error=%s",
-                    issue_key,
-                    jira_result.error,
-                )
-
-        # ------------------------------------------------------------------
-        # GitHub enrichment — same idea as Jira above, for a goal that
-        # references a PR/issue ("owner/repo#42" or a github.com URL).
-        # GitHub access is per-user (an OAuth connection, not an
-        # install-wide credential), so this tool is never registered with
-        # the global Tool Registry — it's constructed fresh for this run
-        # using the run's own user's token via executor.execute_instance().
-        # No-ops silently if the query has no GitHub reference, or if this
-        # user hasn't connected GitHub — Jira enrichment is unaffected either
-        # way, they're independent.
-        # ------------------------------------------------------------------
-        gh_ref = extract_pr_or_issue_ref(task_description)
-        if gh_ref is not None:
-            user_id = context.extras.get("user_id")
-            github_token = None
-            if user_id is not None:
-                from app.services.github_service import get_decrypted_access_token
-
-                github_token = await get_decrypted_access_token(db, user_id)
-
-            if github_token is None:
-                logger.info("planning_agent_github_skipped_not_connected ref=%s", gh_ref)
-            else:
-                from app.core.config import get_settings
-
-                github_tool = GitHubTool(
-                    {
-                        "github_token": github_token,
-                        "github_mcp_server_url": get_settings().github_mcp_default_server_url,
-                        "github_mcp_api_key": github_token,
-                    }
-                )
-                github_result = await executor.execute_instance(
-                    github_tool, "github", "GitHub", ToolInput(query=task_description)
-                )
-                github_obs = PlanningObservation(
-                    tool_name="fetch_github_reference",
-                    summary=github_result.summary or (github_result.error or ""),
-                    data=github_result.data,
-                    succeeded=github_result.success,
-                    error=github_result.error or "",
-                )
-                evidence.append(to_evidence(github_obs, "tool_call"))
-                if github_result.success:
-                    task_description = task_description + wrap_untrusted_content(
-                        "github", redact_secrets(github_result.data.get("context_text", ""))
-                    )
-                    logger.info("planning_agent_github_enriched ref=%s", gh_ref)
-                else:
-                    logger.info(
-                        "planning_agent_github_fetch_failed ref=%s error=%s",
-                        gh_ref,
-                        github_result.error,
-                    )
-
-        # ------------------------------------------------------------------
-        # Analyse the business problem FIRST — before any repository data is
-        # fetched or formatted. This ordering is the fix for repository-first
-        # planning: capabilities and the architecture pattern are derived from
-        # the brief, so an ETL request gets ETL zones even when every indexed
-        # repository is a microservice. The resulting search terms then drive
-        # which repositories are worth showing at all.
-        # Pure keyword matching — no LLM call, no tokens.
-        # ------------------------------------------------------------------
-        profile = analyse(task_description)
-        logger.info(
-            "planning_agent_analysed pattern=%s capabilities=%s",
-            profile.key,
-            ",".join(c.key for c in profile.capabilities) or "none",
+        enriched_request = await ContextResolutionPipeline().resolve(
+            raw_request=original_task_description,
+            db=db,
+            graph_repo_override=context.extras.get("graph_repository"),
+            user_id=context.extras.get("user_id"),
+            model=context.model,
+            extras=context.extras,
         )
+        # Own copy: the agent appends its own reasoning/verification
+        # evidence below without mutating the pipeline's returned list.
+        evidence: list[Evidence] = list(enriched_request.evidence)
 
-        # ------------------------------------------------------------------
-        # Tool Platform: discover → execute → build context
-        # (registry/executor already created above, for the Jira fetch)
-        # ------------------------------------------------------------------
-        tool_input = ToolInput(
-            query=task_description,
-            parameters={
-                "db": db,
-                # Scopes the repository read to this run's owner. Repository
-                # rows are per-user, so without it the graph tool would pull
-                # other accounts' repositories into this plan's prompt and
-                # evidence pool (the tool rejects the call rather than
-                # allowing that — see Neo4jGraphTool.execute).
-                "user_id": context.extras.get("user_id"),
-                "relevance_terms": profile.search_terms,
-                # Hop-budgeted repository built by RunCoordinator's Context
-                # Preparation step from PLANNING_MANIFEST.max_graph_hops
-                # (see app.graph.hop_budget). None outside that dispatcher
-                # — Neo4jGraphTool falls back to an unbudgeted repository.
-                "graph_repo": context.extras.get("graph_repository"),
-            },
-        )
-
-        results = await executor.execute_all([("neo4j_graph", tool_input)])
-        graph_result = results[0]
-
-        planning_context = ContextBuilder().build(results)
-
-        # Re-derive Evidence from the ToolResult's embedded observation summaries
-        # (preserving the "tool_call" / "graph_traversal" kinds the contract requires).
-        repos_succeeded: bool = graph_result.data.get("_repos_succeeded", graph_result.success)
-        traverse_succeeded: bool = graph_result.data.get(
-            "_traverse_succeeded", graph_result.success
-        )
-        repos_summary: str = graph_result.data.get("_repos_summary", graph_result.summary)
-        traverse_summary: str = graph_result.data.get("_traverse_summary", graph_result.summary)
-
-        repos_obs = PlanningObservation(
-            tool_name="get_indexed_repositories",
-            summary=repos_summary,
-            data={"indexed_repositories": graph_result.data.get("indexed_repositories", [])},
-            succeeded=repos_succeeded,
-            error=graph_result.error or "",
-        )
-        traverse_obs = PlanningObservation(
-            tool_name="traverse_architecture_graph",
-            summary=traverse_summary,
-            data={
-                "components": graph_result.data.get("components", []),
-                "kafka_topics": graph_result.data.get("kafka_topics", []),
-            },
-            succeeded=traverse_succeeded,
-            error=graph_result.error or "",
-        )
-
-        evidence.append(to_evidence(repos_obs, "tool_call"))
-        evidence.append(to_evidence(traverse_obs, "graph_traversal"))
-
-        indexed_repos: list[dict[str, str]] = graph_result.data.get("indexed_repositories", [])
-        component_count: int = graph_result.data.get("_component_count", 0)
-        topic_count: int = graph_result.data.get("_topic_count", 0)
-        ranked_repo_names: list[str] = graph_result.data.get("ranked_repositories", [])
-        graph_components: list[dict[str, Any]] = graph_result.data.get("components", [])
-        graph_topics: list[dict[str, Any]] = graph_result.data.get("kafka_topics", [])
+        task_description = enriched_request.enriched_text
+        profile = enriched_request.profile
+        indexed_repos: list[dict[str, Any]] = enriched_request.indexed_repositories
+        graph_components: list[dict[str, Any]] = enriched_request.graph_components
+        graph_topics: list[dict[str, Any]] = enriched_request.graph_topics
+        ranked_repo_names: list[str] = enriched_request.ranked_repository_names
+        component_count = len(graph_components)
+        topic_count = len(graph_topics)
 
         logger.info(
-            "planning_agent_tool_execution indexed_repo_count=%d component_count=%d topic_count=%d",
+            "planning_agent_context_resolved indexed_repo_count=%d component_count=%d "
+            "topic_count=%d reference_count=%d",
             len(indexed_repos),
             component_count,
             topic_count,
+            len(enriched_request.resolved_references),
         )
 
         # ------------------------------------------------------------------
@@ -667,12 +488,8 @@ class PlanningAgent:
         # ------------------------------------------------------------------
         # Observe: determine confidence based on what the graph returned
         # ------------------------------------------------------------------
-        graph_unavailable = not repos_succeeded or (bool(indexed_repos) and not traverse_succeeded)
-        has_graph_data = (
-            not graph_unavailable
-            and bool(indexed_repos)
-            and (component_count > 0 or topic_count > 0)
-        )
+        graph_unavailable = not enriched_request.graph_available
+        has_graph_data = enriched_request.graph_has_data
         if graph_unavailable:
             base_confidence = 0.25
         elif has_graph_data:
@@ -684,9 +501,10 @@ class PlanningAgent:
             logger.info("planning_agent_no_graph_data note=no indexed repositories")
 
         # ------------------------------------------------------------------
-        # Synthesize: LLM call with real graph context from ContextBuilder
+        # Synthesize: LLM call with real graph context, already resolved
+        # and normalized by the Context Resolution Pipeline.
         # ------------------------------------------------------------------
-        graph_context_text = planning_context.context_text
+        graph_context_text = enriched_request.graph_context_text
         prompt = _render_prompt(task_description, graph_context_text, profile)
 
         logger.info(

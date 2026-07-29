@@ -41,6 +41,7 @@ from app.agents._contract import (
     Confidence,
     Evidence,
 )
+from app.agents.confidence import WeightedEvidence, calculate_weighted_confidence
 from app.agents.engineering_review.schemas import (
     CompletenessFinding,
     DependencyAssessment,
@@ -76,11 +77,52 @@ _MAX_CONTEXT_CHARS = 8_000
 # is no longer implicitly capped at 256 chars by the freetext chain.
 _MAX_BLUEPRINT_CONTEXT_CHARS = 24_000
 
+# Readiness-based base confidence, expressed as a one-hot weighted-evidence
+# table: exactly one of these three flags is ever true for a given report
+# (see _readiness_flags below), so the shared engine's weighted sum reduces
+# to "the weight of whichever readiness tier applies" — the same value this
+# table produced as a plain dict lookup before this refactor, with the same
+# meaning (this agent's own domain judgment about what each tier is worth,
+# per app.agents.confidence's module docstring on why weights stay
+# agent-owned). Both Code Generation and Documentation Planning already
+# route their confidence through this same engine; this table is what makes
+# Engineering Review's the third and last, closing the one architectural
+# inconsistency the Delta Report flagged (custom arithmetic duplicating
+# what the engine already does).
 _READINESS_CONFIDENCE = {
     "ready": 0.9,
     "needs_revision": 0.6,
     "not_ready": 0.3,
+    # Fallback weight for a readiness_status the LLM returned that isn't one
+    # of the three above (schemas.py's readiness_status has no enum
+    # constraint — it's a plain `str`, so an empty/unrecognized value is a
+    # real, reachable case, not hypothetical). Matches this table's
+    # pre-refactor `dict.get(status, 0.5)` default exactly — see
+    # _readiness_flags below for how this becomes a one-hot flag like the
+    # other three instead of a second code path.
+    "_unrecognized": 0.5,
 }
+
+
+def _readiness_flags(readiness_status: str) -> dict[str, bool]:
+    """One-hot encode `readiness_status` over `_READINESS_CONFIDENCE`'s
+    keys — exactly one flag is true, so `calculate_weighted_confidence`'s
+    weighted sum reduces to "the weight of whichever tier applies",
+    identical to the plain dict lookup this replaces."""
+    key = readiness_status if readiness_status in _READINESS_CONFIDENCE else "_unrecognized"
+    return {candidate: candidate == key for candidate in _READINESS_CONFIDENCE}
+
+# Per-warning confidence penalty on top of the readiness-based base above —
+# capped so a handful of carried-forward warnings can't push confidence
+# below what the categorical tier itself already implies. Passed as
+# WeightedEvidence.penalty/penalty_reason (the same mechanism
+# code_generation/confidence.py already uses for its own per-violation
+# penalty) rather than computed by hand. These two constants stay local to
+# this agent — like _READINESS_CONFIDENCE, they encode a domain judgment
+# specific to blueprint-readiness review, not a value any other agent
+# would share; only the arithmetic that turns them into a score is shared.
+_WARNING_PENALTY_PER_ITEM = 0.05
+_MAX_WARNING_PENALTY = 0.2
 
 
 def _collect_verification_warnings(
@@ -366,13 +408,27 @@ class EngineeringReviewAgent:
             )
         )
 
-        confidence_score = _READINESS_CONFIDENCE.get(report.readiness_status, 0.5)
-        confidence_reasoning = (
-            f"Readiness status '{report.readiness_status or 'unknown'}' derived from "
-            f"{len(report.completeness_findings)} completeness finding(s), "
-            f"{len(report.risk_assessment)} risk assessment(s), and "
-            f"{len(report.dependency_assessment)} dependency assessment(s) "
-            f"against the Planning/Development/Testing blueprint."
+        # Confidence, via the shared weighted-evidence engine — the same
+        # one Code Generation (app.agents.code_generation.confidence) and
+        # Documentation Planning (agents/documentation_planning/agent.py)
+        # already use. Applied AFTER the deterministic "ready" downgrade
+        # above, so a numeric score is never computed from a readiness
+        # verdict the override hasn't already had a chance to correct.
+        warning_penalty = min(
+            _MAX_WARNING_PENALTY, _WARNING_PENALTY_PER_ITEM * len(prior_verification_warnings)
+        )
+        confidence_score, confidence_reasoning = calculate_weighted_confidence(
+            WeightedEvidence(
+                flags=_readiness_flags(report.readiness_status),
+                weights=_READINESS_CONFIDENCE,
+                penalty=warning_penalty,
+                penalty_reason=(
+                    f"{len(prior_verification_warnings)} carried-forward deterministic "
+                    "verification warning(s)"
+                    if warning_penalty
+                    else ""
+                ),
+            )
         )
 
         logger.info(

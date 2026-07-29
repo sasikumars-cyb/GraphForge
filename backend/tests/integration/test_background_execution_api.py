@@ -223,3 +223,55 @@ async def test_continue_workflow_returns_before_stage_completes(
     # advance_workflow ran (via the background task's on_complete hook)
     # and moved current_stage forward past planning.
     assert completed["current_stage"] == "development"
+
+
+async def test_workflow_title_starts_as_placeholder_then_becomes_ai_generated(
+    client: AsyncClient,
+    slow_planning_agent: _SlowFakeAgent,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """POST /workflows must not block on generate_title() (a real LLM
+    call): the workflow is created with an instant, deterministic
+    placeholder title, and the real title lands via a background task
+    shortly after — see app.orchestrator.background_execution.
+    schedule_title_generation."""
+    from app.agents.title_generation import fallback_title
+
+    generation_started = asyncio.Event()
+
+    async def fake_generate_title(objective: str, *, model: str | None = None) -> str:
+        generation_started.set()
+        return "A Real AI-Generated Title"
+
+    monkeypatch.setattr("app.agents.title_generation.generate_title", fake_generate_title)
+
+    token = await _register_and_get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    objective = "Add a rate limiter to the payment API"
+    create_resp = await client.post(
+        "/api/v1/workflows",
+        headers=headers,
+        json={"title": objective, "workflow_type": "planning"},
+    )
+    assert create_resp.status_code == 202
+    workflow_id = create_resp.json()["workflow_id"]
+
+    # Immediately after creation — before the background title task has
+    # necessarily run — the workflow already carries the deterministic
+    # placeholder, never a blank/pending value.
+    fetched = await client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)
+    initial_title = fetched.json()["title"]
+    assert initial_title == fallback_title(objective)
+
+    completed = await _poll_until(
+        client,
+        f"/api/v1/workflows/{workflow_id}",
+        headers,
+        lambda b: b["title"] == "A Real AI-Generated Title",
+    )
+    assert completed["title"] == "A Real AI-Generated Title"
+    assert generation_started.is_set()
+
+    # Unblock the planning agent so the test doesn't leak a pending task.
+    slow_planning_agent.release.set()

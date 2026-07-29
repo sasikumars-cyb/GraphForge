@@ -188,9 +188,13 @@ class ConfluenceTool:
                     headers={"Accept": "application/json"},
                 )
             if response.status_code == 401:
-                raise ConfluenceApiError("Confluence authentication failed — check email/API token.")
+                raise ConfluenceApiError(
+                    "Confluence authentication failed — check email/API token."
+                )
             if response.status_code == 400:
-                raise ConfluenceApiError(f"Confluence rejected the search query: {response.text[:200]}")
+                raise ConfluenceApiError(
+                    f"Confluence rejected the search query: {response.text[:200]}"
+                )
             response.raise_for_status()
             content_type = response.headers.get("content-type", "")
             if "application/json" not in content_type:
@@ -292,7 +296,9 @@ class ConfluenceTool:
             async with httpx.AsyncClient(
                 auth=(self._email, self._token), timeout=5.0, follow_redirects=True
             ) as client:
-                response = await client.get(f"{self._base_url}/wiki/rest/api/space", params={"limit": 1})
+                response = await client.get(
+                    f"{self._base_url}/wiki/rest/api/space", params={"limit": 1}
+                )
             if response.status_code == 401:
                 return ToolHealth.AUTH_FAILED
             if response.status_code >= 500:

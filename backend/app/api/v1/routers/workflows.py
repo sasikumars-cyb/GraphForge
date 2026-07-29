@@ -27,6 +27,7 @@ from app.api.v1.dependencies import get_current_user
 from app.context.resolvers.freetext import resolve as resolve_freetext
 from app.core.exceptions import AppError, NotFoundError
 from app.core.rate_limit import check_rate_limit
+from app.core.request_context import set_workflow_context
 from app.database.session import get_db_session
 from app.models.run import Run
 from app.models.user import User
@@ -351,7 +352,10 @@ async def create_workflow(
     disconnecting, navigating away, or refreshing. Poll GET
     /workflows/{workflow_id} for progress.
     """
-    from app.orchestrator.background_execution import schedule_run_execution
+    from app.orchestrator.background_execution import (
+        schedule_run_execution,
+        schedule_title_generation,
+    )
     from app.orchestrator.run_coordinator import RunCoordinator
 
     check_rate_limit(
@@ -481,6 +485,12 @@ async def create_workflow(
     run.workflow_stage = stage
     await db.commit()
 
+    # Bound before either background task is created, not inside them: a
+    # task copies its creator's contextvars context at creation time, so
+    # this is what makes both tasks' logs carry the same correlation ids
+    # as the request that scheduled them.
+    set_workflow_context(workflow_id=str(workflow.id), workflow_run_id=str(run.id))
+
     schedule_run_execution(
         run_id=run.id,
         subject=subject,
@@ -491,6 +501,12 @@ async def create_workflow(
         registry=global_registry,
         on_complete=_workflow_stage_finalizer(workflow.id),
     )
+    # Real AI title generation, off the request's critical path — the
+    # workflow already carries a deterministic placeholder title (see
+    # workflow_service.create_workflow) and is durable as of the commit
+    # just above, which is what makes it safe for a separate background
+    # session to fetch it by id.
+    schedule_title_generation(workflow.id, body.title, body.model)
 
     return ContinueWorkflowResponse(
         workflow_id=str(workflow.id),
@@ -737,6 +753,8 @@ async def continue_workflow(
     if previous_run:
         run.previous_run_id = previous_run.id
     await db.commit()
+
+    set_workflow_context(workflow_id=str(workflow.id), workflow_run_id=str(run.id))
 
     schedule_run_execution(
         run_id=run.id,

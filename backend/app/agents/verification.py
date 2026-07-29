@@ -35,6 +35,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from app.agents.normalization import normalize_path, normalize_text, squash, tokenize
+
 # ---------------------------------------------------------------------------
 # 1. Entity / tenant mismatch detection
 # ---------------------------------------------------------------------------
@@ -224,8 +226,6 @@ def find_unindexed_sibling_references(text: str, indexed_repo_names: list[str]) 
 # verification uses for repository/file-path checks, so every deterministic
 # validator in this codebase applies identical normalization rules rather
 # than each keeping its own slightly-different copy.
-
-from app.agents.normalization import normalize_path, normalize_text, squash, tokenize
 
 _normalize = normalize_text  # local alias — kept so existing call sites/tests
 _tokenize = tokenize  # in this module don't all need renaming.

@@ -134,7 +134,10 @@ def format_development_block(result: dict[str, Any] | None) -> str:
 
 def format_engineering_review_block(result: dict[str, Any] | None) -> str:
     if not result:
-        return "### Engineering Review Stage\n(No completed Engineering Review stage result available.)"
+        return (
+            "### Engineering Review Stage\n"
+            "(No completed Engineering Review stage result available.)"
+        )
 
     lines = [
         "### Engineering Review Stage",

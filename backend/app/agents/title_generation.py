@@ -46,9 +46,18 @@ def _looks_like_a_title(text: str) -> bool:
     return bool(text) and len(text) <= _MAX_TITLE_CHARS and "\n" not in text
 
 
-def _fallback_title(objective: str) -> str:
+def fallback_title(objective: str) -> str:
     """Word-boundary-truncated version of the objective — never cuts a
-    word in half, never empty."""
+    word in half, never empty.
+
+    Public (not `_fallback_title`) because `workflow_service.create_workflow`
+    uses this as the *initial* synchronous title — instant and free — before
+    handing the real AI title generation to a background task (see
+    `app.orchestrator.background_execution.schedule_title_generation`).
+    `generate_title` below still falls back to this same function on
+    failure, so a workflow's title is never worse than what it would have
+    shown while waiting synchronously before this change.
+    """
     collapsed = " ".join(objective.split())  # collapse newlines/whitespace
     if not collapsed:
         return "Untitled"
@@ -82,4 +91,4 @@ async def generate_title(objective: str, *, model: str | None = None) -> str:
         )
     except AppError as exc:
         logger.warning("title_generation_failed error=%s falling back to truncated objective", exc)
-    return _fallback_title(objective)
+    return fallback_title(objective)

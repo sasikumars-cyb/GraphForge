@@ -161,6 +161,14 @@ class Settings(BaseSettings):
         default="https://mcp.atlassian.com/v1/mcp/authv2"
     )
 
+    # Off by default: this adds one extra bounded LLM call to every planning
+    # run whose prompt has no deterministic Jira/Confluence/GitHub/repository
+    # reference (see app.context_pipeline.discovery), which is the common
+    # case for a freeform request — enabling it by default would silently
+    # add latency/cost to most runs rather than only the ones that actually
+    # benefit. Turn on once the recommendation quality has been evaluated.
+    enable_context_discovery: bool = Field(default=False)
+
     @model_validator(mode="after")
     def _reject_insecure_defaults_in_production(self) -> "Settings":
         """Fail fast rather than run production on a publicly-known secret.

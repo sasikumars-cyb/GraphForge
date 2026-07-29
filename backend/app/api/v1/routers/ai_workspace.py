@@ -95,7 +95,9 @@ def _build_provider_info(spec: ProviderSpec, config: AIProviderConfig | None) ->
         enabled=config.enabled if config else True,
         api_key_configured=bool(config and config.encrypted_api_key),
         model=config.model if config else None,
-        provider_options=dict(config.provider_options) if config and config.provider_options else {},
+        provider_options=(
+            dict(config.provider_options) if config and config.provider_options else {}
+        ),
         base_url=config.base_url if config else None,
         temperature=config.temperature if config else None,
         max_tokens=config.max_tokens if config else None,

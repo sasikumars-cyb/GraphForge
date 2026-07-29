@@ -217,3 +217,84 @@ def cancel_run(run_id: uuid.UUID) -> bool:
         return False
     task.cancel()
     return True
+
+
+# ---------------------------------------------------------------------------
+# Title generation — same fire-and-forget shape as run execution above, for
+# a much smaller job: one LLM call that only ever patches one column.
+# ---------------------------------------------------------------------------
+#
+# Both `workflow_service.create_workflow()` and `POST /agent-runs`
+# (app.api.v1.routers.agent_runs) used to `await generate_title(...)`
+# before returning, so every workflow/run creation paid a full LLM
+# round-trip in its response latency for a purely cosmetic field — neither
+# response schema returns `title` synchronously in a way that requires the
+# *generated* value (ContinueWorkflowResponse never returns it at all;
+# AgentRunResponse's `title` is populated from whatever is committed by the
+# time the response is built, and now that's the placeholder). Both models
+# (`Workflow`, `Run`) have an identical `id`/`title` shape, so one generic
+# task body serves both — parameterized by which model class to patch,
+# not two near-duplicate task functions.
+#
+# The row is created immediately with the same deterministic fallback
+# `generate_title` already used on failure, and the real title (if
+# generation succeeds) lands in a follow-up UPDATE once the background
+# task finishes — the title is never worse than today's failure-path
+# fallback, and callers that read it afterward simply see whichever value
+# is currently committed.
+
+_title_tasks: set[Any] = set()
+
+
+async def _generate_title_task(
+    model_cls: type[Any], row_id: uuid.UUID, objective: str, model: str | None
+) -> None:
+    from app.agents.title_generation import generate_title
+
+    try:
+        title = await generate_title(objective, model=model)
+    except Exception:
+        # generate_title() itself only raises on a bug in its own fallback
+        # path (it catches AppError internally) — this is defense in depth,
+        # matching _execute_run_task's "never let an exception escape a
+        # detached task" shape.
+        logger.exception(
+            "background_title_generation_failed model=%s id=%s", model_cls.__name__, row_id
+        )
+        return
+
+    async with AsyncSessionLocal() as db:
+        try:
+            row = await db.get(model_cls, row_id)
+            if row is None:
+                # Row was deleted before title generation finished —
+                # nothing to patch, not an error.
+                return
+            row.title = title
+            await db.commit()
+        except Exception:
+            logger.exception(
+                "background_title_persist_failed model=%s id=%s", model_cls.__name__, row_id
+            )
+
+
+def schedule_title_generation(
+    row_id: uuid.UUID,
+    objective: str,
+    model: str | None = None,
+    *,
+    model_cls: type[Any] | None = None,
+) -> Any:
+    """Fire-and-forget the real AI title generation for a just-created
+    Workflow (default) or Run (`model_cls=Run`). Returns the created
+    asyncio.Task (mainly useful for tests)."""
+    import asyncio
+
+    from app.models.workflow import Workflow
+
+    task = asyncio.create_task(
+        _generate_title_task(model_cls or Workflow, row_id, objective, model)
+    )
+    _title_tasks.add(task)
+    task.add_done_callback(_title_tasks.discard)
+    return task

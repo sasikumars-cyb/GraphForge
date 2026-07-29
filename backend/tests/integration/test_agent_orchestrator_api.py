@@ -61,13 +61,19 @@ def _mock_title_generation():
     """Title generation makes a real LLM call via create_llm_provider(); this
     dev environment's .env has real GROQ/OPENAI keys, so leaving this
     unmocked hits the live API on every workflow/run creation in this file
-    (confirmed: caused real 429 rate-limit failures). Identity fallback
-    keeps assertions on workflow/run titles predictable."""
+    (confirmed: caused real 429 rate-limit failures).
+
+    Workflow/run creation itself no longer calls generate_title() at all —
+    both now assign an instant, deterministic placeholder synchronously
+    (app.agents.title_generation.fallback_title) and generate the real
+    title in a background task (app.orchestrator.background_execution.
+    schedule_title_generation) that this fixture's tests never await. That
+    background task still calls the real generate_title(), so it's mocked
+    at its one canonical import location — patching it there covers both
+    the workflow and the agent-run code paths, unlike the two router-level
+    patches this used to need."""
     identity = AsyncMock(side_effect=lambda objective, **_kwargs: objective)
-    with (
-        patch("app.services.workflow_service.generate_title", identity),
-        patch("app.api.v1.routers.agent_runs.generate_title", identity),
-    ):
+    with patch("app.agents.title_generation.generate_title", identity):
         yield
 
 

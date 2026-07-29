@@ -255,7 +255,13 @@ async def test_documentation_planning_agent_confidence_tracks_impact() -> None:
 
 
 @pytest.mark.asyncio
-async def test_documentation_planning_agent_none_impact_lower_confidence() -> None:
+async def test_documentation_planning_agent_confidence_independent_of_llm_impact_label() -> None:
+    """Confidence is evidence-based (app.agents.confidence), never a lookup
+    keyed by the LLM's own `documentation_impact` label — the exact
+    coupling a prior architecture audit flagged (the model choosing the
+    value that then determines how much to trust it). With all three
+    prior stages present and no verification warnings, confidence is 1.0
+    regardless of whether the LLM said "none" or "high" impact."""
     context = _make_context(workflow=_full_workflow())
 
     with patch(
@@ -268,7 +274,56 @@ async def test_documentation_planning_agent_none_impact_lower_confidence() -> No
         output = await agent.run(context)
 
     assert output.result["documentation_impact"] == "none"
-    assert output.confidence.score <= 0.65
+    assert output.confidence.score == 1.0
+    assert "Deterministic confidence" in output.confidence.reasoning
+
+
+async def test_documentation_planning_agent_confidence_drops_with_missing_prior_stage() -> None:
+    """Missing prior-stage context (not the LLM's chosen label) is what
+    lowers confidence."""
+    workflow = _make_workflow(
+        [
+            _make_run("planning", "completed", _planning_result()),
+            _make_run("testing", "completed", _testing_result()),
+            # development stage missing entirely
+        ]
+    )
+    context = _make_context(workflow=workflow)
+
+    with patch(
+        "app.agents.documentation_planning.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(documentation_impact="high")),
+    ):
+        output = await DocumentationPlanningAgent().run(context)
+
+    assert output.confidence.score < 1.0
+
+
+async def test_documentation_planning_agent_confidence_drops_with_verification_warnings() -> None:
+    """A prior stage's own deterministic verification warning lowers
+    confidence even when every stage is otherwise present and the LLM
+    reports high documentation impact."""
+    planning_with_warning = _planning_result()
+    planning_with_warning["verification_warnings"] = [
+        "Repository 'billing-service' cited in this plan was not found among the "
+        "repositories this run's graph traversal actually returned — unverified."
+    ]
+    workflow = _make_workflow(
+        [
+            _make_run("planning", "completed", planning_with_warning),
+            _make_run("development", "completed", _development_result()),
+            _make_run("testing", "completed", _testing_result()),
+        ]
+    )
+    context = _make_context(workflow=workflow)
+
+    with patch(
+        "app.agents.documentation_planning.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(documentation_impact="high")),
+    ):
+        output = await DocumentationPlanningAgent().run(context)
+
+    assert output.confidence.score < 1.0
 
 
 # ---------------------------------------------------------------------------

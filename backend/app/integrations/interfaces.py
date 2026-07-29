@@ -170,7 +170,12 @@ class IGitWriteProvider(ABC):
 
     @abstractmethod
     async def create_branch(
-        self, owner: str, repo: str, branch_name: str, from_sha: str, access_token: str | None = None
+        self,
+        owner: str,
+        repo: str,
+        branch_name: str,
+        from_sha: str,
+        access_token: str | None = None,
     ) -> str:
         """Create a new branch ref from `from_sha`. Returns the new ref's SHA."""
         raise NotImplementedError

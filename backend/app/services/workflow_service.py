@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.agents.title_generation import generate_title
+from app.agents.title_generation import fallback_title
 from app.core.exceptions import NotFoundError
 from app.models.run import Run
 from app.models.workflow import Workflow
@@ -173,8 +173,13 @@ async def create_workflow(
 
     `title` here is the user's full engineering objective (the parameter
     name is kept for API-contract stability) — stored verbatim as
-    `Workflow.original_prompt`, while `Workflow.title` becomes a real,
-    AI-generated short title derived from it.
+    `Workflow.original_prompt`, while `Workflow.title` starts as a
+    deterministic truncated placeholder (see `fallback_title`) and is
+    replaced with a real, AI-generated short title shortly after this
+    call returns, once the caller schedules
+    `background_execution.schedule_title_generation` against the
+    committed row (see that function's docstring for why the scheduling
+    itself doesn't happen in here).
 
     For auto_execution workflows, `source_workflow_id` must reference an
     existing, approved Planning workflow (the blueprint being executed).
@@ -243,7 +248,12 @@ async def create_workflow(
                 error_code="parent_workflow_not_found",
             ) from exc
 
-    generated_title = await generate_title(title)
+    # Instant, deterministic placeholder — never blocks workflow creation on
+    # an LLM round-trip. The router schedules the real AI title generation
+    # as a background task (schedule_title_generation) once this workflow
+    # (and the run that follows it) is actually committed; see that
+    # function's docstring for why it can't be scheduled from in here.
+    generated_title = fallback_title(title)
 
     workflow = Workflow(
         id=uuid.uuid4(),

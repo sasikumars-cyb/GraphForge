@@ -34,7 +34,6 @@ from app.agents.verification import build_evidence_pool, verify_claims
 from app.models.repository import Repository
 from app.models.workflow import Workflow
 
-
 # ---------------------------------------------------------------------------
 # Repository verification
 # ---------------------------------------------------------------------------
@@ -280,7 +279,11 @@ def validate_file_operations(
             )
             continue
 
-        if operation in ("modify", "delete") and known and normalize_path(path) not in known_normalized:
+        if (
+            operation in ("modify", "delete")
+            and known
+            and normalize_path(path) not in known_normalized
+        ):
             violations.append(
                 FileOperationViolation(
                     path=path,

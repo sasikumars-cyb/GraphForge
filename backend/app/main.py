@@ -17,6 +17,7 @@ from app.api.v1.routers import api_router
 from app.core.config import get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import configure_logging
+from app.core.request_id_middleware import RequestIDMiddleware
 from app.database.session import AsyncSessionLocal, engine
 from app.graph.session import close_driver
 from app.orchestrator.background_execution import recover_orphaned_runs
@@ -146,6 +147,10 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    # Added after CORSMiddleware so it becomes the outermost layer (Starlette
+    # runs middlewares in reverse registration order) — the request id must
+    # exist before anything else in the stack has a chance to log.
+    app.add_middleware(RequestIDMiddleware)
 
     register_exception_handlers(app)
 

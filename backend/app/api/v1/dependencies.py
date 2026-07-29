@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.exceptions import ForbiddenError, InvalidTokenError, UnauthorizedError
+from app.core.request_context import set_user_id
 from app.core.security import decode_access_token
 from app.database.session import get_db_session
 from app.integrations.interfaces import IOAuthProvider
@@ -66,6 +67,7 @@ async def get_current_user(
     if user is None or not user.is_active:
         raise InvalidTokenError("User not found or inactive.")
 
+    set_user_id(str(user.id))
     return user
 
 
