@@ -13,6 +13,7 @@ import type { AgentStep, Evidence, WorkflowStageInfo } from "../types/agent";
 type EventKind = Evidence["kind"] | "lifecycle";
 
 export const STAGE_AGENT_LABEL: Record<string, string> = {
+  context_discovery: "Context Discovery Agent",
   planning: "Planning Agent",
   development: "Development Agent",
   testing: "Testing Agent",

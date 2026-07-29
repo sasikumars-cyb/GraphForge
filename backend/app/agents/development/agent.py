@@ -1,14 +1,26 @@
 """Development Agent — Change Planning capability.
 
 Implements the IAgent protocol for goal=develop_change_plan. Every run:
-1. Calls RepositoryDiscoveryTool to discover indexed repos (tool_call evidence).
-2. Calls ComponentDiscoveryTool to find all components and topics (graph_traversal evidence).
-3. Calls DependencyTraversalTool to map edges and cross-repo coupling (graph_traversal evidence).
+1. Reads the Planning stage's full result via get_stage_result().
+2. Reads repositories and components the Context Discovery stage already
+   discovered, via get_stage_result() — see the Context Discovery /
+   Context Explorer architecture review's "Development should not repeat
+   repository/component discovery already performed upstream" principle.
+   Falls back to RepositoryDiscoveryTool/ComponentDiscoveryTool (this
+   agent's own tools) only for a standalone run with no context_discovery
+   stage to read — unchanged from before that stage existed.
+3. Calls DependencyTraversalTool to map edges and cross-repo coupling
+   (graph_traversal evidence) — genuinely incremental: the Context
+   Discovery stage's own graph retrieval ranks repositories/components,
+   it does not traverse dependency edges, so this is Development's own,
+   non-duplicated contribution.
 4. Synthesizes a structured implementation blueprint using the LLM,
-   grounded in the real graph context gathered in steps 1-3 (llm_reasoning evidence).
+   grounded in the graph context gathered above (llm_reasoning evidence).
 
-The agent thinks like a Senior Engineer: Which repos change? Which services?
-Which files? Can something be reused? What could break? What order?
+The agent thinks like a Senior Engineer: Given what exists (Context
+Discovery) and what should be built (Planning), where should changes be
+made? Which files? Can something be reused? What could break? What order?
+It does not rediscover context or redesign the solution.
 
 Inside a workflow, the immediately-prior Planning stage's *full* structured
 result is read directly via get_stage_result() and folded into the prompt
@@ -48,6 +60,7 @@ from app.agents.development.schemas import (
 from app.agents.development.tools import (
     ComponentDiscoveryTool,
     DependencyTraversalTool,
+    DevelopmentObservation,
     RepositoryDiscoveryTool,
     format_graph_context,
     to_evidence,
@@ -254,28 +267,73 @@ class DevelopmentAgent:
             )
 
         # ------------------------------------------------------------------
-        # Step 1 — Discover indexed repositories (tool_call evidence)
+        # Steps 1-2 — Repositories and components. When this run is part of
+        # a workflow, the context_discovery stage has already discovered
+        # these (see the Context Discovery / Context Explorer architecture
+        # review — Development should not repeat repository/component
+        # discovery already performed upstream); read its result via
+        # get_stage_result() and wrap it as a DevelopmentObservation so
+        # format_graph_context()/to_evidence() below work unchanged. Only a
+        # standalone Development run (no workflow, or a workflow whose
+        # context_discovery stage hasn't run) falls back to discovering
+        # them itself, exactly as before this stage existed.
         # ------------------------------------------------------------------
-        repos_tool = RepositoryDiscoveryTool(db=db, graph_repository=graph_repo)
-        repos_obs = await repos_tool.execute()
-        evidence.append(to_evidence(repos_obs, "tool_call"))
+        context_discovery_result = (
+            get_stage_result(workflow, "context_discovery") if workflow else None
+        )
+
+        if context_discovery_result is not None:
+            indexed_repos_raw = context_discovery_result.get("indexed_repositories") or []
+            repos_obs = DevelopmentObservation(
+                tool_name="context_discovery_repositories",
+                summary=(
+                    f"Reused {len(indexed_repos_raw)} indexed repository(ies) already "
+                    "discovered by the Context Discovery stage."
+                ),
+                data={"indexed_repositories": indexed_repos_raw},
+            )
+            components_raw = context_discovery_result.get("graph_components") or []
+            topics_raw = context_discovery_result.get("graph_topics") or []
+            components_obs = DevelopmentObservation(
+                tool_name="context_discovery_components",
+                summary=(
+                    f"Reused {len(components_raw)} component(s) and {len(topics_raw)} "
+                    "topic(s) already discovered by the Context Discovery stage."
+                ),
+                data={"components": components_raw, "kafka_topics": topics_raw},
+            )
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="read_context_discovery_stage",
+                    summary=(
+                        "Read repositories and components from the Context Discovery "
+                        "stage's result via get_stage_result() — see that stage's own "
+                        "Evidence tab for the full discovery trail."
+                    ),
+                )
+            )
+        else:
+            repos_tool = RepositoryDiscoveryTool(db=db, graph_repository=graph_repo)
+            repos_obs = await repos_tool.execute()
+            evidence.append(to_evidence(repos_obs, "tool_call"))
+
+            components_tool = ComponentDiscoveryTool(graph_repository=graph_repo)
+            components_obs = await components_tool.execute(
+                repos_obs.data.get("indexed_repositories", [])
+            )
+            evidence.append(to_evidence(components_obs, "graph_traversal"))
 
         indexed_repos: list[dict[str, str]] = repos_obs.data.get("indexed_repositories", [])
-        logger.info("development_agent_step1 indexed_repo_count=%d", len(indexed_repos))
-
-        # ------------------------------------------------------------------
-        # Step 2 — Discover components (graph_traversal evidence)
-        # ------------------------------------------------------------------
-        components_tool = ComponentDiscoveryTool(graph_repository=graph_repo)
-        components_obs = await components_tool.execute(indexed_repos)
-        evidence.append(to_evidence(components_obs, "graph_traversal"))
-
         component_count = len(components_obs.data.get("components", []))
         topic_count = len(components_obs.data.get("kafka_topics", []))
         logger.info(
-            "development_agent_step2 component_count=%d topic_count=%d",
+            "development_agent_repos_and_components indexed_repo_count=%d "
+            "component_count=%d topic_count=%d source=%s",
+            len(indexed_repos),
             component_count,
             topic_count,
+            "context_discovery" if context_discovery_result is not None else "own_tools",
         )
 
         # ------------------------------------------------------------------

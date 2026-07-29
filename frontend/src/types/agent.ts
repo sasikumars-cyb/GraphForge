@@ -413,9 +413,42 @@ export interface DocumentationPlanResult {
   prior_verification_warnings?: string[];
 }
 
+// --- Context Discovery Result (agent-specific payload inside step.result) ---
+
+export interface ResolvedReferenceResult {
+  type: string;
+  provider: string;
+  confidence: number;
+  raw_value: string;
+  normalized_value: string;
+}
+
+export interface AdditionalContextRecommendationResult {
+  should_search: boolean;
+  capability: string | null;
+  reasoning: string;
+}
+
+export interface ContextDiscoveryResult {
+  original_request: string;
+  enriched_text: string;
+  resolved_references: ResolvedReferenceResult[];
+  indexed_repositories: Record<string, unknown>[];
+  graph_components: Record<string, unknown>[];
+  graph_topics: Record<string, unknown>[];
+  ranked_repository_names: string[];
+  graph_context_text: string;
+  graph_available: boolean;
+  graph_has_data: boolean;
+  additional_context_recommendation: AdditionalContextRecommendationResult | null;
+  planning_metadata: Record<string, unknown>;
+  prompt_version: string;
+}
+
 // --- Workflow Types ---
 
 export type WorkflowStage =
+  | "context_discovery"
   | "planning"
   | "development"
   | "testing"
@@ -519,4 +552,11 @@ export interface ContinueWorkflowResponse {
 export interface WorkflowApprovalResponse {
   workflow_id: string;
   status: string;
+}
+
+export interface OverrideStageResultRequest {
+  // A partial correction, merged on top of the stage's own AgentStep.result
+  // at read time (see get_stage_result on the backend) — only the fields a
+  // human actually changed, never the whole result.
+  override: Record<string, unknown>;
 }

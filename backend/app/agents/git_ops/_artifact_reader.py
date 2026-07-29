@@ -59,15 +59,29 @@ class HasRuns(Protocol):
 
 
 def get_stage_result(workflow: HasRuns, stage: str) -> dict[str, Any] | None:
-    """Return the result dict from the most recent completed run for
-    `stage`, or None if no completed run exists for that stage.
+    """Return the *effective* result dict for the most recent completed
+    run of `stage`, or None if no completed run exists for that stage.
 
-    The result is stored in AgentStep.result (a JSONB column) — the same
-    dict that `_summarize_previous_output` reads from in text mode.
+    The base result is stored in AgentStep.result (a JSONB column) — the
+    same dict that `_summarize_previous_output` reads from in text mode.
+    "Effective" means: if a human overrode part of this stage's output
+    (see the Context Explorer / human-override design), the override is
+    merged on top of the base result here, once, so every caller of this
+    function automatically sees the corrected view without needing to
+    know overrides exist at all. The base `result` itself is never
+    mutated — it stays exactly what the agent produced, which is what
+    keeps confidence calibration (app.models.confidence_calibration)
+    checking a real AI output against the human decision, not an edited
+    one. `human_override` is read via `getattr` with a default of None,
+    not added to `_HasStepResult`'s Protocol, so structural test fakes
+    that predate this field keep satisfying the Protocol unchanged.
     """
     for run in sorted(workflow.runs, key=lambda r: r.created_at, reverse=True):
         if run.workflow_stage == stage and run.status == "completed":
             step = run.steps[0] if run.steps else None
             if step and step.result:
+                override = getattr(step, "human_override", None)
+                if override:
+                    return {**step.result, **override}
                 return dict(step.result)
     return None

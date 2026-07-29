@@ -16,7 +16,7 @@ is the first of several specialized agents coordinated by an Agent Orchestrator.
 graph LR
     UI[Frontend] --> API[FastAPI routers]
     API --> ORCH[Agent Orchestrator]
-    ORCH --> AGENTS[Agents: Review, Planning,<br/>Development, Testing, Engineering Review]
+    ORCH --> AGENTS[Agents: Review, Context Discovery,<br/>Planning, Development, Testing, Engineering Review]
     AGENTS --> DET[Deterministic engine<br/>app/analysis]
     AGENTS --> KG[(Neo4j Knowledge Graph)]
     AGENTS --> LLM[LLM Provider<br/>OpenAI/Gemini]
@@ -40,8 +40,9 @@ backend/app/
   models/          SQLAlchemy ORM — one file per table, strictly separate from schemas/
   schemas/         Pydantic request/response models — matches models/ 1:1 by field name, not by import
   analysis/        deterministic risk/impact engine — no LLM calls anywhere in this package, ever
-  agents/          agent implementations (planning/, development/, testing/, engineering_review/,
-                   code_generation/, git_ops/) plus the frozen Agent Contract (_contract.py)
+  agents/          agent implementations (context_discovery/, planning/, development/, testing/,
+                   engineering_review/, code_generation/, git_ops/) plus the frozen Agent Contract
+                   (_contract.py)
   ai/agent/        the Review Agent's Plan→Tool→Observe→Decide loop, adapted into the framework
                    via app/agents/review_adapter.py
   orchestrator/    Agent Registry, Selector, RunCoordinator

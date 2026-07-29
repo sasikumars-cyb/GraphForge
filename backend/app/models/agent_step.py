@@ -51,6 +51,23 @@ class AgentStep(Base):
     latency_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
+    # Human override — a small, additive sidecar rather than a parallel
+    # persistence model (see the Context Explorer architecture review):
+    # `result` above stays exactly what the agent produced, untouched,
+    # so confidence calibration (app.models.confidence_calibration) keeps
+    # checking a real AI output against the human's approve/reject
+    # decision, never a human-edited one. `human_override` holds only the
+    # fields a human actually changed (a partial dict, merged on top of
+    # `result` at read time — see get_stage_result() in
+    # app.agents.git_ops._artifact_reader); nullable/None means "no
+    # override was made," the overwhelmingly common case. `overridden_by`/
+    # `overridden_at` are the audit trail for when one was.
+    human_override: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    overridden_by_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    overridden_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

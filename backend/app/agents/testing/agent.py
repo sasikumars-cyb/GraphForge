@@ -1,15 +1,31 @@
 """Test Planning Agent — Testing Strategy capability.
 
 Implements the IAgent protocol for goal=plan_tests. Every run:
-1. Calls TestRepositoryDiscoveryTool to discover indexed repos (tool_call evidence).
-2. Calls TestComponentDiscoveryTool to find components and topics (graph_traversal evidence).
-3. Calls TestDependencyTraversalTool to map integration points (graph_traversal evidence).
-4. Synthesizes a structured test plan using the LLM, grounded in the
-   real graph context gathered in steps 1-3 (llm_reasoning evidence).
+1. Reads repositories and components the Context Discovery stage already
+   discovered, via get_stage_result() — see the Context Discovery /
+   Context Explorer architecture review's "do not rediscover repositories
+   or components" principle. Falls back to TestRepositoryDiscoveryTool/
+   TestComponentDiscoveryTool (this agent's own tools) only for a
+   standalone run with no context_discovery stage to read.
+2. Calls TestDependencyTraversalTool to map integration points
+   (graph_traversal evidence). Kept as this agent's own call rather than
+   read from Development's `dependencies` field: Development's field is
+   an LLM-curated subset shaped for architecture narration, not the raw
+   edge/integration-point traversal Testing's own verification checks
+   LLM claims against — reusing it would mean verifying the LLM's test
+   plan against another LLM's earlier output instead of live graph
+   truth, which is a real regression in verification quality, not a
+   harmless dedup. This is genuinely incremental, QA-specific analysis,
+   the same way Development's own dependency traversal is incremental
+   relative to Context Discovery.
+3. Synthesizes a structured test plan using the LLM, grounded in the
+   graph context gathered above (llm_reasoning evidence).
 
-The agent thinks like a Senior QA Lead: What changed? Who depends on it?
-What could break? Which interfaces require integration tests? What edge
-cases are highest risk?
+The agent thinks like a Senior QA Lead: given what changed (Development)
+and what exists (Context Discovery), what must be validated? Who depends
+on it? What could break? Which interfaces require integration tests?
+What edge cases are highest risk? It does not rediscover repositories or
+components already discovered upstream.
 
 Inside a workflow, the Planning and Development stages' *full* structured
 results are read directly via get_stage_result() and folded into the
@@ -58,6 +74,7 @@ from app.agents.testing.schemas import (
 from app.agents.testing.tools import (
     TestComponentDiscoveryTool,
     TestDependencyTraversalTool,
+    TestingObservation,
     TestRepositoryDiscoveryTool,
     format_graph_context,
     to_evidence,
@@ -305,28 +322,68 @@ class TestPlanningAgent:
             )
 
         # ------------------------------------------------------------------
-        # Step 1 — Discover indexed repositories (tool_call evidence)
+        # Steps 1-2 — Repositories and components. Read from the Context
+        # Discovery stage when this run is part of a workflow (see module
+        # docstring); wrapped as a TestingObservation so
+        # format_graph_context()/to_evidence() below work unchanged. Falls
+        # back to this agent's own tools only for a standalone run.
         # ------------------------------------------------------------------
-        repos_tool = TestRepositoryDiscoveryTool(db=db, graph_repository=graph_repo)
-        repos_obs = await repos_tool.execute()
-        evidence.append(to_evidence(repos_obs, "tool_call"))
+        context_discovery_result = (
+            get_stage_result(workflow, "context_discovery") if workflow else None
+        )
+
+        if context_discovery_result is not None:
+            indexed_repos_raw = context_discovery_result.get("indexed_repositories") or []
+            repos_obs = TestingObservation(
+                tool_name="context_discovery_repositories",
+                summary=(
+                    f"Reused {len(indexed_repos_raw)} indexed repository(ies) already "
+                    "discovered by the Context Discovery stage."
+                ),
+                data={"indexed_repositories": indexed_repos_raw},
+            )
+            components_raw = context_discovery_result.get("graph_components") or []
+            topics_raw = context_discovery_result.get("graph_topics") or []
+            components_obs = TestingObservation(
+                tool_name="context_discovery_components",
+                summary=(
+                    f"Reused {len(components_raw)} component(s) and {len(topics_raw)} "
+                    "topic(s) already discovered by the Context Discovery stage."
+                ),
+                data={"components": components_raw, "kafka_topics": topics_raw},
+            )
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="read_context_discovery_stage",
+                    summary=(
+                        "Read repositories and components from the Context Discovery "
+                        "stage's result via get_stage_result() — see that stage's own "
+                        "Evidence tab for the full discovery trail."
+                    ),
+                )
+            )
+        else:
+            repos_tool = TestRepositoryDiscoveryTool(db=db, graph_repository=graph_repo)
+            repos_obs = await repos_tool.execute()
+            evidence.append(to_evidence(repos_obs, "tool_call"))
+
+            components_tool = TestComponentDiscoveryTool(graph_repository=graph_repo)
+            components_obs = await components_tool.execute(
+                repos_obs.data.get("indexed_repositories", [])
+            )
+            evidence.append(to_evidence(components_obs, "graph_traversal"))
 
         indexed_repos: list[dict[str, str]] = repos_obs.data.get("indexed_repositories", [])
-        logger.info("testing_agent_step1 indexed_repo_count=%d", len(indexed_repos))
-
-        # ------------------------------------------------------------------
-        # Step 2 — Discover components (graph_traversal evidence)
-        # ------------------------------------------------------------------
-        components_tool = TestComponentDiscoveryTool(graph_repository=graph_repo)
-        components_obs = await components_tool.execute(indexed_repos)
-        evidence.append(to_evidence(components_obs, "graph_traversal"))
-
         component_count = len(components_obs.data.get("components", []))
         topic_count = len(components_obs.data.get("kafka_topics", []))
         logger.info(
-            "testing_agent_step2 component_count=%d topic_count=%d",
+            "testing_agent_repos_and_components indexed_repo_count=%d "
+            "component_count=%d topic_count=%d source=%s",
+            len(indexed_repos),
             component_count,
             topic_count,
+            "context_discovery" if context_discovery_result is not None else "own_tools",
         )
 
         # ------------------------------------------------------------------

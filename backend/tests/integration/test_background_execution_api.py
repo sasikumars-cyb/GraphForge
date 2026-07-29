@@ -188,7 +188,17 @@ async def test_cancel_completed_run_is_a_no_op(client: AsyncClient) -> None:
 async def test_continue_workflow_returns_before_stage_completes(
     client: AsyncClient,
     slow_planning_agent: _SlowFakeAgent,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    # This test doesn't exercise title generation at all — stub it to a
+    # fast, deterministic no-op so it can't leak a real, slow Bedrock call
+    # into a later test's event loop (background title tasks are
+    # fire-and-forget and outlive this test's own scope otherwise).
+    async def fast_title(objective: str, *, model: str | None = None) -> str:
+        return objective
+
+    monkeypatch.setattr("app.agents.title_generation.generate_title", fast_title)
+
     token = await _register_and_get_token(client)
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -202,6 +212,20 @@ async def test_continue_workflow_returns_before_stage_completes(
     assert body["status"] == "queued"
     workflow_id = body["workflow_id"]
 
+    # context_discovery is real (not swapped for a fake) and runs first —
+    # let it finish before continuing into the stage under test (planning).
+    await _poll_until(
+        client,
+        f"/api/v1/workflows/{workflow_id}",
+        headers,
+        lambda b: b["stages"][0]["status"] == "completed",
+    )
+
+    continue_resp = await client.post(
+        f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+    )
+    assert continue_resp.status_code == 202
+
     assert not slow_planning_agent.release.is_set()
     await asyncio.wait_for(slow_planning_agent.started.wait(), timeout=2)
 
@@ -210,7 +234,7 @@ async def test_continue_workflow_returns_before_stage_completes(
     mid_flight = await client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)
     mid_body = mid_flight.json()
     assert mid_body["current_stage"] == "planning"
-    assert mid_body["stages"][0]["status"] in ("queued", "running")
+    assert mid_body["stages"][1]["status"] in ("queued", "running")
 
     slow_planning_agent.release.set()
 
@@ -218,7 +242,7 @@ async def test_continue_workflow_returns_before_stage_completes(
         client,
         f"/api/v1/workflows/{workflow_id}",
         headers,
-        lambda b: b["stages"][0]["status"] == "completed",
+        lambda b: b["stages"][1]["status"] == "completed",
     )
     # advance_workflow ran (via the background task's on_complete hook)
     # and moved current_stage forward past planning.

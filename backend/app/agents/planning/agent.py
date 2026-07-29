@@ -1,33 +1,40 @@
 """Planning Agent — PW-4.
 
 Implements the IAgent protocol for goal=plan_freeform. Every run:
-1. Hands the raw request to `ContextResolutionPipeline.resolve()`, which
-   detects references (Jira/Confluence/GitHub/repository), resolves them
-   through the matching provider, retrieves Knowledge Graph context, and
-   returns a single `EnrichedPlanningRequest` — the tool_call and
-   graph_traversal Evidence entries below are produced by that pipeline,
-   not by this agent.
+1. Resolves context via `_resolve_context()` (below) — inside a workflow,
+   that means reading the context_discovery stage's already-persisted
+   result via `get_stage_result()`, exactly like Development, Testing,
+   Documentation Planning, and Engineering Review already read Planning's
+   own result. A standalone run (no workflow) still calls
+   `ContextResolutionPipeline.resolve()` directly, unchanged from before
+   the Context Discovery stage existed — see the Context Discovery /
+   Context Explorer architecture review for why the split is drawn there.
 2. Runs deterministic verification of the resolved graph data against
-   whatever the LLM later claims (still owned by this agent — it's part
-   of judging the *plan*, not part of resolving context).
-3. Synthesizes an implementation plan using the LLM, grounded in the
-   pipeline's graph context (llm_reasoning evidence).
+   whatever the LLM later claims (owned by this agent — it's part of
+   judging the *plan*, not part of resolving context).
+3. Synthesizes an implementation plan using the LLM, grounded in that
+   graph context (llm_reasoning evidence).
 
 This agent has no reference-detection, provider-selection, or tool-
-dispatch code of its own anymore (see `app.context_pipeline` for all of
-that) — its own Plan -> Select Tool -> Execute -> Observe -> Decide loop
-is now scoped entirely to reasoning over an already-enriched request,
-the same five-state shape the Review Agent uses internally, applied here
-to planning rather than review. No retry is implemented in this phase
-(unlike the Review Agent's confidence-triggered retry) — a single pass
-always runs to completion, aside from the bounded reflection pass below.
+dispatch code of its own (see `app.context_pipeline`, now driven by the
+context_discovery stage rather than called from here directly) — its own
+Plan -> Select Tool -> Execute -> Observe -> Decide loop is scoped
+entirely to reasoning over an already-resolved request: understanding
+it, evaluating the discovered context, and producing a blueprint. It does
+not perform repository discovery itself. The same five-state shape the
+Review Agent uses internally, applied here to planning rather than
+review. No retry is implemented in this phase (unlike the Review Agent's
+confidence-triggered retry) — a single pass always runs to completion,
+aside from the bounded reflection pass below.
 
 The key demonstration requirement (RAJAN_PACKAGE.md): at least one
 Evidence entry must be kind="graph_traversal" or kind="tool_call". This
-is guaranteed: the pipeline's repository lookup always produces a
-tool_call entry and its graph traversal always produces a
-graph_traversal entry, even if those queries return empty results
-(empty = real graph query, just no data yet).
+is guaranteed on both paths: the workflow path's own
+"read_context_discovery_stage" entry is itself kind="tool_call"; the
+standalone path's repository lookup always produces a tool_call entry
+and its graph traversal always produces a graph_traversal entry, even
+when those queries return empty results (empty = real graph query, just
+no data yet).
 """
 
 from __future__ import annotations
@@ -36,6 +43,7 @@ import contextlib
 import logging
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +57,7 @@ from app.agents._contract import (
     Evidence,
 )
 from app.agents.blueprint.factory import BlueprintFactory
+from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.llm import STAGE_PLANNING, invoke_llm_json, stage_for
 from app.agents.planning.classifier import PlanningProfile, analyse, pattern_for_key
 from app.agents.planning.schemas import (
@@ -353,6 +362,107 @@ def _parse_llm_response(
 
 
 # ---------------------------------------------------------------------------
+# Context resolution — read the Context Discovery stage's output when this
+# run is part of a workflow; only actually *run* discovery (via the Context
+# Resolution Pipeline) for a standalone Planning run, which has no prior
+# stage to read. See the Context Discovery / Context Explorer architecture
+# review: Planning no longer discovers context itself inside a workflow —
+# that responsibility now belongs entirely to the context_discovery stage.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class _ResolvedContext:
+    """The handful of fields `run()` actually needs, regardless of which
+    of the two paths below produced them."""
+
+    task_description: str
+    profile: PlanningProfile
+    indexed_repos: list[dict[str, Any]]
+    graph_components: list[dict[str, Any]]
+    graph_topics: list[dict[str, Any]]
+    ranked_repo_names: list[str]
+    graph_context_text: str
+    graph_available: bool
+    graph_has_data: bool
+    evidence: list[Evidence]
+
+
+async def _resolve_context(context: AgentContext, db: AsyncSession) -> _ResolvedContext:
+    raw_request: str = context.subject.display_name
+    workflow = context.extras.get("workflow")
+
+    context_discovery_result = get_stage_result(workflow, "context_discovery") if workflow else None
+
+    if context_discovery_result is not None:
+        # Workflow path — the normal case going forward. The context_
+        # discovery stage already did every reference-detection/Jira/
+        # Confluence/GitHub/graph-retrieval call; re-derive only `profile`,
+        # a pure, cheap, deterministic function of the enriched text (no
+        # I/O, no LLM call) — see ContextDiscoveryResult's own docstring
+        # for why the profile itself isn't persisted and re-parsed instead.
+        enriched_text = context_discovery_result.get("enriched_text", raw_request)
+        logger.info(
+            "planning_agent_context_read_from_stage indexed_repo_count=%d "
+            "component_count=%d topic_count=%d",
+            len(context_discovery_result.get("indexed_repositories") or []),
+            len(context_discovery_result.get("graph_components") or []),
+            len(context_discovery_result.get("graph_topics") or []),
+        )
+        return _ResolvedContext(
+            task_description=enriched_text,
+            profile=analyse(enriched_text),
+            indexed_repos=context_discovery_result.get("indexed_repositories") or [],
+            graph_components=context_discovery_result.get("graph_components") or [],
+            graph_topics=context_discovery_result.get("graph_topics") or [],
+            ranked_repo_names=context_discovery_result.get("ranked_repository_names") or [],
+            graph_context_text=context_discovery_result.get("graph_context_text") or "",
+            graph_available=bool(context_discovery_result.get("graph_available")),
+            graph_has_data=bool(context_discovery_result.get("graph_has_data")),
+            evidence=[
+                Evidence(
+                    kind="tool_call",
+                    reference="read_context_discovery_stage",
+                    summary=(
+                        "Read the Context Discovery stage's result via "
+                        "get_stage_result() — see that stage's own Evidence tab "
+                        "for the full discovery trail (references detected, "
+                        "sources resolved, graph traversal)."
+                    ),
+                )
+            ],
+        )
+
+    # Standalone path — no workflow, or a workflow whose context_discovery
+    # stage hasn't run (shouldn't happen for a "planning"-type workflow,
+    # since it's always the first stage, but fails open rather than
+    # crashing if it somehow does). Unchanged from before this stage
+    # existed: run discovery directly.
+    enriched_request = await ContextResolutionPipeline().resolve(
+        raw_request=raw_request,
+        db=db,
+        graph_repo_override=context.extras.get("graph_repository"),
+        user_id=context.extras.get("user_id"),
+        model=context.model,
+        extras=context.extras,
+    )
+    return _ResolvedContext(
+        task_description=enriched_request.enriched_text,
+        profile=enriched_request.profile,
+        indexed_repos=enriched_request.indexed_repositories,
+        graph_components=enriched_request.graph_components,
+        graph_topics=enriched_request.graph_topics,
+        ranked_repo_names=enriched_request.ranked_repository_names,
+        graph_context_text=enriched_request.graph_context_text,
+        graph_available=enriched_request.graph_available,
+        graph_has_data=enriched_request.graph_has_data,
+        # Own copy: the agent appends its own reasoning/verification
+        # evidence below without mutating the pipeline's returned list.
+        evidence=list(enriched_request.evidence),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Planning Agent
 # ---------------------------------------------------------------------------
 
@@ -370,12 +480,14 @@ class PlanningAgent:
         # "Task Description" field shows the original request, not a
         # multi-paragraph ticket dump. Everything downstream of the raw
         # request (reference detection, Jira/Confluence/GitHub enrichment,
-        # capability classification, graph retrieval) now happens in the
-        # Context Resolution Pipeline (see app.context_pipeline) — this
-        # agent consumes only its output, `EnrichedPlanningRequest`, and
-        # has no idea whether any given artifact came from Jira,
-        # Confluence, GitHub, the Knowledge Graph, or a provider that
-        # doesn't exist yet.
+        # capability classification, graph retrieval) is the Context
+        # Discovery stage's job now, not this agent's — see
+        # `_resolve_context` above. Inside a workflow, Planning consumes
+        # that stage's already-persisted result via get_stage_result(),
+        # exactly like Development/Testing/Documentation Planning/
+        # Engineering Review already consume Planning's own result. A
+        # standalone Planning run (no workflow) still runs discovery
+        # itself, unchanged from before this stage existed.
         original_task_description: str = context.subject.display_name
         subject_id: str = context.subject.subject_id
 
@@ -391,34 +503,26 @@ class PlanningAgent:
         # workflow_stage when it has one, else this agent's own default.
         stage = stage_for(context.extras, STAGE_PLANNING)
 
-        enriched_request = await ContextResolutionPipeline().resolve(
-            raw_request=original_task_description,
-            db=db,
-            graph_repo_override=context.extras.get("graph_repository"),
-            user_id=context.extras.get("user_id"),
-            model=context.model,
-            extras=context.extras,
-        )
+        resolved = await _resolve_context(context, db)
         # Own copy: the agent appends its own reasoning/verification
-        # evidence below without mutating the pipeline's returned list.
-        evidence: list[Evidence] = list(enriched_request.evidence)
+        # evidence below without mutating `resolved.evidence`.
+        evidence: list[Evidence] = list(resolved.evidence)
 
-        task_description = enriched_request.enriched_text
-        profile = enriched_request.profile
-        indexed_repos: list[dict[str, Any]] = enriched_request.indexed_repositories
-        graph_components: list[dict[str, Any]] = enriched_request.graph_components
-        graph_topics: list[dict[str, Any]] = enriched_request.graph_topics
-        ranked_repo_names: list[str] = enriched_request.ranked_repository_names
+        task_description = resolved.task_description
+        profile = resolved.profile
+        indexed_repos: list[dict[str, Any]] = resolved.indexed_repos
+        graph_components: list[dict[str, Any]] = resolved.graph_components
+        graph_topics: list[dict[str, Any]] = resolved.graph_topics
+        ranked_repo_names: list[str] = resolved.ranked_repo_names
         component_count = len(graph_components)
         topic_count = len(graph_topics)
 
         logger.info(
             "planning_agent_context_resolved indexed_repo_count=%d component_count=%d "
-            "topic_count=%d reference_count=%d",
+            "topic_count=%d",
             len(indexed_repos),
             component_count,
             topic_count,
-            len(enriched_request.resolved_references),
         )
 
         # ------------------------------------------------------------------
@@ -488,8 +592,8 @@ class PlanningAgent:
         # ------------------------------------------------------------------
         # Observe: determine confidence based on what the graph returned
         # ------------------------------------------------------------------
-        graph_unavailable = not enriched_request.graph_available
-        has_graph_data = enriched_request.graph_has_data
+        graph_unavailable = not resolved.graph_available
+        has_graph_data = resolved.graph_has_data
         if graph_unavailable:
             base_confidence = 0.25
         elif has_graph_data:
@@ -502,9 +606,10 @@ class PlanningAgent:
 
         # ------------------------------------------------------------------
         # Synthesize: LLM call with real graph context, already resolved
-        # and normalized by the Context Resolution Pipeline.
+        # and normalized by the Context Discovery stage (or, for a
+        # standalone run, the Context Resolution Pipeline directly).
         # ------------------------------------------------------------------
-        graph_context_text = enriched_request.graph_context_text
+        graph_context_text = resolved.graph_context_text
         prompt = _render_prompt(task_description, graph_context_text, profile)
 
         logger.info(

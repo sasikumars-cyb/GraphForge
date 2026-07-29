@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
@@ -79,6 +79,14 @@ class CreateWorkflowRequest(BaseModel):
 
 class ContinueWorkflowRequest(BaseModel):
     model: str | None = None
+
+
+class OverrideStageResultRequest(BaseModel):
+    # A partial dict — only the fields the human actually changed (e.g.
+    # {"ranked_repository_names": [...]}) — merged on top of the stage's
+    # own AgentStep.result at read time, never overwriting it. See
+    # workflow_service.override_stage_result's docstring.
+    override: dict[str, Any]
 
 
 class WorkflowRunResponse(BaseModel):
@@ -397,8 +405,9 @@ async def create_workflow(
         user_id=user.id,
     )
 
-    # Execute the first stage of this workflow_type's sequence (today,
-    # "planning" either way — legacy_sdlc and planning both start there).
+    # Execute the first stage of this workflow_type's sequence — "planning"
+    # workflows now start at "context_discovery" (see WORKFLOW_TYPE_STAGES),
+    # legacy_sdlc still starts at "planning" directly, unchanged.
     stage = workflow_service.stage_sequence(body.workflow_type)[0]
     goal = workflow_service.STAGE_GOALS[stage]
 
@@ -820,6 +829,39 @@ async def cancel_workflow_run(
         in_flight_run.completed_at = datetime.now(UTC)
         await db.commit()
 
+    return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)
+
+
+@router.patch("/{workflow_id}/stages/{stage}/override", response_model=WorkflowApprovalResponse)
+async def override_stage_result(
+    workflow_id: str,
+    stage: str,
+    body: OverrideStageResultRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> WorkflowApprovalResponse:
+    """Human correction on a completed stage's result — the mechanism
+    behind Context Explorer's review/edit UI (see the Context Discovery /
+    Context Explorer architecture review). Reuses the existing approval
+    lifecycle entirely: this only ever adjusts what the *next* stage will
+    read via get_stage_result() when the human then approves/continues
+    exactly as they already do for any other stage transition. It is not
+    itself a stage transition, a new workflow status, or a new approval
+    mechanism — the workflow's `current_stage`/`status` are untouched.
+
+    Named generically (`{stage}/override`), not `context-discovery/
+    override` specifically, since nothing about the mechanism is
+    Context-Discovery-only — any stage whose downstream consumer reads it
+    via get_stage_result() can be corrected the same way.
+    """
+    try:
+        wid = uuid.UUID(workflow_id)
+    except ValueError as exc:
+        raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
+
+    workflow = await workflow_service.get_workflow_for_update(db, wid, user_id=user.id)
+    await workflow_service.override_stage_result(db, workflow, stage, body.override, user.id)
+    await db.commit()
     return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)
 
 

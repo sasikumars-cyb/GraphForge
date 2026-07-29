@@ -14,6 +14,8 @@ import logging
 
 from app.agents.code_generation.agent import CodeGenerationAgent
 from app.agents.code_generation.manifest import CODE_GENERATION_MANIFEST
+from app.agents.context_discovery.agent import ContextDiscoveryAgent
+from app.agents.context_discovery.manifest import CONTEXT_DISCOVERY_MANIFEST
 from app.agents.development.agent import DevelopmentAgent
 from app.agents.development.manifest import DEVELOPMENT_MANIFEST
 from app.agents.documentation_planning.agent import DocumentationPlanningAgent
@@ -52,6 +54,10 @@ def register_agents() -> None:
     if "review" not in existing_ids:
         global_registry.register(REVIEW_MANIFEST, ReviewAgentAdapter())
         logger.info("registered_review_agent")
+
+    if "context_discovery" not in existing_ids:
+        global_registry.register(CONTEXT_DISCOVERY_MANIFEST, ContextDiscoveryAgent())
+        logger.info("registered_context_discovery_agent")
 
     if "planning" not in existing_ids:
         global_registry.register(PLANNING_MANIFEST, PlanningAgent())

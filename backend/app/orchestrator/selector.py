@@ -25,6 +25,7 @@ if TYPE_CHECKING:
 # Goal constants — import these instead of using raw strings
 # ---------------------------------------------------------------------------
 GOAL_REVIEW_PR = "review_pr"
+GOAL_DISCOVER_CONTEXT = "discover_context"
 GOAL_PLAN_FREEFORM = "plan_freeform"
 GOAL_DEVELOP_CHANGE_PLAN = "develop_change_plan"
 GOAL_PLAN_TESTS = "plan_tests"

@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -42,6 +43,7 @@ STAGES = ("planning", "development", "testing", "review")
 WORKFLOW_TYPE_STAGES: dict[str, tuple[str, ...]] = {
     "legacy_sdlc": STAGES,
     "planning": (
+        "context_discovery",
         "planning",
         "development",
         "testing",
@@ -67,6 +69,7 @@ TERMINAL_BEHAVIOR: dict[str, str] = {
 }
 
 STAGE_GOALS: dict[str, str] = {
+    "context_discovery": "discover_context",
     "planning": "plan_freeform",
     "development": "develop_change_plan",
     "testing": "plan_tests",
@@ -82,6 +85,7 @@ STAGE_GOALS: dict[str, str] = {
 }
 
 STAGE_LABELS: dict[str, str] = {
+    "context_discovery": "Context Discovery",
     "planning": "Planning",
     "development": "Development",
     "testing": "Testing",
@@ -551,3 +555,47 @@ async def reject_workflow(db: AsyncSession, workflow: Workflow) -> None:
     await _record_confidence_calibration(db, workflow, "rejected")
     await db.flush()
     logger.info("workflow_rejected id=%s", str(workflow.id))
+
+
+async def override_stage_result(
+    db: AsyncSession,
+    workflow: Workflow,
+    stage: str,
+    override: dict[str, Any],
+    user_id: uuid.UUID,
+) -> None:
+    """Record a human correction on top of a completed stage's AgentStep,
+    without touching the AI's own output (see the human-override design in
+    the Context Discovery / Context Explorer architecture review).
+
+    `override` is a *partial* dict — only the fields the human actually
+    changed — merged on top of `AgentStep.result` at read time by
+    `get_stage_result()` (app.agents.git_ops._artifact_reader), never
+    written into `result` itself. This is what keeps confidence
+    calibration (app.models.confidence_calibration) checking a real,
+    unedited AI output against the human's later approve/reject decision.
+
+    Raises NotFoundError if no completed run exists for `stage` — there is
+    nothing to override yet.
+    """
+    step = None
+    for run in sorted(workflow.runs, key=lambda r: r.created_at, reverse=True):
+        if run.workflow_stage == stage and run.status == "completed":
+            step = run.steps[0] if run.steps else None
+            break
+
+    if step is None:
+        raise NotFoundError(
+            f"No completed '{stage}' stage result exists on this workflow to override."
+        )
+
+    step.human_override = override
+    step.overridden_by_user_id = user_id
+    step.overridden_at = datetime.now(UTC)
+    await db.flush()
+    logger.info(
+        "workflow_stage_result_overridden id=%s stage=%s overridden_by=%s",
+        str(workflow.id),
+        stage,
+        str(user_id),
+    )

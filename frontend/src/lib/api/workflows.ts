@@ -6,6 +6,7 @@ import { apiFetch } from "./client";
 import type {
   ContinueWorkflowResponse,
   CreateWorkflowRequest,
+  OverrideStageResultRequest,
   WorkflowApprovalResponse,
   WorkflowDetail,
   WorkflowListResponse,
@@ -95,6 +96,30 @@ export function deleteWorkflow(token: string, workflowId: string): Promise<undef
     method: "DELETE",
     token,
   });
+}
+
+/** Human correction on a completed stage's result — the mechanism behind
+ * Context Explorer's review/edit UI. `override` is a partial dict (only the
+ * fields the human actually changed); the backend merges it on top of that
+ * stage's own AgentStep.result at read time, so downstream stages (e.g.
+ * Planning reading context_discovery) see the corrected view. Named
+ * generically since any stage a downstream consumer reads via
+ * get_stage_result() can be corrected the same way, not just
+ * context_discovery. */
+export function overrideStageResult(
+  token: string,
+  workflowId: string,
+  stage: string,
+  request: OverrideStageResultRequest,
+): Promise<WorkflowApprovalResponse> {
+  return apiFetch<WorkflowApprovalResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/stages/${encodeURIComponent(stage)}/override`,
+    {
+      method: "PATCH",
+      token,
+      body: request,
+    },
+  );
 }
 
 export function cancelWorkflow(

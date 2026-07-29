@@ -92,6 +92,7 @@ logger = logging.getLogger(__name__)
 # `ai_pr_review`), which is exactly why an agent must not simply pass its
 # own agent_id here.
 
+STAGE_CONTEXT_DISCOVERY = "context_discovery"
 STAGE_PLANNING = "planning"
 STAGE_DEVELOPMENT = "development"
 STAGE_TESTING = "testing"
@@ -109,6 +110,7 @@ STAGE_GENERATE_CODE = "generate_code"
 # of reporting the raw env provider and being wrong whenever a stage override
 # or profile applies.
 _AGENT_DEFAULT_STAGE: dict[str, str] = {
+    "context_discovery": STAGE_CONTEXT_DISCOVERY,
     "planning": STAGE_PLANNING,
     "development": STAGE_DEVELOPMENT,
     "testing": STAGE_TESTING,

@@ -393,40 +393,61 @@ async def test_create_workflow_happy_path(client: AsyncClient) -> None:
         )
         assert response.status_code == 202
         body = response.json()
-        assert body["stage"] == "planning"
+        # context_discovery is now the first stage of a "planning"-type
+        # workflow (see WORKFLOW_TYPE_STAGES) — it runs before planning,
+        # not instead of it.
+        assert body["stage"] == "context_discovery"
         assert body["status"] == "queued"
         workflow_id = body["workflow_id"]
 
-        detail = await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
+        detail = await _poll_workflow_stage_until_terminal(
+            client, workflow_id, "context_discovery", headers
+        )
 
-    assert detail["current_stage"] == "development"
+    assert detail["current_stage"] == "planning"
     stages_by_name = {s["stage"]: s for s in detail["stages"]}
-    assert stages_by_name["planning"]["status"] == "completed"
-    assert stages_by_name["planning"]["run_id"] == body["run_id"]
-    assert stages_by_name["development"]["status"] == "pending"
-    assert stages_by_name["development"]["run_id"] is None
+    assert stages_by_name["context_discovery"]["status"] == "completed"
+    assert stages_by_name["context_discovery"]["run_id"] == body["run_id"]
+    assert stages_by_name["planning"]["status"] == "pending"
+    assert stages_by_name["planning"]["run_id"] is None
 
 
 async def test_continue_workflow_happy_path(client: AsyncClient) -> None:
     token = await _register_unique_and_get_token(client)
     headers = {"Authorization": f"Bearer {token}"}
 
+    # Stage 1: context_discovery — runs automatically on creation, no LLM
+    # call of its own in this test (no Jira/Confluence/GitHub reference in
+    # the title, and enable_context_discovery defaults to False), only the
+    # Neo4j graph tool it shares with every other graph-reading agent.
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
-        ),
-        patch(
-            "app.agents.planning.agent._call_llm",
-            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
         ),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
         )
         workflow_id = create_response.json()["workflow_id"]
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "context_discovery", headers)
+
+    # Stage 2: planning — now reads context_discovery's result via
+    # get_stage_result() rather than calling the Neo4j tool itself, so no
+    # Neo4j mock is needed here, only its own LLM call.
+    with patch(
+        "app.agents.planning.agent._call_llm",
+        new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+    ):
+        continue_response = await client.post(
+            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+        )
+        assert continue_response.status_code == 202
+        assert continue_response.json()["stage"] == "planning"
+
         await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
 
+    # Stage 3: development
     with (
         patch("app.agents.development.agent.get_driver", return_value=MagicMock()),
         patch("app.agents.development.agent.Neo4jGraphRepository", return_value=MagicMock()),
@@ -448,7 +469,7 @@ async def test_continue_workflow_happy_path(client: AsyncClient) -> None:
     stages_by_name = {s["stage"]: s for s in detail["stages"]}
     assert detail["current_stage"] == "testing"
     assert stages_by_name["development"]["status"] == "completed"
-    assert len(detail["runs"]) == 2
+    assert len(detail["runs"]) == 3
 
 
 async def test_continue_workflow_failed_stage_is_linked_to_workflow(client: AsyncClient) -> None:
@@ -469,15 +490,21 @@ async def test_continue_workflow_failed_stage_is_linked_to_workflow(client: Asyn
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
         ),
-        patch(
-            "app.agents.planning.agent._call_llm",
-            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
-        ),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
         )
         workflow_id = create_response.json()["workflow_id"]
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "context_discovery", headers)
+
+    with patch(
+        "app.agents.planning.agent._call_llm",
+        new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+    ):
+        continue_response = await client.post(
+            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+        )
+        assert continue_response.status_code == 202
         await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
 
     with (
@@ -539,10 +566,6 @@ async def test_create_workflow_planning_failure_is_linked_and_error_preserved(
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
         ),
-        patch(
-            "app.agents.planning.agent._call_llm",
-            new=AsyncMock(side_effect=PlanningLLMError(rate_limit_message)),
-        ),
     ):
         response = await client.post(
             "/api/v1/workflows",
@@ -551,6 +574,17 @@ async def test_create_workflow_planning_failure_is_linked_and_error_preserved(
         )
         assert response.status_code == 202
         workflow_id = response.json()["workflow_id"]
+
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "context_discovery", headers)
+
+    with patch(
+        "app.agents.planning.agent._call_llm",
+        new=AsyncMock(side_effect=PlanningLLMError(rate_limit_message)),
+    ):
+        continue_response = await client.post(
+            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+        )
+        assert continue_response.status_code == 202
 
         detail = await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
 
@@ -596,16 +630,14 @@ async def test_workflow_not_visible_or_mutable_by_a_different_user(client: Async
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
         ),
-        patch(
-            "app.agents.planning.agent._call_llm",
-            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
-        ),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Owner-only workflow"}, headers=owner_headers
         )
         workflow_id = create_response.json()["workflow_id"]
-        await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", owner_headers)
+        await _poll_workflow_stage_until_terminal(
+            client, workflow_id, "context_discovery", owner_headers
+        )
 
     # A different, unrelated user must not be able to read it...
     get_response = await client.get(f"/api/v1/workflows/{workflow_id}", headers=other_headers)
@@ -667,3 +699,126 @@ async def test_run_not_visible_or_mutable_by_a_different_user(client: AsyncClien
 
     owner_get_response = await client.get(f"/api/v1/agent-runs/{run_id}", headers=owner_headers)
     assert owner_get_response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# PATCH /workflows/{id}/stages/{stage}/override — human-override mechanism
+# ---------------------------------------------------------------------------
+
+
+async def test_override_context_discovery_result_is_consumed_by_planning(
+    client: AsyncClient,
+) -> None:
+    """End-to-end: a human-corrected indexed_repositories list, applied via
+    PATCH .../stages/context_discovery/override after context_discovery
+    completes, must be what Planning's prompt actually reflects when the
+    workflow is continued — not the AI's original (uncorrected) output.
+    Exercises the full get_stage_result() override-merge path over real
+    HTTP/DB, not just the unit-level merge in test_context_override.py."""
+    token = await _register_unique_and_get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+    ):
+        create_response = await client.post(
+            "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
+        )
+        workflow_id = create_response.json()["workflow_id"]
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "context_discovery", headers)
+
+    override = {
+        "indexed_repositories": [
+            {"id": "corrected-id", "name": "corrected-service", "owner": "acme"}
+        ],
+        # Planning's prompt is built from graph_context_text directly (not
+        # re-derived from indexed_repositories), so a correction that should
+        # actually reach the prompt must include it too — the override is a
+        # partial merge, not a re-derivation.
+        "graph_context_text": "Indexed repositories: corrected-service (acme).",
+    }
+    override_response = await client.patch(
+        f"/api/v1/workflows/{workflow_id}/stages/context_discovery/override",
+        json={"override": override},
+        headers=headers,
+    )
+    assert override_response.status_code == 200
+    assert override_response.json()["workflow_id"] == workflow_id
+
+    captured_prompt: dict[str, str] = {}
+
+    async def _capture_prompt(user_prompt: str, **_kwargs: object) -> str:
+        captured_prompt["prompt"] = user_prompt
+        return _PLANNING_LLM_RESPONSE
+
+    with patch("app.agents.planning.agent._call_llm", new=_capture_prompt):
+        continue_response = await client.post(
+            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+        )
+        assert continue_response.status_code == 202
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
+
+    assert "corrected-service" in captured_prompt["prompt"], (
+        "Planning must consume the overridden context_discovery result, "
+        "not the AI's original (uncorrected) indexed repository."
+    )
+
+
+async def test_override_stage_result_404s_for_a_stage_that_never_completed(
+    client: AsyncClient,
+) -> None:
+    token = await _register_unique_and_get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+    ):
+        create_response = await client.post(
+            "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
+        )
+        workflow_id = create_response.json()["workflow_id"]
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "context_discovery", headers)
+
+    # "planning" hasn't run yet — nothing to override.
+    response = await client.patch(
+        f"/api/v1/workflows/{workflow_id}/stages/planning/override",
+        json={"override": {"executive_summary": "Edited."}},
+        headers=headers,
+    )
+    assert response.status_code == 404
+
+
+async def test_override_stage_result_not_visible_or_mutable_by_a_different_user(
+    client: AsyncClient,
+) -> None:
+    owner_token = await _register_unique_and_get_token(client)
+    owner_headers = {"Authorization": f"Bearer {owner_token}"}
+    other_token = await _register_unique_and_get_token(client)
+    other_headers = {"Authorization": f"Bearer {other_token}"}
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+    ):
+        create_response = await client.post(
+            "/api/v1/workflows", json={"title": "Owner-only workflow"}, headers=owner_headers
+        )
+        workflow_id = create_response.json()["workflow_id"]
+        await _poll_workflow_stage_until_terminal(
+            client, workflow_id, "context_discovery", owner_headers
+        )
+
+    response = await client.patch(
+        f"/api/v1/workflows/{workflow_id}/stages/context_discovery/override",
+        json={"override": {"indexed_repositories": []}},
+        headers=other_headers,
+    )
+    assert response.status_code == 404

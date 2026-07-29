@@ -6,7 +6,7 @@ This document explains how GraphForge actually works today: what each part of th
 
 ## Overview
 
-GraphForge is a single-tenant web application: a React SPA frontend, a FastAPI backend, PostgreSQL as the primary datastore, and Neo4j as a dedicated graph store for codebase architecture. The backend orchestrates multi-stage AI-agent "workflows" (Planning → Development → Testing → Documentation Planning → Engineering Review) that call out to a pluggable set of LLM providers (Bedrock, OpenAI, Gemini, Groq), and integrates with GitHub (repository access, pull requests, webhooks) and, via a generic MCP-based tool layer, Jira/Confluence.
+GraphForge is a single-tenant web application: a React SPA frontend, a FastAPI backend, PostgreSQL as the primary datastore, and Neo4j as a dedicated graph store for codebase architecture. The backend orchestrates multi-stage AI-agent "workflows" (Context Discovery → Planning → Development → Testing → Documentation Planning → Engineering Review) that call out to a pluggable set of LLM providers (Bedrock, OpenAI, Gemini, Groq), and integrates with GitHub (repository access, pull requests, webhooks) and, via a generic MCP-based tool layer, Jira/Confluence.
 
 ```mermaid
 flowchart LR
@@ -125,7 +125,7 @@ A **Workflow** (`app/models/workflow.py`, table `workflows`) groups a sequence o
 | `workflow_type` | Stages |
 |---|---|
 | `legacy_sdlc` | the original frozen 4-stage sequence (`STAGES` constant) |
-| `planning` (current default — `NewWorkflowPage` creates this) | `planning` → `development` → `testing` → `documentation_planning` → `engineering_review` |
+| `planning` (current default — `NewWorkflowPage` creates this) | `context_discovery` → `planning` → `development` → `testing` → `documentation_planning` → `engineering_review` |
 | `auto_execution` | `generate_code` → `create_branch` → `commit_changes` → `run_tests` → `create_pull_request` → `ai_pr_review` (future — no code writes/PR-creation is wired to run automatically yet) |
 
 Each stage is human-gated: nothing auto-advances without an explicit `/approve` (or `/continue`) call — see `ApprovalGateBanner`/`WorkflowApprovalBanner` on the frontend, `POST /workflows/{id}/continue`/`/approve`/`/reject` on the backend. A `Run`'s `status` field is `"queued" | "running" | "completed" | "partial" | "failed"` (`app/models/run.py`).

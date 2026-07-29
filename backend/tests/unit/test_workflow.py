@@ -102,6 +102,7 @@ def test_legacy_sdlc_sequence_is_exactly_stages() -> None:
 
 def test_planning_sequence_ends_in_engineering_review_not_review() -> None:
     assert stage_sequence("planning") == (
+        "context_discovery",
         "planning",
         "development",
         "testing",
@@ -340,7 +341,7 @@ async def test_create_workflow() -> None:
     workflow = await create_workflow(mock_db, title="JWT auth implementation")
 
     assert workflow.title == "JWT auth implementation"
-    assert workflow.current_stage == "planning"
+    assert workflow.current_stage == "context_discovery"
     assert workflow.status == "in_progress"
     mock_db.add.assert_called_once()
     mock_db.flush.assert_awaited_once()
@@ -417,7 +418,7 @@ async def test_create_workflow_defaults_to_planning_type() -> None:
     workflow = await create_workflow(mock_db, title="Add rate limiting")
 
     assert workflow.workflow_type == "planning"
-    assert workflow.current_stage == "planning"
+    assert workflow.current_stage == "context_discovery"
 
 
 @pytest.mark.asyncio

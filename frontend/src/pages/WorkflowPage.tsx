@@ -12,6 +12,7 @@ import { WorkflowSummaryHero } from "../components/workflow/WorkflowSummaryHero"
 import { WorkflowReplayPanel } from "../components/workflow/WorkflowReplayPanel";
 import { StageResultPanel } from "../components/runs/StageResultPanel";
 import { JiraIssuePicker } from "../components/workflow/JiraIssuePicker";
+import { ContextExplorerPanel } from "../components/workflow/ContextExplorerPanel";
 import { useAuth } from "../app/auth-context";
 import {
   approveWorkflow,
@@ -21,7 +22,7 @@ import {
   rejectWorkflow,
 } from "../lib/api/workflows";
 import { getAgentRun } from "../lib/api/agentRuns";
-import type { AgentStep, RunDetail, WorkflowDetail } from "../types/agent";
+import type { AgentStep, ContextDiscoveryResult, RunDetail, WorkflowDetail } from "../types/agent";
 import { deriveWorkflowState, STAGE_AGENT_LABEL } from "../lib/workflowDerived";
 
 const POLL_INTERVAL_MS = 2500;
@@ -263,6 +264,21 @@ export function WorkflowPage() {
           {error}
         </div>
       )}
+
+      {canContinue &&
+        lastCompletedStage &&
+        lastCompletedStage.stage === "context_discovery" &&
+        lastCompletedStage.run_id &&
+        runsById.get(lastCompletedStage.run_id)?.steps[0] && (
+          <ContextExplorerPanel
+            workflowId={workflow.workflow_id}
+            result={
+              runsById.get(lastCompletedStage.run_id)!.steps[0]
+                .result as unknown as ContextDiscoveryResult
+            }
+            onOverridden={() => loadWorkflow(false)}
+          />
+        )}
 
       {canContinue && lastCompletedStage && (
         <ApprovalGateBanner
