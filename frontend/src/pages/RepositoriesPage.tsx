@@ -184,7 +184,7 @@ export function RepositoriesPage() {
       header: "Indexing status",
       render: (repo) => {
         const job = jobsByRepoId[repo.id];
-        if (job === undefined) return <span className="text-xs text-slate-500">Loading…</span>;
+        if (job === undefined) return <span className="text-xs text-fg-muted">Loading…</span>;
         if (!job) return <StatusBadge label="Not indexed" tone="neutral" />;
         if (job.status === "completed") return <StatusBadge label="Indexed" tone="success" />;
         if (job.status === "failed") return <StatusBadge label="Index failed" tone="danger" />;
@@ -204,8 +204,8 @@ export function RepositoriesPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-xl font-semibold text-slate-50">Repositories</h2>
-        <p className="mt-1 text-sm text-slate-400">
+        <h2 className="text-xl font-semibold text-fg">Repositories</h2>
+        <p className="mt-1 text-sm text-fg-muted">
           Repositories tracked and indexed by GraphForge.
         </p>
       </div>
@@ -241,7 +241,7 @@ export function RepositoriesPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       )}
@@ -265,8 +265,8 @@ export function RepositoriesPage() {
                 onClick={() => setFilter(option)}
                 className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
                   filter === option
-                    ? "border-sky-500 bg-sky-500/10 text-sky-300"
-                    : "border-slate-700 text-slate-300 hover:border-slate-500"
+                    ? "border-info-line bg-info-bg text-info-fg"
+                    : "border-line text-fg-secondary hover:border-line-strong"
                 }`}
               >
                 {option === "all"
@@ -283,11 +283,11 @@ export function RepositoriesPage() {
           <div className="flex items-center gap-3">
             {selectedIds.size > 0 && (
               <>
-                <span className="text-xs text-slate-400">{selectedIds.size} selected</span>
+                <span className="text-xs text-fg-muted">{selectedIds.size} selected</span>
                 <button
                   type="button"
                   onClick={() => setSelectedIds(new Set())}
-                  className="text-xs text-slate-400 underline hover:text-slate-200"
+                  className="text-xs text-fg-muted underline hover:text-fg-secondary"
                 >
                   Clear selection
                 </button>
@@ -297,7 +297,7 @@ export function RepositoriesPage() {
               type="button"
               onClick={() => void handleIndexSelected()}
               disabled={selectedIds.size === 0 || bulkProgress !== null}
-              className="rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-md bg-info-solid px-3 py-1.5 text-sm font-medium text-info-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {bulkProgress
                 ? `Indexing ${bulkProgress.current} of ${bulkProgress.total} repositories…`
@@ -307,10 +307,10 @@ export function RepositoriesPage() {
         </div>
 
         {bulkResult && (
-          <div className="mb-4 rounded-md border border-slate-700 bg-slate-900/60 px-3 py-2 text-sm">
-            <span className="text-emerald-400">✓ Successfully indexed: {bulkResult.success}</span>
+          <div className="mb-4 rounded-md border border-line bg-surface px-3 py-2 text-sm">
+            <span className="text-success-fg">✓ Successfully indexed: {bulkResult.success}</span>
             {bulkResult.failed > 0 && (
-              <span className="ml-4 text-rose-400">⚠ Failed: {bulkResult.failed}</span>
+              <span className="ml-4 text-danger-fg">⚠ Failed: {bulkResult.failed}</span>
             )}
           </div>
         )}

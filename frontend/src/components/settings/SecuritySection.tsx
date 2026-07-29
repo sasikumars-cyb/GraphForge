@@ -14,12 +14,12 @@ function SecurityItem({ icon, title, description, status, statusTone }: Security
   return (
     <div className="flex items-start justify-between gap-4 py-3">
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-md bg-slate-800 text-slate-400">
+        <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-md bg-surface-raised text-fg-muted">
           {icon}
         </div>
         <div>
-          <p className="text-sm font-medium text-slate-200">{title}</p>
-          <p className="text-xs text-slate-500">{description}</p>
+          <p className="text-sm font-medium text-fg-secondary">{title}</p>
+          <p className="text-xs text-fg-muted">{description}</p>
         </div>
       </div>
       <StatusBadge label={status} tone={statusTone} />
@@ -34,7 +34,7 @@ export function SecuritySection() {
         title="Credentials & Secrets"
         description="Encryption and credential management for integrations"
       >
-        <div className="divide-y divide-slate-800/60">
+        <div className="divide-y divide-line-muted">
           <SecurityItem
             icon={<Lock className="h-4 w-4" />}
             title="Token Encryption"
@@ -70,7 +70,7 @@ export function SecuritySection() {
         title="Access Control"
         description="Authentication and authorization settings"
       >
-        <div className="divide-y divide-slate-800/60">
+        <div className="divide-y divide-line-muted">
           <SecurityItem
             icon={<Key className="h-4 w-4" />}
             title="JWT Authentication"

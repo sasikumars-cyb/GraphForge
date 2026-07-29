@@ -263,10 +263,10 @@ function DiagramInvalidState({
 }) {
   const msg = SECTION_EMPTY_MESSAGES[sectionTitle];
   return (
-    <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 rounded-xl border border-slate-800 bg-slate-900/40 px-6 py-8 text-center">
-      <AlertCircle className="h-6 w-6 text-slate-600" aria-hidden="true" />
-      <p className="text-sm font-medium text-slate-400">{msg?.heading ?? diagram.title}</p>
-      <p className="max-w-sm text-xs text-slate-500">{msg?.body ?? reason}</p>
+    <div className="flex min-h-[160px] flex-col items-center justify-center gap-2 rounded-xl border border-line-muted bg-surface px-6 py-8 text-center">
+      <AlertCircle className="h-6 w-6 text-fg-subtle" aria-hidden="true" />
+      <p className="text-sm font-medium text-fg-muted">{msg?.heading ?? diagram.title}</p>
+      <p className="max-w-sm text-xs text-fg-muted">{msg?.body ?? reason}</p>
     </div>
   );
 }
@@ -278,8 +278,8 @@ function DiagramInvalidState({
 function EmptyBlueprint() {
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-16 text-center">
-      <LayoutGrid className="h-8 w-8 text-slate-600" aria-hidden="true" />
-      <p className="text-sm text-slate-500">No visual diagrams were generated for this stage.</p>
+      <LayoutGrid className="h-8 w-8 text-fg-subtle" aria-hidden="true" />
+      <p className="text-sm text-fg-muted">No visual diagrams were generated for this stage.</p>
     </div>
   );
 }
@@ -439,22 +439,22 @@ export function BlueprintExplorer({
     const slide = sections[Math.min(slideIndex, sections.length - 1)];
     return (
       <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between gap-3 border-b border-slate-800 pb-3">
+        <div className="flex items-center justify-between gap-3 border-b border-line-muted pb-3">
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold text-slate-100">{slide.title}</h2>
+            <h2 className="truncate text-sm font-semibold text-fg">{slide.title}</h2>
             {slide.description && (
-              <p className="mt-0.5 truncate text-xs text-slate-500">{slide.description}</p>
+              <p className="mt-0.5 truncate text-xs text-fg-muted">{slide.description}</p>
             )}
           </div>
           <div className="flex shrink-0 items-center gap-1.5">
-            <span className="text-[11px] tabular-nums text-slate-500">
+            <span className="text-[11px] tabular-nums text-fg-muted">
               {slideIndex + 1} / {sections.length}
             </span>
             <button
               type="button"
               onClick={() => setSlideIndex((i) => Math.max(0, i - 1))}
               disabled={slideIndex === 0}
-              className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200 disabled:opacity-30 disabled:hover:bg-transparent"
+              className="rounded-lg p-1.5 text-fg-muted transition-colors hover:bg-surface-raised hover:text-fg-secondary disabled:opacity-30 disabled:hover:bg-transparent"
               aria-label="Previous section"
             >
               <ChevronLeft className="h-4 w-4" aria-hidden="true" />
@@ -463,7 +463,7 @@ export function BlueprintExplorer({
               type="button"
               onClick={() => setSlideIndex((i) => Math.min(sections.length - 1, i + 1))}
               disabled={slideIndex >= sections.length - 1}
-              className="rounded-lg p-1.5 text-slate-400 transition-colors hover:bg-slate-800 hover:text-slate-200 disabled:opacity-30 disabled:hover:bg-transparent"
+              className="rounded-lg p-1.5 text-fg-muted transition-colors hover:bg-surface-raised hover:text-fg-secondary disabled:opacity-30 disabled:hover:bg-transparent"
               aria-label="Next section"
             >
               <ChevronRight className="h-4 w-4" aria-hidden="true" />
@@ -471,7 +471,7 @@ export function BlueprintExplorer({
             <button
               type="button"
               onClick={() => setPresentationMode(false)}
-              className="ml-1 flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 hover:text-slate-200"
+              className="ml-1 flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-raised hover:text-fg-secondary"
             >
               <Rows3 className="h-3 w-3" aria-hidden="true" />
               Exit
@@ -533,10 +533,10 @@ export function BlueprintExplorer({
           {visibleStatItems.map((s) => (
             <div
               key={s.label}
-              className="flex items-baseline gap-1.5 rounded-lg border border-slate-800 bg-slate-900/60 px-3 py-1.5"
+              className="flex items-baseline gap-1.5 rounded-lg border border-line-muted bg-surface px-3 py-1.5"
             >
-              <span className="text-sm font-semibold text-slate-100">{s.value}</span>
-              <span className="text-[10.5px] font-medium text-slate-500">{s.label}</span>
+              <span className="text-sm font-semibold text-fg">{s.value}</span>
+              <span className="text-[10.5px] font-medium text-fg-muted">{s.label}</span>
             </div>
           ))}
         </div>
@@ -548,21 +548,21 @@ export function BlueprintExplorer({
           <button
             type="button"
             onClick={expandAll}
-            className="rounded-md px-2.5 py-1 text-[11px] font-medium text-slate-400 ring-1 ring-inset ring-slate-800 transition-colors hover:bg-slate-800 hover:text-slate-200"
+            className="rounded-md px-2.5 py-1 text-[11px] font-medium text-fg-muted ring-1 ring-inset ring-line-muted transition-colors hover:bg-surface-raised hover:text-fg-secondary"
           >
             Expand all
           </button>
           <button
             type="button"
             onClick={collapseAll}
-            className="rounded-md px-2.5 py-1 text-[11px] font-medium text-slate-400 ring-1 ring-inset ring-slate-800 transition-colors hover:bg-slate-800 hover:text-slate-200"
+            className="rounded-md px-2.5 py-1 text-[11px] font-medium text-fg-muted ring-1 ring-inset ring-line-muted transition-colors hover:bg-surface-raised hover:text-fg-secondary"
           >
             Collapse all
           </button>
           <button
             type="button"
             onClick={enterPresentation}
-            className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-slate-400 ring-1 ring-inset ring-slate-800 transition-colors hover:bg-slate-800 hover:text-slate-200"
+            className="flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-medium text-fg-muted ring-1 ring-inset ring-line-muted transition-colors hover:bg-surface-raised hover:text-fg-secondary"
           >
             <Presentation className="h-3 w-3" aria-hidden="true" />
             Presentation mode
@@ -572,7 +572,7 @@ export function BlueprintExplorer({
 
       {/* ── Sticky section navigation ── */}
       {sections.length > 1 && (
-        <div className="sticky top-0 z-20 -mx-4 mb-2 border-b border-slate-800/70 bg-slate-950/95 px-4 py-2 backdrop-blur-sm">
+        <div className="sticky top-0 z-20 -mx-4 mb-2 border-b border-line-muted bg-canvas px-4 py-2 backdrop-blur-sm">
           <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
             {sections.map((section) => {
               const isActive = activeSection === section.id;
@@ -583,15 +583,15 @@ export function BlueprintExplorer({
                   onClick={() => scrollToSection(section.id)}
                   className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-[11px] font-medium ring-1 ring-inset transition-all duration-200 ${
                     isActive
-                      ? "bg-brand-500/20 text-brand-200 ring-brand-500/40 shadow-[0_0_8px_rgba(99,102,241,0.15)]"
-                      : "text-slate-500 ring-slate-800 hover:bg-slate-800/60 hover:text-slate-300"
+                      ? "bg-accent-bg text-accent-fg ring-accent-line/40 shadow-sm"
+                      : "text-fg-muted ring-line-muted hover:bg-surface-raised hover:text-fg-secondary"
                   }`}
                   aria-current={isActive ? "true" : undefined}
                 >
                   {section.title}
                   <span
                     className={`rounded-full px-1 py-0.5 text-[9px] font-semibold ${
-                      isActive ? "bg-brand-500/30 text-brand-300" : "bg-slate-800 text-slate-500"
+                      isActive ? "bg-accent-bg text-accent-fg" : "bg-surface-raised text-fg-muted"
                     }`}
                   >
                     {section.diagrams.length}
@@ -615,11 +615,11 @@ export function BlueprintExplorer({
               aria-label={section.title}
             >
               {/* Section header */}
-              <div className="mb-4 flex items-start gap-3 border-b border-slate-800/60 pb-3">
+              <div className="mb-4 flex items-start gap-3 border-b border-line-muted pb-3">
                 <button
                   type="button"
                   onClick={() => toggleSection(section.id)}
-                  className="mt-0.5 shrink-0 rounded p-0.5 text-slate-500 transition-colors hover:bg-slate-800 hover:text-slate-300"
+                  className="mt-0.5 shrink-0 rounded p-0.5 text-fg-muted transition-colors hover:bg-surface-raised hover:text-fg-secondary"
                   aria-label={isCollapsed ? `Expand ${section.title}` : `Collapse ${section.title}`}
                 >
                   {isCollapsed ? (
@@ -631,15 +631,15 @@ export function BlueprintExplorer({
 
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <h2 className="text-sm font-semibold tracking-tight text-slate-100">
+                    <h2 className="text-sm font-semibold tracking-tight text-fg">
                       {section.title}
                     </h2>
-                    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-400">
+                    <span className="rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-fg-muted">
                       {section.diagrams.length}
                     </span>
                   </div>
                   {section.description && (
-                    <p className="mt-0.5 text-xs text-slate-500">{section.description}</p>
+                    <p className="mt-0.5 text-xs text-fg-muted">{section.description}</p>
                   )}
                 </div>
               </div>
@@ -682,7 +682,7 @@ export function BlueprintExplorer({
       </div>
 
       {/* ── Footer ── */}
-      <p className="mt-6 text-[10px] text-slate-700">
+      <p className="mt-6 text-[10px] text-fg-subtle">
         Blueprint v{blueprint.version} · {blueprint.agent_id} · {totalDiagrams} diagram
         {totalDiagrams !== 1 ? "s" : ""} across {sections.length} section
         {sections.length !== 1 ? "s" : ""} · Click any node to highlight connections ·

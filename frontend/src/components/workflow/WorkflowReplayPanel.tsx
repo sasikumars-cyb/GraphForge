@@ -16,11 +16,11 @@ const SPEEDS = [1, 5, 20, 60] as const;
 const TICK_MS = 100;
 
 const KIND_STYLE: Record<string, string> = {
-  lifecycle: "text-slate-500",
-  tool_call: "text-sky-400",
-  graph_traversal: "text-violet-400",
-  graph_fact: "text-emerald-400",
-  llm_reasoning: "text-amber-400",
+  lifecycle: "text-fg-muted",
+  tool_call: "text-info-fg",
+  graph_traversal: "text-cat-7-fg",
+  graph_fact: "text-success-fg",
+  llm_reasoning: "text-warning-fg",
 };
 
 /** "Hackathon wow factor" feature — Workflow Replay. Every event here is
@@ -72,7 +72,7 @@ export function WorkflowReplayPanel({ stages, stepsByRunId }: WorkflowReplayPane
 
   if (timeline.length === 0) {
     return (
-      <p className="text-sm text-slate-500">
+      <p className="text-sm text-fg-muted">
         Replay unlocks once at least one stage has finished — there's nothing to play back yet.
       </p>
     );
@@ -97,7 +97,7 @@ export function WorkflowReplayPanel({ stages, stepsByRunId }: WorkflowReplayPane
         <button
           type="button"
           onClick={handlePlayPause}
-          className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-brand-400"
+          className="inline-flex items-center gap-2 rounded-lg bg-accent-solid px-3 py-1.5 text-sm font-medium text-accent-on-solid transition-colors hover:brightness-110"
           aria-label={isPlaying ? "Pause replay" : atEnd ? "Restart replay" : "Play replay"}
         >
           {isPlaying ? (
@@ -114,7 +114,7 @@ export function WorkflowReplayPanel({ stages, stepsByRunId }: WorkflowReplayPane
             setIsPlaying(false);
             setPlayheadMs(startMs);
           }}
-          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 hover:text-slate-200"
+          className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-raised hover:text-fg-secondary"
           aria-label="Restart from the beginning"
         >
           <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
@@ -130,8 +130,8 @@ export function WorkflowReplayPanel({ stages, stepsByRunId }: WorkflowReplayPane
               aria-pressed={speed === s}
               className={`rounded-md px-2 py-1 text-xs font-medium transition-colors ${
                 speed === s
-                  ? "bg-brand-500/20 text-brand-200 ring-1 ring-inset ring-brand-500/40"
-                  : "text-slate-500 hover:bg-slate-800 hover:text-slate-300"
+                  ? "bg-accent-bg text-accent-fg ring-1 ring-inset ring-accent-line/40"
+                  : "text-fg-muted hover:bg-surface-raised hover:text-fg-secondary"
               }`}
             >
               {s}x
@@ -139,7 +139,7 @@ export function WorkflowReplayPanel({ stages, stepsByRunId }: WorkflowReplayPane
           ))}
         </div>
 
-        <span className="ml-auto font-mono text-xs tabular-nums text-slate-500">
+        <span className="ml-auto font-mono text-xs tabular-nums text-fg-muted">
           {formatDuration(Math.max(0, playheadMs - startMs))} / {formatDuration(endMs - startMs)}
         </span>
       </div>
@@ -157,7 +157,7 @@ export function WorkflowReplayPanel({ stages, stepsByRunId }: WorkflowReplayPane
           }}
           aria-label="Replay position"
           aria-valuetext={`${formatDuration(playheadMs - startMs)} of ${formatDuration(endMs - startMs)}`}
-          className="h-1.5 w-full cursor-pointer appearance-none rounded-full accent-brand-500"
+          className="h-1.5 w-full cursor-pointer appearance-none rounded-full accent-accent-solid"
           style={{
             background: `linear-gradient(to right, var(--color-brand-500) ${progressPct}%, var(--color-slate-800) ${progressPct}%)`,
           }}
@@ -173,7 +173,7 @@ export function WorkflowReplayPanel({ stages, stepsByRunId }: WorkflowReplayPane
                 <span
                   key={s.stage}
                   style={{ left: `${pct}%` }}
-                  className="absolute -translate-x-1/2 text-[10px] font-medium text-slate-600"
+                  className="absolute -translate-x-1/2 text-[10px] font-medium text-fg-subtle"
                 >
                   {s.label}
                 </span>
@@ -183,17 +183,17 @@ export function WorkflowReplayPanel({ stages, stepsByRunId }: WorkflowReplayPane
       </div>
 
       <div
-        className="rounded-lg bg-slate-950 px-3 py-2 text-sm font-medium text-slate-200"
+        className="rounded-lg bg-canvas px-3 py-2 text-sm font-medium text-fg-secondary"
         aria-hidden="true"
       >
         {current ? (
           <>
-            <span className="text-brand-300">{current.agentLabel}</span>
-            <span className="text-slate-600"> — </span>
-            <span className={KIND_STYLE[current.kind] ?? "text-slate-300"}>{current.text}</span>
+            <span className="text-accent-fg">{current.agentLabel}</span>
+            <span className="text-fg-subtle"> — </span>
+            <span className={KIND_STYLE[current.kind] ?? "text-fg-secondary"}>{current.text}</span>
           </>
         ) : (
-          <span className="text-slate-600">Press play to begin the replay.</span>
+          <span className="text-fg-subtle">Press play to begin the replay.</span>
         )}
       </div>
       <p className="sr-only" aria-live="polite">
@@ -202,22 +202,22 @@ export function WorkflowReplayPanel({ stages, stepsByRunId }: WorkflowReplayPane
 
       <div
         ref={feedRef}
-        className="flex max-h-72 flex-col gap-0.5 overflow-y-auto rounded-lg bg-slate-950/60 p-3 font-mono text-[11.5px] leading-relaxed"
+        className="flex max-h-72 flex-col gap-0.5 overflow-y-auto rounded-lg bg-canvas p-3 font-mono text-[11.5px] leading-relaxed"
       >
         {revealed.map((ev, i) => {
           const showStageDivider = i === 0 || revealed[i - 1].stage !== ev.stage;
           return (
             <div key={ev.key}>
               {showStageDivider && (
-                <p className="mt-2 mb-1 text-[10px] font-semibold tracking-wide text-slate-600 uppercase first:mt-0">
+                <p className="mt-2 mb-1 text-[10px] font-semibold tracking-wide text-fg-subtle uppercase first:mt-0">
                   {ev.agentLabel}
                 </p>
               )}
               <div className="grid grid-cols-[52px_1fr] gap-3 py-0.5 animate-[activity-in_200ms_ease-out_backwards]">
-                <span className="text-slate-600">
+                <span className="text-fg-subtle">
                   +{formatDuration(Math.max(0, ev.atMs - startMs))}
                 </span>
-                <span className={KIND_STYLE[ev.kind] ?? "text-slate-300"}>{ev.text}</span>
+                <span className={KIND_STYLE[ev.kind] ?? "text-fg-secondary"}>{ev.text}</span>
               </div>
             </div>
           );

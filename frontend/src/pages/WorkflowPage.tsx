@@ -158,11 +158,11 @@ export function WorkflowPage() {
       <div className="flex flex-col gap-6">
         <Link
           to="/"
-          className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
+          className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg-secondary"
         >
           ← Back to dashboard
         </Link>
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       </div>
@@ -232,8 +232,8 @@ export function WorkflowPage() {
               aria-expanded={showReplay}
               className={`inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium ring-1 ring-inset transition-colors ${
                 showReplay
-                  ? "bg-brand-500/20 text-brand-200 ring-brand-500/40"
-                  : "text-slate-400 ring-slate-700 hover:bg-slate-800 hover:text-slate-200"
+                  ? "bg-accent-bg text-accent-fg ring-accent-line/40"
+                  : "text-fg-muted ring-line hover:bg-surface-raised hover:text-fg-secondary"
               }`}
             >
               <Clapperboard className="h-3.5 w-3.5" aria-hidden="true" />
@@ -259,7 +259,7 @@ export function WorkflowPage() {
       )}
 
       {error && phase !== "failed" && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       )}
@@ -316,14 +316,14 @@ export function WorkflowPage() {
               onClick={() => setSelectedRunId(t.run_id)}
               className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium ring-1 ring-inset transition-colors ${
                 selectedRunId === t.run_id
-                  ? "bg-brand-500/20 text-brand-200 ring-brand-500/40"
-                  : "text-slate-400 ring-slate-700 hover:bg-slate-800 hover:text-slate-200"
+                  ? "bg-accent-bg text-accent-fg ring-accent-line/40"
+                  : "text-fg-muted ring-line hover:bg-surface-raised hover:text-fg-secondary"
               }`}
             >
               {t.label}
               {t.attempts > 1 && (
                 <span
-                  className="rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] font-semibold text-slate-400"
+                  className="rounded-full bg-surface-raised px-1.5 py-0.5 text-[10px] font-semibold text-fg-muted"
                   title={`Retried ${t.attempts - 1} time${t.attempts - 1 > 1 ? "s" : ""}`}
                 >
                   retry {t.attempts - 1}
@@ -346,10 +346,10 @@ export function WorkflowPage() {
             <RunStatusBadge status={selectedRun.status} />
             {selectedRun.error_message && (
               <details className="group">
-                <summary className="cursor-pointer text-xs font-medium text-rose-300/80 hover:text-rose-200">
+                <summary className="cursor-pointer text-xs font-medium text-danger-fg hover:text-danger-fg">
                   View error details
                 </summary>
-                <p className="mt-2 rounded-lg bg-slate-950 p-3 font-mono text-xs whitespace-pre-wrap text-rose-300">
+                <p className="mt-2 rounded-lg bg-canvas p-3 font-mono text-xs whitespace-pre-wrap text-danger-fg">
                   {selectedRun.error_message}
                 </p>
               </details>
@@ -371,11 +371,11 @@ export function WorkflowPage() {
 function WorkflowPageSkeleton() {
   return (
     <div className="flex flex-col gap-6" aria-busy="true" aria-label="Loading workflow">
-      <div className="h-40 animate-pulse rounded-2xl bg-slate-900" />
-      <div className="h-28 animate-pulse rounded-xl bg-slate-900" />
+      <div className="h-40 animate-pulse rounded-2xl bg-surface" />
+      <div className="h-28 animate-pulse rounded-xl bg-surface" />
       <div className="grid gap-6 lg:grid-cols-[1fr_1.3fr]">
-        <div className="h-64 animate-pulse rounded-xl bg-slate-900" />
-        <div className="h-64 animate-pulse rounded-xl bg-slate-900" />
+        <div className="h-64 animate-pulse rounded-xl bg-surface" />
+        <div className="h-64 animate-pulse rounded-xl bg-surface" />
       </div>
     </div>
   );
@@ -442,14 +442,14 @@ export function NewWorkflowPage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center gap-3">
-        <div className="rounded-lg bg-brand-500/10 p-2 ring-1 ring-inset ring-brand-500/30">
-          <GitMerge className="h-5 w-5 text-brand-400" aria-hidden="true" />
+        <div className="rounded-lg bg-accent-bg p-2 ring-1 ring-inset ring-accent-line/30">
+          <GitMerge className="h-5 w-5 text-accent-fg" aria-hidden="true" />
         </div>
         <div>
-          <h2 className="text-xl font-semibold text-slate-50">
+          <h2 className="text-xl font-semibold text-fg">
             {parentId ? "Refine this plan" : "Describe what you want built"}
           </h2>
-          <p className="text-sm text-slate-400">
+          <p className="text-sm text-fg-muted">
             {parentId
               ? "This becomes a new version of that workflow — its blueprint carries forward automatically, plus whatever you note below."
               : "GraphForge turns this into an AI workflow — Planning → Development → Testing → Review — and runs each stage for you."}
@@ -462,21 +462,21 @@ export function NewWorkflowPage() {
         <button
           type="button"
           aria-pressed="true"
-          className="flex flex-col items-start gap-1.5 rounded-xl border-2 border-brand-500 bg-brand-500/5 p-4 text-left"
+          className="flex flex-col items-start gap-1.5 rounded-xl border-2 border-accent-line bg-accent-bg p-4 text-left"
         >
           <div className="flex flex-wrap items-center gap-2">
             <span
-              className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 border-brand-400"
+              className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full border-2 border-accent-line"
               aria-hidden="true"
             >
-              <span className="h-1.5 w-1.5 rounded-full bg-brand-400" />
+              <span className="h-1.5 w-1.5 rounded-full bg-accent-solid" />
             </span>
-            <span className="text-sm font-semibold text-slate-100">Planning Workflow</span>
-            <span className="rounded-full bg-brand-500/20 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-brand-300 uppercase">
+            <span className="text-sm font-semibold text-fg">Planning Workflow</span>
+            <span className="rounded-full bg-accent-bg px-2 py-0.5 text-[10px] font-semibold tracking-wide text-accent-fg uppercase">
               Recommended
             </span>
           </div>
-          <p className="pl-6 text-xs text-slate-400">
+          <p className="pl-6 text-xs text-fg-muted">
             Plan, blueprint, test-strategize, and get an Engineering Review — no code is written and
             nothing is committed. You approve the result.
           </p>
@@ -484,19 +484,19 @@ export function NewWorkflowPage() {
 
         <div
           aria-disabled="true"
-          className="flex flex-col items-start gap-1.5 rounded-xl border border-slate-800 bg-slate-900/30 p-4 text-left opacity-60"
+          className="flex flex-col items-start gap-1.5 rounded-xl border border-line-muted bg-surface p-4 text-left opacity-60"
         >
           <div className="flex flex-wrap items-center gap-2">
             <span
-              className="h-4 w-4 shrink-0 rounded-full border-2 border-slate-700"
+              className="h-4 w-4 shrink-0 rounded-full border-2 border-line"
               aria-hidden="true"
             />
-            <span className="text-sm font-semibold text-slate-400">Implementation Workflow</span>
-            <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-semibold tracking-wide text-slate-500 uppercase">
+            <span className="text-sm font-semibold text-fg-muted">Implementation Workflow</span>
+            <span className="rounded-full bg-surface-raised px-2 py-0.5 text-[10px] font-semibold tracking-wide text-fg-muted uppercase">
               Coming soon
             </span>
           </div>
-          <p className="pl-6 text-xs text-slate-500">
+          <p className="pl-6 text-xs text-fg-muted">
             Writes code, opens a pull request, and runs an AI review on the real diff — not
             available yet.
           </p>
@@ -514,7 +514,7 @@ export function NewWorkflowPage() {
           )}
 
           <div>
-            <label htmlFor="workflow-input" className="block text-sm font-medium text-slate-200">
+            <label htmlFor="workflow-input" className="block text-sm font-medium text-fg-secondary">
               What's the engineering objective?
             </label>
             <textarea
@@ -525,7 +525,7 @@ export function NewWorkflowPage() {
               placeholder="e.g. Add rate limiting to the payment API. GraphForge will plan it, generate an implementation blueprint, propose tests, and review it — automatically."
               rows={4}
               maxLength={MAX_OBJECTIVE_LENGTH}
-              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:opacity-50"
+              className="mt-2 w-full rounded-lg border border-line bg-surface-raised px-4 py-3 text-sm text-fg placeholder-fg-subtle focus:border-accent-line disabled:opacity-50"
               aria-required="true"
               aria-describedby="workflow-input-count"
             />
@@ -533,10 +533,10 @@ export function NewWorkflowPage() {
               id="workflow-input-count"
               className={`mt-1 text-right text-xs ${
                 input.length >= MAX_OBJECTIVE_LENGTH
-                  ? "text-rose-400"
+                  ? "text-danger-fg"
                   : input.length >= MAX_OBJECTIVE_LENGTH * 0.9
-                    ? "text-amber-400"
-                    : "text-slate-500"
+                    ? "text-warning-fg"
+                    : "text-fg-muted"
               }`}
             >
               {input.length.toLocaleString()} / {MAX_OBJECTIVE_LENGTH.toLocaleString()}
@@ -545,8 +545,8 @@ export function NewWorkflowPage() {
 
           {parentId && (
             <div>
-              <label htmlFor="refinement-note" className="block text-sm font-medium text-slate-200">
-                What should change in this version? <span className="text-slate-500">(optional)</span>
+              <label htmlFor="refinement-note" className="block text-sm font-medium text-fg-secondary">
+                What should change in this version? <span className="text-fg-muted">(optional)</span>
               </label>
               <textarea
                 id="refinement-note"
@@ -556,21 +556,21 @@ export function NewWorkflowPage() {
                 placeholder="e.g. The architecture is right, but the risk section is thin — call out the migration's rollback plan explicitly."
                 rows={3}
                 maxLength={4000}
-                className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-800/60 px-4 py-3 text-sm text-slate-100 placeholder-slate-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500 disabled:opacity-50"
+                className="mt-2 w-full rounded-lg border border-line bg-surface-raised px-4 py-3 text-sm text-fg placeholder-fg-subtle focus:border-accent-line disabled:opacity-50"
               />
             </div>
           )}
 
           {!isSubmitting && (
             <div>
-              <p className="mb-2 text-xs font-medium text-slate-500">Try an example:</p>
+              <p className="mb-2 text-xs font-medium text-fg-muted">Try an example:</p>
               <div className="flex flex-wrap gap-2">
                 {EXAMPLES.map((example) => (
                   <button
                     key={example}
                     type="button"
                     onClick={() => setInput(example)}
-                    className="rounded-md border border-slate-700 px-2.5 py-1 text-xs text-slate-400 transition-colors hover:border-brand-500/40 hover:text-brand-300"
+                    className="rounded-md border border-line px-2.5 py-1 text-xs text-fg-muted transition-colors hover:border-accent-line/40 hover:text-accent-fg"
                   >
                     {example}
                   </button>
@@ -583,14 +583,14 @@ export function NewWorkflowPage() {
             <button
               type="submit"
               disabled={isSubmitting || !input.trim()}
-              className="inline-flex items-center gap-2 rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-400 disabled:cursor-not-allowed disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-lg bg-accent-solid px-4 py-2 text-sm font-medium text-accent-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               aria-label={parentId ? "Create refined workflow" : "Start SDLC workflow"}
             >
               <Send className="h-4 w-4" aria-hidden="true" />
               {isSubmitting ? "Starting…" : parentId ? "Create Refinement" : "Start Workflow"}
             </button>
             {isSubmitting && (
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-fg-muted">
                 Starting planning phase — this may take up to a minute.
               </span>
             )}
@@ -599,7 +599,7 @@ export function NewWorkflowPage() {
       </Card>
 
       {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       )}

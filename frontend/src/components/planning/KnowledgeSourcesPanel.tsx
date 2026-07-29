@@ -18,19 +18,19 @@ interface SourceRow {
 }
 
 const STATUS_DOT_TONE: Record<SourceStatus, string> = {
-  success: "bg-emerald-400",
-  not_found: "bg-slate-500",
-  unavailable: "bg-slate-600",
-  failed: "bg-rose-400",
-  unreferenced: "bg-slate-600",
+  success: "bg-success-solid",
+  not_found: "bg-neutral-bg",
+  unavailable: "bg-line-strong",
+  failed: "bg-danger-solid",
+  unreferenced: "bg-line-strong",
 };
 
 const STATUS_ICON_TONE: Record<SourceStatus, string> = {
-  success: "text-emerald-400",
-  not_found: "text-slate-400",
-  unavailable: "text-slate-600",
-  failed: "text-rose-400",
-  unreferenced: "text-slate-600",
+  success: "text-success-fg",
+  not_found: "text-fg-muted",
+  unavailable: "text-fg-subtle",
+  failed: "text-danger-fg",
+  unreferenced: "text-fg-subtle",
 };
 
 function StatusDot({ status }: { status: SourceStatus }) {
@@ -125,8 +125,8 @@ export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPane
   const isGreenfield = !graphUsed && !reposIndexed;
 
   const planningMode = isGreenfield
-    ? { label: "Greenfield", tone: "text-amber-300 bg-amber-500/10 ring-amber-500/30" }
-    : { label: "Repository-Grounded", tone: "text-emerald-300 bg-emerald-500/10 ring-emerald-500/30" };
+    ? { label: "Greenfield", tone: "text-warning-fg bg-warning-bg ring-warning-line/30" }
+    : { label: "Repository-Grounded", tone: "text-success-fg bg-success-bg ring-success-line/30" };
 
   // Count evidence items from graph tools
   const graphEvidence = evidence.filter(
@@ -142,7 +142,7 @@ export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPane
       <div className="flex flex-col gap-3">
         {/* Planning mode badge */}
         <div className="flex items-center justify-between">
-          <span className="text-xs text-slate-500">Planning mode</span>
+          <span className="text-xs text-fg-muted">Planning mode</span>
           <span
             className={`rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset ${planningMode.tone}`}
           >
@@ -150,7 +150,7 @@ export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPane
           </span>
         </div>
 
-        <div className="h-px bg-slate-800" />
+        <div className="h-px bg-surface-raised" />
 
         {/* Source rows */}
         <ul className="flex flex-col gap-2.5">
@@ -164,8 +164,8 @@ export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPane
                 />
                 <StatusDot status={src.status} />
                 <div className="min-w-0 flex-1">
-                  <span className="text-xs font-medium text-slate-300">{src.label}</span>
-                  <p className="mt-0.5 text-xs text-slate-500" title={src.detail}>
+                  <span className="text-xs font-medium text-fg-secondary">{src.label}</span>
+                  <p className="mt-0.5 text-xs text-fg-muted" title={src.detail}>
                     {src.detail}
                   </p>
                 </div>
@@ -176,8 +176,8 @@ export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPane
 
         {graphEvidence > 0 && (
           <>
-            <div className="h-px bg-slate-800" />
-            <p className="text-xs text-slate-500">
+            <div className="h-px bg-surface-raised" />
+            <p className="text-xs text-fg-muted">
               {graphEvidence} graph traversal{graphEvidence === 1 ? "" : "s"} informed this plan.
             </p>
           </>
@@ -185,10 +185,10 @@ export function KnowledgeSourcesPanel({ result, evidence }: KnowledgeSourcesPane
 
         {isGreenfield && !anyExternalSource && (
           <>
-            <div className="h-px bg-slate-800" />
-            <p className="text-xs text-slate-500">
+            <div className="h-px bg-surface-raised" />
+            <p className="text-xs text-fg-muted">
               Connect GitHub, Jira, or Confluence in{" "}
-              <span className="text-sky-400">Settings → Integrations</span> to ground future
+              <span className="text-info-fg">Settings → Integrations</span> to ground future
               plans in real engineering data.
             </p>
           </>

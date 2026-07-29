@@ -13,11 +13,11 @@ export function StatCard({ label, value, hint, icon: Icon }: StatCardProps) {
   return (
     <Card className="flex flex-col gap-2">
       <div className="flex items-center justify-between">
-        <p className="text-xs font-medium uppercase tracking-wide text-slate-400">{label}</p>
-        {Icon && <Icon className="h-4 w-4 text-sky-400" aria-hidden="true" />}
+        <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">{label}</p>
+        {Icon && <Icon className="h-4 w-4 text-info-fg" aria-hidden="true" />}
       </div>
-      <p className="text-2xl font-semibold text-slate-50">{value}</p>
-      {hint && <p className="text-xs text-slate-500">{hint}</p>}
+      <p className="font-display text-2xl font-semibold tabular-nums text-fg">{value}</p>
+      {hint && <p className="text-xs text-fg-muted">{hint}</p>}
     </Card>
   );
 }

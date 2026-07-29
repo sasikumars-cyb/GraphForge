@@ -89,11 +89,11 @@ export function JiraIssuePicker({ onSelect }: JiraIssuePickerProps) {
 
   return (
     <div className="relative" ref={containerRef}>
-      <label htmlFor="jira-search" className="block text-sm font-medium text-slate-200">
-        Link a Jira issue <span className="text-slate-500">(optional)</span>
+      <label htmlFor="jira-search" className="block text-sm font-medium text-fg-secondary">
+        Link a Jira issue <span className="text-fg-muted">(optional)</span>
       </label>
       <div className="relative mt-2">
-        <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-slate-500" aria-hidden="true" />
+        <Search className="pointer-events-none absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-fg-muted" aria-hidden="true" />
         <input
           id="jira-search"
           type="text"
@@ -104,17 +104,17 @@ export function JiraIssuePicker({ onSelect }: JiraIssuePickerProps) {
           }}
           onFocus={() => setIsOpen(true)}
           placeholder="Search by summary, e.g. rate limiting"
-          className="w-full rounded-lg border border-slate-700 bg-slate-800/60 py-2.5 pr-3 pl-9 text-sm text-slate-100 placeholder-slate-500 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500"
+          className="w-full rounded-lg border border-line bg-surface-raised py-2.5 pr-3 pl-9 text-sm text-fg placeholder-fg-subtle focus:border-accent-line "
         />
         {isSearching && (
-          <Loader2 className="absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 animate-spin text-slate-500" aria-hidden="true" />
+          <Loader2 className="absolute top-1/2 right-3 h-4 w-4 -translate-y-1/2 animate-spin text-fg-muted" aria-hidden="true" />
         )}
       </div>
 
       {isOpen && query.trim().length >= 2 && !isSearching && (
-        <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-slate-700 bg-slate-900 shadow-lg">
+        <div className="absolute z-10 mt-1 w-full overflow-hidden rounded-lg border border-line bg-surface shadow-lg">
           {results.length === 0 ? (
-            <p className="px-3 py-2.5 text-xs text-slate-500">
+            <p className="px-3 py-2.5 text-xs text-fg-muted">
               No matching issues found (or Jira isn't connected for search).
             </p>
           ) : (
@@ -124,17 +124,17 @@ export function JiraIssuePicker({ onSelect }: JiraIssuePickerProps) {
                   <button
                     type="button"
                     onClick={() => handleSelect(issue)}
-                    className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left hover:bg-slate-800"
+                    className="flex w-full flex-col items-start gap-0.5 px-3 py-2 text-left hover:bg-surface-raised"
                   >
                     <span className="flex items-center gap-2 text-xs">
-                      <span className="rounded bg-slate-800 px-1.5 py-0.5 font-mono font-semibold text-brand-300">
+                      <span className="rounded bg-surface-raised px-1.5 py-0.5 font-mono font-semibold text-accent-fg">
                         {issue.key}
                       </span>
-                      <span className="text-slate-500">{issue.issue_type}</span>
-                      <span className="text-slate-500">·</span>
-                      <span className="text-slate-500">{issue.status}</span>
+                      <span className="text-fg-muted">{issue.issue_type}</span>
+                      <span className="text-fg-muted">·</span>
+                      <span className="text-fg-muted">{issue.status}</span>
                     </span>
-                    <span className="text-sm text-slate-200">{issue.summary}</span>
+                    <span className="text-sm text-fg-secondary">{issue.summary}</span>
                   </button>
                 </li>
               ))}

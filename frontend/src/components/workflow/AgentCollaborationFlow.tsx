@@ -24,7 +24,7 @@ export function AgentCollaborationFlow({ stages, stepsByRunId }: AgentCollaborat
 
   if (completedStages.length === 0) {
     return (
-      <p className="text-sm text-slate-500">
+      <p className="text-sm text-fg-muted">
         No stage has completed yet — collaboration will appear here once one finishes.
       </p>
     );
@@ -40,11 +40,11 @@ export function AgentCollaborationFlow({ stages, stepsByRunId }: AgentCollaborat
 
         return (
           <div key={stage.stage} className="flex flex-col items-center">
-            <div className="w-full rounded-xl border border-slate-800 bg-slate-900/50 p-4">
-              <p className="text-sm font-bold text-slate-100">
+            <div className="w-full rounded-xl border border-line-muted bg-surface p-4">
+              <p className="text-sm font-bold text-fg">
                 {STAGE_AGENT_LABEL[stage.stage] ?? stage.stage}
               </p>
-              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+              <p className="mt-2 text-[11px] font-semibold uppercase tracking-wide text-fg-muted">
                 Produced
               </p>
               {counts.length > 0 ? (
@@ -52,14 +52,14 @@ export function AgentCollaborationFlow({ stages, stepsByRunId }: AgentCollaborat
                   {counts.map((c) => (
                     <li
                       key={c.label}
-                      className="rounded-full bg-brand-500/10 px-2.5 py-0.5 text-xs font-medium text-brand-200 ring-1 ring-inset ring-brand-500/25"
+                      className="rounded-full bg-accent-bg px-2.5 py-0.5 text-xs font-medium text-accent-fg ring-1 ring-inset ring-accent-line/25"
                     >
                       {c.count} {c.label}
                     </li>
                   ))}
                 </ul>
               ) : (
-                <p className="mt-1 text-xs text-slate-500">
+                <p className="mt-1 text-xs text-fg-muted">
                   A synthesized result (no itemized artifacts).
                 </p>
               )}
@@ -67,8 +67,8 @@ export function AgentCollaborationFlow({ stages, stepsByRunId }: AgentCollaborat
 
             {!isLast && (
               <div className="flex flex-col items-center gap-1 py-2">
-                <ArrowDown className="h-4 w-4 text-slate-600" aria-hidden="true" />
-                <span className="text-[10.5px] font-medium uppercase tracking-wide text-slate-600">
+                <ArrowDown className="h-4 w-4 text-fg-subtle" aria-hidden="true" />
+                <span className="text-[10.5px] font-medium uppercase tracking-wide text-fg-subtle">
                   consumed by {next ? stageLabel(next) : "next stage"}
                 </span>
               </div>

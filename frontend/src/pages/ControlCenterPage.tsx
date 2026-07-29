@@ -55,21 +55,21 @@ export function ControlCenterPage() {
 
   const platformHealthColor =
     system?.platform_status === "healthy"
-      ? "text-emerald-400"
+      ? "text-success-fg"
       : system?.platform_status === "degraded"
-        ? "text-amber-400"
-        : "text-rose-400";
+        ? "text-warning-fg"
+        : "text-danger-fg";
 
   if (loading) {
     return (
       <div className="flex flex-col gap-6">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-slate-50">Control Center</h2>
-          <p className="mt-1 text-sm text-slate-500">Loading platform status…</p>
+          <h2 className="text-2xl font-bold tracking-tight text-fg">Control Center</h2>
+          <p className="mt-1 text-sm text-fg-muted">Loading platform status…</p>
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
-            <div key={i} className="h-16 animate-pulse rounded-xl bg-slate-800/40" />
+            <div key={i} className="h-16 animate-pulse rounded-xl bg-surface-raised" />
           ))}
         </div>
       </div>
@@ -80,9 +80,9 @@ export function ControlCenterPage() {
     return (
       <div className="flex flex-col gap-6">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-slate-50">Control Center</h2>
+          <h2 className="text-2xl font-bold tracking-tight text-fg">Control Center</h2>
         </div>
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       </div>
@@ -101,7 +101,7 @@ export function ControlCenterPage() {
     <div className="flex flex-col gap-6">
       {/* ── Header ──────────────────────────────────────────────── */}
       <div>
-        <h2 className="text-2xl font-bold tracking-tight text-slate-50">Control Center</h2>
+        <h2 className="text-2xl font-bold tracking-tight text-fg">Control Center</h2>
         <p className={`mt-1 text-sm ${platformHealthColor}`}>
           <span className="inline-block h-2 w-2 rounded-full bg-current mr-2" />
           {platformHealthLabel}
@@ -109,7 +109,12 @@ export function ControlCenterPage() {
       </div>
 
       {/* ── Status Indicators ───────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {/* 4 columns only from `lg` up — at `sm` (640px) each of 4 columns
+          has too little width for its value line, so "development" /
+          "bedrock" truncated to "d…" / "b…" well before the page felt
+          cramped generally (reproduced at 800–1024px). 2 columns until
+          there's genuinely enough room per card removes that dead zone. */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatusIndicator
           label="Platform"
           value={system.environment}
@@ -140,29 +145,34 @@ export function ControlCenterPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Left: AI Providers */}
         <section className="flex flex-col gap-2">
-          <h3 className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+          <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
             AI Providers
           </h3>
-          <div className="divide-y divide-slate-800/40 rounded-lg border border-slate-800/60 bg-slate-900/30">
+          <div className="divide-y divide-line-muted rounded-lg border border-line-muted bg-surface">
             {system.ai_providers.map((provider) => (
               <div
                 key={provider.name}
                 className="flex items-center gap-3 px-4 py-2.5"
               >
                 {provider.active ? (
-                  <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" aria-hidden="true" />
+                  <CheckCircle2 className="h-4 w-4 shrink-0 text-success-fg" aria-hidden="true" />
                 ) : provider.configured ? (
-                  <CircleDot className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+                  <CircleDot className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden="true" />
                 ) : (
-                  <XCircle className="h-4 w-4 shrink-0 text-slate-700" aria-hidden="true" />
+                  <XCircle className="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden="true" />
                 )}
-                <span className="flex-1 text-sm text-slate-300 capitalize">{provider.name}</span>
+                <span className="flex-1 truncate text-sm text-fg-secondary capitalize">
+                  {provider.name}
+                </span>
                 {provider.active && provider.model && (
-                  <span className="rounded bg-brand-500/10 px-2 py-0.5 text-xs font-medium text-brand-300 ring-1 ring-inset ring-brand-500/20">
+                  <span
+                    className="max-w-[40%] truncate rounded bg-accent-bg px-2 py-0.5 text-xs font-medium text-accent-fg ring-1 ring-inset ring-accent-line/20"
+                    title={provider.model}
+                  >
                     {provider.model}
                   </span>
                 )}
-                <span className="text-xs text-slate-600">
+                <span className="shrink-0 text-xs text-fg-subtle">
                   {provider.active ? "active" : provider.configured ? "configured" : "not configured"}
                 </span>
               </div>
@@ -172,21 +182,21 @@ export function ControlCenterPage() {
 
         {/* Right: Connections */}
         <section className="flex flex-col gap-2">
-          <h3 className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+          <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
             Connections
           </h3>
-          <div className="divide-y divide-slate-800/40 rounded-lg border border-slate-800/60 bg-slate-900/30">
+          <div className="divide-y divide-line-muted rounded-lg border border-line-muted bg-surface">
             {/* GitHub (from live check) */}
             <div className="flex items-center gap-3 px-4 py-2.5">
               {githubConnected ? (
-                <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" aria-hidden="true" />
+                <CheckCircle2 className="h-4 w-4 shrink-0 text-success-fg" aria-hidden="true" />
               ) : (
-                <CircleDot className="h-4 w-4 shrink-0 text-slate-600" aria-hidden="true" />
+                <CircleDot className="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden="true" />
               )}
-              <GitBranch className="h-3.5 w-3.5 shrink-0 text-slate-500" aria-hidden="true" />
-              <span className="flex-1 text-sm text-slate-300">GitHub</span>
+              <GitBranch className="h-3.5 w-3.5 shrink-0 text-fg-muted" aria-hidden="true" />
+              <span className="flex-1 text-sm text-fg-secondary">GitHub</span>
               {githubConnected && github?.github_username && (
-                <span className="text-xs text-slate-500">@{github.github_username}</span>
+                <span className="text-xs text-fg-muted">@{github.github_username}</span>
               )}
               <ConnectionBadge status={githubConnected ? "connected" : "not_configured"} />
             </div>
@@ -197,16 +207,16 @@ export function ControlCenterPage() {
               .map((conn) => (
                 <div key={conn.name} className="flex items-center gap-3 px-4 py-2.5">
                   {conn.status === "connected" ? (
-                    <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-500" aria-hidden="true" />
+                    <CheckCircle2 className="h-4 w-4 shrink-0 text-success-fg" aria-hidden="true" />
                   ) : conn.status === "configured" ? (
-                    <CircleDot className="h-4 w-4 shrink-0 text-brand-400" aria-hidden="true" />
+                    <CircleDot className="h-4 w-4 shrink-0 text-accent-fg" aria-hidden="true" />
                   ) : (
-                    <XCircle className="h-4 w-4 shrink-0 text-slate-700" aria-hidden="true" />
+                    <XCircle className="h-4 w-4 shrink-0 text-fg-subtle" aria-hidden="true" />
                   )}
                   <ConnectionIcon name={conn.name} />
-                  <span className="flex-1 text-sm text-slate-300">{conn.name}</span>
+                  <span className="flex-1 text-sm text-fg-secondary">{conn.name}</span>
                   {conn.detail && (
-                    <span className="max-w-[160px] truncate text-xs text-slate-600">
+                    <span className="max-w-[160px] truncate text-xs text-fg-subtle">
                       {conn.detail}
                     </span>
                   )}
@@ -221,10 +231,10 @@ export function ControlCenterPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Left: Knowledge Base */}
         <section className="flex flex-col gap-2">
-          <h3 className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+          <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
             Knowledge Base
           </h3>
-          <div className="rounded-lg border border-slate-800/60 bg-slate-900/30 px-4 py-3">
+          <div className="rounded-lg border border-line-muted bg-surface px-4 py-3">
             <div className="space-y-2.5">
               <MetricRow
                 label="Repositories tracked"
@@ -248,10 +258,10 @@ export function ControlCenterPage() {
 
         {/* Right: Platform Info */}
         <section className="flex flex-col gap-2">
-          <h3 className="text-xs font-semibold tracking-wide text-slate-500 uppercase">
+          <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
             Platform
           </h3>
-          <div className="rounded-lg border border-slate-800/60 bg-slate-900/30 px-4 py-3">
+          <div className="rounded-lg border border-line-muted bg-surface px-4 py-3">
             <div className="space-y-2.5">
               <MetricRow label="Version" value={system.version} />
               <MetricRow label="Environment" value={system.environment} />
@@ -285,18 +295,18 @@ function StatusIndicator({
   icon: React.ComponentType<{ className?: string }>;
 }) {
   const dotColor = {
-    ok: "bg-emerald-400",
-    warn: "bg-amber-400",
-    error: "bg-rose-400",
-    neutral: "bg-slate-600",
+    ok: "bg-success-solid",
+    warn: "bg-warning-solid",
+    error: "bg-danger-solid",
+    neutral: "bg-line-strong",
   }[status];
 
   return (
-    <div className="flex items-center gap-3 rounded-xl border border-slate-800/60 bg-slate-900/40 px-4 py-3">
-      <Icon className="h-4 w-4 shrink-0 text-slate-500" aria-hidden="true" />
+    <div className="flex items-center gap-3 rounded-xl border border-line-muted bg-surface px-4 py-3">
+      <Icon className="h-4 w-4 shrink-0 text-fg-muted" aria-hidden="true" />
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-slate-200">{value}</p>
-        <p className="text-xs text-slate-600">{label}</p>
+        <p className="truncate text-sm font-medium text-fg-secondary">{value}</p>
+        <p className="text-xs text-fg-subtle">{label}</p>
       </div>
       <span className={`h-2 w-2 shrink-0 rounded-full ${dotColor}`} />
     </div>
@@ -306,27 +316,27 @@ function StatusIndicator({
 function ConnectionBadge({ status }: { status: string }) {
   if (status === "connected") {
     return (
-      <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-medium text-emerald-400 ring-1 ring-inset ring-emerald-500/20">
+      <span className="rounded bg-success-bg px-1.5 py-0.5 text-[10px] font-medium text-success-fg ring-1 ring-inset ring-success-line/20">
         connected
       </span>
     );
   }
   if (status === "configured") {
     return (
-      <span className="rounded bg-brand-500/10 px-1.5 py-0.5 text-[10px] font-medium text-brand-300 ring-1 ring-inset ring-brand-500/20">
+      <span className="rounded bg-accent-bg px-1.5 py-0.5 text-[10px] font-medium text-accent-fg ring-1 ring-inset ring-accent-line/20">
         configured
       </span>
     );
   }
   return (
-    <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-medium text-slate-600 ring-1 ring-inset ring-slate-700">
+    <span className="rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-fg-subtle ring-1 ring-inset ring-line">
       not configured
     </span>
   );
 }
 
 function ConnectionIcon({ name }: { name: string }) {
-  const className = "h-3.5 w-3.5 shrink-0 text-slate-500";
+  const className = "h-3.5 w-3.5 shrink-0 text-fg-muted";
   switch (name) {
     case "Neo4j":
       return <Globe className={className} aria-hidden="true" />;
@@ -350,9 +360,9 @@ function MetricRow({
 }) {
   return (
     <div className="flex items-center justify-between">
-      <span className="text-sm text-slate-500">{label}</span>
+      <span className="text-sm text-fg-muted">{label}</span>
       <span
-        className={`text-sm font-medium tabular-nums ${highlight ? "text-brand-300" : "text-slate-300"}`}
+        className={`text-sm font-medium tabular-nums ${highlight ? "text-accent-fg" : "text-fg-secondary"}`}
       >
         {value}
       </span>

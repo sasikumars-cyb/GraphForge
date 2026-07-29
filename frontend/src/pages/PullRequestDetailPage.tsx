@@ -46,14 +46,14 @@ const RISK_TONE: Record<RiskLevel, "danger" | "warning" | "success"> = {
 
 function ImpactedNodeList({ nodes, emptyLabel }: { nodes: ImpactedNode[]; emptyLabel: string }) {
   if (nodes.length === 0) {
-    return <p className="text-xs text-slate-500">{emptyLabel}</p>;
+    return <p className="text-xs text-fg-muted">{emptyLabel}</p>;
   }
   return (
     <ul className="flex flex-wrap gap-2">
       {nodes.map((node) => (
         <li
           key={node.id}
-          className="rounded-md bg-slate-800/80 px-2 py-1 text-xs text-slate-300"
+          className="rounded-md bg-surface-raised px-2 py-1 text-xs text-fg-secondary"
           title={node.node_type}
         >
           {node.name}
@@ -68,13 +68,13 @@ function DeterministicPanel({ analysis }: { analysis: PullRequestAnalysis }) {
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3">
         <RiskBadge level={analysis.risk.toLowerCase() as "high" | "medium" | "low"} />
-        <span className="text-xs text-slate-500">
+        <span className="text-xs text-fg-muted">
           <StatusBadge label={analysis.risk} tone={RISK_TONE[analysis.risk]} />
         </span>
       </div>
 
       <div>
-        <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+        <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
           Directly impacted
         </p>
         <ImpactedNodeList
@@ -84,7 +84,7 @@ function DeterministicPanel({ analysis }: { analysis: PullRequestAnalysis }) {
       </div>
 
       <div>
-        <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+        <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
           Indirectly impacted (cross-repository)
         </p>
         <ImpactedNodeList
@@ -95,17 +95,17 @@ function DeterministicPanel({ analysis }: { analysis: PullRequestAnalysis }) {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">APIs</p>
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">APIs</p>
           <ImpactedNodeList nodes={analysis.impacted_apis} emptyLabel="None." />
         </div>
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Kafka topics
           </p>
           <ImpactedNodeList nodes={analysis.impacted_topics} emptyLabel="None." />
         </div>
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Libraries
           </p>
           <ImpactedNodeList nodes={analysis.impacted_libraries} emptyLabel="None." />
@@ -114,12 +114,12 @@ function DeterministicPanel({ analysis }: { analysis: PullRequestAnalysis }) {
 
       {analysis.dependency_paths.length > 0 && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Dependency paths
           </p>
           <ul className="flex flex-col gap-1">
             {analysis.dependency_paths.map((path, i) => (
-              <li key={i} className="text-xs text-slate-400">
+              <li key={i} className="text-xs text-fg-muted">
                 {path.steps.map((step) => step.node_name).join(" → ")}
               </li>
             ))}
@@ -133,18 +133,18 @@ function DeterministicPanel({ analysis }: { analysis: PullRequestAnalysis }) {
 function AiAnalysisPanel({ ai }: { ai: AIAnalysis | AIAnalysisResult }) {
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-sm text-slate-300">{ai.executive_summary}</p>
+      <p className="text-sm text-fg-secondary">{ai.executive_summary}</p>
 
       {ai.breaking_changes.length > 0 && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Breaking changes
           </p>
           <ul className="flex flex-col gap-2">
             {ai.breaking_changes.map((bc, i) => (
-              <li key={i} className="rounded-md bg-slate-800/60 p-2 text-xs">
-                <span className="font-medium text-slate-200">{bc.component}</span> —{" "}
-                {bc.description} <span className="text-slate-500">({bc.severity})</span>
+              <li key={i} className="rounded-md bg-surface-raised p-2 text-xs">
+                <span className="font-medium text-fg-secondary">{bc.component}</span> —{" "}
+                {bc.description} <span className="text-fg-muted">({bc.severity})</span>
               </li>
             ))}
           </ul>
@@ -153,14 +153,14 @@ function AiAnalysisPanel({ ai }: { ai: AIAnalysis | AIAnalysisResult }) {
 
       {ai.migration_advice.length > 0 && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Migration advice
           </p>
           <ul className="flex flex-col gap-2">
             {ai.migration_advice.map((advice, i) => (
-              <li key={i} className="rounded-md bg-slate-800/60 p-2 text-xs">
-                <span className="font-medium text-slate-200">{advice.component}</span> —{" "}
-                {advice.advice} <span className="text-slate-500">({advice.priority})</span>
+              <li key={i} className="rounded-md bg-surface-raised p-2 text-xs">
+                <span className="font-medium text-fg-secondary">{advice.component}</span> —{" "}
+                {advice.advice} <span className="text-fg-muted">({advice.priority})</span>
               </li>
             ))}
           </ul>
@@ -169,14 +169,14 @@ function AiAnalysisPanel({ ai }: { ai: AIAnalysis | AIAnalysisResult }) {
 
       {ai.suggested_reviewers.length > 0 && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Suggested reviewers
           </p>
           <ul className="flex flex-wrap gap-2">
             {ai.suggested_reviewers.map((reviewer, i) => (
               <li
                 key={i}
-                className="rounded-md bg-slate-800/80 px-2 py-1 text-xs text-slate-300"
+                className="rounded-md bg-surface-raised px-2 py-1 text-xs text-fg-secondary"
                 title={reviewer.reason}
               >
                 {reviewer.reviewer}
@@ -188,13 +188,13 @@ function AiAnalysisPanel({ ai }: { ai: AIAnalysis | AIAnalysisResult }) {
 
       {ai.regression_tests.length > 0 && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Suggested regression tests
           </p>
           <ul className="flex flex-col gap-2">
             {ai.regression_tests.map((test, i) => (
-              <li key={i} className="rounded-md bg-slate-800/60 p-2 text-xs">
-                <span className="font-medium text-slate-200">{test.component}</span> —{" "}
+              <li key={i} className="rounded-md bg-surface-raised p-2 text-xs">
+                <span className="font-medium text-fg-secondary">{test.component}</span> —{" "}
                 {test.test_description}
               </li>
             ))}
@@ -202,7 +202,7 @@ function AiAnalysisPanel({ ai }: { ai: AIAnalysis | AIAnalysisResult }) {
         </div>
       )}
 
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-fg-muted">
         Confidence:{" "}
         {Math.round(("confidence" in ai ? ai.confidence.score : ai.confidence_score) * 100)}%
       </p>
@@ -217,22 +217,22 @@ function ReleaseCoordinationPanel({
 }) {
   return (
     <div className="flex flex-col gap-4">
-      <p className="text-xs text-slate-500">
+      <p className="text-xs text-fg-muted">
         Regenerated fresh on every run — not persisted. Only shown for the AI analysis you just ran.
       </p>
 
       {plan.deployment_order.length > 0 && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Deployment order
           </p>
           <ol className="flex flex-col gap-2">
             {plan.deployment_order.map((step) => (
-              <li key={step.order} className="rounded-md bg-slate-800/60 p-2 text-xs">
-                <span className="font-medium text-slate-200">
+              <li key={step.order} className="rounded-md bg-surface-raised p-2 text-xs">
+                <span className="font-medium text-fg-secondary">
                   {step.order}. {step.repository}
                 </span>{" "}
-                — {step.action} <span className="text-slate-500">({step.reason})</span>
+                — {step.action} <span className="text-fg-muted">({step.reason})</span>
               </li>
             ))}
           </ol>
@@ -241,21 +241,21 @@ function ReleaseCoordinationPanel({
 
       {plan.repositories_to_notify.length > 0 && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Repositories to notify
           </p>
           <ul className="flex flex-col gap-2">
             {plan.repositories_to_notify.map((entry, i) => (
               <li
                 key={i}
-                className="flex items-center gap-2 rounded-md bg-slate-800/60 p-2 text-xs"
+                className="flex items-center gap-2 rounded-md bg-surface-raised p-2 text-xs"
               >
                 <StatusBadge
                   label={entry.urgency}
                   tone={entry.urgency === "blocking" ? "danger" : "warning"}
                 />
-                <span className="font-medium text-slate-200">{entry.repository}</span>
-                <span className="text-slate-500">{entry.reason}</span>
+                <span className="font-medium text-fg-secondary">{entry.repository}</span>
+                <span className="text-fg-muted">{entry.reason}</span>
               </li>
             ))}
           </ul>
@@ -264,37 +264,37 @@ function ReleaseCoordinationPanel({
 
       {plan.rollout_strategy && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Rollout strategy
           </p>
-          <p className="text-xs text-slate-300">{plan.rollout_strategy}</p>
+          <p className="text-xs text-fg-secondary">{plan.rollout_strategy}</p>
         </div>
       )}
 
       {plan.backward_compatibility_advice && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Backward compatibility
           </p>
-          <p className="text-xs text-slate-300">{plan.backward_compatibility_advice}</p>
+          <p className="text-xs text-fg-secondary">{plan.backward_compatibility_advice}</p>
         </div>
       )}
 
       {plan.communication_summary && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Communication summary
           </p>
-          <p className="text-xs text-slate-300">{plan.communication_summary}</p>
+          <p className="text-xs text-fg-secondary">{plan.communication_summary}</p>
         </div>
       )}
 
       {plan.rollout_risks.length > 0 && (
         <div>
-          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <p className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Rollout risks
           </p>
-          <ul className="list-inside list-disc text-xs text-slate-300">
+          <ul className="list-inside list-disc text-xs text-fg-secondary">
             {plan.rollout_risks.map((risk, i) => (
               <li key={i}>{risk}</li>
             ))}
@@ -432,18 +432,18 @@ export function PullRequestDetailPage() {
 
   if (!pr) {
     if (isLoadingPullRequests) {
-      return <p className="text-sm text-slate-500">Loading…</p>;
+      return <p className="text-sm text-fg-muted">Loading…</p>;
     }
     if (pullRequestsError) {
       return (
         <div className="flex flex-col gap-4">
           <Link
             to="/pull-requests"
-            className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
+            className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg-secondary"
           >
             ← Back to pull requests
           </Link>
-          <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+          <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
             {pullRequestsError}
           </div>
         </div>
@@ -456,11 +456,11 @@ export function PullRequestDetailPage() {
       <div className="flex flex-col gap-4">
         <Link
           to="/pull-requests"
-          className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
+          className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg-secondary"
         >
           ← Back to pull requests
         </Link>
-        <p className="text-sm text-slate-500">Pull request not found.</p>
+        <p className="text-sm text-fg-muted">Pull request not found.</p>
       </div>
     );
   }
@@ -468,8 +468,8 @@ export function PullRequestDetailPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-xl font-semibold text-slate-50">{pr.title}</h2>
-        <p className="mt-1 text-sm text-slate-400">
+        <h2 className="text-xl font-semibold text-fg">{pr.title}</h2>
+        <p className="mt-1 text-sm text-fg-muted">
           <Link to={`/repositories/${pr.repositoryId}`} className="hover:underline">
             {pr.repositoryFullName}
           </Link>{" "}
@@ -478,7 +478,7 @@ export function PullRequestDetailPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       )}
@@ -491,7 +491,7 @@ export function PullRequestDetailPage() {
             type="button"
             onClick={() => void handleRunDeterministic()}
             disabled={isRunningDeterministic}
-            className="rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md bg-info-solid px-3 py-1.5 text-sm font-medium text-info-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isRunningDeterministic
               ? "Running…"
@@ -504,7 +504,7 @@ export function PullRequestDetailPage() {
         {deterministic ? (
           <DeterministicPanel analysis={deterministic} />
         ) : (
-          <p className="text-sm text-slate-500">Not analyzed yet.</p>
+          <p className="text-sm text-fg-muted">Not analyzed yet.</p>
         )}
       </Card>
 
@@ -517,7 +517,7 @@ export function PullRequestDetailPage() {
               type="button"
               onClick={() => void handleRunAi()}
               disabled={isRunningAi || isInvestigating}
-              className="rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-md bg-info-solid px-3 py-1.5 text-sm font-medium text-info-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isRunningAi ? "Running…" : aiAnalysis ? "Re-run AI analysis" : "Run AI analysis"}
             </button>
@@ -526,7 +526,7 @@ export function PullRequestDetailPage() {
               onClick={() => void handleInvestigate()}
               disabled={isRunningAi || isInvestigating}
               title="Runs the Change Investigation Agent - it decides which evidence to gather"
-              className="rounded-md bg-violet-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-md bg-accent-solid px-3 py-1.5 text-sm font-medium text-accent-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isInvestigating ? "Investigating…" : "Investigate (Agent)"}
             </button>
@@ -535,7 +535,7 @@ export function PullRequestDetailPage() {
               onClick={() => void handlePublishReview()}
               disabled={isRunningAi || isInvestigating || isPublishing || !aiAnalysis}
               title="Publishes the AI analysis above as a comment on the GitHub pull request"
-              className="rounded-md bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-md bg-success-solid px-3 py-1.5 text-sm font-medium text-success-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isPublishing
                 ? "Publishing…"
@@ -551,21 +551,21 @@ export function PullRequestDetailPage() {
           {aiAnalysis ? (
             <>
               {generatedWithModelId && (
-                <div className="flex flex-wrap gap-x-6 gap-y-1 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs">
-                  <span className="text-slate-500">
+                <div className="flex flex-wrap gap-x-6 gap-y-1 rounded-lg border border-line-muted bg-canvas px-3 py-2 text-xs">
+                  <span className="text-fg-muted">
                     Generated using{" "}
-                    <span className="font-medium text-slate-200">
+                    <span className="font-medium text-fg-secondary">
                       {findAiModel(generatedWithModelId).label}
                     </span>
                   </span>
-                  <span className="text-slate-500">
+                  <span className="text-fg-muted">
                     Estimated cost{" "}
-                    <span className="font-medium text-slate-200">
+                    <span className="font-medium text-fg-secondary">
                       {findAiModel(generatedWithModelId).estimatedCost}
                     </span>
                   </span>
-                  <span className="text-slate-500">
-                    Provider <span className="font-medium text-slate-200">OpenAI</span>
+                  <span className="text-fg-muted">
+                    Provider <span className="font-medium text-fg-secondary">OpenAI</span>
                   </span>
                 </div>
               )}
@@ -575,7 +575,7 @@ export function PullRequestDetailPage() {
                   href={publishedCommentUrl}
                   target="_blank"
                   rel="noreferrer"
-                  className="text-xs font-medium text-emerald-400 hover:underline"
+                  className="text-xs font-medium text-success-fg hover:underline"
                 >
                   View published comment on GitHub →
                 </a>
@@ -583,7 +583,7 @@ export function PullRequestDetailPage() {
               {reasoningLog && <ReasoningLogPanel steps={reasoningLog} />}
             </>
           ) : (
-            <p className="text-sm text-slate-500">Not analyzed yet.</p>
+            <p className="text-sm text-fg-muted">Not analyzed yet.</p>
           )}
         </div>
       </Card>
@@ -595,7 +595,7 @@ export function PullRequestDetailPage() {
         {releasePlan ? (
           <ReleaseCoordinationPanel plan={releasePlan} />
         ) : (
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-fg-muted">
             Run AI analysis above to generate a release coordination plan.
           </p>
         )}

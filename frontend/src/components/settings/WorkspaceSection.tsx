@@ -16,8 +16,8 @@ function ToggleRow({
   return (
     <label className="flex cursor-pointer items-start justify-between gap-4 py-3">
       <span>
-        <span className="block text-sm font-medium text-slate-200">{label}</span>
-        <span className="block text-xs text-slate-500">{description}</span>
+        <span className="block text-sm font-medium text-fg-secondary">{label}</span>
+        <span className="block text-xs text-fg-muted">{description}</span>
       </span>
       <span className="relative inline-flex h-6 w-11 shrink-0 items-center">
         <input
@@ -26,7 +26,7 @@ function ToggleRow({
           onChange={(e) => setChecked(e.target.checked)}
           className="peer sr-only"
         />
-        <span className="h-6 w-11 rounded-full bg-slate-700 transition-colors peer-checked:bg-sky-500" />
+        <span className="h-6 w-11 rounded-full bg-surface-active transition-colors peer-checked:bg-info-solid" />
         <span className="absolute left-0.5 h-5 w-5 rounded-full bg-white transition-transform peer-checked:translate-x-5" />
       </span>
     </label>
@@ -39,19 +39,19 @@ export function WorkspaceSection() {
       <Card title="Organization" description="General workspace identity and defaults">
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-slate-400">Organization name</span>
+            <span className="text-fg-muted">Organization name</span>
             <input
               type="text"
               defaultValue="Acme Engineering"
-              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500"
+              className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
             />
           </label>
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-slate-400">Default branch</span>
+            <span className="text-fg-muted">Default branch</span>
             <input
               type="text"
               defaultValue="main"
-              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500"
+              className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
             />
           </label>
         </div>
@@ -61,7 +61,7 @@ export function WorkspaceSection() {
         title="Notifications"
         description="How GraphForge alerts you about important events"
       >
-        <div className="divide-y divide-slate-800">
+        <div className="divide-y divide-line-muted">
           <ToggleRow
             label="Critical risk alerts"
             description="Notify immediately when a pull request is scored critical"
@@ -94,16 +94,16 @@ export function WorkspaceSection() {
       >
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-slate-400">Default workflow type</span>
-            <select className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500">
+            <span className="text-fg-muted">Default workflow type</span>
+            <select className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line">
               <option value="full">Full (Plan + Develop + Test + Review)</option>
               <option value="plan_only">Plan Only</option>
               <option value="review_only">Review Only</option>
             </select>
           </label>
           <label className="flex flex-col gap-1 text-sm">
-            <span className="text-slate-400">Auto-approve threshold</span>
-            <select className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500">
+            <span className="text-fg-muted">Auto-approve threshold</span>
+            <select className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line">
               <option value="never">Never (require manual approval)</option>
               <option value="low">Low risk changes only</option>
               <option value="medium">Medium risk and below</option>

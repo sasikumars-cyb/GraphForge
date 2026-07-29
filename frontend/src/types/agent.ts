@@ -428,7 +428,15 @@ export type WorkflowStatus =
 export interface WorkflowStageInfo {
   stage: string;
   label: string;
-  status: "completed" | "running" | "failed" | "pending";
+  // Mirrors Run.status directly (see backend WorkflowStageResponse) — that
+  // includes "queued" (Run row created, not yet picked up for execution)
+  // and "partial" (agent finished with a degraded/incomplete result), not
+  // just the 4 statuses this used to declare. Under-typing this let
+  // "queued" silently fall through PipelineGraph's status→config lookup to
+  // the same static, no-spinner treatment as an untouched future stage —
+  // indistinguishable from "nothing has happened yet" even while the run
+  // was genuinely in flight.
+  status: "completed" | "running" | "queued" | "partial" | "failed" | "pending";
   run_id: string | null;
 }
 

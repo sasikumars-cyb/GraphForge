@@ -1,5 +1,6 @@
 @import "tailwindcss";
 @import "./styles/themes.css";
+@import "./styles/tokens.css";
 
 @theme {
   /* Typography — Sora for headings (geometric, technical), Plus Jakarta
@@ -8,6 +9,40 @@
   --font-sans: "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Sora", "Plus Jakarta Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* ---- Shape -----------------------------------------------------------
+   * The audit found four radius conventions competing with no rule for
+   * picking between them (`rounded` 63x, `rounded-md` 107x, `rounded-lg`
+   * 130x, `rounded-xl` 25x). These re-point Tailwind's own scale onto a
+   * 4-step ladder tied to component size, so the existing utilities stay
+   * valid and simply land on the system:
+   *   sm  badges, pills, inline chips        md  inputs, buttons, small tiles
+   *   lg  panels, list rows, popovers        xl  cards, modals, page sections
+   * `rounded-full` is unchanged and stays reserved for pills and avatars. */
+  --radius-sm: 0.375rem;
+  --radius-md: 0.5rem;
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.25rem;
+
+  /* ---- Elevation -------------------------------------------------------
+   * Before this there were 11 shadows in the whole app, 3 of them one-off
+   * `shadow-[...]` arbitrary values. Four steps, each a two-layer shadow
+   * (tight contact + broad ambient) so cards read as lifted rather than
+   * outlined. Tuned per theme via `--gf-shadow-color` below — a black drop
+   * shadow is invisible on a near-black canvas, which is why the dark
+   * themes had effectively no elevation at all. */
+  --shadow-xs: 0 1px 2px 0 var(--gf-shadow-weak);
+  --shadow-sm: 0 1px 2px 0 var(--gf-shadow-weak), 0 2px 6px -1px var(--gf-shadow-weak);
+  --shadow-md: 0 2px 4px -1px var(--gf-shadow), 0 6px 16px -2px var(--gf-shadow-weak);
+  --shadow-lg: 0 4px 8px -2px var(--gf-shadow), 0 12px 32px -4px var(--gf-shadow);
+  --shadow-xl: 0 8px 16px -4px var(--gf-shadow), 0 24px 56px -8px var(--gf-shadow);
+
+  /* ---- Motion ----------------------------------------------------------
+   * Two durations and one easing. Premium motion is short and consistent;
+   * anything longer than 200ms on a hover reads as lag. */
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-emphasized: cubic-bezier(0.3, 0, 0, 1);
 }
 
 /* Brand accent (--color-brand-*) and every restyled Tailwind color family
@@ -15,9 +50,37 @@
    for the full token architecture and docs/theming.md for how to add a
    new theme. */
 
+/* ---------------------------------------------------------------------------
+ * One focus treatment for the whole app.
+ *
+ * The audit found 21 of the files containing a `<button>` had no focus
+ * styling at all, and the handful that did each invented their own
+ * (`focus-visible:ring-2 focus-visible:ring-brand-500`, `focus:outline-none`
+ * with nothing to replace it, ...). `outline` rather than `ring` so the
+ * indicator can never be clipped by an ancestor's `overflow-hidden`, and
+ * `focus-visible` so it appears for keyboard users without firing on click.
+ * ------------------------------------------------------------------------ */
+@utility focus-ring {
+  &:focus-visible {
+    outline: 2px solid var(--gf-focus);
+    outline-offset: 2px;
+  }
+}
+
 @layer base {
   body {
     font-family: var(--font-sans);
+  }
+
+  /* Anything focusable that hasn't opted into a bespoke treatment still gets
+     a visible indicator — the default is "visible", not "nothing". */
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--gf-focus);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background-color: var(--gf-selection);
   }
 
   h1,
@@ -75,6 +138,51 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* ---------------------------------------------------------------------------
+ * @xyflow/react chrome.
+ *
+ * xyflow ships its own light/dark stylesheet selected by the `colorMode`
+ * prop, which only knows "light" or "dark" — so Midnight and Modern Blue got
+ * plain Dark's chrome (near-white control buttons on a blue-black canvas) and
+ * High Contrast got Light's. Pointing the library's own custom properties at
+ * our tokens makes the controls, minimap and handles follow the active theme
+ * instead of the two-way switch.
+ * ------------------------------------------------------------------------ */
+.react-flow {
+  --xy-background-color: var(--gf-graph-canvas);
+  --xy-edge-stroke: var(--gf-graph-edge);
+  --xy-edge-stroke-selected: var(--gf-graph-selected);
+  --xy-connectionline-stroke: var(--gf-graph-edge);
+  --xy-attribution-background-color: transparent;
+  --xy-minimap-background-color: var(--gf-surface-raised);
+  --xy-minimap-mask-background-color: var(--gf-graph-cluster);
+  --xy-controls-button-background-color: var(--gf-surface-raised);
+  --xy-controls-button-background-color-hover: var(--gf-surface-hover);
+  --xy-controls-button-color: var(--gf-fg-secondary);
+  --xy-controls-button-color-hover: var(--gf-fg);
+  --xy-controls-button-border-color: var(--gf-line);
+  --xy-node-color: var(--gf-fg-secondary);
+  --xy-node-border: 1px solid var(--gf-line);
+  --xy-node-background-color: var(--gf-surface-raised);
+  --xy-handle-background-color: var(--gf-line-strong);
+  --xy-handle-border-color: var(--gf-surface);
+  --xy-selection-background-color: var(--gf-selection);
+}
+
+/* The dot grid: xyflow's default `#91919a` is a fixed grey that reads as
+   noise on the light themes and vanishes on Midnight. */
+.react-flow__background pattern circle {
+  fill: var(--gf-chart-grid);
+}
+
+/* Keyboard focus for the zoom/fit controls — xyflow renders plain buttons
+   with no focus treatment of its own. */
+.react-flow__controls-button:focus-visible {
+  outline: 2px solid var(--gf-focus);
+  outline-offset: 2px;
+  z-index: 1;
 }
 
 /* @xyflow/react keeps a node's `visibility: hidden` until its internal

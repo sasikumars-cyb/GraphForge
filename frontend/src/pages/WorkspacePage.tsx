@@ -11,52 +11,52 @@ import {
 function CapabilityCard({ capability }: { capability: WorkspaceCapability }) {
   const colorMap: Record<string, { bg: string; ring: string; text: string; hover: string }> = {
     sky: {
-      bg: "bg-sky-500/10",
-      ring: "ring-sky-500/30",
-      text: "text-sky-400",
-      hover: "hover:border-sky-500/40",
+      bg: "bg-info-bg",
+      ring: "ring-info-line/30",
+      text: "text-info-fg",
+      hover: "hover:border-info-line/40",
     },
     violet: {
-      bg: "bg-violet-500/10",
-      ring: "ring-violet-500/30",
-      text: "text-violet-400",
-      hover: "hover:border-violet-500/40",
+      bg: "bg-cat-7-bg",
+      ring: "ring-cat-7-line/30",
+      text: "text-cat-7-fg",
+      hover: "hover:border-cat-7-line/40",
     },
     amber: {
-      bg: "bg-amber-500/10",
-      ring: "ring-amber-500/30",
-      text: "text-amber-400",
-      hover: "hover:border-amber-500/40",
+      bg: "bg-warning-bg",
+      ring: "ring-warning-line/30",
+      text: "text-warning-fg",
+      hover: "hover:border-warning-line/40",
     },
     emerald: {
-      bg: "bg-emerald-500/10",
-      ring: "ring-emerald-500/30",
-      text: "text-emerald-400",
-      hover: "hover:border-emerald-500/40",
+      bg: "bg-success-bg",
+      ring: "ring-success-line/30",
+      text: "text-success-fg",
+      hover: "hover:border-success-line/40",
     },
     rose: {
-      bg: "bg-rose-500/10",
-      ring: "ring-rose-500/30",
-      text: "text-rose-400",
-      hover: "hover:border-rose-500/40",
+      bg: "bg-danger-bg",
+      ring: "ring-danger-line/30",
+      text: "text-danger-fg",
+      hover: "hover:border-danger-line/40",
     },
     teal: {
-      bg: "bg-teal-500/10",
-      ring: "ring-teal-500/30",
-      text: "text-teal-400",
-      hover: "hover:border-teal-500/40",
+      bg: "bg-cat-5-bg",
+      ring: "ring-cat-5-line/30",
+      text: "text-cat-5-fg",
+      hover: "hover:border-cat-5-line/40",
     },
     orange: {
-      bg: "bg-orange-500/10",
-      ring: "ring-orange-500/30",
-      text: "text-orange-400",
-      hover: "hover:border-orange-500/40",
+      bg: "bg-cat-6-bg",
+      ring: "ring-cat-6-line/30",
+      text: "text-cat-6-fg",
+      hover: "hover:border-cat-6-line/40",
     },
     indigo: {
-      bg: "bg-indigo-500/10",
-      ring: "ring-indigo-500/30",
-      text: "text-indigo-400",
-      hover: "hover:border-indigo-500/40",
+      bg: "bg-cat-7-bg",
+      ring: "ring-cat-7-line/30",
+      text: "text-cat-7-fg",
+      hover: "hover:border-cat-7-line/40",
     },
   };
 
@@ -64,17 +64,17 @@ function CapabilityCard({ capability }: { capability: WorkspaceCapability }) {
 
   if (!capability.available) {
     return (
-      <div className="relative flex flex-col gap-3 rounded-xl border border-slate-800/60 bg-slate-900/30 p-5 opacity-60">
+      <div className="relative flex flex-col gap-3 rounded-xl border border-line-muted bg-surface p-5 opacity-60">
         <div className="flex items-center gap-3">
           <div className={`rounded-lg ${colors.bg} p-2.5 ring-1 ring-inset ${colors.ring}`}>
             <capability.icon className={`h-5 w-5 ${colors.text}`} aria-hidden="true" />
           </div>
           <div className="min-w-0 flex-1">
-            <h3 className="text-sm font-semibold text-slate-300">{capability.name}</h3>
+            <h3 className="text-sm font-semibold text-fg-secondary">{capability.name}</h3>
           </div>
         </div>
-        <p className="text-xs leading-relaxed text-slate-500">{capability.description}</p>
-        <span className="mt-auto inline-flex w-fit items-center rounded-full bg-slate-800/80 px-2.5 py-1 text-[10px] font-medium tracking-wide text-slate-500 uppercase">
+        <p className="text-xs leading-relaxed text-fg-muted">{capability.description}</p>
+        <span className="mt-auto inline-flex w-fit items-center rounded-full bg-surface-raised px-2.5 py-1 text-[10px] font-medium tracking-wide text-fg-muted uppercase">
           Coming Soon
         </span>
       </div>
@@ -84,19 +84,17 @@ function CapabilityCard({ capability }: { capability: WorkspaceCapability }) {
   return (
     <Link
       to={`/workspace/${capability.slug}`}
-      className={`group relative flex flex-col gap-3 rounded-xl border border-slate-800 bg-slate-900/60 p-5 shadow-sm shadow-black/20 transition-colors ${colors.hover} hover:bg-slate-900/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-500`}
+      className={`group relative flex flex-col gap-3 rounded-xl border border-line-muted bg-surface p-5 shadow-sm transition-colors ${colors.hover} hover:bg-surface `}
     >
       <div className="flex items-center gap-3">
         <div className={`rounded-lg ${colors.bg} p-2.5 ring-1 ring-inset ${colors.ring}`}>
           <capability.icon className={`h-5 w-5 ${colors.text}`} aria-hidden="true" />
         </div>
         <div className="min-w-0 flex-1">
-          <h3 className="text-sm font-semibold text-slate-100 group-hover:text-white">
-            {capability.name}
-          </h3>
+          <h3 className="text-sm font-semibold text-fg group-hover:text-fg">{capability.name}</h3>
         </div>
       </div>
-      <p className="text-xs leading-relaxed text-slate-400">{capability.description}</p>
+      <p className="text-xs leading-relaxed text-fg-muted">{capability.description}</p>
       <span
         className={`mt-auto inline-flex w-fit items-center rounded-full ${colors.bg} px-2.5 py-1 text-[10px] font-medium tracking-wide ${colors.text} uppercase`}
       >
@@ -129,12 +127,12 @@ export function WorkspacePage() {
       {/* Header */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex items-center gap-3">
-          <div className="rounded-lg bg-brand-500/10 p-2 ring-1 ring-inset ring-brand-500/30">
-            <Sparkles className="h-5 w-5 text-brand-400" aria-hidden="true" />
+          <div className="rounded-lg bg-accent-bg p-2 ring-1 ring-inset ring-accent-line/30">
+            <Sparkles className="h-5 w-5 text-accent-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-slate-50">AI Workspace</h2>
-            <p className="text-sm text-slate-400">
+            <h2 className="text-xl font-semibold text-fg">AI Workspace</h2>
+            <p className="text-sm text-fg-muted">
               Discover and run AI-powered engineering capabilities.
             </p>
           </div>
@@ -143,7 +141,7 @@ export function WorkspacePage() {
         {/* Search */}
         <div className="relative w-full sm:w-64">
           <Search
-            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-500"
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-muted"
             aria-hidden="true"
           />
           <input
@@ -151,7 +149,7 @@ export function WorkspacePage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search capabilities..."
-            className="w-full rounded-lg border border-slate-700 bg-slate-900 py-2 pl-9 pr-3 text-sm text-slate-100 placeholder-slate-500 outline-none transition-colors focus:border-brand-500/60 focus:ring-1 focus:ring-brand-500/30"
+            className="w-full rounded-lg border border-line bg-surface py-2 pl-9 pr-3 text-sm text-fg placeholder-fg-subtle transition-colors focus:border-accent-line/60 "
           />
         </div>
       </div>
@@ -163,8 +161,8 @@ export function WorkspacePage() {
           onClick={() => setActiveCategory("all")}
           className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
             activeCategory === "all"
-              ? "bg-brand-500/20 text-brand-300 ring-1 ring-inset ring-brand-500/40"
-              : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+              ? "bg-accent-bg text-accent-fg ring-1 ring-inset ring-accent-line/40"
+              : "text-fg-muted hover:bg-surface-raised hover:text-fg-secondary"
           }`}
         >
           All
@@ -176,8 +174,8 @@ export function WorkspacePage() {
             onClick={() => setActiveCategory(cat)}
             className={`rounded-full px-3 py-1.5 text-xs font-medium transition-colors ${
               activeCategory === cat
-                ? "bg-brand-500/20 text-brand-300 ring-1 ring-inset ring-brand-500/40"
-                : "text-slate-400 hover:bg-slate-800 hover:text-slate-200"
+                ? "bg-accent-bg text-accent-fg ring-1 ring-inset ring-accent-line/40"
+                : "text-fg-muted hover:bg-surface-raised hover:text-fg-secondary"
             }`}
           >
             {CATEGORY_LABELS[cat]}
@@ -197,7 +195,7 @@ export function WorkspacePage() {
       {/* Coming soon */}
       {comingSoon.length > 0 && (
         <div>
-          <h3 className="mb-3 text-xs font-semibold tracking-wide text-slate-600 uppercase">
+          <h3 className="mb-3 text-xs font-semibold tracking-wide text-fg-subtle uppercase">
             Coming Soon
           </h3>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -211,8 +209,8 @@ export function WorkspacePage() {
       {/* Empty state */}
       {available.length === 0 && comingSoon.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
-          <Search className="mb-3 h-8 w-8 text-slate-600" aria-hidden="true" />
-          <p className="text-sm text-slate-400">No capabilities match your search.</p>
+          <Search className="mb-3 h-8 w-8 text-fg-subtle" aria-hidden="true" />
+          <p className="text-sm text-fg-muted">No capabilities match your search.</p>
         </div>
       )}
     </div>

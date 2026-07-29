@@ -38,7 +38,7 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
 
       {result.executive_summary && (
         <Card title="Implementation Plan">
-          <p className="text-sm text-slate-200">{result.executive_summary}</p>
+          <p className="text-sm text-fg-secondary">{result.executive_summary}</p>
         </Card>
       )}
 
@@ -51,20 +51,20 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
             {result.implementation_steps.map((s, i) => (
               <li
                 key={i}
-                className="flex gap-3 rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-3"
+                className="flex gap-3 rounded-lg border border-line-muted bg-surface px-4 py-3"
               >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-sky-500/10 text-xs font-semibold text-sky-300 ring-1 ring-inset ring-sky-500/30">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-info-bg text-xs font-semibold text-info-fg ring-1 ring-inset ring-info-line/30">
                   {s.order ?? i + 1}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm text-slate-200">{s.description}</p>
+                  <p className="text-sm text-fg-secondary">{s.description}</p>
                   {s.affected_component && (
-                    <p className="mt-1 text-xs text-slate-500">
-                      Component: <span className="text-slate-400">{s.affected_component}</span>
+                    <p className="mt-1 text-xs text-fg-muted">
+                      Component: <span className="text-fg-muted">{s.affected_component}</span>
                     </p>
                   )}
                   {s.risk_note && (
-                    <p className="mt-1 text-xs text-amber-400">Risk: {s.risk_note}</p>
+                    <p className="mt-1 text-xs text-warning-fg">Risk: {s.risk_note}</p>
                   )}
                 </div>
               </li>
@@ -78,7 +78,7 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
           <Card title="Affected Components">
             <ul className="space-y-1">
               {result.affected_components.map((c) => (
-                <li key={c} className="text-sm text-slate-300">
+                <li key={c} className="text-sm text-fg-secondary">
                   {c}
                 </li>
               ))}
@@ -90,7 +90,7 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
           <Card title="Kafka Topics">
             <ul className="space-y-1">
               {result.kafka_topics_involved.map((t) => (
-                <li key={t} className="font-mono text-sm text-slate-300">
+                <li key={t} className="font-mono text-sm text-fg-secondary">
                   {t}
                 </li>
               ))}
@@ -102,7 +102,7 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
           <Card title="Repositories Consulted">
             <ul className="space-y-1">
               {result.repositories_consulted.map((r) => (
-                <li key={r} className="text-sm text-slate-300">
+                <li key={r} className="text-sm text-fg-secondary">
                   {r}
                 </li>
               ))}
@@ -115,9 +115,9 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
         <Card title="Risk Considerations">
           <ul className="space-y-2">
             {result.risk_considerations.map((risk, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm text-amber-200">
+              <li key={i} className="flex items-start gap-2 text-sm text-warning-fg">
                 <span
-                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400"
+                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-warning-solid"
                   aria-hidden="true"
                 />
                 {risk}
@@ -127,7 +127,7 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
         </Card>
       )}
 
-      <div className="text-xs text-slate-500">
+      <div className="text-xs text-fg-muted">
         Graph context:{" "}
         {result.graph_context_used ? "Used architecture graph data" : "No graph data available"}
       </div>
@@ -145,9 +145,9 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
 
       {result.executive_summary && (
         <Card title="Implementation Blueprint">
-          <p className="text-sm text-slate-200">{result.executive_summary}</p>
+          <p className="text-sm text-fg-secondary">{result.executive_summary}</p>
           {/* What did Development actually produce? A plan — never code. */}
-          <p className="mt-2 text-xs text-slate-500">
+          <p className="mt-2 text-xs text-fg-muted">
             This stage produces a structured implementation plan only — no repositories, branches,
             or commits are created.
           </p>
@@ -163,23 +163,23 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
             {result.implementation_phases.map((phase, i) => (
               <li
                 key={i}
-                className="flex gap-3 rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-3"
+                className="flex gap-3 rounded-lg border border-line-muted bg-surface px-4 py-3"
               >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-violet-500/10 text-xs font-semibold text-violet-300 ring-1 ring-inset ring-violet-500/30">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-cat-7-bg text-xs font-semibold text-cat-7-fg ring-1 ring-inset ring-cat-7-line/30">
                   {phase.order ?? i + 1}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-slate-200">{phase.title}</p>
-                  <p className="mt-1 text-sm text-slate-400">{phase.description}</p>
+                  <p className="text-sm font-medium text-fg-secondary">{phase.title}</p>
+                  <p className="mt-1 text-sm text-fg-muted">{phase.description}</p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
                     {phase.estimated_complexity && (
                       <span
                         className={`rounded px-1.5 py-0.5 text-xs font-medium ${
                           phase.estimated_complexity === "high"
-                            ? "bg-rose-500/10 text-rose-300"
+                            ? "bg-danger-bg text-danger-fg"
                             : phase.estimated_complexity === "medium"
-                              ? "bg-amber-500/10 text-amber-300"
-                              : "bg-emerald-500/10 text-emerald-300"
+                              ? "bg-warning-bg text-warning-fg"
+                              : "bg-success-bg text-success-fg"
                         }`}
                       >
                         {phase.estimated_complexity}
@@ -188,13 +188,13 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
                     {phase.affected_components.map((comp) => (
                       <span
                         key={comp}
-                        className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400"
+                        className="rounded bg-surface-raised px-1.5 py-0.5 text-xs text-fg-muted"
                       >
                         {comp}
                       </span>
                     ))}
                     {phase.depends_on_phases.length > 0 && (
-                      <span className="text-xs text-slate-500">
+                      <span className="text-xs text-fg-muted">
                         depends on: {phase.depends_on_phases.join(", ")}
                       </span>
                     )}
@@ -216,15 +216,15 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
               {result.repositories.map((repo, i) => (
                 <li
                   key={i}
-                  className="flex items-start gap-2 rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2"
+                  className="flex items-start gap-2 rounded-md border border-line-muted bg-surface px-3 py-2"
                 >
                   <GitBranch
-                    className="mt-0.5 h-4 w-4 shrink-0 text-violet-400"
+                    className="mt-0.5 h-4 w-4 shrink-0 text-cat-7-fg"
                     aria-hidden="true"
                   />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-slate-200">{repo.name}</p>
-                    {repo.reason && <p className="text-xs text-slate-400">{repo.reason}</p>}
+                    <p className="text-sm font-medium text-fg-secondary">{repo.name}</p>
+                    {repo.reason && <p className="text-xs text-fg-muted">{repo.reason}</p>}
                   </div>
                 </li>
               ))}
@@ -241,23 +241,23 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
               {result.components.map((comp, i) => (
                 <li
                   key={i}
-                  className="flex items-start gap-2 rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2"
+                  className="flex items-start gap-2 rounded-md border border-line-muted bg-surface px-3 py-2"
                 >
-                  <Layers className="mt-0.5 h-4 w-4 shrink-0 text-sky-400" aria-hidden="true" />
+                  <Layers className="mt-0.5 h-4 w-4 shrink-0 text-info-fg" aria-hidden="true" />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-slate-200">{comp.name}</p>
+                      <p className="text-sm font-medium text-fg-secondary">{comp.name}</p>
                       {comp.component_type && (
-                        <span className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">
+                        <span className="rounded bg-surface-raised px-1.5 py-0.5 text-xs text-fg-muted">
                           {comp.component_type}
                         </span>
                       )}
                     </div>
                     {comp.change_description && (
-                      <p className="mt-0.5 text-xs text-slate-400">{comp.change_description}</p>
+                      <p className="mt-0.5 text-xs text-fg-muted">{comp.change_description}</p>
                     )}
                     {comp.repository && (
-                      <p className="text-xs text-slate-500">
+                      <p className="text-xs text-fg-muted">
                         {comp.repository}
                         {comp.file_path ? ` • ${comp.file_path}` : ""}
                       </p>
@@ -279,15 +279,15 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
             {result.dependencies.map((dep, i) => (
               <li
                 key={i}
-                className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2 text-sm"
+                className="flex items-center gap-2 rounded-md border border-line-muted bg-surface px-3 py-2 text-sm"
               >
-                <span className="text-slate-200">{dep.source}</span>
-                <span className="rounded bg-sky-500/10 px-1.5 py-0.5 text-xs font-medium text-sky-300">
+                <span className="text-fg-secondary">{dep.source}</span>
+                <span className="rounded bg-info-bg px-1.5 py-0.5 text-xs font-medium text-info-fg">
                   {dep.relationship}
                 </span>
-                <span className="text-slate-200">{dep.target}</span>
+                <span className="text-fg-secondary">{dep.target}</span>
                 {dep.risk_note && (
-                  <span className="ml-auto text-xs text-amber-400">{dep.risk_note}</span>
+                  <span className="ml-auto text-xs text-warning-fg">{dep.risk_note}</span>
                 )}
               </li>
             ))}
@@ -301,14 +301,14 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
             {result.reusable_implementations.map((impl, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 rounded-md border border-emerald-500/20 bg-emerald-500/5 px-3 py-2"
+                className="flex items-start gap-2 rounded-md border border-success-line/20 bg-success-bg px-3 py-2"
               >
-                <Recycle className="mt-0.5 h-4 w-4 shrink-0 text-emerald-400" aria-hidden="true" />
+                <Recycle className="mt-0.5 h-4 w-4 shrink-0 text-success-fg" aria-hidden="true" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-emerald-200">{impl.name}</p>
-                  {impl.reason && <p className="text-xs text-slate-400">{impl.reason}</p>}
+                  <p className="text-sm font-medium text-success-fg">{impl.name}</p>
+                  {impl.reason && <p className="text-xs text-fg-muted">{impl.reason}</p>}
                   {impl.repository && (
-                    <p className="text-xs text-slate-500">in {impl.repository}</p>
+                    <p className="text-xs text-fg-muted">in {impl.repository}</p>
                   )}
                 </div>
               </li>
@@ -326,23 +326,23 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
             {result.risks.map((risk, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2"
+                className="flex items-start gap-2 rounded-md border border-warning-line/20 bg-warning-bg px-3 py-2"
               >
                 <AlertTriangle
-                  className="mt-0.5 h-4 w-4 shrink-0 text-amber-400"
+                  className="mt-0.5 h-4 w-4 shrink-0 text-warning-fg"
                   aria-hidden="true"
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm text-slate-200">{risk.description}</p>
+                    <p className="text-sm text-fg-secondary">{risk.description}</p>
                     {risk.severity && (
                       <span
                         className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                           risk.severity === "critical" || risk.severity === "high"
-                            ? "bg-rose-500/10 text-rose-300"
+                            ? "bg-danger-bg text-danger-fg"
                             : risk.severity === "medium"
-                              ? "bg-amber-500/10 text-amber-300"
-                              : "bg-slate-800 text-slate-400"
+                              ? "bg-warning-bg text-warning-fg"
+                              : "bg-surface-raised text-fg-muted"
                         }`}
                       >
                         {risk.severity}
@@ -350,10 +350,10 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
                     )}
                   </div>
                   {risk.mitigation && (
-                    <p className="mt-1 text-xs text-slate-400">Mitigation: {risk.mitigation}</p>
+                    <p className="mt-1 text-xs text-fg-muted">Mitigation: {risk.mitigation}</p>
                   )}
                   {risk.affected_component && (
-                    <p className="text-xs text-slate-500">Affects: {risk.affected_component}</p>
+                    <p className="text-xs text-fg-muted">Affects: {risk.affected_component}</p>
                   )}
                 </div>
               </li>
@@ -366,9 +366,9 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
         <Card title="Recommendations">
           <ul className="space-y-2">
             {result.recommendations.map((rec, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm text-slate-300">
+              <li key={i} className="flex items-start gap-2 text-sm text-fg-secondary">
                 <span
-                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-violet-400"
+                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-cat-7-line"
                   aria-hidden="true"
                 />
                 {rec}
@@ -378,7 +378,7 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
         </Card>
       )}
 
-      <div className="text-xs text-slate-500">
+      <div className="text-xs text-fg-muted">
         Graph context:{" "}
         {result.graph_context_used
           ? "Blueprint grounded in architecture graph data"
@@ -395,7 +395,7 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
 
       {result.executive_summary && (
         <Card title="Test Strategy">
-          <p className="text-sm text-slate-200">{result.executive_summary}</p>
+          <p className="text-sm text-fg-secondary">{result.executive_summary}</p>
         </Card>
       )}
 
@@ -406,9 +406,9 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
               <Card title="In Scope">
                 <ul className="space-y-1">
                   {result.test_scope.in_scope.map((item, i) => (
-                    <li key={i} className="flex items-start gap-2 text-sm text-teal-200">
+                    <li key={i} className="flex items-start gap-2 text-sm text-cat-5-fg">
                       <CheckCircle2
-                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-teal-400"
+                        className="mt-0.5 h-3.5 w-3.5 shrink-0 text-cat-5-fg"
                         aria-hidden="true"
                       />
                       {item}
@@ -421,7 +421,7 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
               <Card title="Out of Scope">
                 <ul className="space-y-1">
                   {result.test_scope.out_of_scope.map((item, i) => (
-                    <li key={i} className="text-sm text-slate-400">
+                    <li key={i} className="text-sm text-fg-muted">
                       {item}
                     </li>
                   ))}
@@ -440,25 +440,25 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
             {result.execution_order.map((phase, i) => (
               <li
                 key={i}
-                className="flex gap-3 rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-3"
+                className="flex gap-3 rounded-lg border border-line-muted bg-surface px-4 py-3"
               >
-                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-teal-500/10 text-xs font-semibold text-teal-300 ring-1 ring-inset ring-teal-500/30">
+                <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-cat-5-bg text-xs font-semibold text-cat-5-fg ring-1 ring-inset ring-cat-5-line/30">
                   {phase.order ?? i + 1}
                 </span>
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-slate-200">{phase.title}</p>
-                  <p className="mt-1 text-sm text-slate-400">{phase.description}</p>
+                  <p className="text-sm font-medium text-fg-secondary">{phase.title}</p>
+                  <p className="mt-1 text-sm text-fg-muted">{phase.description}</p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {phase.test_types.map((type) => (
                       <span
                         key={type}
-                        className="rounded bg-teal-500/10 px-1.5 py-0.5 text-xs text-teal-300"
+                        className="rounded bg-cat-5-bg px-1.5 py-0.5 text-xs text-cat-5-fg"
                       >
                         {type}
                       </span>
                     ))}
                     {phase.depends_on_phases.length > 0 && (
-                      <span className="text-xs text-slate-500">
+                      <span className="text-xs text-fg-muted">
                         depends on: {phase.depends_on_phases.join(", ")}
                       </span>
                     )}
@@ -480,29 +480,29 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
               {result.regression_tests.map((test, i) => (
                 <li
                   key={i}
-                  className="rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2"
+                  className="rounded-md border border-line-muted bg-surface px-3 py-2"
                 >
                   <div className="flex items-center gap-2">
-                    <p className="flex-1 text-sm text-slate-200">{test.description}</p>
+                    <p className="flex-1 text-sm text-fg-secondary">{test.description}</p>
                     {test.priority && (
                       <span
                         className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                           test.priority === "critical"
-                            ? "bg-rose-500/10 text-rose-300"
+                            ? "bg-danger-bg text-danger-fg"
                             : test.priority === "high"
-                              ? "bg-amber-500/10 text-amber-300"
+                              ? "bg-warning-bg text-warning-fg"
                               : test.priority === "medium"
-                                ? "bg-sky-500/10 text-sky-300"
-                                : "bg-slate-800 text-slate-400"
+                                ? "bg-info-bg text-info-fg"
+                                : "bg-surface-raised text-fg-muted"
                         }`}
                       >
                         {test.priority}
                       </span>
                     )}
                   </div>
-                  <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                  <div className="mt-1 flex items-center gap-2 text-xs text-fg-muted">
                     <span>{test.component}</span>
-                    {test.automated && <span className="text-teal-400">automated</span>}
+                    {test.automated && <span className="text-cat-5-fg">automated</span>}
                   </div>
                 </li>
               ))}
@@ -519,12 +519,12 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
               {result.integration_tests.map((test, i) => (
                 <li
                   key={i}
-                  className="rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2"
+                  className="rounded-md border border-line-muted bg-surface px-3 py-2"
                 >
-                  <p className="text-sm text-slate-200">{test.description}</p>
-                  <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                  <p className="text-sm text-fg-secondary">{test.description}</p>
+                  <div className="mt-1 flex items-center gap-2 text-xs text-fg-muted">
                     <span>{test.source_component}</span>
-                    <span className="rounded bg-sky-500/10 px-1 text-sky-300">
+                    <span className="rounded bg-info-bg px-1 text-info-fg">
                       {test.relationship}
                     </span>
                     <span>{test.target_component}</span>
@@ -532,10 +532,10 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
                       <span
                         className={`ml-auto rounded px-1.5 py-0.5 text-xs font-medium ${
                           test.priority === "critical"
-                            ? "bg-rose-500/10 text-rose-300"
+                            ? "bg-danger-bg text-danger-fg"
                             : test.priority === "high"
-                              ? "bg-amber-500/10 text-amber-300"
-                              : "bg-slate-800 text-slate-400"
+                              ? "bg-warning-bg text-warning-fg"
+                              : "bg-surface-raised text-fg-muted"
                         }`}
                       >
                         {test.priority}
@@ -558,18 +558,18 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
             {result.edge_cases.map((edge, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2"
+                className="flex items-start gap-2 rounded-md border border-warning-line/20 bg-warning-bg px-3 py-2"
               >
                 <AlertTriangle
-                  className="mt-0.5 h-4 w-4 shrink-0 text-amber-400"
+                  className="mt-0.5 h-4 w-4 shrink-0 text-warning-fg"
                   aria-hidden="true"
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm text-slate-200">{edge.description}</p>
-                  <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                  <p className="text-sm text-fg-secondary">{edge.description}</p>
+                  <div className="mt-1 flex items-center gap-2 text-xs text-fg-muted">
                     {edge.component && <span>{edge.component}</span>}
                     {edge.category && (
-                      <span className="rounded bg-slate-800 px-1 text-slate-400">
+                      <span className="rounded bg-surface-raised px-1 text-fg-muted">
                         {edge.category}
                       </span>
                     )}
@@ -577,8 +577,8 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
                       <span
                         className={`rounded px-1.5 py-0.5 font-medium ${
                           edge.severity === "critical" || edge.severity === "high"
-                            ? "bg-rose-500/10 text-rose-300"
-                            : "bg-amber-500/10 text-amber-300"
+                            ? "bg-danger-bg text-danger-fg"
+                            : "bg-warning-bg text-warning-fg"
                         }`}
                       >
                         {edge.severity}
@@ -599,20 +599,20 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
               {result.automation_candidates.map((auto, i) => (
                 <li
                   key={i}
-                  className="flex items-start gap-2 rounded-md border border-teal-500/20 bg-teal-500/5 px-3 py-2"
+                  className="flex items-start gap-2 rounded-md border border-cat-5-line/20 bg-cat-5-bg px-3 py-2"
                 >
-                  <Zap className="mt-0.5 h-4 w-4 shrink-0 text-teal-400" aria-hidden="true" />
+                  <Zap className="mt-0.5 h-4 w-4 shrink-0 text-cat-5-fg" aria-hidden="true" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-teal-200">{auto.description}</p>
-                    <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
+                    <p className="text-sm text-cat-5-fg">{auto.description}</p>
+                    <div className="mt-1 flex items-center gap-2 text-xs text-fg-muted">
                       {auto.component && <span>{auto.component}</span>}
                       {auto.test_type && (
-                        <span className="rounded bg-teal-500/10 px-1 text-teal-300">
+                        <span className="rounded bg-cat-5-bg px-1 text-cat-5-fg">
                           {auto.test_type}
                         </span>
                       )}
                     </div>
-                    {auto.reason && <p className="mt-1 text-xs text-slate-400">{auto.reason}</p>}
+                    {auto.reason && <p className="mt-1 text-xs text-fg-muted">{auto.reason}</p>}
                   </div>
                 </li>
               ))}
@@ -626,16 +626,16 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
               {result.manual_validations.map((manual, i) => (
                 <li
                   key={i}
-                  className="flex items-start gap-2 rounded-md border border-slate-700 bg-slate-900/30 px-3 py-2"
+                  className="flex items-start gap-2 rounded-md border border-line bg-surface px-3 py-2"
                 >
-                  <Users className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+                  <Users className="mt-0.5 h-4 w-4 shrink-0 text-fg-muted" aria-hidden="true" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm text-slate-200">{manual.description}</p>
+                    <p className="text-sm text-fg-secondary">{manual.description}</p>
                     {manual.reason && (
-                      <p className="mt-1 text-xs text-slate-400">Reason: {manual.reason}</p>
+                      <p className="mt-1 text-xs text-fg-muted">Reason: {manual.reason}</p>
                     )}
                     {manual.component && (
-                      <p className="text-xs text-slate-500">{manual.component}</p>
+                      <p className="text-xs text-fg-muted">{manual.component}</p>
                     )}
                   </div>
                 </li>
@@ -654,23 +654,23 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
             {result.risks.map((risk, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2"
+                className="flex items-start gap-2 rounded-md border border-warning-line/20 bg-warning-bg px-3 py-2"
               >
                 <AlertTriangle
-                  className="mt-0.5 h-4 w-4 shrink-0 text-amber-400"
+                  className="mt-0.5 h-4 w-4 shrink-0 text-warning-fg"
                   aria-hidden="true"
                 />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <p className="text-sm text-slate-200">{risk.description}</p>
+                    <p className="text-sm text-fg-secondary">{risk.description}</p>
                     {risk.severity && (
                       <span
                         className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                           risk.severity === "critical" || risk.severity === "high"
-                            ? "bg-rose-500/10 text-rose-300"
+                            ? "bg-danger-bg text-danger-fg"
                             : risk.severity === "medium"
-                              ? "bg-amber-500/10 text-amber-300"
-                              : "bg-slate-800 text-slate-400"
+                              ? "bg-warning-bg text-warning-fg"
+                              : "bg-surface-raised text-fg-muted"
                         }`}
                       >
                         {risk.severity}
@@ -678,7 +678,7 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
                     )}
                   </div>
                   {risk.mitigation && (
-                    <p className="mt-1 text-xs text-slate-400">Mitigation: {risk.mitigation}</p>
+                    <p className="mt-1 text-xs text-fg-muted">Mitigation: {risk.mitigation}</p>
                   )}
                 </div>
               </li>
@@ -691,9 +691,9 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
         <Card title="Recommendations">
           <ul className="space-y-2">
             {result.recommendations.map((rec, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm text-slate-300">
+              <li key={i} className="flex items-start gap-2 text-sm text-fg-secondary">
                 <span
-                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-teal-400"
+                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-cat-5-line"
                   aria-hidden="true"
                 />
                 {rec}
@@ -703,7 +703,7 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
         </Card>
       )}
 
-      <div className="text-xs text-slate-500">
+      <div className="text-xs text-fg-muted">
         Graph context:{" "}
         {result.graph_context_used
           ? "Test plan grounded in architecture graph data"
@@ -714,16 +714,16 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
 }
 
 const DOCUMENTATION_IMPACT_STYLES: Record<string, string> = {
-  high: "bg-rose-500/10 text-rose-300",
-  medium: "bg-amber-500/10 text-amber-300",
-  low: "bg-sky-500/10 text-sky-300",
-  none: "bg-slate-800 text-slate-400",
+  high: "bg-danger-bg text-danger-fg",
+  medium: "bg-warning-bg text-warning-fg",
+  low: "bg-info-bg text-info-fg",
+  none: "bg-surface-raised text-fg-muted",
 };
 
 const PRIORITY_STYLES: Record<string, string> = {
-  high: "bg-rose-500/10 text-rose-300",
-  medium: "bg-amber-500/10 text-amber-300",
-  low: "bg-slate-800 text-slate-400",
+  high: "bg-danger-bg text-danger-fg",
+  medium: "bg-warning-bg text-warning-fg",
+  low: "bg-surface-raised text-fg-muted",
 };
 
 export function DocumentationPlanningResultDetails({
@@ -740,19 +740,19 @@ export function DocumentationPlanningResultDetails({
 
       {result.executive_summary && (
         <Card title="Documentation Plan">
-          <p className="text-sm text-slate-200">{result.executive_summary}</p>
+          <p className="text-sm text-fg-secondary">{result.executive_summary}</p>
           {result.documentation_impact && (
             <div className="mt-3 flex items-center gap-2">
               <span
                 className={`rounded px-1.5 py-0.5 text-xs font-medium uppercase tracking-wide ${
                   DOCUMENTATION_IMPACT_STYLES[result.documentation_impact] ??
-                  "bg-slate-800 text-slate-400"
+                  "bg-surface-raised text-fg-muted"
                 }`}
               >
                 {result.documentation_impact} impact
               </span>
               {result.impact_explanation && (
-                <span className="text-xs text-slate-400">{result.impact_explanation}</span>
+                <span className="text-xs text-fg-muted">{result.impact_explanation}</span>
               )}
             </div>
           )}
@@ -768,30 +768,30 @@ export function DocumentationPlanningResultDetails({
             {result.required_updates.map((update, i) => (
               <li
                 key={i}
-                className="rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2"
+                className="rounded-md border border-line-muted bg-surface px-3 py-2"
               >
                 <div className="flex items-center gap-2">
-                  <FileText className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
-                  <p className="flex-1 truncate text-sm font-medium text-slate-200">
+                  <FileText className="h-3.5 w-3.5 shrink-0 text-fg-muted" aria-hidden="true" />
+                  <p className="flex-1 truncate text-sm font-medium text-fg-secondary">
                     {update.document}
                   </p>
                   {update.action && (
-                    <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400">
+                    <span className="shrink-0 rounded bg-surface-raised px-1.5 py-0.5 text-xs text-fg-muted">
                       {update.action}
                     </span>
                   )}
                   {update.priority && (
                     <span
                       className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
-                        PRIORITY_STYLES[update.priority] ?? "bg-slate-800 text-slate-400"
+                        PRIORITY_STYLES[update.priority] ?? "bg-surface-raised text-fg-muted"
                       }`}
                     >
                       {update.priority}
                     </span>
                   )}
                 </div>
-                {update.reason && <p className="mt-1 text-xs text-slate-400">{update.reason}</p>}
-                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                {update.reason && <p className="mt-1 text-xs text-fg-muted">{update.reason}</p>}
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-fg-muted">
                   {update.owner && <span>Owner: {update.owner}</span>}
                   {update.estimated_effort && <span>Effort: {update.estimated_effort}</span>}
                   {update.dependencies.length > 0 && (
@@ -813,13 +813,13 @@ export function DocumentationPlanningResultDetails({
             {result.new_documentation.map((doc, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 rounded-md border border-teal-500/20 bg-teal-500/5 px-3 py-2"
+                className="flex items-start gap-2 rounded-md border border-cat-5-line/20 bg-cat-5-bg px-3 py-2"
               >
-                <Zap className="mt-0.5 h-4 w-4 shrink-0 text-teal-400" aria-hidden="true" />
+                <Zap className="mt-0.5 h-4 w-4 shrink-0 text-cat-5-fg" aria-hidden="true" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm text-teal-200">{doc.name}</p>
-                  {doc.purpose && <p className="mt-1 text-xs text-slate-400">{doc.purpose}</p>}
-                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                  <p className="text-sm text-cat-5-fg">{doc.name}</p>
+                  {doc.purpose && <p className="mt-1 text-xs text-fg-muted">{doc.purpose}</p>}
+                  <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-fg-muted">
                     {doc.suggested_location && <span>{doc.suggested_location}</span>}
                     {doc.owner && <span>Owner: {doc.owner}</span>}
                     {doc.estimated_effort && <span>Effort: {doc.estimated_effort}</span>}
@@ -828,7 +828,7 @@ export function DocumentationPlanningResultDetails({
                 {doc.priority && (
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
-                      PRIORITY_STYLES[doc.priority] ?? "bg-slate-800 text-slate-400"
+                      PRIORITY_STYLES[doc.priority] ?? "bg-surface-raised text-fg-muted"
                     }`}
                   >
                     {doc.priority}
@@ -846,15 +846,15 @@ export function DocumentationPlanningResultDetails({
             {result.existing_updates.map((update, i) => (
               <li
                 key={i}
-                className="rounded-md border border-slate-800 bg-slate-900/30 px-3 py-2"
+                className="rounded-md border border-line-muted bg-surface px-3 py-2"
               >
-                <p className="text-sm font-medium text-slate-200">{update.file_path}</p>
+                <p className="text-sm font-medium text-fg-secondary">{update.file_path}</p>
                 {update.sections_affected.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {update.sections_affected.map((section) => (
                       <span
                         key={section}
-                        className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-400"
+                        className="rounded bg-surface-raised px-1.5 py-0.5 text-xs text-fg-muted"
                       >
                         {section}
                       </span>
@@ -862,7 +862,7 @@ export function DocumentationPlanningResultDetails({
                   </div>
                 )}
                 {update.summary_of_changes && (
-                  <p className="mt-1 text-xs text-slate-400">{update.summary_of_changes}</p>
+                  <p className="mt-1 text-xs text-fg-muted">{update.summary_of_changes}</p>
                 )}
               </li>
             ))}
@@ -879,23 +879,23 @@ export function DocumentationPlanningResultDetails({
             {result.risks.map((risk, i) => (
               <li
                 key={i}
-                className="flex items-start gap-2 rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2"
+                className="flex items-start gap-2 rounded-md border border-warning-line/20 bg-warning-bg px-3 py-2"
               >
                 <AlertTriangle
-                  className="mt-0.5 h-4 w-4 shrink-0 text-amber-400"
+                  className="mt-0.5 h-4 w-4 shrink-0 text-warning-fg"
                   aria-hidden="true"
                 />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm text-slate-200">{risk.description}</p>
+                  <p className="text-sm text-fg-secondary">{risk.description}</p>
                 </div>
                 {risk.severity && (
                   <span
                     className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-medium ${
                       risk.severity === "critical" || risk.severity === "high"
-                        ? "bg-rose-500/10 text-rose-300"
+                        ? "bg-danger-bg text-danger-fg"
                         : risk.severity === "medium"
-                          ? "bg-amber-500/10 text-amber-300"
-                          : "bg-slate-800 text-slate-400"
+                          ? "bg-warning-bg text-warning-fg"
+                          : "bg-surface-raised text-fg-muted"
                     }`}
                   >
                     {risk.severity}
@@ -911,9 +911,9 @@ export function DocumentationPlanningResultDetails({
         <Card title="Recommendations">
           <ul className="space-y-2">
             {result.recommendations.map((rec, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm text-slate-300">
+              <li key={i} className="flex items-start gap-2 text-sm text-fg-secondary">
                 <span
-                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-teal-400"
+                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-cat-5-line"
                   aria-hidden="true"
                 />
                 {rec}
@@ -927,9 +927,9 @@ export function DocumentationPlanningResultDetails({
         <Card title="Release Notes Draft">
           <ul className="space-y-2">
             {result.release_notes_draft.map((note, i) => (
-              <li key={i} className="flex items-start gap-2 text-sm text-slate-300">
+              <li key={i} className="flex items-start gap-2 text-sm text-fg-secondary">
                 <span
-                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400"
+                  className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-info-solid"
                   aria-hidden="true"
                 />
                 {note}
@@ -946,7 +946,7 @@ export function DocumentationPlanningResultDetails({
               <li
                 key={i}
                 className={`flex items-center gap-2 text-sm ${
-                  item.applicable ? "text-slate-200" : "text-slate-600 line-through"
+                  item.applicable ? "text-fg-secondary" : "text-fg-subtle line-through"
                 }`}
               >
                 <Circle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />

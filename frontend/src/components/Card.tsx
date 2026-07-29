@@ -13,18 +13,14 @@ export function Card({ title, description, action, children, className = "" }: C
   const hasHeader = title !== undefined || description !== undefined || action !== undefined;
 
   return (
-    <div
-      className={`rounded-xl border border-slate-800 bg-slate-900/60 shadow-sm shadow-black/20 ${className}`}
-    >
+    <div className={`rounded-xl border border-line-muted bg-surface shadow-sm ${className}`}>
       {hasHeader && (
-        <div className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4">
+        <div className="flex items-start justify-between gap-4 border-b border-line-muted px-5 py-4">
           <div>
             {title && (
-              <h2 className="font-display text-sm font-semibold tracking-tight text-slate-100">
-                {title}
-              </h2>
+              <h2 className="font-display text-sm font-semibold tracking-tight text-fg">{title}</h2>
             )}
-            {description && <p className="mt-0.5 text-xs text-slate-400">{description}</p>}
+            {description && <p className="mt-0.5 text-xs text-fg-muted">{description}</p>}
           </div>
           {action}
         </div>

@@ -4,33 +4,40 @@ interface RiskBadgeProps {
   level: RiskLevel;
 }
 
+/**
+ * Risk is an *ordered* four-step severity scale, so it reads from the four
+ * reserved status roles rather than four unrelated categorical hues. That
+ * keeps "critical" the same red as every other error surface in the app and
+ * keeps the four steps monotonic in weight, in every theme.
+ */
 const RISK_STYLES: Record<RiskLevel, { label: string; badge: string; dot: string }> = {
   critical: {
     label: "Critical",
-    badge: "bg-red-500/10 text-red-300 ring-red-500/30",
-    dot: "bg-red-400",
+    badge: "bg-danger-bg text-danger-fg ring-danger-line/40",
+    dot: "bg-danger-solid",
   },
   high: {
     label: "High",
-    badge: "bg-orange-500/10 text-orange-300 ring-orange-500/30",
-    dot: "bg-orange-400",
+    badge: "bg-serious-bg text-serious-fg ring-serious-line/40",
+    dot: "bg-serious-solid",
   },
   medium: {
     label: "Medium",
-    badge: "bg-amber-500/10 text-amber-300 ring-amber-500/30",
-    dot: "bg-amber-400",
+    badge: "bg-warning-bg text-warning-fg ring-warning-line/40",
+    dot: "bg-warning-solid",
   },
   low: {
     label: "Low",
-    badge: "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30",
-    dot: "bg-emerald-400",
+    badge: "bg-success-bg text-success-fg ring-success-line/40",
+    dot: "bg-success-solid",
   },
 };
 
 /**
  * Dedicated risk-level indicator — deliberately separate from StatusBadge
  * since risk is the one signal every page in GraphForge has to make
- * scannable at a glance. Pairs color with a dot, not color alone.
+ * scannable at a glance. Pairs color with a dot and a word, never color
+ * alone, so the level survives greyscale and colour-vision deficiency.
  */
 export function RiskBadge({ level }: RiskBadgeProps) {
   const style = RISK_STYLES[level];

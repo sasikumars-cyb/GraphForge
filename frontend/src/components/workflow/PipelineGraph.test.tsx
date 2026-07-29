@@ -45,6 +45,6 @@ describe("PipelineGraph", () => {
   it("marks the currently-selected stage's node distinctly", () => {
     renderGraph({ selectedRunId: "run-1" });
     const node = screen.getByRole("button", { name: "Planning: Complete" });
-    expect(node.className).toContain("ring-brand-400");
+    expect(node.className).toContain("ring-accent-line");
   });
 });

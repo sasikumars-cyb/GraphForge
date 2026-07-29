@@ -14,12 +14,12 @@ function AdvancedItem({ icon, title, description, status, statusTone }: Advanced
   return (
     <div className="flex items-start justify-between gap-4 py-3">
       <div className="flex items-start gap-3">
-        <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-md bg-slate-800 text-slate-400">
+        <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-md bg-surface-raised text-fg-muted">
           {icon}
         </div>
         <div>
-          <p className="text-sm font-medium text-slate-200">{title}</p>
-          <p className="text-xs text-slate-500">{description}</p>
+          <p className="text-sm font-medium text-fg-secondary">{title}</p>
+          <p className="text-xs text-fg-muted">{description}</p>
         </div>
       </div>
       <StatusBadge label={status} tone={statusTone} />
@@ -34,7 +34,7 @@ export function AdvancedSection() {
         title="Diagnostics"
         description="Platform health and debugging tools"
       >
-        <div className="divide-y divide-slate-800/60">
+        <div className="divide-y divide-line-muted">
           <AdvancedItem
             icon={<Activity className="h-4 w-4" />}
             title="Provider Debugging"
@@ -63,7 +63,7 @@ export function AdvancedSection() {
         title="Feature Flags"
         description="Experimental features and preview capabilities"
       >
-        <div className="divide-y divide-slate-800/60">
+        <div className="divide-y divide-line-muted">
           <AdvancedItem
             icon={<Flag className="h-4 w-4" />}
             title="Streaming Responses"
@@ -92,10 +92,10 @@ export function AdvancedSection() {
         title="Telemetry"
         description="Usage metrics and platform observability"
       >
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-fg-muted">
           GraphForge collects anonymous usage metrics to improve agent performance and reliability.
           No code, prompts, or business data is transmitted. Telemetry can be disabled via the
-          environment variable <code className="rounded bg-slate-800 px-1 py-0.5 text-xs text-slate-300">GRAPHFORGE_TELEMETRY=off</code>.
+          environment variable <code className="rounded bg-surface-raised px-1 py-0.5 text-xs text-fg-secondary">GRAPHFORGE_TELEMETRY=off</code>.
         </p>
       </Card>
     </div>

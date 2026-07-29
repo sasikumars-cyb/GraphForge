@@ -25,8 +25,8 @@ export function StageArtifactCard({ stage, step, stages }: StageArtifactCardProp
   const next = nextStageOf(stage, stages);
 
   return (
-    <div className="flex flex-col gap-4 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
-      {summary && <p className="text-sm leading-relaxed text-slate-200">{summary}</p>}
+    <div className="flex flex-col gap-4 rounded-xl border border-line-muted bg-surface p-4">
+      {summary && <p className="text-sm leading-relaxed text-fg-secondary">{summary}</p>}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <Stat label="Confidence">
@@ -48,19 +48,19 @@ export function StageArtifactCard({ stage, step, stages }: StageArtifactCardProp
           {counts.map((c) => (
             <span
               key={c.label}
-              className="inline-flex items-center gap-1.5 rounded-full bg-slate-800 px-2.5 py-1 text-xs font-medium text-slate-300"
+              className="inline-flex items-center gap-1.5 rounded-full bg-surface-raised px-2.5 py-1 text-xs font-medium text-fg-secondary"
             >
-              <FileOutput className="h-3 w-3 text-slate-500" aria-hidden="true" />
+              <FileOutput className="h-3 w-3 text-fg-muted" aria-hidden="true" />
               {c.count} {c.label}
             </span>
           ))}
         </div>
       )}
 
-      <div className="flex items-center gap-2 border-t border-slate-800 pt-3 text-xs text-slate-500">
+      <div className="flex items-center gap-2 border-t border-line-muted pt-3 text-xs text-fg-muted">
         <span>Hands off to</span>
         <ArrowRight className="h-3 w-3" aria-hidden="true" />
-        <span className="font-semibold text-slate-300">
+        <span className="font-semibold text-fg-secondary">
           {next ? stageLabel(next) : "Workflow output"}
         </span>
       </div>
@@ -71,8 +71,8 @@ export function StageArtifactCard({ stage, step, stages }: StageArtifactCardProp
 function Stat({ label, value, children }: { label: string; value?: string; children?: ReactNode }) {
   return (
     <div>
-      <p className="text-[10.5px] font-medium uppercase tracking-wide text-slate-500">{label}</p>
-      <div className="mt-1 text-sm font-semibold text-slate-100">{children ?? value}</div>
+      <p className="text-[10.5px] font-medium uppercase tracking-wide text-fg-muted">{label}</p>
+      <div className="mt-1 text-sm font-semibold text-fg">{children ?? value}</div>
     </div>
   );
 }

@@ -209,9 +209,15 @@
   --gf-slate-400: #7c85ab;
   --gf-slate-500: #545e82;
   --gf-slate-600: #333b5c;
-  --gf-slate-700: #20264a;
-  --gf-slate-800: #141936;
-  --gf-slate-900: #0a0e24;
+  --gf-slate-700: #1a1f42;
+  /* slate-800/900 nudged a touch darker and more saturated toward indigo
+     than the original #141936/#0a0e24 — those were close enough to Dark's
+     #1e293b/#0f172a in both lightness and hue that the two themes read as
+     the same dark mode at a glance. Only these two structural neutrals
+     move; brand/status/graph-node colors (WCAG-validated per theme, see
+     tokens.css's header comment) are untouched. */
+  --gf-slate-800: #11142e;
+  --gf-slate-900: #07091c;
   --gf-slate-950: #02040f;
 
   --gf-brand-50: #f5f0ff;

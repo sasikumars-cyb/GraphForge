@@ -18,11 +18,25 @@ import { useTheme } from "../../theme/theme-context";
 const NODE_WIDTH = 190;
 const NODE_HEIGHT = 56;
 
-// Node-focused highlighting palette (DependencyGraph only).
-const SELECTED_COLOR = "#facc15"; // amber - the clicked node itself
-const INCOMING_COLOR = "#34d399"; // emerald - nodes/edges pointing into the selection
-const OUTGOING_COLOR = "#38bdf8"; // sky - nodes/edges the selection points out to
-const FADED_OPACITY = 0.15;
+// Node-focused highlighting palette (DependencyGraph only). These are the
+// *relationship* colours — deliberately drawn from the semantic roles rather
+// than the categorical node slots, so a highlight can never be confused with
+// a node type. The selection colour used to be a hardcoded `#facc15` gold,
+// which sat at ~1.9:1 on the light canvas and clashed with the amber warning
+// tone; it is now the theme's accent.
+const SELECTED_COLOR = "var(--gf-graph-selected)";
+const INCOMING_COLOR = "var(--gf-graph-incoming)";
+const OUTGOING_COLOR = "var(--gf-graph-outgoing)";
+// Dimming for nodes outside the selection. 0.15 pushed unrelated nodes below
+// the point where their labels could be read at all; the highlight ring and
+// z-order already carry the emphasis, so the dim only needs to recede.
+const FADED_OPACITY = 0.3;
+
+/** A translucent wash of `color`, for glows/rings. Hex-with-alpha suffixes
+ *  (`${c}55`) cannot work here because these colours are `var()` references. */
+function wash(color: string, percent: number): string {
+  return `color-mix(in srgb, ${color} ${percent}%, transparent)`;
+}
 
 const GROUP_PADDING = 28;
 
@@ -51,7 +65,15 @@ function layoutGraph(
     const position = g.node(node.id);
     const label = primaryLabel(node.labels);
     const colors = resolveLabelColors(label);
-    const name = String(node.properties.name ?? node.id);
+    // A Repository node's own `properties.name` is rarely populated (the
+    // indexer writes repository identity onto the row, not the graph node),
+    // so this fell through to the raw `node.id` — `{uuid}:repository` — the
+    // one label a reviewer most needs to read at a glance. `repositoryNameById`
+    // (already threaded through for multi-repo cluster labels below) has the
+    // real "owner/name" and takes priority for exactly this node type.
+    const repoName =
+      label === "Repository" ? repositoryNameById?.[repositoryIdOf(node.id)] : undefined;
+    const name = String(repoName ?? node.properties.name ?? node.id);
     return {
       graphNode: node,
       absoluteX: position.x - NODE_WIDTH / 2,
@@ -68,9 +90,9 @@ function layoutGraph(
     target: edge.target_id,
     label: edge.type,
     animated: edge.type === "PRODUCES_TO" || edge.type === "CONSUMES_FROM",
-    markerEnd: { type: MarkerType.ArrowClosed, color: "var(--gf-slate-500)" },
-    style: { stroke: "var(--gf-slate-500)" },
-    labelStyle: { fill: "var(--gf-slate-400)", fontSize: 10 },
+    markerEnd: { type: MarkerType.ArrowClosed, color: "var(--gf-graph-edge)" },
+    style: { stroke: "var(--gf-graph-edge)", strokeWidth: 1.5 },
+    labelStyle: { fill: "var(--gf-graph-edge-label)", fontSize: 10 },
   }));
 
   // Group nodes by owning repository (hierarchical clustering) so a merged,
@@ -86,6 +108,14 @@ function layoutGraph(
     const nodes: Node[] = baseNodes.map(({ graphNode, absoluteX, absoluteY, label, colors, name }) => ({
       id: graphNode.id,
       position: { x: absoluteX, y: absoluteY },
+      // Top-level width/height (not just style.width below) so the MiniMap's
+      // nodeHasDimensions() check passes immediately from these known-upfront
+      // dagre dimensions, instead of waiting on React Flow's post-mount
+      // ResizeObserver measurement — without this the minimap renders zero
+      // node rects (just the empty viewport mask) until/unless `measured`
+      // happens to populate, which in practice never visibly did.
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
       data: {
         label: (
           <div>
@@ -96,10 +126,12 @@ function layoutGraph(
       },
       style: {
         background: colors.background,
-        border: `1px solid ${colors.border}`,
+        border: `var(--gf-node-border-width, 1px) solid ${colors.border}`,
         borderRadius: 8,
         width: NODE_WIDTH,
-        color: "var(--gf-slate-200)",
+        // Ink from the same slot as the fill — a shared neutral cannot be
+        // readable on eight different fills across five themes.
+        color: colors.text,
         fontSize: 12,
         padding: 8,
       },
@@ -135,11 +167,15 @@ function layoutGraph(
       id: groupId,
       type: "group",
       position: { x: left, y: top },
+      // See the `nodes` map above — top-level width/height so the MiniMap
+      // can size this cluster box without waiting on post-mount measurement.
+      width: box.maxX - box.minX + GROUP_PADDING * 2,
+      height: box.maxY - box.minY + GROUP_PADDING * 2 + 20,
       style: {
         width: box.maxX - box.minX + GROUP_PADDING * 2,
         height: box.maxY - box.minY + GROUP_PADDING * 2 + 20,
-        background: "rgba(148, 163, 184, 0.04)",
-        border: "1px dashed var(--gf-slate-600)",
+        background: "var(--gf-graph-cluster)",
+        border: "1px dashed var(--gf-graph-cluster-line)",
         borderRadius: 12,
       },
       data: {},
@@ -156,7 +192,7 @@ function layoutGraph(
       style: {
         background: "transparent",
         border: "none",
-        color: "var(--gf-slate-300)",
+        color: "var(--gf-fg-muted)",
         fontSize: 11,
         fontWeight: 700,
         padding: 0,
@@ -181,6 +217,8 @@ function layoutGraph(
         : { x: absoluteX, y: absoluteY },
       parentId: groupId,
       extent: groupId ? "parent" : undefined,
+      width: NODE_WIDTH,
+      height: NODE_HEIGHT,
       data: {
         label: (
           <div>
@@ -191,10 +229,12 @@ function layoutGraph(
       },
       style: {
         background: colors.background,
-        border: `1px solid ${colors.border}`,
+        border: `var(--gf-node-border-width, 1px) solid ${colors.border}`,
         borderRadius: 8,
         width: NODE_WIDTH,
-        color: "var(--gf-slate-200)",
+        // Ink from the same slot as the fill — a shared neutral cannot be
+        // readable on eight different fills across five themes.
+        color: colors.text,
         fontSize: 12,
         padding: 8,
       },
@@ -246,11 +286,11 @@ function overviewNode(repo: RepositorySummary, x: number, y: number): Node {
       ),
     },
     style: {
-      background: "var(--gf-slate-800)",
-      border: "1px solid var(--gf-slate-500)",
+      background: "var(--gf-surface-raised)",
+      border: "1px solid var(--gf-line-strong)",
       borderRadius: 10,
       width: OVERVIEW_NODE_WIDTH,
-      color: "var(--gf-slate-200)",
+      color: "var(--gf-fg-secondary)",
       fontSize: 12,
       padding: 10,
       cursor: "pointer",
@@ -321,17 +361,17 @@ export function RepositoryOverviewGraph({
       label: (
         <span title={`Shared topics:\n${edge.topics.join("\n")}`}>{edge.topics.length}</span>
       ),
-      markerEnd: { type: MarkerType.ArrowClosed, color: "var(--gf-slate-500)" },
-      style: { stroke: "var(--gf-slate-500)" },
-      labelBgStyle: { fill: "var(--gf-slate-800)" },
-      labelStyle: { fill: "var(--gf-slate-200)", fontSize: 11 },
+      markerEnd: { type: MarkerType.ArrowClosed, color: "var(--gf-graph-edge)" },
+      style: { stroke: "var(--gf-graph-edge)", strokeWidth: 1.5 },
+      labelBgStyle: { fill: "var(--gf-surface-raised)" },
+      labelStyle: { fill: "var(--gf-fg-secondary)", fontSize: 11 },
     }));
 
     return { nodes: laidOutNodes, edges: flowEdges };
   }, [repositories, dependencyEdges]);
 
   return (
-    <div style={{ height: 480 }} className="overflow-hidden rounded-lg border border-slate-700">
+    <div style={{ height: 480 }} className="overflow-hidden rounded-xl border border-line bg-graph-canvas">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -407,7 +447,9 @@ export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphPr
           ...node.style,
           opacity: glowColor ? 1 : FADED_OPACITY,
           border: glowColor ? `2px solid ${glowColor}` : node.style?.border,
-          boxShadow: glowColor ? `0 0 0 2px ${glowColor}55, 0 0 16px 3px ${glowColor}88` : undefined,
+          boxShadow: glowColor
+            ? `0 0 0 2px ${wash(glowColor, 45)}, 0 0 16px 3px ${wash(glowColor, 55)}`
+            : undefined,
         },
       };
     });
@@ -425,9 +467,9 @@ export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphPr
           ...edge.style,
           stroke: color ?? edge.style?.stroke,
           opacity: isConnected ? 1 : FADED_OPACITY,
-          strokeWidth: isConnected ? 2.5 : 1,
+          strokeWidth: isConnected ? 2.5 : 1.5,
         },
-        markerEnd: { type: MarkerType.ArrowClosed, color: color ?? "var(--gf-slate-500)" },
+        markerEnd: { type: MarkerType.ArrowClosed, color: color ?? "var(--gf-graph-edge)" },
         labelStyle: { ...edge.labelStyle, opacity: isConnected ? 1 : FADED_OPACITY },
       };
     });
@@ -436,7 +478,7 @@ export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphPr
   }, [baseNodes, baseEdges, selectedNodeId, realNodeIds]);
 
   return (
-    <div style={{ height: 480 }} className="overflow-hidden rounded-lg border border-slate-700">
+    <div style={{ height: 480 }} className="overflow-hidden rounded-xl border border-line bg-graph-canvas">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -451,7 +493,12 @@ export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphPr
       >
         <Background />
         <Controls />
-        <MiniMap pannable zoomable style={{ background: "var(--gf-slate-900)" }} />
+        <MiniMap
+          pannable
+          zoomable
+          style={{ background: "var(--gf-surface-raised)" }}
+          maskColor="var(--gf-graph-cluster)"
+        />
       </ReactFlow>
     </div>
   );

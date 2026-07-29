@@ -64,22 +64,22 @@ export function ApprovalGateBanner({
 
   if (failure) {
     return (
-      <div className="flex flex-col gap-3 rounded-xl border border-rose-500/30 bg-rose-500/5 px-5 py-4">
+      <div className="flex flex-col gap-3 rounded-xl border border-danger-line/40 bg-danger-bg px-5 py-4">
         <div className="flex items-start gap-3">
-          <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-rose-400" aria-hidden="true" />
+          <XCircle className="mt-0.5 h-5 w-5 shrink-0 text-danger-fg" aria-hidden="true" />
           <div className="flex-1">
-            <p className="text-sm text-rose-200">
-              <strong className="text-rose-100">{stageLabel(failure.stage)}</strong> failed. The
-              agent hit an error while running this stage — nothing was skipped or corrupted, and
-              your workflow is safe to retry.
+            <p className="text-sm text-danger-fg">
+              <strong className="font-semibold text-danger-fg">{stageLabel(failure.stage)}</strong>{" "}
+              failed. The agent hit an error while running this stage — nothing was skipped or
+              corrupted, and your workflow is safe to retry.
             </p>
             {failure.errorMessage && (
               <details className="group mt-2">
-                <summary className="inline-flex cursor-pointer items-center gap-1.5 text-xs font-medium text-rose-300/80 hover:text-rose-200">
+                <summary className="focus-ring inline-flex cursor-pointer items-center gap-1.5 rounded-sm text-xs font-medium text-danger-fg underline-offset-2 hover:underline">
                   <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
                   View error details
                 </summary>
-                <pre className="mt-2 max-h-48 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs whitespace-pre-wrap text-rose-300/90">
+                <pre className="mt-2 max-h-48 overflow-auto rounded-lg border border-danger-line/30 bg-code-bg p-3 font-mono text-xs whitespace-pre-wrap text-danger-fg">
                   {failure.errorMessage}
                 </pre>
               </details>
@@ -91,7 +91,7 @@ export function ApprovalGateBanner({
             type="button"
             onClick={() => navigate(refineHref)}
             disabled={isSubmitting}
-            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 hover:text-slate-200 disabled:opacity-50"
+            className="focus-ring inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium text-fg-secondary ring-1 ring-inset ring-line transition-colors hover:bg-surface-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
           >
             <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
             Refine
@@ -100,7 +100,7 @@ export function ApprovalGateBanner({
             type="button"
             onClick={onApprove}
             disabled={isSubmitting}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-rose-500 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+            className="focus-ring inline-flex items-center gap-1.5 rounded-md bg-danger-solid px-4 py-2 text-xs font-semibold text-danger-on-solid shadow-xs transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -115,13 +115,13 @@ export function ApprovalGateBanner({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-3 rounded-xl border border-warning-line/40 bg-warning-bg px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex items-start gap-3">
-        <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" aria-hidden="true" />
-        <p className="text-sm text-amber-200">
-          <strong className="text-amber-100">{stageLabel(completedStage)}</strong> is complete.
-          Review its output above, then approve to start{" "}
-          <strong className="text-amber-100">{stageLabel(nextStage)}</strong>.
+        <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-warning-fg" aria-hidden="true" />
+        <p className="text-sm text-warning-fg">
+          <strong className="font-semibold text-warning-fg">{stageLabel(completedStage)}</strong> is
+          complete. Review its output above, then approve to start{" "}
+          <strong className="font-semibold text-warning-fg">{stageLabel(nextStage)}</strong>.
         </p>
       </div>
       <div className="flex shrink-0 items-center gap-2">
@@ -129,7 +129,7 @@ export function ApprovalGateBanner({
           type="button"
           onClick={onReject}
           disabled={isSubmitting}
-          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 hover:text-slate-200 disabled:opacity-50"
+          className="focus-ring inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium text-fg-secondary ring-1 ring-inset ring-line transition-colors hover:bg-surface-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
         >
           <XCircle className="h-3.5 w-3.5" aria-hidden="true" />
           Reject
@@ -138,7 +138,7 @@ export function ApprovalGateBanner({
           type="button"
           onClick={() => navigate(refineHref)}
           disabled={isSubmitting}
-          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-medium text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 hover:text-slate-200 disabled:opacity-50"
+          className="focus-ring inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium text-fg-secondary ring-1 ring-inset ring-line transition-colors hover:bg-surface-hover hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
         >
           <PenLine className="h-3.5 w-3.5" aria-hidden="true" />
           Refine
@@ -147,7 +147,7 @@ export function ApprovalGateBanner({
           type="button"
           onClick={onApprove}
           disabled={isSubmitting}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-brand-500 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-brand-400 disabled:cursor-not-allowed disabled:opacity-60"
+          className="focus-ring inline-flex items-center gap-1.5 rounded-md bg-accent-solid px-4 py-2 text-xs font-semibold text-accent-on-solid shadow-xs transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {isSubmitting ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />

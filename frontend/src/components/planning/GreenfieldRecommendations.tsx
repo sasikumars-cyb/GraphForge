@@ -82,14 +82,14 @@ const CONFLUENCE_DOCS = [
 export function GreenfieldBanner({ result }: { result: PlanningResult }) {
   const label = result.project_type_label || "New Project";
   return (
-    <div className="flex items-start gap-3 rounded-xl border border-amber-500/30 bg-amber-500/5 px-4 py-3">
-      <Sprout className="mt-0.5 h-5 w-5 shrink-0 text-amber-400" aria-hidden="true" />
+    <div className="flex items-start gap-3 rounded-xl border border-warning-line/30 bg-warning-bg px-4 py-3">
+      <Sprout className="mt-0.5 h-5 w-5 shrink-0 text-warning-fg" aria-hidden="true" />
       <div>
-        <p className="text-sm font-medium text-amber-200">Greenfield Project — {label}</p>
-        <p className="mt-0.5 text-xs text-amber-300/70">
+        <p className="text-sm font-medium text-warning-fg">Greenfield Project — {label}</p>
+        <p className="mt-0.5 text-xs text-warning-fg">
           No engineering knowledge sources (repositories, Jira, Confluence) were available. This
           plan was generated from first principles. Connect your engineering systems in{" "}
-          <span className="font-medium text-amber-200">Settings → Tool Registry</span> to ground
+          <span className="font-medium text-warning-fg">Settings → Tool Registry</span> to ground
           future plans in real architecture data.
         </p>
       </div>
@@ -112,21 +112,21 @@ export function GreenfieldRecommendations({ result }: GreenfieldRecommendationsP
           {repos.map((repo, i) => (
             <li
               key={repo}
-              className="flex items-center gap-2.5 rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2"
+              className="flex items-center gap-2.5 rounded-md border border-line-muted bg-surface px-3 py-2"
             >
-              <GitBranch className="h-3.5 w-3.5 shrink-0 text-sky-400" aria-hidden="true" />
-              <span className="font-mono text-xs text-slate-300">{repo}</span>
+              <GitBranch className="h-3.5 w-3.5 shrink-0 text-info-fg" aria-hidden="true" />
+              <span className="font-mono text-xs text-fg-secondary">{repo}</span>
               {i === 0 && (
-                <span className="ml-auto rounded bg-sky-500/10 px-1.5 py-0.5 text-[10px] text-sky-400">
+                <span className="ml-auto rounded bg-info-bg px-1.5 py-0.5 text-[10px] text-info-fg">
                   primary
                 </span>
               )}
             </li>
           ))}
         </ul>
-        <p className="mt-3 text-xs text-slate-600">
+        <p className="mt-3 text-xs text-fg-subtle">
           Create these in GitHub and index them via{" "}
-          <span className="text-slate-500">Settings → Repositories</span>.
+          <span className="text-fg-muted">Settings → Repositories</span>.
         </p>
       </Card>
 
@@ -139,20 +139,20 @@ export function GreenfieldRecommendations({ result }: GreenfieldRecommendationsP
           {epics.map((epic, i) => (
             <li
               key={i}
-              className="flex items-center gap-2.5 rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2"
+              className="flex items-center gap-2.5 rounded-md border border-line-muted bg-surface px-3 py-2"
             >
-              <ListTodo className="h-3.5 w-3.5 shrink-0 text-violet-400" aria-hidden="true" />
+              <ListTodo className="h-3.5 w-3.5 shrink-0 text-cat-7-fg" aria-hidden="true" />
               <div className="min-w-0 flex-1">
-                <span className="text-xs font-mono text-slate-500">
+                <span className="text-xs font-mono text-fg-muted">
                   EPIC-{String(i + 1).padStart(2, "0")}
                 </span>
-                <span className="ml-2 text-xs text-slate-300">{epic}</span>
+                <span className="ml-2 text-xs text-fg-secondary">{epic}</span>
               </div>
             </li>
           ))}
         </ul>
-        <p className="mt-3 text-xs text-slate-600">
-          Connect Jira in <span className="text-slate-500">Settings → Tool Registry</span> to
+        <p className="mt-3 text-xs text-fg-subtle">
+          Connect Jira in <span className="text-fg-muted">Settings → Tool Registry</span> to
           automatically populate backlog.
         </p>
       </Card>
@@ -166,16 +166,16 @@ export function GreenfieldRecommendations({ result }: GreenfieldRecommendationsP
           {CONFLUENCE_DOCS.map((doc) => (
             <li
               key={doc}
-              className="flex items-center gap-2.5 rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2"
+              className="flex items-center gap-2.5 rounded-md border border-line-muted bg-surface px-3 py-2"
             >
-              <FileText className="h-3.5 w-3.5 shrink-0 text-teal-400" aria-hidden="true" />
-              <span className="text-xs text-slate-300">{doc}</span>
+              <FileText className="h-3.5 w-3.5 shrink-0 text-cat-5-fg" aria-hidden="true" />
+              <span className="text-xs text-fg-secondary">{doc}</span>
             </li>
           ))}
         </ul>
-        <p className="mt-3 text-xs text-slate-600">
+        <p className="mt-3 text-xs text-fg-subtle">
           Connect Confluence in{" "}
-          <span className="text-slate-500">Settings → Tool Registry</span> to link docs to runs.
+          <span className="text-fg-muted">Settings → Tool Registry</span> to link docs to runs.
         </p>
       </Card>
     </div>

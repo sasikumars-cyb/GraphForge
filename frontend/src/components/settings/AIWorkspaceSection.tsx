@@ -85,7 +85,7 @@ function PrimaryProviderCard({
   if (!primary) {
     return (
       <Card title="Primary Provider" description="No default provider selected">
-        <p className="text-sm text-slate-400">
+        <p className="text-sm text-fg-muted">
           {providers.some((p) => p.configured)
             ? 'No provider is set as default yet. Choose one below and click "Set as Default".'
             : "Configure an AI provider below to power GraphForge agents."}
@@ -98,12 +98,12 @@ function PrimaryProviderCard({
     <Card title="Primary Provider" description="Active provider powering all agent workflows">
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-4">
-          <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-emerald-500/10 ring-1 ring-inset ring-emerald-500/30">
-            <Activity className="h-6 w-6 text-emerald-400" />
+          <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-success-bg ring-1 ring-inset ring-success-line/30">
+            <Activity className="h-6 w-6 text-success-fg" />
           </div>
           <div>
-            <p className="text-base font-semibold text-slate-100">{primary.label}</p>
-            <p className="text-sm text-slate-400">
+            <p className="text-base font-semibold text-fg">{primary.label}</p>
+            <p className="text-sm text-fg-muted">
               {primary.model ?? primary.default_model}
             </p>
           </div>
@@ -111,18 +111,18 @@ function PrimaryProviderCard({
         <StatusBadge label={statusLabel(primary.status)} tone={statusTone(primary.status)} />
       </div>
 
-      <div className="mt-4 grid grid-cols-3 gap-4 border-t border-slate-800 pt-4">
+      <div className="mt-4 grid grid-cols-3 gap-4 border-t border-line-muted pt-4">
         <div>
-          <p className="text-xs text-slate-500">Status</p>
-          <p className="mt-0.5 text-sm font-medium text-slate-200">{statusLabel(primary.status)}</p>
+          <p className="text-xs text-fg-muted">Status</p>
+          <p className="mt-0.5 text-sm font-medium text-fg-secondary">{statusLabel(primary.status)}</p>
         </div>
         <div>
-          <p className="text-xs text-slate-500">Latency</p>
-          <p className="mt-0.5 text-sm font-medium text-slate-200">{formatLatency(primary.latency_ms)}</p>
+          <p className="text-xs text-fg-muted">Latency</p>
+          <p className="mt-0.5 text-sm font-medium text-fg-secondary">{formatLatency(primary.latency_ms)}</p>
         </div>
         <div>
-          <p className="text-xs text-slate-500">Last Success</p>
-          <p className="mt-0.5 text-sm font-medium text-slate-200">{formatTime(primary.last_success_at)}</p>
+          <p className="text-xs text-fg-muted">Last Success</p>
+          <p className="mt-0.5 text-sm font-medium text-fg-secondary">{formatTime(primary.last_success_at)}</p>
         </div>
       </div>
     </Card>
@@ -189,13 +189,13 @@ function ProviderConfigPanel({
   }
 
   return (
-    <div className="mt-3 space-y-3 border-t border-slate-800 pt-3">
+    <div className="mt-3 space-y-3 border-t border-line-muted pt-3">
       {provider.requires_api_key && (
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-400">
+          <span className="text-fg-muted">
             API Key{" "}
             {provider.api_key_configured && (
-              <span className="text-emerald-400">(configured)</span>
+              <span className="text-success-fg">(configured)</span>
             )}
           </span>
           <input
@@ -205,33 +205,33 @@ function ProviderConfigPanel({
             placeholder={
               provider.api_key_configured ? "Leave blank to keep current" : "Enter API key"
             }
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500"
+            className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
           />
         </label>
       )}
 
       {!provider.requires_api_key && provider.key === "bedrock" && (
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-400">AWS Region</span>
+          <span className="text-fg-muted">AWS Region</span>
           <input
             type="text"
             value={region}
             onChange={(e) => setRegion(e.target.value)}
             placeholder="us-east-1"
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500"
+            className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
           />
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-fg-muted">
             Credentials from AWS SDK credential chain (env, CLI, IAM role).
           </span>
         </label>
       )}
 
       <label className="flex flex-col gap-1 text-sm">
-        <span className="text-slate-400">Model</span>
+        <span className="text-fg-muted">Model</span>
         <select
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500"
+          className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
         >
           {provider.models.map((m) => (
             <option key={m.id} value={m.id}>
@@ -243,7 +243,7 @@ function ProviderConfigPanel({
       </label>
 
       {error && (
-        <p role="alert" className="rounded-md bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+        <p role="alert" className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger-fg">
           {error}
         </p>
       )}
@@ -251,8 +251,8 @@ function ProviderConfigPanel({
         <div
           className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
             validation.ok
-              ? "bg-emerald-500/10 text-emerald-300"
-              : "bg-rose-500/10 text-rose-300"
+              ? "bg-success-bg text-success-fg"
+              : "bg-danger-bg text-danger-fg"
           }`}
         >
           {validation.ok ? (
@@ -267,13 +267,13 @@ function ProviderConfigPanel({
         </div>
       )}
 
-      <label className="flex items-center gap-2 text-sm text-slate-400">
+      <label className="flex items-center gap-2 text-sm text-fg-muted">
         <input
           type="checkbox"
           checked={makeDefault}
           disabled={isDefault}
           onChange={(e) => setMakeDefault(e.target.checked)}
-          className="h-3.5 w-3.5 rounded border-slate-700 bg-slate-950 accent-sky-500"
+          className="h-3.5 w-3.5 rounded border-line bg-canvas accent-accent-solid"
         />
         {isDefault ? "This is the default provider" : "Set as default provider"}
       </label>
@@ -283,7 +283,7 @@ function ProviderConfigPanel({
           type="button"
           onClick={() => void handleSave()}
           disabled={isSaving}
-          className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-sky-500/50"
+          className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
         >
           {isSaving ? "Saving..." : "Save"}
         </button>
@@ -291,7 +291,7 @@ function ProviderConfigPanel({
           type="button"
           onClick={() => void handleValidate()}
           disabled={isValidating}
-          className="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-50"
+          className="rounded-md border border-line px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-raised disabled:opacity-50"
         >
           {isValidating ? "Testing..." : "Test Connection"}
         </button>
@@ -338,28 +338,28 @@ function ProviderList({
   return (
     <div className="flex flex-col gap-5">
       {defaultError && (
-        <p role="alert" className="rounded-md bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+        <p role="alert" className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger-fg">
           {defaultError}
         </p>
       )}
       {configured.length > 0 && (
         <Card title="Configured Providers" description="Providers with active configuration">
-          <div className="divide-y divide-slate-800/60">
+          <div className="divide-y divide-line-muted">
             {configured.map((p) => {
               const isDefault = p.key === defaultProviderKey;
               return (
                 <div key={p.key} className="py-3 first:pt-0 last:pb-0">
                   <div className="flex items-center justify-between">
                     <div>
-                      <p className="text-sm font-medium text-slate-200">
+                      <p className="text-sm font-medium text-fg-secondary">
                         {p.label}
                         {isDefault && (
-                          <span className="ml-2 rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300 ring-1 ring-inset ring-sky-500/30">
+                          <span className="ml-2 rounded-full bg-info-bg px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-info-fg ring-1 ring-inset ring-info-line/30">
                             Default
                           </span>
                         )}
                       </p>
-                      <p className="text-xs text-slate-500">
+                      <p className="text-xs text-fg-muted">
                         {p.model ?? p.default_model}
                         {p.latency_ms != null && ` \u00B7 ${p.latency_ms}ms`}
                         {p.last_success_at && ` \u00B7 Last used ${formatTime(p.last_success_at)}`}
@@ -375,7 +375,7 @@ function ProviderList({
                           type="button"
                           onClick={() => void handleSetDefault(p)}
                           disabled={settingDefaultKey === p.key}
-                          className="rounded-md border border-sky-700 px-2.5 py-1 text-xs font-medium text-sky-300 hover:bg-sky-500/10 disabled:opacity-50"
+                          className="rounded-md border border-info-line/50 px-2.5 py-1 text-xs font-medium text-info-fg transition-colors hover:bg-info-bg disabled:cursor-not-allowed disabled:opacity-50"
                         >
                           {settingDefaultKey === p.key ? "Setting..." : "Set as Default"}
                         </button>
@@ -383,7 +383,7 @@ function ProviderList({
                       <button
                         type="button"
                         onClick={() => setExpandedKey(expandedKey === p.key ? null : p.key)}
-                        className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                        className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
                       >
                         {expandedKey === p.key ? "Close" : "Configure"}
                       </button>
@@ -401,18 +401,18 @@ function ProviderList({
 
       {available.length > 0 && (
         <Card title="Available Providers" description="Providers ready to configure">
-          <div className="divide-y divide-slate-800/60">
+          <div className="divide-y divide-line-muted">
             {available.map((p) => (
               <div key={p.key} className="py-3 first:pt-0 last:pb-0">
                 <div className="flex items-center justify-between">
                   <div>
-                    <p className="text-sm font-medium text-slate-200">{p.label}</p>
-                    <p className="text-xs text-slate-500">{p.notes || "Ready to configure"}</p>
+                    <p className="text-sm font-medium text-fg-secondary">{p.label}</p>
+                    <p className="text-xs text-fg-muted">{p.notes || "Ready to configure"}</p>
                   </div>
                   <button
                     type="button"
                     onClick={() => setExpandedKey(expandedKey === p.key ? null : p.key)}
-                    className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                    className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
                   >
                     {expandedKey === p.key ? "Close" : "Configure"}
                   </button>
@@ -470,7 +470,7 @@ export function AIWorkspaceSection() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 py-8 text-sm text-slate-500">
+      <div className="flex items-center gap-2 py-8 text-sm text-fg-muted">
         <Loader2 className="h-4 w-4 animate-spin" />
         Loading AI workspace...
       </div>
@@ -479,7 +479,7 @@ export function AIWorkspaceSection() {
 
   if (error) {
     return (
-      <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-4 py-3 text-sm text-rose-300">
+      <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
         {error}
       </div>
     );
@@ -496,8 +496,8 @@ export function AIWorkspaceSection() {
 
       {/* Profiles and Fallback — forward-looking cards */}
       <Card title="AI Profiles" description="Named configurations for different workflow stages">
-        <div className="flex items-center gap-3 text-sm text-slate-400">
-          <Clock className="h-4 w-4 text-slate-500" />
+        <div className="flex items-center gap-3 text-sm text-fg-muted">
+          <Clock className="h-4 w-4 text-fg-muted" />
           <span>
             Configure profiles under AI Providers to assign different models and parameters
             per workflow stage (Planning, Development, Review, Testing).
@@ -506,8 +506,8 @@ export function AIWorkspaceSection() {
       </Card>
 
       <Card title="Fallback Policy" description="Automatic provider failover on recoverable errors">
-        <div className="flex items-center gap-3 text-sm text-slate-400">
-          <AlertTriangle className="h-4 w-4 text-slate-500" />
+        <div className="flex items-center gap-3 text-sm text-fg-muted">
+          <AlertTriangle className="h-4 w-4 text-fg-muted" />
           <span>
             When enabled, recoverable failures (rate limits, timeouts) automatically retry
             on the next provider in the configured fallback order.

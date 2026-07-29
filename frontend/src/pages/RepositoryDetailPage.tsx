@@ -37,7 +37,7 @@ const pullRequestColumns: TableColumn<PullRequest>[] = [
     render: (pr) => (
       <Link to={`/pull-requests/${pr.id}`} className="hover:underline">
         {pr.title}
-        <span className="ml-2 text-xs text-slate-500">#{pr.number}</span>
+        <span className="ml-2 text-xs text-fg-muted">#{pr.number}</span>
       </Link>
     ),
   },
@@ -167,24 +167,24 @@ export function RepositoryDetailPage() {
   }
 
   if (isLoading) {
-    return <p className="text-sm text-slate-500">Loading…</p>;
+    return <p className="text-sm text-fg-muted">Loading…</p>;
   }
 
   if (!repository) {
-    return <p className="text-sm text-slate-500">Repository not found.</p>;
+    return <p className="text-sm text-fg-muted">Repository not found.</p>;
   }
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-slate-50">{repository.full_name}</h2>
-          <p className="mt-1 text-sm text-slate-400">{repository.html_url}</p>
+          <h2 className="text-xl font-semibold text-fg">{repository.full_name}</h2>
+          <p className="mt-1 text-sm text-fg-muted">{repository.html_url}</p>
         </div>
         <div className="flex gap-2">
           <Link
             to={`/architecture?repository=${repository.id}`}
-            className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:border-slate-500"
+            className="rounded-md border border-line px-3 py-1.5 text-sm text-fg-secondary hover:border-line-strong"
           >
             View graph
           </Link>
@@ -192,7 +192,7 @@ export function RepositoryDetailPage() {
             type="button"
             onClick={() => void handleRemove()}
             disabled={isRemoving}
-            className="rounded-md border border-rose-500/50 px-3 py-1.5 text-sm font-medium text-rose-300 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md border border-danger-line/50 px-3 py-1.5 text-sm font-medium text-danger-fg hover:bg-danger-bg disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isRemoving ? "Removing…" : "Remove repository"}
           </button>
@@ -200,7 +200,7 @@ export function RepositoryDetailPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       )}
@@ -211,12 +211,12 @@ export function RepositoryDetailPage() {
             <>
               <StatusBadge label={indexingJob.status} tone={JOB_STATUS_TONE[indexingJob.status]} />
               {indexingJob.finished_at && (
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-fg-muted">
                   Last indexed {formatRelativeTime(indexingJob.finished_at)}
                 </span>
               )}
               {indexingJob.result_summary && (
-                <span className="text-xs text-slate-500">
+                <span className="text-xs text-fg-muted">
                   {Object.entries(indexingJob.result_summary)
                     .map(([key, count]) => `${count} ${key}`)
                     .join(", ")}
@@ -224,7 +224,7 @@ export function RepositoryDetailPage() {
               )}
             </>
           ) : (
-            <span className="text-xs text-slate-500">Not indexed yet.</span>
+            <span className="text-xs text-fg-muted">Not indexed yet.</span>
           )}
           <button
             type="button"
@@ -232,14 +232,14 @@ export function RepositoryDetailPage() {
             disabled={
               isIndexing || indexingJob?.status === "pending" || indexingJob?.status === "running"
             }
-            className="rounded-md bg-sky-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md bg-info-solid px-3 py-1.5 text-sm font-medium text-info-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isIndexing ? "Indexing…" : "Run indexing"}
           </button>
         </div>
 
         {indexingJob?.status === "failed" && indexingJob.error_message && (
-          <p className="mt-3 rounded-md bg-rose-500/10 px-3 py-2 text-xs whitespace-pre-wrap text-rose-300">
+          <p className="mt-3 rounded-md bg-danger-bg px-3 py-2 text-xs whitespace-pre-wrap text-danger-fg">
             {indexingJob.error_message}
           </p>
         )}

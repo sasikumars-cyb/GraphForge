@@ -6,9 +6,9 @@ import { disableAgent, enableAgent, listAgentManifests } from "../../lib/api/age
 import type { AgentManifest } from "../../types/agents";
 
 const COST_CLASS_STYLES: Record<string, string> = {
-  cheap: "text-emerald-400",
-  standard: "text-sky-400",
-  expensive: "text-amber-400",
+  cheap: "text-success-fg",
+  standard: "text-info-fg",
+  expensive: "text-warning-fg",
 };
 
 function AgentRow({
@@ -33,23 +33,23 @@ function AgentRow({
     <div className="flex items-center justify-between gap-4 py-2.5">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-slate-200">{agent.agent_id}</span>
-          <span className={`text-[10px] font-medium uppercase ${COST_CLASS_STYLES[agent.cost_class] ?? "text-slate-500"}`}>
+          <span className="text-sm font-medium text-fg-secondary">{agent.agent_id}</span>
+          <span className={`text-[10px] font-medium uppercase ${COST_CLASS_STYLES[agent.cost_class] ?? "text-fg-muted"}`}>
             {agent.cost_class}
           </span>
           {!agent.enabled && (
-            <span className="inline-flex items-center gap-1 rounded bg-rose-500/10 px-1.5 py-0.5 text-[10px] font-medium text-rose-300 ring-1 ring-inset ring-rose-500/20">
+            <span className="inline-flex items-center gap-1 rounded bg-danger-bg px-1.5 py-0.5 text-[10px] font-medium text-danger-fg ring-1 ring-inset ring-danger-line/20">
               <ShieldOff className="h-2.5 w-2.5" aria-hidden="true" />
               Disabled
             </span>
           )}
         </div>
-        <p className="mt-0.5 text-xs text-slate-500">{agent.purpose}</p>
+        <p className="mt-0.5 text-xs text-fg-muted">{agent.purpose}</p>
         <div className="mt-1.5 flex flex-wrap gap-1">
           {agent.goals.map((goal) => (
             <span
               key={goal}
-              className="rounded bg-slate-800/80 px-1.5 py-0.5 text-[10px] font-mono text-slate-400"
+              className="rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-mono text-fg-muted"
             >
               {goal}
             </span>
@@ -67,7 +67,7 @@ function AgentRow({
             aria-label={`${agent.enabled ? "Disable" : "Enable"} ${agent.agent_id}`}
             className="peer sr-only"
           />
-          <span className="h-5 w-9 rounded-full bg-slate-700 transition-colors peer-checked:bg-sky-500 peer-disabled:opacity-50" />
+          <span className="h-5 w-9 rounded-full bg-surface-active transition-colors peer-checked:bg-info-solid peer-disabled:opacity-50" />
           <span className="absolute left-0.5 h-4 w-4 rounded-full bg-white transition-transform peer-checked:translate-x-4" />
         </label>
       </div>
@@ -118,7 +118,7 @@ export function AgentRegistrySection() {
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 py-8 text-sm text-slate-500">
+      <div className="flex items-center gap-2 py-8 text-sm text-fg-muted">
         <Loader2 className="h-4 w-4 animate-spin" />
         Loading agent registry...
       </div>
@@ -127,7 +127,7 @@ export function AgentRegistrySection() {
 
   if (error) {
     return (
-      <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-4 py-3 text-sm text-rose-300">
+      <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
         {error}
       </div>
     );
@@ -140,22 +140,22 @@ export function AgentRegistrySection() {
       <Card>
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <p className="text-xs text-slate-500">Registered Agents</p>
-            <p className="mt-0.5 text-lg font-semibold text-slate-100">{agents.length}</p>
+            <p className="text-xs text-fg-muted">Registered Agents</p>
+            <p className="mt-0.5 text-lg font-semibold text-fg">{agents.length}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Enabled</p>
-            <p className="mt-0.5 text-lg font-semibold text-emerald-400">{enabledCount}</p>
+            <p className="text-xs text-fg-muted">Enabled</p>
+            <p className="mt-0.5 text-lg font-semibold text-success-fg">{enabledCount}</p>
           </div>
         </div>
       </Card>
 
       <Card title="Agents">
-        <p className="mb-2 text-xs text-slate-500">
+        <p className="mb-2 text-xs text-fg-muted">
           Disabling an agent stops new runs for it immediately — any workflow stage using it will
           fail with a clear error until it's re-enabled. Runs already in progress are unaffected.
         </p>
-        <div className="divide-y divide-slate-800/60">
+        <div className="divide-y divide-line-muted">
           {agents.map((agent) => (
             <AgentRow key={agent.agent_id} agent={agent} onToggle={handleToggle} />
           ))}

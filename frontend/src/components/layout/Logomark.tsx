@@ -14,8 +14,8 @@ export function Logomark({ className = "h-8 w-8" }: { className?: string }) {
       <circle cx="22" cy="20" r="2.4" fill="white" fillOpacity="0.85" />
       <defs>
         <linearGradient id="logomark-gradient" x1="0" y1="0" x2="32" y2="32">
-          <stop offset="0%" stopColor="#8425ff" />
-          <stop offset="100%" stopColor="#47bfff" />
+          <stop offset="0%" stopColor="var(--gf-accent-solid)" />
+          <stop offset="100%" stopColor="var(--gf-brand-glow)" />
         </linearGradient>
       </defs>
     </svg>

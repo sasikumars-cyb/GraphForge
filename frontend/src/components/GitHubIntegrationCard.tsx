@@ -153,12 +153,12 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
   return (
     <Card title="Integrations" description="Connect the systems GraphForge reads from">
       <div className="flex flex-col gap-4">
-        <div className="flex items-center justify-between rounded-lg border border-slate-800 px-4 py-3">
+        <div className="flex items-center justify-between rounded-lg border border-line-muted px-4 py-3">
           <div className="flex items-center gap-3">
-            <GitBranch className="h-5 w-5 text-slate-300" aria-hidden="true" />
+            <GitBranch className="h-5 w-5 text-fg-secondary" aria-hidden="true" />
             <div>
-              <p className="text-sm font-medium text-slate-200">GitHub</p>
-              <p className="text-xs text-slate-500">
+              <p className="text-sm font-medium text-fg-secondary">GitHub</p>
+              <p className="text-xs text-fg-muted">
                 {status?.connected
                   ? `Connected as @${status.github_username}`
                   : "Read pull requests from your repositories"}
@@ -167,7 +167,7 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
           </div>
           <div className="flex items-center gap-3">
             {isLoadingStatus ? (
-              <Loader2 className="h-4 w-4 animate-spin text-slate-500" aria-hidden="true" />
+              <Loader2 className="h-4 w-4 animate-spin text-fg-muted" aria-hidden="true" />
             ) : (
               <StatusBadge
                 label={status?.connected ? "Connected" : "Not connected"}
@@ -178,7 +178,7 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
               <button
                 type="button"
                 onClick={() => void handleDisconnect()}
-                className="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                className="rounded-md border border-line px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
               >
                 Disconnect
               </button>
@@ -187,7 +187,7 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
                 type="button"
                 onClick={() => void handleConnect()}
                 disabled={isConnecting || isLoadingStatus}
-                className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-sky-500/50"
+                className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
               >
                 {isConnecting ? "Connecting…" : "Connect"}
               </button>
@@ -196,38 +196,36 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
         </div>
 
         {error && (
-          <p role="alert" className="rounded-md bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+          <p role="alert" className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger-fg">
             {error}
           </p>
         )}
         {notice && !error && (
-          <p className="rounded-md bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
-            {notice}
-          </p>
+          <p className="rounded-md bg-success-bg px-3 py-2 text-sm text-success-fg">{notice}</p>
         )}
 
         {status?.connected && (
-          <div className="rounded-lg border border-slate-800 p-4">
+          <div className="rounded-lg border border-line-muted p-4">
             <div className="mb-3 flex items-center justify-between">
-              <p className="text-sm font-medium text-slate-200">Repositories</p>
+              <p className="text-sm font-medium text-fg-secondary">Repositories</p>
               <button
                 type="button"
                 onClick={() => void handleSaveSelection()}
                 disabled={isSaving || isLoadingRepos || !availableRepos}
-                className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-sky-500/50"
+                className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
               >
                 {isSaving ? "Saving…" : "Save selection"}
               </button>
             </div>
 
             {isLoadingRepos ? (
-              <p className="text-sm text-slate-500">Loading repositories from GitHub…</p>
+              <p className="text-sm text-fg-muted">Loading repositories from GitHub…</p>
             ) : !availableRepos || availableRepos.length === 0 ? (
-              <p className="text-sm text-slate-500">
+              <p className="text-sm text-fg-muted">
                 No repositories found for this GitHub account.
               </p>
             ) : (
-              <ul className="max-h-72 divide-y divide-slate-800 overflow-y-auto">
+              <ul className="max-h-72 divide-y divide-line-muted overflow-y-auto">
                 {availableRepos.map((repo) => (
                   <li key={repo.provider_repo_id}>
                     <label className="flex cursor-pointer items-center gap-3 py-2">
@@ -235,10 +233,10 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
                         type="checkbox"
                         checked={selectedIds.has(repo.provider_repo_id)}
                         onChange={() => toggleRepo(repo.provider_repo_id)}
-                        className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-sky-500 focus:ring-sky-500"
+                        className="h-4 w-4 rounded border-line-strong bg-canvas text-info-fg "
                       />
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-sm text-slate-200">
+                        <span className="block truncate text-sm text-fg-secondary">
                           {repo.full_name}
                         </span>
                       </span>

@@ -49,15 +49,15 @@ export function PlanningRunPicker({ value, onChange, disabled }: PlanningRunPick
 
   return (
     <div>
-      <label htmlFor="planning-run-picker" className="block text-xs font-medium text-slate-400">
-        Ground in a previous Planning run <span className="text-slate-600">(optional)</span>
+      <label htmlFor="planning-run-picker" className="block text-xs font-medium text-fg-muted">
+        Ground in a previous Planning run <span className="text-fg-subtle">(optional)</span>
       </label>
       <select
         id="planning-run-picker"
         value={value ?? ""}
         disabled={disabled || loading}
         onChange={(e) => onChange(e.target.value || null)}
-        className="mt-1.5 w-full rounded-lg border border-slate-700 bg-slate-800/60 px-3 py-2 text-sm text-slate-200 focus:border-sky-500 focus:outline-none focus:ring-1 focus:ring-sky-500 disabled:opacity-50"
+        className="mt-1.5 w-full rounded-lg border border-line bg-surface-raised px-3 py-2 text-sm text-fg-secondary focus:border-info-line disabled:opacity-50"
       >
         <option value="">None — run standalone</option>
         {runs.map((r) => (
@@ -68,9 +68,9 @@ export function PlanningRunPicker({ value, onChange, disabled }: PlanningRunPick
         ))}
       </select>
       {!loading && runs.length === 0 && (
-        <p className="mt-1 text-xs text-slate-600">
+        <p className="mt-1 text-xs text-fg-subtle">
           No completed Planning runs yet — run one from{" "}
-          <span className="text-sky-500">AI Workspace → Planning</span> first if you'd like to
+          <span className="text-info-fg">AI Workspace → Planning</span> first if you'd like to
           ground this run in one.
         </p>
       )}
@@ -84,7 +84,7 @@ export function PlanningRunPicker({ value, onChange, disabled }: PlanningRunPick
 export function StandaloneContextBanner({ planningRunId }: { planningRunId: string | null }) {
   if (planningRunId) {
     return (
-      <div className="flex items-start gap-2.5 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+      <div className="flex items-start gap-2.5 rounded-lg border border-success-line/30 bg-success-bg px-4 py-3 text-sm text-success-fg">
         <Lightbulb className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
         <p>
           This run will be grounded in the selected Planning run's result — the same context a
@@ -95,7 +95,7 @@ export function StandaloneContextBanner({ planningRunId }: { planningRunId: stri
   }
 
   return (
-    <div className="flex items-start gap-2.5 rounded-lg border border-sky-500/30 bg-sky-500/10 px-4 py-3 text-sm text-sky-200">
+    <div className="flex items-start gap-2.5 rounded-lg border border-info-line/30 bg-info-bg px-4 py-3 text-sm text-info-fg">
       <Info className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
       <p>
         Running standalone — this request has no Workflow behind it, so it won't see a prior

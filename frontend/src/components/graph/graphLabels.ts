@@ -4,10 +4,45 @@
  * Kept out of DependencyGraph.tsx so these stay pure, directly testable, and
  * don't break that file's fast-refresh boundary (a component module should
  * only export components).
+ *
+ * Colours are returned as `var(--gf-node-N-*)` references rather than literal
+ * hexes. Two reasons:
+ *   1. The previous map hardcoded dark-only hexes (`#0c4a6e` on a node whose
+ *      label text was `var(--gf-slate-200)`). In the light themes that
+ *      resolved to dark-navy-on-dark-slate — about 1.3:1, i.e. invisible —
+ *      which is the "black text on dark backgrounds" the graph was showing.
+ *   2. Inline `var()` in a ReactFlow node style re-resolves on theme switch
+ *      with no React work at all, so the graph retints itself for free.
+ *
+ * The eight node slots are a *categorical* palette: fixed assignment order,
+ * never cycled. A label with no slot gets the neutral treatment rather than
+ * a generated ninth hue, so two unrelated types can never accidentally read
+ * as the same category. Each slot's steps are validated per theme for
+ * colour-vision-deficiency separation and >= 4.5:1 label contrast on the
+ * node's own fill (see src/styles/tokens.css).
  */
 
-/** Fallback styling for a node label we have no explicit colour for. */
-export const UNKNOWN_LABEL_COLORS = { background: "#1e293b", border: "#94a3b8" };
+export interface NodeColors {
+  background: string;
+  border: string;
+  /** Label ink — must be read from the same slot as the fill it sits on. */
+  text: string;
+}
+
+function slot(n: number): NodeColors {
+  return {
+    background: `var(--gf-node-${n}-bg)`,
+    border: `var(--gf-node-${n}-line)`,
+    text: `var(--gf-node-${n}-fg)`,
+  };
+}
+
+/** Fallback styling for a node label we have no explicit slot for. */
+export const UNKNOWN_LABEL_COLORS: NodeColors = {
+  background: "var(--gf-surface-raised)",
+  border: "var(--gf-line-strong)",
+  text: "var(--gf-fg-secondary)",
+};
 
 /**
  * Explicit colours for the node labels we know about.
@@ -19,21 +54,21 @@ export const UNKNOWN_LABEL_COLORS = { background: "#1e293b", border: "#94a3b8" }
  * `Component` entry and drew in identical grey, while the legend advertised
  * six Java/Spring types the graph could not contain.
  */
-export const NODE_LABEL_COLORS: Record<string, { background: string; border: string }> = {
+export const NODE_LABEL_COLORS: Record<string, NodeColors> = {
   // Java / Spring Boot
-  Controller: { background: "#0c4a6e", border: "#38bdf8" },
-  Service: { background: "#164e3c", border: "#34d399" },
-  FeignClient: { background: "#3b2f0b", border: "#fbbf24" },
-  Endpoint: { background: "#1e1b4b", border: "#818cf8" },
-  KafkaTopic: { background: "#4a044e", border: "#e879f9" },
-  MavenDependency: { background: "#292524", border: "#a8a29e" },
+  Controller: slot(1), // entry points share the blue slot with Module
+  Service: slot(2), // behaviour shares green with Function
+  FeignClient: slot(4), // outbound integration
+  Endpoint: slot(5),
+  KafkaTopic: slot(3), // messaging
+  MavenDependency: UNKNOWN_LABEL_COLORS, // external, deliberately recessive
   // Python
-  Module: { background: "#0c3f5e", border: "#5eb0ef" },
-  Class: { background: "#3d1f4d", border: "#c084fc" },
-  Function: { background: "#14392e", border: "#5eead4" },
-  PythonDependency: { background: "#292524", border: "#a8a29e" },
+  Module: slot(1),
+  Class: slot(7),
+  Function: slot(2),
+  PythonDependency: UNKNOWN_LABEL_COLORS,
   // Cross-language
-  Repository: { background: "#422006", border: "#fb923c" },
+  Repository: slot(6),
   Component: UNKNOWN_LABEL_COLORS,
 };
 
@@ -60,7 +95,7 @@ export function primaryLabel(labels: string[]): string {
   );
 }
 
-export function resolveLabelColors(label: string): { background: string; border: string } {
+export function resolveLabelColors(label: string): NodeColors {
   return NODE_LABEL_COLORS[label] ?? UNKNOWN_LABEL_COLORS;
 }
 

@@ -32,21 +32,21 @@ export function VerificationWarnings({
 
   return (
     <section
-      className="rounded-lg border border-amber-700/50 bg-amber-950/30 p-4"
+      className="rounded-lg border border-warning-line/40 bg-warning-bg p-4"
       aria-labelledby="verification-warnings-heading"
     >
       <div className="flex items-start gap-3">
-        <span aria-hidden="true" className="mt-0.5 text-lg leading-none text-amber-400">
+        <span aria-hidden="true" className="mt-0.5 text-lg leading-none text-warning-fg">
           ⚠
         </span>
         <div className="min-w-0 flex-1">
           <h3
             id="verification-warnings-heading"
-            className="text-sm font-semibold text-amber-200"
+            className="text-sm font-semibold text-warning-fg"
           >
             {count} unverified {count === 1 ? "claim" : "claims"} in this {subject}
           </h3>
-          <p className="mt-1 text-xs text-amber-200/70">
+          <p className="mt-1 text-xs text-warning-fg">
             These were checked against the indexed code this run actually
             retrieved, and could not be matched. Treat them as unconfirmed —
             the rest of the {subject} is unaffected.
@@ -56,9 +56,9 @@ export function VerificationWarnings({
             {warnings.map((warning) => (
               <li
                 key={warning}
-                className="flex gap-2 text-xs leading-relaxed text-amber-100/90"
+                className="flex gap-2 text-xs leading-relaxed text-warning-fg"
               >
-                <span aria-hidden="true" className="select-none text-amber-500/60">
+                <span aria-hidden="true" className="select-none text-warning-fg">
                   •
                 </span>
                 <span className="min-w-0 break-words">{warning}</span>

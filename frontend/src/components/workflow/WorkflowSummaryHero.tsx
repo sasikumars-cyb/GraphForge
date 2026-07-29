@@ -34,17 +34,15 @@ export function WorkflowSummaryHero({
       : null;
 
   return (
-    <div className="flex flex-col gap-6 rounded-2xl border border-emerald-500/25 bg-gradient-to-br from-emerald-500/10 via-slate-900 to-slate-900 p-7 text-center">
+    <div className="flex flex-col gap-6 rounded-2xl border border-success-line/25 bg-gradient-to-br from-success-solid via-surface to-surface p-7 text-center">
       <div className="flex flex-col items-center gap-2">
-        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-emerald-500/15 ring-1 ring-inset ring-emerald-500/40">
-          <CheckCircle2 className="h-6 w-6 text-emerald-400" aria-hidden="true" />
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-success-bg ring-1 ring-inset ring-success-line/40">
+          <CheckCircle2 className="h-6 w-6 text-success-fg" aria-hidden="true" />
         </div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-emerald-400">
+        <p className="text-xs font-semibold uppercase tracking-wide text-success-fg">
           {variant === "approved" ? "Blueprint Approved" : "Workflow Complete"}
         </p>
-        <h2 className="font-display text-2xl font-bold tracking-tight text-slate-50">
-          {workflow.title}
-        </h2>
+        <h2 className="font-display text-2xl font-bold tracking-tight text-fg">{workflow.title}</h2>
       </div>
 
       <div className="mx-auto grid w-full max-w-2xl grid-cols-2 gap-5 sm:grid-cols-5">
@@ -67,8 +65,8 @@ export function WorkflowSummaryHero({
 function SummaryStat({ label, value }: { label: string; value: string }) {
   return (
     <div>
-      <p className="font-mono text-lg font-bold tabular-nums text-slate-50 sm:text-xl">{value}</p>
-      <p className="mt-0.5 text-[11px] font-medium uppercase tracking-wide text-slate-500">
+      <p className="font-mono text-lg font-bold tabular-nums text-fg sm:text-xl">{value}</p>
+      <p className="mt-0.5 text-[11px] font-medium uppercase tracking-wide text-fg-muted">
         {label}
       </p>
     </div>

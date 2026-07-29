@@ -44,7 +44,7 @@ const columns: TableColumn<QueueRow>[] = [
     render: ({ workflow }) => (
       <Link
         to={`/workflows/${workflow.workflow_id}`}
-        className="block truncate font-medium text-slate-100 hover:underline"
+        className="block truncate font-medium text-fg hover:underline"
         title={workflow.title}
       >
         {workflow.title}
@@ -57,7 +57,7 @@ const columns: TableColumn<QueueRow>[] = [
     render: (row) => {
       const { text, title } = repositoryLabel(row);
       return (
-        <span className="text-sm text-slate-300" title={title}>
+        <span className="text-sm text-fg-secondary" title={title}>
           {text}
         </span>
       );
@@ -67,7 +67,7 @@ const columns: TableColumn<QueueRow>[] = [
     key: "scope",
     header: "Estimated Scope",
     render: ({ development }) => (
-      <span className="text-sm text-slate-300">
+      <span className="text-sm text-fg-secondary">
         {scopeLabel(development?.implementation_phases)}
       </span>
     ),
@@ -76,14 +76,14 @@ const columns: TableColumn<QueueRow>[] = [
     key: "approved_date",
     header: "Approval Date",
     render: ({ workflow }) => (
-      <span className="text-sm text-slate-400">{formatRelativeTime(workflow.updated_at)}</span>
+      <span className="text-sm text-fg-muted">{formatRelativeTime(workflow.updated_at)}</span>
     ),
   },
   {
     key: "approved_by",
     header: "Approved By",
     render: ({ workflow }) => (
-      <span className="text-sm text-slate-300">{workflow.approved_by ?? "—"}</span>
+      <span className="text-sm text-fg-secondary">{workflow.approved_by ?? "—"}</span>
     ),
   },
   {
@@ -98,10 +98,10 @@ const columns: TableColumn<QueueRow>[] = [
       <span
         aria-disabled="true"
         title="Turning an approved blueprint into code isn't available yet"
-        className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-slate-500 ring-1 ring-inset ring-slate-800 opacity-60"
+        className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted ring-1 ring-inset ring-line-muted opacity-60"
       >
         Start Implementation
-        <span className="rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
+        <span className="rounded-full bg-surface-raised px-1.5 py-0.5 text-[10px] uppercase tracking-wide">
           Coming soon
         </span>
       </span>
@@ -180,19 +180,19 @@ export function ApprovedQueuePage() {
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center gap-3">
-        <div className="rounded-lg bg-emerald-500/10 p-2 ring-1 ring-inset ring-emerald-500/30">
-          <CheckCircle2 className="h-5 w-5 text-emerald-400" aria-hidden="true" />
+        <div className="rounded-lg bg-success-bg p-2 ring-1 ring-inset ring-success-line/30">
+          <CheckCircle2 className="h-5 w-5 text-success-fg" aria-hidden="true" />
         </div>
         <div>
-          <h2 className="text-xl font-semibold text-slate-50">Approved Queue</h2>
-          <p className="text-sm text-slate-400">
+          <h2 className="text-xl font-semibold text-fg">Approved Queue</h2>
+          <p className="text-sm text-fg-muted">
             {total} approved blueprint{total === 1 ? "" : "s"}
           </p>
         </div>
       </div>
 
       {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       )}
@@ -206,8 +206,8 @@ export function ApprovedQueuePage() {
         />
 
         {total > 0 && (
-          <div className="mt-4 flex items-center justify-between border-t border-slate-800 pt-4">
-            <p className="text-xs text-slate-500">
+          <div className="mt-4 flex items-center justify-between border-t border-line-muted pt-4">
+            <p className="text-xs text-fg-muted">
               Page {page} of {Math.ceil(total / PAGE_SIZE)}
             </p>
             <div className="flex gap-2">
@@ -215,7 +215,7 @@ export function ApprovedQueuePage() {
                 type="button"
                 onClick={() => setPage(page - 1)}
                 disabled={page <= 1}
-                className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-30"
+                className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-30"
                 aria-label="Previous page"
               >
                 <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
@@ -225,7 +225,7 @@ export function ApprovedQueuePage() {
                 type="button"
                 onClick={() => setPage(page + 1)}
                 disabled={!hasMore}
-                className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs text-slate-400 ring-1 ring-inset ring-slate-700 transition-colors hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-30"
+                className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-30"
                 aria-label="Next page"
               >
                 Next

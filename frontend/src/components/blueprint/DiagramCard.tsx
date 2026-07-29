@@ -22,22 +22,22 @@ const DIAGRAM_TYPE_LABELS: Record<string, string> = {
 };
 
 const DIAGRAM_TYPE_COLORS: Record<string, string> = {
-  flow: "text-sky-400 bg-sky-500/10 ring-sky-500/30",
-  architecture: "text-violet-400 bg-violet-500/10 ring-violet-500/30",
-  sequence: "text-teal-400 bg-teal-500/10 ring-teal-500/30",
-  dependency: "text-amber-400 bg-amber-500/10 ring-amber-500/30",
-  timeline: "text-blue-400 bg-blue-500/10 ring-blue-500/30",
-  er: "text-pink-400 bg-pink-500/10 ring-pink-500/30",
-  risk_heatmap: "text-orange-400 bg-orange-500/10 ring-orange-500/30",
+  flow: "text-info-fg bg-info-bg ring-info-line/30",
+  architecture: "text-cat-7-fg bg-cat-7-bg ring-cat-7-line/30",
+  sequence: "text-cat-5-fg bg-cat-5-bg ring-cat-5-line/30",
+  dependency: "text-warning-fg bg-warning-bg ring-warning-line/30",
+  timeline: "text-info-fg bg-info-bg ring-info-line/30",
+  er: "text-cat-3-fg bg-cat-3-bg ring-cat-3-line/30",
+  risk_heatmap: "text-cat-6-fg bg-cat-6-bg ring-cat-6-line/30",
 };
 
 function confidenceBadge(score: number): { label: string; cls: string } {
   const pct = Math.round(score * 100);
   if (score >= 0.8)
-    return { label: `${pct}%`, cls: "text-emerald-400 bg-emerald-500/10 ring-emerald-500/30" };
+    return { label: `${pct}%`, cls: "text-success-fg bg-success-bg ring-success-line/30" };
   if (score >= 0.6)
-    return { label: `${pct}%`, cls: "text-yellow-400 bg-yellow-500/10 ring-yellow-500/30" };
-  return { label: `${pct}%`, cls: "text-orange-400 bg-orange-500/10 ring-orange-500/30" };
+    return { label: `${pct}%`, cls: "text-warning-fg bg-warning-bg ring-warning-line/30" };
+  return { label: `${pct}%`, cls: "text-cat-6-fg bg-cat-6-bg ring-cat-6-line/30" };
 }
 
 interface DiagramCardProps {
@@ -105,7 +105,7 @@ function FullscreenPortal({ children, onClose }: { children: ReactNode; onClose:
   return (
     <div
       ref={dialogRef}
-      className="fixed inset-0 z-50 flex flex-col bg-slate-950 outline-none"
+      className="fixed inset-0 z-50 flex flex-col bg-canvas"
       role="dialog"
       aria-modal="true"
       tabIndex={-1}
@@ -117,31 +117,16 @@ function FullscreenPortal({ children, onClose }: { children: ReactNode; onClose:
 
 export function DiagramCard({ diagram, minHeight = 320, index = 0 }: DiagramCardProps) {
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const cardRef = useRef<HTMLDivElement>(null);
 
-  const badgeClass = DIAGRAM_TYPE_COLORS[diagram.type] ?? "text-slate-400 bg-slate-800 ring-slate-700";
+  const badgeClass = DIAGRAM_TYPE_COLORS[diagram.type] ?? "text-fg-muted bg-surface-raised ring-line";
   const confidence = typeof diagram.confidence === "number" ? confidenceBadge(diagram.confidence) : null;
   const evidenceCount = diagram.evidence?.length ?? 0;
   const why = diagram.metadata?.why ? String(diagram.metadata.why) : null;
 
-  function handleHoverEnter() {
-    if (cardRef.current) {
-      cardRef.current.style.boxShadow =
-        "0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px rgba(148,163,184,0.08)";
-      cardRef.current.style.transform = "translateY(-2px)";
-    }
-  }
-  function handleHoverLeave() {
-    if (cardRef.current) {
-      cardRef.current.style.boxShadow = "";
-      cardRef.current.style.transform = "";
-    }
-  }
-
   function renderHeader(fullscreen: boolean) {
     return (
       <div
-        className={`flex items-start justify-between border-b border-slate-800 px-4 py-3 ${
+        className={`flex items-start justify-between border-b border-line-muted px-4 py-3 ${
           fullscreen ? "" : ""
         }`}
       >
@@ -162,21 +147,21 @@ export function DiagramCard({ diagram, minHeight = 320, index = 0 }: DiagramCard
               </span>
             )}
             {evidenceCount > 0 && (
-              <span className="shrink-0 rounded bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-400">
+              <span className="shrink-0 rounded bg-surface-raised px-1.5 py-0.5 text-[10px] text-fg-muted">
                 {evidenceCount} source{evidenceCount !== 1 ? "s" : ""}
               </span>
             )}
           </div>
 
           {/* Title */}
-          <h3 className={`mt-1.5 font-semibold text-slate-100 ${fullscreen ? "text-base" : "truncate text-sm"}`}>
+          <h3 className={`mt-1.5 font-semibold text-fg ${fullscreen ? "text-base" : "truncate text-sm"}`}>
             {diagram.title}
           </h3>
 
           {/* Description / why */}
           {(why ?? diagram.description) && (
             <p
-              className={`mt-0.5 text-xs text-slate-500 ${
+              className={`mt-0.5 text-xs text-fg-muted ${
                 fullscreen ? "line-clamp-3" : "truncate"
               }`}
             >
@@ -190,7 +175,7 @@ export function DiagramCard({ diagram, minHeight = 320, index = 0 }: DiagramCard
           <button
             type="button"
             onClick={() => {/* future export */}}
-            className="rounded-lg p-1.5 text-slate-600 transition-colors hover:bg-slate-800 hover:text-slate-400"
+            className="rounded-md p-1.5 text-fg-subtle transition-colors hover:bg-surface-hover hover:text-fg-secondary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
             aria-label="Export diagram (coming soon)"
             title="Export (coming soon)"
           >
@@ -199,7 +184,7 @@ export function DiagramCard({ diagram, minHeight = 320, index = 0 }: DiagramCard
           <button
             type="button"
             onClick={() => setIsFullscreen(!isFullscreen)}
-            className="rounded-lg p-1.5 text-slate-500 transition-colors hover:bg-slate-800 hover:text-slate-300"
+            className="rounded-md p-1.5 text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-focus"
             aria-label={isFullscreen ? "Exit fullscreen" : `View ${diagram.title} fullscreen`}
           >
             {isFullscreen ? (
@@ -227,16 +212,17 @@ export function DiagramCard({ diagram, minHeight = 320, index = 0 }: DiagramCard
   }
 
   return (
+    // The hover lift used to be two imperative `style.boxShadow = "0 8px 32px
+    // rgba(0,0,0,0.5)..."` writes on mouse enter/leave. That shadow is
+    // invisible on a light canvas and it bypassed `prefers-reduced-motion`,
+    // since an inline style isn't subject to the media query that zeroes
+    // transition durations app-wide. As classes it inherits both.
     <div
-      ref={cardRef}
-      className="flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60"
+      className="flex flex-col overflow-hidden rounded-xl border border-line-muted bg-surface shadow-sm transition-[box-shadow,transform] duration-200 ease-[var(--ease-standard)] hover:-translate-y-0.5 hover:shadow-lg"
       style={{
         animation: "diagram-card-in 0.45s ease-out backwards",
         animationDelay: `${index * 55}ms`,
-        transition: "box-shadow 0.2s ease, transform 0.2s ease",
       }}
-      onMouseEnter={handleHoverEnter}
-      onMouseLeave={handleHoverLeave}
     >
       {renderHeader(false)}
 
@@ -245,7 +231,7 @@ export function DiagramCard({ diagram, minHeight = 320, index = 0 }: DiagramCard
       </div>
 
       {Boolean(diagram.metadata?.note) && (
-        <p className="border-t border-slate-800 px-4 py-2 text-[10px] text-slate-600">
+        <p className="border-t border-line-muted px-4 py-2 text-[10px] text-fg-muted">
           {String(diagram.metadata?.note)}
         </p>
       )}

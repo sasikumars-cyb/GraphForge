@@ -9,23 +9,23 @@ interface WorkflowTimelineProps {
 const STATUS_CONFIG: Record<string, { icon: typeof Circle; color: string; bgColor: string }> = {
   completed: {
     icon: CheckCircle2,
-    color: "text-emerald-400",
-    bgColor: "bg-emerald-500/20",
+    color: "text-success-fg",
+    bgColor: "bg-success-bg",
   },
   running: {
     icon: Loader2,
-    color: "text-sky-400",
-    bgColor: "bg-sky-500/20",
+    color: "text-info-fg",
+    bgColor: "bg-info-bg",
   },
   failed: {
     icon: XCircle,
-    color: "text-rose-400",
-    bgColor: "bg-rose-500/20",
+    color: "text-danger-fg",
+    bgColor: "bg-danger-bg",
   },
   pending: {
     icon: Circle,
-    color: "text-slate-500",
-    bgColor: "bg-slate-800",
+    color: "text-fg-muted",
+    bgColor: "bg-surface-raised",
   },
 };
 
@@ -50,10 +50,10 @@ export function WorkflowTimeline({ stages, currentStage }: WorkflowTimelineProps
               <div
                 className={`flex h-9 w-9 items-center justify-center rounded-full ring-2 ring-inset ${config.bgColor} ${
                   isActive
-                    ? "ring-sky-400"
+                    ? "ring-info-line"
                     : stage.status === "completed"
-                      ? "ring-emerald-500/40"
-                      : "ring-slate-700"
+                      ? "ring-success-line/40"
+                      : "ring-line"
                 }`}
               >
                 <Icon
@@ -64,10 +64,10 @@ export function WorkflowTimeline({ stages, currentStage }: WorkflowTimelineProps
               <span
                 className={`text-xs font-medium ${
                   isActive
-                    ? "text-sky-300"
+                    ? "text-info-fg"
                     : stage.status === "completed"
-                      ? "text-emerald-300"
-                      : "text-slate-500"
+                      ? "text-success-fg"
+                      : "text-fg-muted"
                 }`}
               >
                 {stage.label}
@@ -83,7 +83,7 @@ export function WorkflowTimeline({ stages, currentStage }: WorkflowTimelineProps
               {!isLast && (
                 <div
                   className={`mx-2 h-0.5 w-8 sm:w-12 ${
-                    stage.status === "completed" ? "bg-emerald-500/40" : "bg-slate-700"
+                    stage.status === "completed" ? "bg-success-bg" : "bg-surface-active"
                   }`}
                   aria-hidden="true"
                 />

@@ -12,8 +12,8 @@ const columns: TableColumn<PullRequestRow>[] = [
     header: "Pull request",
     render: (pr) => (
       <Link to={`/pull-requests/${pr.id}`} className="block hover:underline">
-        <p className="font-medium text-slate-100">{pr.title}</p>
-        <p className="text-xs text-slate-500">#{pr.number}</p>
+        <p className="font-medium text-fg">{pr.title}</p>
+        <p className="text-xs text-fg-muted">#{pr.number}</p>
       </Link>
     ),
   },
@@ -44,14 +44,14 @@ export function PullRequestsPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-xl font-semibold text-slate-50">Pull Requests</h2>
-        <p className="mt-1 text-sm text-slate-400">
+        <h2 className="text-xl font-semibold text-fg">Pull Requests</h2>
+        <p className="mt-1 text-sm text-fg-muted">
           Every tracked pull request across monitored repositories, with its computed risk.
         </p>
       </div>
 
       {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       )}

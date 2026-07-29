@@ -1,0 +1,720 @@
+/**
+ * Semantic design tokens — the layer components are supposed to consume.
+ *
+ * Why this file exists
+ * -------------------
+ * themes.css re-themes the *primitive* ramps (`--gf-slate-800`,
+ * `--gf-emerald-400`, ...). That works, but a primitive carries no meaning:
+ * `slate-700` is simultaneously "default border", "a background" and "a text
+ * colour" depending on the call site, so it cannot be tuned for any of them
+ * without breaking the other two. Every contrast failure found in the audit
+ * traced back to exactly that collision.
+ *
+ * So: primitives stay as the raw palette, and *this* file names the roles.
+ * Components reference roles (`bg-surface`, `text-fg-muted`, `border-line`,
+ * `text-danger-fg`) and never a primitive. A role can then be retuned per
+ * theme without touching a component, which is the whole point.
+ *
+ * How the values were chosen
+ * --------------------------
+ * Not by eye. Every value below was solved for a WCAG target against the
+ * surface it actually renders on, then verified:
+ *   - `*-fg` roles      >= 4.5:1 on BOTH their own tint and `surface-raised`
+ *   - `*-line` roles    >= 3:1 on `surface` (>= 4.5:1 in High Contrast)
+ *   - `*-on-solid`      >= 4.5:1 on the matching `*-solid`
+ *   - graph node labels >= 4.5:1 on their node fill (7:1 in High Contrast)
+ *   - graph node hues   validated as a categorical set for colour-vision
+ *     deficiency separation (OKLab dE >= 8 adjacent) and >= 3:1 vs canvas
+ * High Contrast targets AAA (7:1) for text rather than AA.
+ *
+ * Most roles are plain aliases onto the primitive ramps — those already
+ * invert correctly per theme, so one `:root` mapping serves all five themes.
+ * A role only gets an explicit per-theme value where the ramp's value would
+ * fail its contrast target; those blocks are below, each labelled with why.
+ */
+
+/* ---------------------------------------------------------------------------
+ * Role -> primitive mapping. Theme-independent: themes.css defines every ramp
+ * "app-background-first" (slate-950 is always the canvas, slate-50 always the
+ * strongest ink), so these aliases hold in light and dark themes alike.
+ * ------------------------------------------------------------------------ */
+:root {
+  /* Surfaces — the elevation ladder. */
+  --gf-canvas: var(--gf-slate-950);
+  --gf-canvas-subtle: var(--gf-slate-900);
+  --gf-surface: var(--gf-slate-900);
+  --gf-surface-raised: var(--gf-slate-800);
+  --gf-surface-sunken: var(--gf-slate-950);
+  --gf-surface-hover: var(--gf-slate-800);
+  --gf-surface-active: var(--gf-slate-700);
+  --gf-overlay: color-mix(in srgb, var(--gf-slate-50) 60%, transparent);
+
+  /* Ink. `fg` and `fg-secondary` clear AA from the ramp; `fg-muted` and
+     `fg-subtle` do not in any theme and are overridden per theme below. */
+  --gf-fg: var(--gf-slate-50);
+  --gf-fg-secondary: var(--gf-slate-200);
+
+  /* Lines. `--gf-line` is set per theme rather than aliased onto
+     `slate-700`: that primitive sits at 1.31-1.50:1 against the card surface
+     in three of the five themes, which is the "borders blend into the
+     background" failure. Each theme's value below clears ~2:1. */
+  --gf-line-muted: var(--gf-slate-800);
+  --gf-line-strong: var(--gf-slate-600);
+
+  /* Code / terminal wells. */
+  --gf-code-bg: var(--gf-slate-950);
+  --gf-terminal-bg: var(--gf-slate-950);
+
+  /* Selection. */
+  --gf-selection: color-mix(in srgb, var(--gf-accent-solid) 22%, transparent);
+
+  /* Elevation ink. A black drop shadow over a near-black canvas is
+     invisible, which is why the dark themes read as flat — so the dark
+     themes get a deeper, more opaque black and the light themes a tinted
+     slate that stays soft. Consumed by --shadow-* in index.css. */
+  --gf-shadow: rgb(15 23 42 / 0.1);
+  --gf-shadow-weak: rgb(15 23 42 / 0.06);
+
+  /* Neutral status role — the "no signal" tone for badges/pills. */
+  --gf-neutral-bg: color-mix(in srgb, var(--gf-slate-500) 12%, var(--gf-surface));
+  --gf-neutral-line: var(--gf-slate-600);
+  --gf-neutral-solid: var(--gf-slate-600);
+}
+
+/* ---------------------------------------------------------------------------
+ * Per-theme explicit values.
+ *
+ * Only roles whose primitive would fail a contrast target appear here:
+ *   fg-muted / fg-subtle  — the ramp's slate-500/600 sit at 2.5-3.9:1 on
+ *                           surface-raised in every theme (54 and 17 files
+ *                           used them as body text).
+ *   status roles          — the ramp's accent-100/200 shades are pale tints
+ *                           in the light-mode themes yet are used only ever
+ *                           as *text*, landing at ~1.1:1.
+ *   graph / chart         — no primitive existed; these were hardcoded hexes
+ *                           inside the graph components.
+ * ------------------------------------------------------------------------ */
+
+/* ---- Light (default) ---------------------------------------------------- */
+:root {
+  --gf-line: #9eb0c7;
+  --gf-fg-muted: #59687c;
+  --gf-fg-subtle: #7286a2;
+  --gf-fg-on-solid: #ffffff;
+
+  --gf-success-fg: #0a7350;
+  --gf-success-bg: #d6ebe9;
+  --gf-success-line: #0e9d6d;
+  --gf-success-solid: #0ea271;
+  --gf-success-on-solid: #0b0b0f;
+
+  --gf-warning-fg: #8f5c06;
+  --gf-warning-bg: #ece7dc;
+  --gf-warning-line: #c07c08;
+  --gf-warning-solid: #c57f08;
+  --gf-warning-on-solid: #0b0b0f;
+
+  --gf-danger-fg: #c70b2b;
+  --gf-danger-bg: #f1dfe6;
+  --gf-danger-line: #f43f5e;
+  --gf-danger-solid: #f43f5e;
+
+  --gf-serious-fg: #aa4804;
+  --gf-serious-bg: #f1e4dc;
+  --gf-serious-line: #ea6406;
+  --gf-serious-solid: #ef6606;
+  --gf-serious-on-solid: #0b0b0f;
+  --gf-danger-on-solid: #0b0b0f;
+
+  --gf-info-fg: #096e9c;
+  --gf-info-bg: #d6eaf5;
+  --gf-info-line: #0d94d1;
+  --gf-info-solid: #0d97d6;
+  --gf-info-on-solid: #0b0b0f;
+
+  --gf-accent-fg: #7e1bff;
+  --gf-accent-bg: #e4dcfa;
+  --gf-accent-line: #8425ff;
+  --gf-accent-solid: #8425ff;
+  --gf-accent-on-solid: #ffffff;
+
+  --gf-focus: #8425ff;
+
+  /* Graph — light canvas steps. */
+  --gf-graph-canvas: var(--gf-slate-900);
+  --gf-graph-edge: #64748b;
+  --gf-graph-edge-label: #475569;
+  --gf-graph-cluster: color-mix(in srgb, #64748b 6%, transparent);
+  --gf-graph-cluster-line: #94a3b8;
+  --gf-graph-selected: #7e1bff;
+  --gf-graph-incoming: #0a7350;
+  --gf-graph-outgoing: #096e9c;
+  /* Node border stroke width — 1px everywhere except High Contrast (see
+     that theme block), which doubles it. That theme's own node fills are
+     already WCAG-validated per-theme and near-identical in hue/lightness
+     to Light's (same categorical palette, just re-tuned for label
+     contrast) — a thicker stroke is the honest way to make its graph read
+     as "high contrast" without touching those validated colors. */
+  --gf-node-border-width: 1px;
+
+  --gf-node-1-bg: #e5effa;
+  --gf-node-1-line: #2a78d6;
+  --gf-node-1-fg: #256cc1;
+  --gf-node-2-bg: #e0f0e0;
+  --gf-node-2-line: #008300;
+  --gf-node-2-fg: #007900;
+  --gf-node-3-bg: #fcecf2;
+  --gf-node-3-line: #e35d8f;
+  --gf-node-3-fg: #cb2362;
+  --gf-node-4-bg: #f7f0e0;
+  --gf-node-4-line: #ba7e00;
+  --gf-node-4-fg: #916200;
+  --gf-node-5-bg: #e3f3ee;
+  --gf-node-5-line: #189d6e;
+  --gf-node-5-fg: #137a55;
+  --gf-node-6-bg: #fcece6;
+  --gf-node-6-line: #ea612b;
+  --gf-node-6-fg: #bb4213;
+  --gf-node-7-bg: #e9e7f4;
+  --gf-node-7-line: #4a3aa7;
+  --gf-node-7-fg: #4a3aa7;
+  --gf-node-8-bg: #fce9e9;
+  --gf-node-8-line: #e34948;
+  --gf-node-8-fg: #ce2120;
+
+  --gf-chart-1: #2a78d6;
+  --gf-chart-2: #008300;
+  --gf-chart-3: #e35d8f;
+  --gf-chart-4: #ba7e00;
+  --gf-chart-5: #189d6e;
+  --gf-chart-6: #ea612b;
+  --gf-chart-7: #4a3aa7;
+  --gf-chart-8: #e34948;
+  --gf-chart-grid: color-mix(in srgb, #64748b 18%, transparent);
+  --gf-chart-axis: #7286a2;
+}
+
+/* ---- Dark --------------------------------------------------------------- */
+:root[data-theme="dark"] {
+  --gf-line: #3b4b62;
+  --gf-shadow: rgb(0 0 0 / 0.45);
+  --gf-shadow-weak: rgb(0 0 0 / 0.28);
+
+  --gf-fg-muted: #8290a5;
+  --gf-fg-subtle: #60738e;
+  --gf-fg-on-solid: #ffffff;
+
+  --gf-success-fg: #10b981;
+  --gf-success-bg: #0f2a34;
+  --gf-success-line: #10b981;
+  --gf-success-solid: #10b981;
+  --gf-success-on-solid: #0b0b0f;
+
+  --gf-warning-fg: #f59e0b;
+  --gf-warning-bg: #2b2726;
+  --gf-warning-line: #f59e0b;
+  --gf-warning-solid: #f59e0b;
+  --gf-warning-on-solid: #0b0b0f;
+
+  --gf-danger-fg: #f55772;
+  --gf-danger-bg: #2a1c30;
+  --gf-danger-line: #f43f5e;
+  --gf-danger-solid: #f43f5e;
+
+  --gf-serious-fg: #f97316;
+  --gf-serious-bg: #2b2228;
+  --gf-serious-line: #f97316;
+  --gf-serious-solid: #f97316;
+  --gf-serious-on-solid: #0b0b0f;
+  --gf-danger-on-solid: #0b0b0f;
+
+  --gf-info-fg: #0ea5e9;
+  --gf-info-bg: #0f2841;
+  --gf-info-line: #0ea5e9;
+  --gf-info-solid: #0ea5e9;
+  --gf-info-on-solid: #0b0b0f;
+
+  --gf-accent-fg: #af72ff;
+  --gf-accent-bg: #1d1944;
+  --gf-accent-line: #8425ff;
+  --gf-accent-solid: #8425ff;
+  --gf-accent-on-solid: #ffffff;
+
+  --gf-focus: #af72ff;
+
+  --gf-graph-canvas: var(--gf-slate-900);
+  --gf-graph-edge: #64748b;
+  --gf-graph-edge-label: #94a3b8;
+  --gf-graph-cluster: color-mix(in srgb, #94a3b8 5%, transparent);
+  --gf-graph-cluster-line: #475569;
+  --gf-graph-selected: #af72ff;
+  --gf-graph-incoming: #10b981;
+  --gf-graph-outgoing: #0ea5e9;
+
+  --gf-node-1-bg: #172b4c;
+  --gf-node-1-line: #3987e5;
+  --gf-node-1-fg: #5095e8;
+  --gf-node-2-bg: #0c2a22;
+  --gf-node-2-line: #008300;
+  --gf-node-2-fg: #00a200;
+  --gf-node-3-bg: #33213a;
+  --gf-node-3-line: #d55181;
+  --gf-node-3-fg: #db6a93;
+  --gf-node-4-bg: #302b22;
+  --gf-node-4-line: #c98500;
+  --gf-node-4-fg: #c98500;
+  --gf-node-5-bg: #112f37;
+  --gf-node-5-line: #199e70;
+  --gf-node-5-fg: #1aa776;
+  --gf-node-6-bg: #332329;
+  --gf-node-6-line: #d95926;
+  --gf-node-6-fg: #de6d40;
+  --gf-node-7-bg: #262b4c;
+  --gf-node-7-line: #9085e9;
+  --gf-node-7-fg: #9489ea;
+  --gf-node-8-bg: #362535;
+  --gf-node-8-line: #e66767;
+  --gf-node-8-fg: #e76b6b;
+
+  --gf-chart-1: #3987e5;
+  --gf-chart-2: #008300;
+  --gf-chart-3: #d55181;
+  --gf-chart-4: #c98500;
+  --gf-chart-5: #199e70;
+  --gf-chart-6: #d95926;
+  --gf-chart-7: #9085e9;
+  --gf-chart-8: #e66767;
+  --gf-chart-grid: color-mix(in srgb, #94a3b8 14%, transparent);
+  --gf-chart-axis: #60738e;
+}
+
+/* ---- Midnight ----------------------------------------------------------- */
+:root[data-theme="midnight"] {
+  --gf-line: #37417f;
+  --gf-shadow: rgb(0 0 0 / 0.55);
+  --gf-shadow-weak: rgb(0 0 0 / 0.34);
+
+  --gf-fg-muted: #7a84a9;
+  --gf-fg-subtle: #57659e;
+  --gf-fg-on-solid: #ffffff;
+
+  --gf-success-fg: #10b981;
+  --gf-success-bg: #0b232f;
+  --gf-success-line: #10b981;
+  --gf-success-solid: #10b981;
+  --gf-success-on-solid: #0b0b0f;
+
+  --gf-warning-fg: #f59e0b;
+  --gf-warning-bg: #261f21;
+  --gf-warning-line: #f59e0b;
+  --gf-warning-solid: #f59e0b;
+  --gf-warning-on-solid: #0b0b0f;
+
+  --gf-danger-fg: #f43f5e;
+  --gf-danger-bg: #26142b;
+  --gf-danger-line: #f43f5e;
+  --gf-danger-solid: #f43f5e;
+
+  --gf-serious-fg: #f97316;
+  --gf-serious-bg: #271a22;
+  --gf-serious-line: #f97316;
+  --gf-serious-solid: #f97316;
+  --gf-serious-on-solid: #0b0b0f;
+  --gf-danger-on-solid: #0b0b0f;
+
+  --gf-info-fg: #0ea5e9;
+  --gf-info-bg: #0a203c;
+  --gf-info-line: #0ea5e9;
+  --gf-info-solid: #0ea5e9;
+  --gf-info-on-solid: #0b0b0f;
+
+  --gf-accent-fg: #a45dff;
+  --gf-accent-bg: #19113e;
+  --gf-accent-line: #9147ff;
+  --gf-accent-solid: #9147ff;
+  --gf-accent-on-solid: #ffffff;
+
+  --gf-focus: #a45dff;
+
+  --gf-graph-canvas: var(--gf-slate-900);
+  --gf-graph-edge: #5a658b;
+  --gf-graph-edge-label: #7c85ab;
+  --gf-graph-cluster: color-mix(in srgb, #7c85ab 5%, transparent);
+  --gf-graph-cluster-line: #333b5c;
+  --gf-graph-selected: #a45dff;
+  --gf-graph-incoming: #10b981;
+  --gf-graph-outgoing: #0ea5e9;
+
+  --gf-node-1-bg: #122447;
+  --gf-node-1-line: #3987e5;
+  --gf-node-1-fg: #478fe7;
+  --gf-node-2-bg: #08231e;
+  --gf-node-2-line: #008300;
+  --gf-node-2-fg: #009c00;
+  --gf-node-3-bg: #2f1a35;
+  --gf-node-3-line: #d55181;
+  --gf-node-3-fg: #d9618d;
+  --gf-node-4-bg: #2c231e;
+  --gf-node-4-line: #c98500;
+  --gf-node-4-fg: #c98500;
+  --gf-node-5-bg: #0d2832;
+  --gf-node-5-line: #199e70;
+  --gf-node-5-fg: #199e70;
+  --gf-node-6-bg: #2f1c24;
+  --gf-node-6-line: #d95926;
+  --gf-node-6-fg: #dc6637;
+  --gf-node-7-bg: #222347;
+  --gf-node-7-line: #9085e9;
+  --gf-node-7-fg: #9085e9;
+  --gf-node-8-bg: #321e30;
+  --gf-node-8-line: #e66767;
+  --gf-node-8-fg: #e66767;
+
+  --gf-chart-1: #3987e5;
+  --gf-chart-2: #008300;
+  --gf-chart-3: #d55181;
+  --gf-chart-4: #c98500;
+  --gf-chart-5: #199e70;
+  --gf-chart-6: #d95926;
+  --gf-chart-7: #9085e9;
+  --gf-chart-8: #e66767;
+  --gf-chart-grid: color-mix(in srgb, #7c85ab 14%, transparent);
+  --gf-chart-axis: #57659e;
+}
+
+/* ---- Modern Blue -------------------------------------------------------- */
+:root[data-theme="modern-blue"] {
+  --gf-line: #334a6b;
+  --gf-shadow: rgb(0 0 0 / 0.5);
+  --gf-shadow-weak: rgb(0 0 0 / 0.3);
+
+  --gf-fg-muted: #748cb0;
+  --gf-fg-subtle: #516f9a;
+  --gf-fg-on-solid: #ffffff;
+
+  --gf-success-fg: #10b981;
+  --gf-success-bg: #0d2a31;
+  --gf-success-line: #10b981;
+  --gf-success-solid: #10b981;
+  --gf-success-on-solid: #0b0b0f;
+
+  --gf-warning-fg: #f59e0b;
+  --gf-warning-bg: #292623;
+  --gf-warning-line: #f59e0b;
+  --gf-warning-solid: #f59e0b;
+  --gf-warning-on-solid: #0b0b0f;
+
+  --gf-danger-fg: #f54966;
+  --gf-danger-bg: #291b2d;
+  --gf-danger-line: #f43f5e;
+  --gf-danger-solid: #f43f5e;
+
+  --gf-serious-fg: #f97316;
+  --gf-serious-bg: #292124;
+  --gf-serious-line: #f97316;
+  --gf-serious-solid: #f97316;
+  --gf-serious-on-solid: #0b0b0f;
+  --gf-danger-on-solid: #0b0b0f;
+
+  --gf-info-fg: #0ea5e9;
+  --gf-info-bg: #0d273d;
+  --gf-info-line: #0ea5e9;
+  --gf-info-solid: #0ea5e9;
+  --gf-info-on-solid: #0b0b0f;
+
+  --gf-accent-fg: #a967ff;
+  --gf-accent-bg: #1b1840;
+  --gf-accent-line: #1c86ff;
+  --gf-accent-solid: #1c86ff;
+  --gf-accent-on-solid: #06162c;
+
+  --gf-focus: #4da8ff;
+
+  --gf-graph-canvas: var(--gf-slate-900);
+  --gf-graph-edge: #526a90;
+  --gf-graph-edge-label: #6f88ab;
+  --gf-graph-cluster: color-mix(in srgb, #6f88ab 5%, transparent);
+  --gf-graph-cluster-line: #374b68;
+  --gf-graph-selected: #4da8ff;
+  --gf-graph-incoming: #10b981;
+  --gf-graph-outgoing: #0ea5e9;
+
+  --gf-node-1-bg: #152a48;
+  --gf-node-1-line: #3987e5;
+  --gf-node-1-fg: #4b92e7;
+  --gf-node-2-bg: #0b2a1f;
+  --gf-node-2-line: #008300;
+  --gf-node-2-fg: #00a200;
+  --gf-node-3-bg: #312136;
+  --gf-node-3-line: #d55181;
+  --gf-node-3-fg: #db6a93;
+  --gf-node-4-bg: #2f2a1f;
+  --gf-node-4-line: #c98500;
+  --gf-node-4-fg: #c98500;
+  --gf-node-5-bg: #0f2e33;
+  --gf-node-5-line: #199e70;
+  --gf-node-5-fg: #1aa776;
+  --gf-node-6-bg: #322226;
+  --gf-node-6-line: #d95926;
+  --gf-node-6-fg: #de6d40;
+  --gf-node-7-bg: #252a49;
+  --gf-node-7-line: #9085e9;
+  --gf-node-7-fg: #9489ea;
+  --gf-node-8-bg: #342532;
+  --gf-node-8-line: #e66767;
+  --gf-node-8-fg: #e76b6b;
+
+  --gf-chart-1: #3987e5;
+  --gf-chart-2: #008300;
+  --gf-chart-3: #d55181;
+  --gf-chart-4: #c98500;
+  --gf-chart-5: #199e70;
+  --gf-chart-6: #d95926;
+  --gf-chart-7: #9085e9;
+  --gf-chart-8: #e66767;
+  --gf-chart-grid: color-mix(in srgb, #6f88ab 14%, transparent);
+  --gf-chart-axis: #516f9a;
+}
+
+/* ---- High Contrast — AAA (7:1) text, 4.5:1 lines ------------------------ */
+:root[data-theme="high-contrast"] {
+  --gf-line: #aeaeae;
+  --gf-shadow: rgb(0 0 0 / 0.28);
+  --gf-shadow-weak: rgb(0 0 0 / 0.16);
+
+  --gf-fg-muted: #454545;
+  --gf-fg-subtle: #5e5e5e;
+  --gf-fg-on-solid: #ffffff;
+
+  --gf-success-fg: #075239;
+  --gf-success-bg: #d9ece6;
+  --gf-success-line: #0b7c56;
+  --gf-success-solid: #0ea674;
+  --gf-success-on-solid: #0b0b0f;
+
+  --gf-warning-fg: #684304;
+  --gf-warning-bg: #f0e7d9;
+  --gf-warning-line: #996206;
+  --gf-warning-solid: #ca8208;
+  --gf-warning-on-solid: #0b0b0f;
+
+  --gf-danger-fg: #960921;
+  --gf-danger-bg: #f5dfe3;
+  --gf-danger-line: #df0d31;
+  --gf-danger-solid: #f43f5e;
+
+  --gf-serious-fg: #7d3503;
+  --gf-serious-bg: #f5e4d8;
+  --gf-serious-line: #b94e05;
+  --gf-serious-solid: #f46806;
+  --gf-serious-on-solid: #0b0b0f;
+  --gf-danger-on-solid: #0b0b0f;
+
+  --gf-info-fg: #075071;
+  --gf-info-bg: #d9ebf2;
+  --gf-info-line: #0a75a6;
+  --gf-info-solid: #0d9edf;
+  --gf-info-on-solid: #0b0b0f;
+
+  --gf-accent-fg: #5700c8;
+  --gf-accent-bg: #e7dcf6;
+  --gf-accent-line: #8425ff;
+  --gf-accent-solid: #7a00e6;
+  --gf-accent-on-solid: #ffffff;
+
+  --gf-focus: #5700c8;
+
+  --gf-graph-canvas: var(--gf-slate-900);
+  --gf-graph-edge: #454545;
+  --gf-graph-edge-label: #1a1a1a;
+  --gf-graph-cluster: color-mix(in srgb, #000000 4%, transparent);
+  --gf-graph-cluster-line: #717171;
+  --gf-graph-selected: #5700c8;
+  --gf-graph-incoming: #075239;
+  --gf-graph-outgoing: #075071;
+  --gf-node-border-width: 2px;
+
+  --gf-node-1-bg: #eaf2fb;
+  --gf-node-1-line: #266ec6;
+  --gf-node-1-fg: #1b4f8e;
+  --gf-node-2-bg: #e6f3e6;
+  --gf-node-2-line: #008300;
+  --gf-node-2-fg: #005a00;
+  --gf-node-3-bg: #fceff4;
+  --gf-node-3-line: #d42566;
+  --gf-node-3-fg: #9b1b4b;
+  --gf-node-4-bg: #f8f2e6;
+  --gf-node-4-line: #966600;
+  --gf-node-4-fg: #6e4a00;
+  --gf-node-5-bg: #e8f5f1;
+  --gf-node-5-line: #137e58;
+  --gf-node-5-fg: #0e5b40;
+  --gf-node-6-bg: #fdefea;
+  --gf-node-6-line: #c44513;
+  --gf-node-6-fg: #8d320e;
+  --gf-node-7-bg: #edebf6;
+  --gf-node-7-line: #4a3aa7;
+  --gf-node-7-fg: #4a3aa7;
+  --gf-node-8-bg: #fceded;
+  --gf-node-8-line: #d72221;
+  --gf-node-8-fg: #9e1918;
+
+  --gf-chart-1: #266ec6;
+  --gf-chart-2: #008300;
+  --gf-chart-3: #d42566;
+  --gf-chart-4: #966600;
+  --gf-chart-5: #137e58;
+  --gf-chart-6: #c44513;
+  --gf-chart-7: #4a3aa7;
+  --gf-chart-8: #d72221;
+  --gf-chart-grid: color-mix(in srgb, #000000 22%, transparent);
+  --gf-chart-axis: #454545;
+}
+
+/* ---------------------------------------------------------------------------
+ * Diff roles — derived from the status solids so they retune with the theme.
+ * `var()` resolves against the element's own computed values, so one `:root`
+ * declaration picks up whichever theme block won for `--gf-*-solid`.
+ * ------------------------------------------------------------------------ */
+:root {
+  --gf-diff-added-bg: color-mix(in srgb, var(--gf-success-solid) 14%, var(--gf-surface));
+  --gf-diff-added-fg: var(--gf-success-fg);
+  --gf-diff-added-line: var(--gf-success-line);
+  --gf-diff-removed-bg: color-mix(in srgb, var(--gf-danger-solid) 14%, var(--gf-surface));
+  --gf-diff-removed-fg: var(--gf-danger-fg);
+  --gf-diff-removed-line: var(--gf-danger-line);
+  --gf-diff-modified-bg: color-mix(in srgb, var(--gf-warning-solid) 14%, var(--gf-surface));
+  --gf-diff-modified-fg: var(--gf-warning-fg);
+  --gf-diff-modified-line: var(--gf-warning-line);
+}
+
+/* ---------------------------------------------------------------------------
+ * Expose every role as a Tailwind colour utility: `bg-surface`,
+ * `text-fg-muted`, `border-line`, `ring-focus`, `bg-success-bg`, ...
+ * ------------------------------------------------------------------------ */
+@theme inline {
+  --color-canvas: var(--gf-canvas);
+  --color-canvas-subtle: var(--gf-canvas-subtle);
+  --color-surface: var(--gf-surface);
+  --color-surface-raised: var(--gf-surface-raised);
+  --color-surface-sunken: var(--gf-surface-sunken);
+  --color-surface-hover: var(--gf-surface-hover);
+  --color-surface-active: var(--gf-surface-active);
+  --color-overlay: var(--gf-overlay);
+
+  --color-fg: var(--gf-fg);
+  --color-fg-secondary: var(--gf-fg-secondary);
+  --color-fg-muted: var(--gf-fg-muted);
+  --color-fg-subtle: var(--gf-fg-subtle);
+  --color-fg-on-solid: var(--gf-fg-on-solid);
+
+  --color-line: var(--gf-line);
+  --color-line-muted: var(--gf-line-muted);
+  --color-line-strong: var(--gf-line-strong);
+
+  --color-success-fg: var(--gf-success-fg);
+  --color-success-bg: var(--gf-success-bg);
+  --color-success-line: var(--gf-success-line);
+  --color-success-solid: var(--gf-success-solid);
+  --color-success-on-solid: var(--gf-success-on-solid);
+
+  --color-warning-fg: var(--gf-warning-fg);
+  --color-warning-bg: var(--gf-warning-bg);
+  --color-warning-line: var(--gf-warning-line);
+  --color-warning-solid: var(--gf-warning-solid);
+  --color-warning-on-solid: var(--gf-warning-on-solid);
+
+  --color-danger-fg: var(--gf-danger-fg);
+  --color-danger-bg: var(--gf-danger-bg);
+  --color-danger-line: var(--gf-danger-line);
+  --color-danger-solid: var(--gf-danger-solid);
+  --color-danger-on-solid: var(--gf-danger-on-solid);
+
+  --color-serious-fg: var(--gf-serious-fg);
+  --color-serious-bg: var(--gf-serious-bg);
+  --color-serious-line: var(--gf-serious-line);
+  --color-serious-solid: var(--gf-serious-solid);
+  --color-serious-on-solid: var(--gf-serious-on-solid);
+
+  --color-info-fg: var(--gf-info-fg);
+  --color-info-bg: var(--gf-info-bg);
+  --color-info-line: var(--gf-info-line);
+  --color-info-solid: var(--gf-info-solid);
+  --color-info-on-solid: var(--gf-info-on-solid);
+
+  --color-accent-fg: var(--gf-accent-fg);
+  --color-accent-bg: var(--gf-accent-bg);
+  --color-accent-line: var(--gf-accent-line);
+  --color-accent-solid: var(--gf-accent-solid);
+  --color-accent-on-solid: var(--gf-accent-on-solid);
+
+  --color-neutral-fg: var(--gf-fg-muted);
+  --color-neutral-bg: var(--gf-neutral-bg);
+  --color-neutral-line: var(--gf-neutral-line);
+  --color-neutral-solid: var(--gf-neutral-solid);
+
+  --color-focus: var(--gf-focus);
+  --color-selection: var(--gf-selection);
+  --color-code-bg: var(--gf-code-bg);
+  --color-terminal-bg: var(--gf-terminal-bg);
+
+  --color-graph-canvas: var(--gf-graph-canvas);
+  --color-graph-edge: var(--gf-graph-edge);
+  --color-graph-edge-label: var(--gf-graph-edge-label);
+  --color-graph-cluster: var(--gf-graph-cluster);
+  --color-graph-cluster-line: var(--gf-graph-cluster-line);
+  --color-graph-selected: var(--gf-graph-selected);
+  --color-graph-incoming: var(--gf-graph-incoming);
+  --color-graph-outgoing: var(--gf-graph-outgoing);
+
+  /* Categorical chip slots — the same eight validated hues the graph nodes
+     use, exposed for non-graph identity colouring (capability tiles,
+     diagram-type badges, per-agent accents). Assigned in fixed order and
+     never cycled: a ninth category takes the neutral tone rather than
+     wrapping around onto slot 1. */
+  --color-cat-1-bg: var(--gf-node-1-bg);
+  --color-cat-1-fg: var(--gf-node-1-fg);
+  --color-cat-1-line: var(--gf-node-1-line);
+  --color-cat-2-bg: var(--gf-node-2-bg);
+  --color-cat-2-fg: var(--gf-node-2-fg);
+  --color-cat-2-line: var(--gf-node-2-line);
+  --color-cat-3-bg: var(--gf-node-3-bg);
+  --color-cat-3-fg: var(--gf-node-3-fg);
+  --color-cat-3-line: var(--gf-node-3-line);
+  --color-cat-4-bg: var(--gf-node-4-bg);
+  --color-cat-4-fg: var(--gf-node-4-fg);
+  --color-cat-4-line: var(--gf-node-4-line);
+  --color-cat-5-bg: var(--gf-node-5-bg);
+  --color-cat-5-fg: var(--gf-node-5-fg);
+  --color-cat-5-line: var(--gf-node-5-line);
+  --color-cat-6-bg: var(--gf-node-6-bg);
+  --color-cat-6-fg: var(--gf-node-6-fg);
+  --color-cat-6-line: var(--gf-node-6-line);
+  --color-cat-7-bg: var(--gf-node-7-bg);
+  --color-cat-7-fg: var(--gf-node-7-fg);
+  --color-cat-7-line: var(--gf-node-7-line);
+  --color-cat-8-bg: var(--gf-node-8-bg);
+  --color-cat-8-fg: var(--gf-node-8-fg);
+  --color-cat-8-line: var(--gf-node-8-line);
+
+  --color-chart-1: var(--gf-chart-1);
+  --color-chart-2: var(--gf-chart-2);
+  --color-chart-3: var(--gf-chart-3);
+  --color-chart-4: var(--gf-chart-4);
+  --color-chart-5: var(--gf-chart-5);
+  --color-chart-6: var(--gf-chart-6);
+  --color-chart-7: var(--gf-chart-7);
+  --color-chart-8: var(--gf-chart-8);
+  --color-chart-grid: var(--gf-chart-grid);
+  --color-chart-axis: var(--gf-chart-axis);
+
+  --color-diff-added-bg: var(--gf-diff-added-bg);
+  --color-diff-added-fg: var(--gf-diff-added-fg);
+  --color-diff-added-line: var(--gf-diff-added-line);
+  --color-diff-removed-bg: var(--gf-diff-removed-bg);
+  --color-diff-removed-fg: var(--gf-diff-removed-fg);
+  --color-diff-removed-line: var(--gf-diff-removed-line);
+  --color-diff-modified-bg: var(--gf-diff-modified-bg);
+  --color-diff-modified-fg: var(--gf-diff-modified-fg);
+  --color-diff-modified-line: var(--gf-diff-modified-line);
+}

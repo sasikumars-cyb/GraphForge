@@ -96,44 +96,44 @@ function ProviderConfigPanel({ provider, onSaved }: ProviderConfigPanelProps) {
   }
 
   return (
-    <div className="mt-3 space-y-3 border-t border-slate-800 pt-3">
+    <div className="mt-3 space-y-3 border-t border-line-muted pt-3">
       {provider.requires_api_key && (
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-400">
-            API Key {provider.api_key_configured && <span className="text-emerald-400">(configured)</span>}
+          <span className="text-fg-muted">
+            API Key {provider.api_key_configured && <span className="text-success-fg">(configured)</span>}
           </span>
           <input
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder={provider.api_key_configured ? "Leave blank to keep current" : "Enter API key"}
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500"
+            className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
           />
         </label>
       )}
 
       {!provider.requires_api_key && provider.key === "bedrock" && (
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-400">AWS Region</span>
+          <span className="text-fg-muted">AWS Region</span>
           <input
             type="text"
             value={region}
             onChange={(e) => setRegion(e.target.value)}
             placeholder="us-east-1"
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500"
+            className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
           />
-          <span className="text-xs text-slate-500">
+          <span className="text-xs text-fg-muted">
             Credentials are read from the AWS SDK credential chain (env vars, CLI profile, IAM role).
           </span>
         </label>
       )}
 
       <label className="flex flex-col gap-1 text-sm">
-        <span className="text-slate-400">Model</span>
+        <span className="text-fg-muted">Model</span>
         <select
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500"
+          className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
         >
           {provider.models.map((m) => (
             <option key={m.id} value={m.id}>
@@ -144,7 +144,7 @@ function ProviderConfigPanel({ provider, onSaved }: ProviderConfigPanelProps) {
       </label>
 
       {error && (
-        <p role="alert" className="rounded-md bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+        <p role="alert" className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger-fg">
           {error}
         </p>
       )}
@@ -152,7 +152,7 @@ function ProviderConfigPanel({ provider, onSaved }: ProviderConfigPanelProps) {
       {validation && (
         <div
           className={`flex items-center gap-2 rounded-md px-3 py-2 text-sm ${
-            validation.ok ? "bg-emerald-500/10 text-emerald-300" : "bg-rose-500/10 text-rose-300"
+            validation.ok ? "bg-success-bg text-success-fg" : "bg-danger-bg text-danger-fg"
           }`}
         >
           {validation.ok ? (
@@ -172,7 +172,7 @@ function ProviderConfigPanel({ provider, onSaved }: ProviderConfigPanelProps) {
           type="button"
           onClick={() => void handleSave()}
           disabled={isSaving}
-          className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-sky-500/50"
+          className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
         >
           {isSaving ? "Saving..." : "Save"}
         </button>
@@ -180,7 +180,7 @@ function ProviderConfigPanel({ provider, onSaved }: ProviderConfigPanelProps) {
           type="button"
           onClick={() => void handleValidate()}
           disabled={isValidating}
-          className="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-md border border-line px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-raised disabled:cursor-not-allowed disabled:opacity-50"
         >
           {isValidating ? "Testing..." : "Test connection"}
         </button>
@@ -225,26 +225,26 @@ export function AIProvidersCard() {
     <Card title="AI Providers" description="Configure which AI provider powers GraphForge agents">
       <div className="flex flex-col gap-3">
         {isLoading ? (
-          <div className="flex items-center gap-2 py-4 text-sm text-slate-500">
+          <div className="flex items-center gap-2 py-4 text-sm text-fg-muted">
             <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
             Loading providers...
           </div>
         ) : error ? (
-          <p role="alert" className="rounded-md bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+          <p role="alert" className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger-fg">
             {error}
           </p>
         ) : (
           implemented.map((provider) => (
             <div
               key={provider.key}
-              className="rounded-lg border border-slate-800 px-4 py-3"
+              className="rounded-lg border border-line-muted px-4 py-3"
             >
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
-                  <Brain className="h-5 w-5 text-slate-300" aria-hidden="true" />
+                  <Brain className="h-5 w-5 text-fg-secondary" aria-hidden="true" />
                   <div>
-                    <p className="text-sm font-medium text-slate-200">{provider.label}</p>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-sm font-medium text-fg-secondary">{provider.label}</p>
+                    <p className="text-xs text-fg-muted">
                       {provider.configured
                         ? `Model: ${provider.model ?? provider.default_model}`
                         : provider.notes || "Not configured"}
@@ -256,7 +256,7 @@ export function AIProvidersCard() {
                   <button
                     type="button"
                     onClick={() => toggleExpand(provider.key)}
-                    className="rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800"
+                    className="rounded-md border border-line px-3 py-1.5 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
                   >
                     {expandedKey === provider.key ? "Close" : "Configure"}
                   </button>
@@ -271,7 +271,7 @@ export function AIProvidersCard() {
         )}
 
         {!isLoading && !error && implemented.length === 0 && (
-          <div className="flex items-center gap-2 py-4 text-sm text-slate-500">
+          <div className="flex items-center gap-2 py-4 text-sm text-fg-muted">
             <AlertTriangle className="h-4 w-4" aria-hidden="true" />
             No AI providers available.
           </div>

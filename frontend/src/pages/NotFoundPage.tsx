@@ -6,18 +6,18 @@ import { Compass } from "lucide-react";
  * unstyled "no routes matched" page instead of the app's own layout. */
 export function NotFoundPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-950 px-6">
+    <div className="flex min-h-screen items-center justify-center bg-canvas px-6">
       <div className="flex max-w-md flex-col items-center gap-4 text-center">
-        <div className="rounded-full bg-slate-800/80 p-3 ring-1 ring-inset ring-slate-700">
-          <Compass className="h-6 w-6 text-slate-400" aria-hidden="true" />
+        <div className="rounded-full bg-surface-raised p-3 ring-1 ring-inset ring-line">
+          <Compass className="h-6 w-6 text-fg-muted" aria-hidden="true" />
         </div>
-        <h1 className="text-lg font-semibold text-slate-100">Page not found</h1>
-        <p className="text-sm text-slate-400">
+        <h1 className="text-lg font-semibold text-fg">Page not found</h1>
+        <p className="text-sm text-fg-muted">
           The page you're looking for doesn't exist, or the link may be out of date.
         </p>
         <Link
           to="/"
-          className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-400"
+          className="rounded-lg bg-accent-solid px-4 py-2 text-sm font-medium text-accent-on-solid transition-colors hover:brightness-110"
         >
           Back to dashboard
         </Link>

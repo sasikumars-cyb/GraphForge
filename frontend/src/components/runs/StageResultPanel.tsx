@@ -127,10 +127,10 @@ export function StageResultPanel({
   }
 
   return (
-    <div className="flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+    <div className="flex flex-col overflow-hidden rounded-xl border border-line-muted bg-surface">
       {/* Tab bar */}
       <div
-        className="flex items-center gap-0.5 border-b border-slate-800 px-2 pt-2"
+        className="flex items-center gap-0.5 border-b border-line-muted px-2 pt-2"
         role="tablist"
         aria-label="Stage result views"
       >
@@ -146,8 +146,8 @@ export function StageResultPanel({
               onKeyDown={(e) => handleTabKeyDown(e, index)}
               className={`flex items-center gap-1.5 rounded-t px-3 py-2 text-xs font-medium transition-colors ${
                 isActive
-                  ? "border-b-2 border-brand-500 text-brand-300"
-                  : "text-slate-500 hover:text-slate-300"
+                  ? "border-b-2 border-accent-line text-accent-fg"
+                  : "text-fg-muted hover:text-fg-secondary"
               }`}
               aria-selected={isActive}
               aria-controls={panelId(tab.id)}
@@ -157,7 +157,7 @@ export function StageResultPanel({
               <Icon className="h-3 w-3" aria-hidden="true" />
               {tab.label}
               {tab.id === "blueprint" && hasBlueprint && (
-                <span className="rounded-full bg-brand-500/20 px-1.5 py-0.5 text-[9px] font-semibold text-brand-300">
+                <span className="rounded-full bg-accent-bg px-1.5 py-0.5 text-[9px] font-semibold text-accent-fg">
                   NEW
                 </span>
               )}
@@ -218,7 +218,7 @@ export function StageResultPanel({
 
         {activeTab === "json" && (
           <div id={panelId("json")} role="tabpanel" aria-labelledby={tabId("json")} tabIndex={0}>
-            <pre className="max-h-96 overflow-auto rounded-lg bg-slate-950 p-3 font-mono text-xs text-slate-300">
+            <pre className="max-h-96 overflow-auto rounded-lg bg-canvas p-3 font-mono text-xs text-fg-secondary">
               {JSON.stringify(step.result, null, 2)}
             </pre>
           </div>

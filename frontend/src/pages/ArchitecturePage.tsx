@@ -178,20 +178,20 @@ export function ArchitecturePage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-slate-50">Architecture</h2>
-          <p className="mt-1 text-sm text-slate-400">
+          <h2 className="text-xl font-semibold text-fg">Architecture</h2>
+          <p className="mt-1 text-sm text-fg-muted">
             The dependency graph generated from indexed repositories, showing relationships
             between repositories, modules, services, APIs, data stores, messaging systems, and
             other software components.
           </p>
         </div>
         {repositories.length > 0 && (
-          <label className="flex flex-col gap-1 text-xs text-slate-400">
+          <label className="flex flex-col gap-1 text-xs text-fg-muted">
             Repository
             <select
               value={selectedRepoId}
               onChange={(e) => setSelectedRepoId(e.target.value)}
-              className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-100"
+              className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-fg"
             >
               <option value="all">All repositories (merged)</option>
               {repositories.map((repo) => (
@@ -205,7 +205,7 @@ export function ArchitecturePage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       )}
@@ -222,7 +222,7 @@ export function ArchitecturePage() {
             <button
               type="button"
               onClick={() => setSelectedRepoId("all")}
-              className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-slate-200 hover:border-slate-500"
+              className="rounded-md border border-line px-3 py-1.5 text-sm text-fg-secondary hover:border-line-strong"
             >
               ← Back to overview
             </button>
@@ -230,11 +230,11 @@ export function ArchitecturePage() {
         }
       >
         {isLoading ? (
-          <div className="flex min-h-48 items-center justify-center text-sm text-slate-500">
+          <div className="flex min-h-48 items-center justify-center text-sm text-fg-muted">
             Loading repositories…
           </div>
         ) : repositories.length === 0 ? (
-          <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/50 text-slate-500">
+          <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line bg-canvas text-fg-muted">
             <p className="text-sm">No repositories tracked yet.</p>
           </div>
         ) : selectedRepoId === "all" ? (
@@ -244,11 +244,11 @@ export function ArchitecturePage() {
             onExpand={(repoId) => setSelectedRepoId(repoId)}
           />
         ) : isLoadingSelectedGraph || !graph ? (
-          <div className="flex min-h-48 items-center justify-center text-sm text-slate-500">
+          <div className="flex min-h-48 items-center justify-center text-sm text-fg-muted">
             Loading this repository's graph…
           </div>
         ) : graph.nodes.length === 0 ? (
-          <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/50 text-slate-500">
+          <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line bg-canvas text-fg-muted">
             <p className="text-sm">No graph data yet - index this repository first.</p>
           </div>
         ) : (
@@ -267,10 +267,10 @@ export function ArchitecturePage() {
         <Card title="Legend" description="Node and relationship types in this graph">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-fg-muted">
                 Nodes
               </p>
-              <ul className="flex flex-col gap-1.5 text-sm text-slate-300">
+              <ul className="flex flex-col gap-1.5 text-sm text-fg-secondary">
                 {legendNodeLabels.map((label) => {
                   const colors = resolveLabelColors(label);
                   return (
@@ -289,13 +289,13 @@ export function ArchitecturePage() {
               </ul>
             </div>
             <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-slate-500">
+              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-fg-muted">
                 Relationships
               </p>
-              <ul className="flex flex-col gap-1.5 text-sm text-slate-300">
+              <ul className="flex flex-col gap-1.5 text-sm text-fg-secondary">
                 {legendEdges.map(({ type, description }) => (
                   <li key={type}>
-                    <span className="font-mono text-xs text-slate-400">{type}</span> — {description}
+                    <span className="font-mono text-xs text-fg-muted">{type}</span> — {description}
                   </li>
                 ))}
               </ul>

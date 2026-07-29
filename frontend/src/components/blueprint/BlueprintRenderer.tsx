@@ -37,25 +37,38 @@ import { useTheme } from "../../theme/theme-context";
 // Styling constants — node type → colour pair
 // ---------------------------------------------------------------------------
 
+/**
+ * Node type -> categorical slot. Every value is a `var()` reference into the
+ * token layer, so a diagram retints itself on theme switch with no React
+ * work. These were previously dark-only literals (`bg: "#2e1065"` with
+ * `text: "#f0abfc"`), which stayed dark-on-dark in the three light-mode
+ * themes — the diagrams were unreadable there.
+ *
+ * Slots are assigned, never cycled: an unrecognised type takes `default`
+ * rather than a generated hue, so two unrelated types can't collide.
+ */
 const NODE_STYLES: Record<
   NodeType | "default",
   { bg: string; border: string; text: string }
 > = {
-  default:   { bg: "var(--gf-slate-800)", border: "var(--gf-slate-600)", text: "var(--gf-slate-200)" },
-  input:     { bg: "#0c2744", border: "#38bdf8", text: "#bae6fd" },
-  output:    { bg: "#052e16", border: "#34d399", text: "#a7f3d0" },
-  component: { bg: "var(--gf-slate-800)", border: "#818cf8", text: "#e0e7ff" },
-  topic:     { bg: "#2e1065", border: "#e879f9", text: "#f0abfc" },
-  risk:      { bg: "#1c0a00", border: "#fb923c", text: "#fed7aa" },
-  phase:     { bg: "#0c2744", border: "#60a5fa", text: "#bfdbfe" },
-  entity:    { bg: "#1e1b4b", border: "#a5b4fc", text: "#e0e7ff" },
+  default:   { bg: "var(--gf-surface-raised)", border: "var(--gf-line-strong)", text: "var(--gf-fg-secondary)" },
+  input:     { bg: "var(--gf-node-1-bg)", border: "var(--gf-node-1-line)", text: "var(--gf-node-1-fg)" },
+  output:    { bg: "var(--gf-node-2-bg)", border: "var(--gf-node-2-line)", text: "var(--gf-node-2-fg)" },
+  component: { bg: "var(--gf-node-7-bg)", border: "var(--gf-node-7-line)", text: "var(--gf-node-7-fg)" },
+  topic:     { bg: "var(--gf-node-3-bg)", border: "var(--gf-node-3-line)", text: "var(--gf-node-3-fg)" },
+  risk:      { bg: "var(--gf-node-6-bg)", border: "var(--gf-node-6-line)", text: "var(--gf-node-6-fg)" },
+  phase:     { bg: "var(--gf-node-5-bg)", border: "var(--gf-node-5-line)", text: "var(--gf-node-5-fg)" },
+  entity:    { bg: "var(--gf-node-7-bg)", border: "var(--gf-node-7-line)", text: "var(--gf-node-7-fg)" },
 };
 
+/** Severity is a *status* scale, not a categorical one, so it reads from the
+ *  status roles rather than the node slots — that keeps "critical" the same
+ *  red as every other error surface in the app, in every theme. */
 const RISK_SEVERITY_COLORS: Record<string, { bg: string; border: string; text: string; badge: string }> = {
-  critical: { bg: "#450a0a", border: "#ef4444", text: "#fecaca", badge: "#ef4444" },
-  high:     { bg: "#431407", border: "#f97316", text: "#fed7aa", badge: "#f97316" },
-  medium:   { bg: "#422006", border: "#f59e0b", text: "#fde68a", badge: "#f59e0b" },
-  low:      { bg: "#052e16", border: "#22c55e", text: "#bbf7d0", badge: "#22c55e" },
+  critical: { bg: "var(--gf-danger-bg)",  border: "var(--gf-danger-line)",  text: "var(--gf-danger-fg)",  badge: "var(--gf-danger-solid)" },
+  high:     { bg: "var(--gf-node-6-bg)",  border: "var(--gf-node-6-line)",  text: "var(--gf-node-6-fg)",  badge: "var(--gf-node-6-line)" },
+  medium:   { bg: "var(--gf-warning-bg)", border: "var(--gf-warning-line)", text: "var(--gf-warning-fg)", badge: "var(--gf-warning-solid)" },
+  low:      { bg: "var(--gf-success-bg)", border: "var(--gf-success-line)", text: "var(--gf-success-fg)", badge: "var(--gf-success-solid)" },
 };
 
 const NODE_W = 200;
@@ -318,13 +331,13 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
         const isOut = outgoing.has(n.id);
 
         const glowColor = isSel
-          ? "#facc15"
+          ? "var(--gf-graph-selected)"
           : isIn
-          ? "#34d399"
+          ? "var(--gf-graph-incoming)"
           : isOut
-          ? "#38bdf8"
+          ? "var(--gf-graph-outgoing)"
           : isHov
-          ? "#818cf8"
+          ? "var(--gf-accent-line)"
           : null;
 
         const dimmed = selectedId && !isSel && !isIn && !isOut;
@@ -345,12 +358,12 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
           zIndex: glowColor ? 10 : 0,
           style: {
             ...n.style,
-            opacity: dimmed ? 0.2 : 1,
+            opacity: dimmed ? 0.35 : 1,
             border: glowColor
               ? `2px solid ${glowColor}`
               : n.style?.border,
             boxShadow: glowColor
-              ? `0 0 ${isSel ? "14px" : "8px"} 2px ${glowColor}66`
+              ? `0 0 ${isSel ? "14px" : "8px"} 2px color-mix(in srgb, ${glowColor} 40%, transparent)`
               : undefined,
           },
         };
@@ -358,16 +371,20 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
       edges: flowEdges.map((e): Edge => {
         const isIn = e.target === selectedId;
         const isOut = e.source === selectedId;
-        const color = isIn ? "#34d399" : isOut ? "#38bdf8" : null;
+        const color = isIn
+          ? "var(--gf-graph-incoming)"
+          : isOut
+            ? "var(--gf-graph-outgoing)"
+            : null;
         const dimmed = selectedId && !isIn && !isOut;
         return {
           ...e,
           style: {
             ...e.style,
-            stroke: color ?? "var(--gf-slate-500)",
-            opacity: dimmed ? 0.1 : 1,
+            stroke: color ?? "var(--gf-graph-edge)",
+            opacity: dimmed ? 0.25 : 1,
           },
-          markerEnd: { type: MarkerType.ArrowClosed, color: color ?? "var(--gf-slate-500)" },
+          markerEnd: { type: MarkerType.ArrowClosed, color: color ?? "var(--gf-graph-edge)" },
         };
       }),
     };
@@ -447,7 +464,12 @@ function FlowGraphRenderer({ diagram }: { diagram: Diagram }) {
       {!isSmallGraph && (
         <>
           <Controls />
-          <MiniMap pannable zoomable style={{ background: "var(--gf-slate-900)" }} />
+          <MiniMap
+            pannable
+            zoomable
+            style={{ background: "var(--gf-surface-raised)" }}
+            maskColor="var(--gf-graph-cluster)"
+          />
         </>
       )}
     </ReactFlow>
@@ -475,27 +497,27 @@ function TimelineRenderer({ diagram }: { diagram: Diagram }) {
             <div key={node.id} className="flex flex-1 flex-col items-center">
               {/* connector line */}
               <div className="flex w-full items-center">
-                <div className={`h-0.5 flex-1 transition-colors duration-300 ${i === 0 ? "opacity-0" : "bg-blue-700"}`} />
+                <div className={`h-0.5 flex-1 transition-colors duration-300 ${i === 0 ? "opacity-0" : "bg-info-solid"}`} />
                 <button
                   type="button"
                   onClick={() => setExpanded(isOpen ? null : node.id)}
                   className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full border-2 text-xs font-bold transition-all duration-200 ${
                     isOpen
-                      ? "border-blue-400 bg-blue-500/20 text-blue-200 shadow-[0_0_12px_2px_rgba(96,165,250,0.3)]"
-                      : "border-blue-500 bg-slate-900 text-blue-300 hover:border-blue-400 hover:bg-slate-800"
+                      ? "border-accent-line bg-accent-bg text-accent-fg shadow-md"
+                      : "border-line bg-surface text-fg-secondary hover:border-accent-line hover:bg-surface-hover"
                   }`}
                   aria-label={`Phase ${i + 1}: ${node.label}`}
                 >
                   {i + 1}
                 </button>
-                <div className={`h-0.5 flex-1 transition-colors duration-300 ${isLast ? "opacity-0" : "bg-blue-700"}`} />
+                <div className={`h-0.5 flex-1 transition-colors duration-300 ${isLast ? "opacity-0" : "bg-info-solid"}`} />
               </div>
 
               {/* label */}
               <div className="mt-2 px-1 text-center">
-                <p className="text-xs font-semibold text-blue-300">{node.label}</p>
+                <p className="text-xs font-semibold text-info-fg">{node.label}</p>
                 {Boolean(node.properties?.description) && (
-                  <p className="mt-0.5 line-clamp-2 text-[10px] text-slate-400">
+                  <p className="mt-0.5 line-clamp-2 text-[10px] text-fg-muted">
                     {String(node.properties?.description)}
                   </p>
                 )}
@@ -511,11 +533,11 @@ function TimelineRenderer({ diagram }: { diagram: Diagram }) {
                   width: "100%",
                 }}
               >
-                <div className="rounded-lg border border-blue-500/20 bg-slate-900/80 p-2">
+                <div className="rounded-lg border border-line-muted bg-surface p-2">
                   <ul className="space-y-1">
                     {steps.map((s, si) => (
-                      <li key={si} className="flex items-start gap-1.5 text-[10px] text-slate-300">
-                        <span className="mt-0.5 h-1 w-1 shrink-0 rounded-full bg-blue-400" />
+                      <li key={si} className="flex items-start gap-1.5 text-[10px] text-fg-secondary">
+                        <span className="mt-0.5 h-1 w-1 shrink-0 rounded-full bg-info-solid" />
                         {s}
                       </li>
                     ))}
@@ -523,7 +545,7 @@ function TimelineRenderer({ diagram }: { diagram: Diagram }) {
                   {comps.length > 0 && (
                     <div className="mt-1.5 flex flex-wrap gap-1">
                       {comps.map((c) => (
-                        <span key={c} className="rounded bg-slate-800 px-1 py-0.5 text-[9px] text-slate-400">
+                        <span key={c} className="rounded-sm bg-surface-raised px-1 py-0.5 text-[9px] text-fg-muted">
                           {c}
                         </span>
                       ))}
@@ -536,7 +558,7 @@ function TimelineRenderer({ diagram }: { diagram: Diagram }) {
         })}
       </div>
 
-      <p className="text-center text-[10px] text-slate-600">
+      <p className="text-center text-[10px] text-fg-subtle">
         Click a phase to expand its details
       </p>
     </div>
@@ -581,7 +603,7 @@ function RiskHeatmapRenderer({ diagram }: { diagram: Diagram }) {
             </span>
           );
         })}
-        <span className="ml-auto text-xs text-slate-500">{totalCount} risk{totalCount !== 1 ? "s" : ""}</span>
+        <span className="ml-auto text-xs text-fg-muted">{totalCount} risk{totalCount !== 1 ? "s" : ""}</span>
       </div>
 
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -669,7 +691,7 @@ export function BlueprintRenderer({ diagram }: BlueprintRendererProps) {
       return <RiskHeatmapRenderer diagram={diagram} />;
     default:
       return (
-        <div className="flex h-full items-center justify-center text-sm text-slate-500">
+        <div className="flex h-full items-center justify-center text-sm text-fg-muted">
           Renderer for <code className="mx-1 font-mono">{diagram.type}</code> not yet implemented.
         </div>
       );

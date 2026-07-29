@@ -12,22 +12,22 @@ const KIND_CONFIG: Record<string, { label: string; icon: typeof FileSearch; tone
   graph_traversal: {
     label: "Graph Traversal",
     icon: Database,
-    tone: "text-sky-300 bg-sky-500/10 ring-sky-500/30",
+    tone: "text-info-fg bg-info-bg ring-info-line/30",
   },
   tool_call: {
     label: "Tool Call",
     icon: Cpu,
-    tone: "text-amber-300 bg-amber-500/10 ring-amber-500/30",
+    tone: "text-warning-fg bg-warning-bg ring-warning-line/30",
   },
   graph_fact: {
     label: "Graph Fact",
     icon: FileSearch,
-    tone: "text-emerald-300 bg-emerald-500/10 ring-emerald-500/30",
+    tone: "text-success-fg bg-success-bg ring-success-line/30",
   },
   llm_reasoning: {
     label: "LLM Reasoning",
     icon: Brain,
-    tone: "text-violet-300 bg-violet-500/10 ring-violet-500/30",
+    tone: "text-cat-7-fg bg-cat-7-bg ring-cat-7-line/30",
   },
 };
 
@@ -49,13 +49,13 @@ function EvidenceItem({ ev }: { ev: Evidence }) {
   return (
     <li
       className={`flex items-start gap-3 rounded-lg border px-4 py-3 ${
-        failed ? "border-rose-500/30 bg-rose-500/5" : "border-slate-800 bg-slate-900/40"
+        failed ? "border-danger-line/30 bg-danger-bg" : "border-line-muted bg-surface"
       }`}
       role="listitem"
     >
       <span
         className={`mt-0.5 inline-flex shrink-0 items-center rounded-md p-1.5 ring-1 ring-inset ${
-          failed ? "text-rose-300 bg-rose-500/10 ring-rose-500/30" : config.tone
+          failed ? "text-danger-fg bg-danger-bg ring-danger-line/30" : config.tone
         }`}
         aria-hidden="true"
       >
@@ -64,24 +64,24 @@ function EvidenceItem({ ev }: { ev: Evidence }) {
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
           <span
-            className={`text-xs font-medium ${failed ? "text-rose-300" : "text-slate-300"}`}
+            className={`text-xs font-medium ${failed ? "text-danger-fg" : "text-fg-secondary"}`}
           >
             {failed ? "Failed" : config.label}
           </span>
           {ev.reference && (
-            <span className="truncate text-xs text-slate-500" title={ev.reference}>
+            <span className="truncate text-xs text-fg-muted" title={ev.reference}>
               {ev.reference}
             </span>
           )}
         </div>
-        <p className={`mt-0.5 text-sm ${failed ? "text-rose-200" : "text-slate-200"}`}>
+        <p className={`mt-0.5 text-sm ${failed ? "text-danger-fg" : "text-fg-secondary"}`}>
           {displaySummary}
         </p>
         {needsTruncation && (
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
-            className="mt-1 flex items-center gap-1 text-xs text-sky-400 hover:text-sky-300"
+            className="mt-1 flex items-center gap-1 text-xs text-info-fg hover:text-info-fg"
           >
             {expanded ? (
               <>
@@ -108,7 +108,7 @@ export function EvidencePanel({ evidence, defaultExpanded = false }: EvidencePan
   if (evidence.length === 0) {
     return (
       <Card title="Evidence Trail">
-        <p className="text-sm text-slate-500">
+        <p className="text-sm text-fg-muted">
           No evidence was collected for this run. Evidence items show the graph traversals, tool
           calls, and reasoning that produced the result.
         </p>
@@ -124,7 +124,7 @@ export function EvidencePanel({ evidence, defaultExpanded = false }: EvidencePan
         <button
           type="button"
           onClick={() => setPanelExpanded((v) => !v)}
-          className="flex items-center gap-1 text-xs text-slate-400 hover:text-slate-200"
+          className="flex items-center gap-1 text-xs text-fg-muted hover:text-fg-secondary"
           aria-expanded={panelExpanded}
         >
           {panelExpanded ? (
@@ -156,7 +156,7 @@ export function EvidencePanel({ evidence, defaultExpanded = false }: EvidencePan
               <span
                 key={`${ev.kind}-${ev.reference}-${i}`}
                 className={`rounded-full px-2.5 py-0.5 text-xs ring-1 ring-inset ${
-                  failed ? "text-rose-300 bg-rose-500/10 ring-rose-500/30" : config.tone
+                  failed ? "text-danger-fg bg-danger-bg ring-danger-line/30" : config.tone
                 }`}
               >
                 {failed ? "Failed" : config.label}
@@ -166,7 +166,7 @@ export function EvidencePanel({ evidence, defaultExpanded = false }: EvidencePan
           <button
             type="button"
             onClick={() => setPanelExpanded(true)}
-            className="text-xs text-sky-400 hover:text-sky-300"
+            className="text-xs text-info-fg hover:text-info-fg"
           >
             View details →
           </button>

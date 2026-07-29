@@ -13,31 +13,53 @@ const NODE_CONFIG: Record<
 > = {
   completed: {
     icon: CheckCircle2,
-    ring: "border-emerald-500/50",
-    iconColor: "text-emerald-400",
+    ring: "border-success-line/50",
+    iconColor: "text-success-fg",
     subLabel: "Complete",
-    subColor: "text-emerald-400",
+    subColor: "text-success-fg",
   },
   running: {
     icon: Loader2,
-    ring: "border-sky-400 shadow-[0_0_0_3px_rgba(56,189,248,0.15)]",
-    iconColor: "text-sky-400",
+    ring: "border-info-line shadow-md",
+    iconColor: "text-info-fg",
     subLabel: "Running…",
-    subColor: "text-sky-400",
+    subColor: "text-info-fg",
+  },
+  // The Run row exists and has been picked up for this stage but hasn't
+  // started doing agent work yet — visually distinct from "running" (no
+  // shimmer bar, since there's no progress to show) but still spinning and
+  // labeled as active, not the same static clock as a stage that hasn't
+  // been reached at all (see `pending` below).
+  queued: {
+    icon: Loader2,
+    ring: "border-info-line/60",
+    iconColor: "text-info-fg",
+    subLabel: "Starting…",
+    subColor: "text-info-fg",
+  },
+  // Agent finished but returned a degraded/incomplete result — closer to
+  // "failed" than "completed" in that it needs the reviewer's attention,
+  // but it did produce output (unlike a hard failure).
+  partial: {
+    icon: XCircle,
+    ring: "border-warning-line/60",
+    iconColor: "text-warning-fg",
+    subLabel: "Partial",
+    subColor: "text-warning-fg",
   },
   failed: {
     icon: XCircle,
-    ring: "border-rose-500/60",
-    iconColor: "text-rose-400",
+    ring: "border-danger-line/60",
+    iconColor: "text-danger-fg",
     subLabel: "Failed",
-    subColor: "text-rose-400",
+    subColor: "text-danger-fg",
   },
   pending: {
     icon: Clock,
-    ring: "border-slate-800",
-    iconColor: "text-slate-600",
+    ring: "border-line-muted",
+    iconColor: "text-fg-subtle",
     subLabel: "Queued",
-    subColor: "text-slate-500",
+    subColor: "text-fg-muted",
   },
 };
 
@@ -61,7 +83,7 @@ export function PipelineGraph({ stages, selectedRunId, onSelectStage }: Pipeline
               <div className="flex w-6 shrink-0 items-center sm:w-10">
                 <div
                   className={`h-0.5 w-full transition-colors duration-500 ${
-                    prevDone ? "bg-emerald-500/50" : "bg-slate-800"
+                    prevDone ? "bg-success-bg" : "bg-surface-raised"
                   }`}
                   aria-hidden="true"
                 />
@@ -71,23 +93,27 @@ export function PipelineGraph({ stages, selectedRunId, onSelectStage }: Pipeline
               type="button"
               disabled={!stage.run_id}
               onClick={() => stage.run_id && onSelectStage(stage.run_id)}
-              className={`flex flex-1 flex-col items-center gap-2 rounded-xl border bg-slate-900/60 px-3 py-4 text-center transition-all duration-300 ${config.ring} ${
-                isSelected ? "bg-slate-800/80 ring-2 ring-brand-400" : ""
-              } ${stage.run_id ? "cursor-pointer hover:bg-slate-800/60" : "cursor-default opacity-70"}`}
-              aria-current={stage.status === "running" ? "step" : undefined}
+              className={`flex flex-1 flex-col items-center gap-2 rounded-xl border bg-surface px-3 py-4 text-center transition-all duration-300 ${config.ring} ${
+                isSelected ? "bg-surface-raised ring-2 ring-accent-line" : ""
+              } ${stage.run_id ? "cursor-pointer hover:bg-surface-raised" : "cursor-default opacity-70"}`}
+              aria-current={
+                stage.status === "running" || stage.status === "queued" ? "step" : undefined
+              }
               aria-label={`${stage.label}: ${config.subLabel}`}
             >
               <Icon
-                className={`h-5 w-5 ${config.iconColor} ${stage.status === "running" ? "animate-spin" : ""}`}
+                className={`h-5 w-5 ${config.iconColor} ${
+                  stage.status === "running" || stage.status === "queued" ? "animate-spin" : ""
+                }`}
                 aria-hidden="true"
               />
               <div>
-                <p className="text-sm font-semibold text-slate-100">{stage.label}</p>
+                <p className="text-sm font-semibold text-fg">{stage.label}</p>
                 <p className={`text-[11px] font-medium ${config.subColor}`}>{config.subLabel}</p>
               </div>
               {stage.status === "running" && (
-                <div className="h-1 w-full overflow-hidden rounded-full bg-slate-800">
-                  <div className="h-full w-1/3 animate-[pipeline-shimmer_1.4s_ease-in-out_infinite] rounded-full bg-sky-400" />
+                <div className="h-1 w-full overflow-hidden rounded-full bg-surface-raised">
+                  <div className="h-full w-1/3 animate-[pipeline-shimmer_1.4s_ease-in-out_infinite] rounded-full bg-info-solid" />
                 </div>
               )}
             </button>

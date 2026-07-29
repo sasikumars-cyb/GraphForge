@@ -17,28 +17,28 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       {/* Mobile backdrop — clicking it closes the drawer. Desktop never renders it. */}
       {open && (
         <div
-          className="fixed inset-0 z-30 bg-slate-950/70 md:hidden"
+          className="fixed inset-0 z-30 bg-overlay backdrop-blur-sm md:hidden"
           onClick={onClose}
           aria-hidden="true"
         />
       )}
 
       <aside
-        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-slate-800 bg-slate-900 transition-transform duration-200 ease-in-out md:static md:z-auto md:translate-x-0 ${
+        className={`fixed inset-y-0 left-0 z-40 flex w-64 flex-col border-r border-line-muted bg-surface transition-transform duration-200 ease-[var(--ease-standard)] md:static md:z-auto md:translate-x-0 ${
           open ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         <div className="flex items-center justify-between px-5 py-5">
           <div className="flex items-center gap-2.5">
             <Logomark className="h-8 w-8 shrink-0" />
-            <span className="font-display text-base font-bold tracking-tight text-slate-50">
+            <span className="font-display text-base font-bold tracking-tight text-fg">
               GraphForge
             </span>
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-md p-1 text-slate-400 hover:bg-slate-800 hover:text-slate-100 md:hidden"
+            className="focus-ring rounded-md p-1 text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg md:hidden"
             aria-label="Close navigation"
           >
             <X className="h-5 w-5" />
@@ -49,7 +49,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           {NAV_SECTIONS.map((group) => (
             <div key={group.section ?? "root"} className="pb-1">
               {group.section && (
-                <p className="px-3 pt-4 pb-1 text-[11px] font-semibold tracking-wide text-slate-600 uppercase">
+                <p className="px-3 pt-4 pb-1 text-[11px] font-semibold tracking-wide text-fg-muted uppercase">
                   {group.section}
                 </p>
               )}
@@ -60,10 +60,10 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                   end={item.path === "/"}
                   onClick={onClose}
                   className={({ isActive }) =>
-                    `relative flex items-center gap-3 rounded-lg py-2 pl-3 pr-3 text-sm font-medium transition-colors ${
+                    `focus-ring relative flex items-center gap-3 rounded-lg py-2 pl-3 pr-3 text-sm font-medium transition-colors ${
                       isActive
-                        ? "bg-brand-500/10 text-brand-200 before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-brand-400"
-                        : "text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+                        ? "bg-accent-bg text-accent-fg before:absolute before:inset-y-1.5 before:left-0 before:w-0.5 before:rounded-full before:bg-accent-solid"
+                        : "text-fg-muted hover:bg-surface-hover hover:text-fg"
                     }`
                   }
                 >
@@ -75,19 +75,19 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           ))}
         </nav>
 
-        <div className="border-t border-slate-800 px-5 py-4">
-          <p className="text-xs text-slate-500">Sample data — no repositories connected yet.</p>
+        <div className="border-t border-line-muted px-5 py-4">
+          <p className="text-xs text-fg-muted">Sample data — no repositories connected yet.</p>
           {user && (
             <div className="mt-3 flex items-center justify-between gap-2">
               <div className="min-w-0">
-                <p className="truncate text-sm font-medium text-slate-200">{user.full_name}</p>
-                <p className="truncate text-xs text-slate-500">{user.email}</p>
+                <p className="truncate text-sm font-medium text-fg-secondary">{user.full_name}</p>
+                <p className="truncate text-xs text-fg-muted">{user.email}</p>
               </div>
               <button
                 type="button"
                 onClick={logout}
                 title="Log out"
-                className="shrink-0 rounded-md p-1.5 text-slate-400 hover:bg-slate-800 hover:text-slate-100"
+                className="focus-ring shrink-0 rounded-md p-1.5 text-fg-muted transition-colors hover:bg-surface-hover hover:text-fg"
               >
                 <LogOut className="h-4 w-4" aria-hidden="true" />
               </button>

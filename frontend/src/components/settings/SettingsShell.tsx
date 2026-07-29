@@ -140,8 +140,8 @@ export function SettingsShell() {
     <div className="flex flex-col gap-6">
       {/* Page header */}
       <div>
-        <h2 className="text-xl font-semibold text-slate-50">Settings</h2>
-        <p className="mt-1 text-sm text-slate-400">
+        <h2 className="text-xl font-semibold text-fg">Settings</h2>
+        <p className="mt-1 text-sm text-fg-muted">
           Configure GraphForge platform, AI providers, integrations, and preferences.
         </p>
       </div>
@@ -159,13 +159,13 @@ export function SettingsShell() {
               onClick={() => setActiveTab(tab.id)}
               className={`group flex items-center gap-3 rounded-lg px-3 py-2.5 text-left text-sm font-medium transition-colors whitespace-nowrap ${
                 activeTab === tab.id
-                  ? "bg-brand-500/10 text-brand-200 ring-1 ring-inset ring-brand-500/30"
-                  : "text-slate-400 hover:bg-slate-800/60 hover:text-slate-200"
+                  ? "bg-accent-bg text-accent-fg ring-1 ring-inset ring-accent-line/30"
+                  : "text-fg-muted hover:bg-surface-raised hover:text-fg-secondary"
               }`}
             >
               <tab.icon
                 className={`h-4 w-4 shrink-0 ${
-                  activeTab === tab.id ? "text-brand-400" : "text-slate-500 group-hover:text-slate-300"
+                  activeTab === tab.id ? "text-accent-fg" : "text-fg-muted group-hover:text-fg-secondary"
                 }`}
                 aria-hidden="true"
               />
@@ -181,12 +181,12 @@ export function SettingsShell() {
             <>
               {/* Section header */}
               <div className="mb-5 flex items-center gap-3">
-                <div className="rounded-lg bg-brand-500/10 p-2 ring-1 ring-inset ring-brand-500/30">
-                  <current.icon className="h-5 w-5 text-brand-400" aria-hidden="true" />
+                <div className="rounded-lg bg-accent-bg p-2 ring-1 ring-inset ring-accent-line/30">
+                  <current.icon className="h-5 w-5 text-accent-fg" aria-hidden="true" />
                 </div>
                 <div>
-                  <h3 className="text-base font-semibold text-slate-100">{current.label}</h3>
-                  <p className="text-xs text-slate-400">{current.description}</p>
+                  <h3 className="text-base font-semibold text-fg">{current.label}</h3>
+                  <p className="text-xs text-fg-muted">{current.description}</p>
                 </div>
               </div>
 

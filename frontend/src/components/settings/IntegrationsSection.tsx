@@ -125,10 +125,10 @@ function ConnectionRow({
     <div className="flex items-center justify-between gap-3 py-2.5">
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-slate-200">{conn.name}</span>
+          <span className="text-sm font-medium text-fg-secondary">{conn.name}</span>
           <StatusBadge label={connStatusLabel(conn.status)} tone={connStatusTone(conn.status)} />
         </div>
-        <p className="mt-0.5 text-xs text-slate-500">
+        <p className="mt-0.5 text-xs text-fg-muted">
           {conn.credentials_configured ? "Credentials configured" : "No credentials"}
           {conn.last_sync_at && ` \u00B7 Last sync ${formatTime(conn.last_sync_at)}`}
         </p>
@@ -142,7 +142,7 @@ function ConnectionRow({
             setChecking(false);
           }}
           disabled={checking}
-          className="rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+          className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised disabled:opacity-40"
         >
           {checking ? "Testing..." : "Test Connection"}
         </button>
@@ -154,7 +154,7 @@ function ConnectionRow({
             setDeleting(false);
           }}
           disabled={deleting}
-          className="text-slate-500 hover:text-rose-400 disabled:opacity-40"
+          className="text-fg-muted hover:text-danger-fg disabled:opacity-40"
           title="Remove connection"
         >
           <Trash2 className="h-3.5 w-3.5" />
@@ -225,22 +225,22 @@ function AddConnectionForm({
   }
 
   return (
-    <form onSubmit={(e) => void handleSubmit(e)} className="mt-3 space-y-3 border-t border-slate-800 pt-3">
+    <form onSubmit={(e) => void handleSubmit(e)} className="mt-3 space-y-3 border-t border-line-muted pt-3">
       <label className="flex flex-col gap-1 text-sm">
-        <span className="text-slate-400">Connection Name</span>
+        <span className="text-fg-muted">Connection Name</span>
         <input
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder={`e.g. Production ${source.label}`}
           required
-          className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500"
+          className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
         />
       </label>
 
       {authFields.map((fieldName) => (
         <label key={fieldName} className="flex flex-col gap-1 text-sm">
-          <span className="text-slate-400">
+          <span className="text-fg-muted">
             {fieldName.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}
           </span>
           <input
@@ -248,27 +248,27 @@ function AddConnectionForm({
             value={fields[fieldName] ?? ""}
             onChange={(e) => setFields({ ...fields, [fieldName]: e.target.value })}
             placeholder={fieldName.replace(/_/g, " ")}
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 outline-none focus:border-sky-500"
+            className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
           />
         </label>
       ))}
 
       {error && (
-        <p className="rounded-md bg-rose-500/10 px-3 py-2 text-sm text-rose-300">{error}</p>
+        <p className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger-fg">{error}</p>
       )}
 
       <div className="flex gap-2">
         <button
           type="submit"
           disabled={saving || !name.trim()}
-          className="rounded-md bg-sky-500 px-3 py-1.5 text-xs font-semibold text-black hover:bg-sky-400 disabled:bg-sky-500/50"
+          className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:bg-info-bg"
         >
           {saving ? "Adding..." : "Add Connection"}
         </button>
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-md border border-slate-700 px-3 py-1.5 text-xs text-slate-300 hover:bg-slate-800"
+          className="rounded-md border border-line px-3 py-1.5 text-xs text-fg-secondary hover:bg-surface-raised"
         >
           Cancel
         </button>
@@ -331,33 +331,33 @@ function IntegrationCard({
   const isComingSoon = !source.available;
 
   return (
-    <div className={`rounded-lg border border-slate-800 bg-slate-900/40 px-4 py-3 ${isComingSoon ? "opacity-60" : ""}`}>
+    <div className={`rounded-lg border border-line-muted bg-surface px-4 py-3 ${isComingSoon ? "opacity-60" : ""}`}>
       {/* Source header */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
-          <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-md bg-slate-800 text-slate-300">
+          <div className="mt-0.5 flex h-8 w-8 items-center justify-center rounded-md bg-surface-raised text-fg-secondary">
             <SourceIcon name={source.icon} />
           </div>
           <div>
             <div className="flex items-center gap-2">
-              <p className="text-sm font-medium text-slate-200">{source.label}</p>
+              <p className="text-sm font-medium text-fg-secondary">{source.label}</p>
               {connections.length > 0 && (
-                <span className="rounded-full bg-sky-500/10 px-2 py-0.5 text-[10px] font-semibold text-sky-300">
+                <span className="rounded-full bg-info-bg px-2 py-0.5 text-[10px] font-semibold text-info-fg">
                   {connections.length} {connections.length === 1 ? "connection" : "connections"}
                 </span>
               )}
               {isComingSoon && (
-                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-[10px] font-medium text-slate-500">
+                <span className="rounded-full bg-surface-raised px-2 py-0.5 text-[10px] font-medium text-fg-muted">
                   Coming soon
                 </span>
               )}
             </div>
-            <p className="text-xs text-slate-500">{source.description}</p>
+            <p className="text-xs text-fg-muted">{source.description}</p>
             <div className="mt-2 flex flex-wrap gap-1.5">
               {source.capabilities.map((cap) => (
                 <span
                   key={cap}
-                  className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] font-mono text-slate-400"
+                  className="rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-mono text-fg-muted"
                 >
                   {cap}
                 </span>
@@ -371,7 +371,7 @@ function IntegrationCard({
             type="button"
             onClick={() => void handleAddClick()}
             disabled={connectingOAuth}
-            className="flex items-center gap-1 rounded-md border border-slate-700 px-2.5 py-1 text-xs font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-40"
+            className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised disabled:opacity-40"
           >
             <Plus className="h-3 w-3" />
             {connectingOAuth ? "Redirecting..." : "Add Connection"}
@@ -380,14 +380,14 @@ function IntegrationCard({
       </div>
 
       {oauthError && (
-        <p className="mt-2 rounded-md bg-rose-500/10 px-3 py-2 text-xs text-rose-300">
+        <p className="mt-2 rounded-md bg-danger-bg px-3 py-2 text-xs text-danger-fg">
           {oauthError}
         </p>
       )}
 
       {/* Connections list */}
       {connections.length > 0 && (
-        <div className="mt-3 divide-y divide-slate-800/60 border-t border-slate-800 pt-1">
+        <div className="mt-3 divide-y divide-line-muted border-t border-line-muted pt-1">
           {connections.map((conn) => (
             <ConnectionRow
               key={conn.id}
@@ -470,7 +470,7 @@ export function IntegrationsSection() {
 
   if (loading) {
     return (
-      <div className="flex items-center gap-2 py-8 text-sm text-slate-500">
+      <div className="flex items-center gap-2 py-8 text-sm text-fg-muted">
         <Loader2 className="h-4 w-4 animate-spin" />
         Loading integrations...
       </div>
@@ -479,7 +479,7 @@ export function IntegrationsSection() {
 
   if (error) {
     return (
-      <div className="rounded-lg border border-rose-500/30 bg-rose-500/5 px-4 py-3 text-sm text-rose-300">
+      <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
         {error}
       </div>
     );
@@ -492,7 +492,7 @@ export function IntegrationsSection() {
   return (
     <div className="flex flex-col gap-5">
       {notice && (
-        <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 px-4 py-3 text-sm text-emerald-300">
+        <div className="rounded-lg border border-success-line/30 bg-success-bg px-4 py-3 text-sm text-success-fg">
           {notice}
         </div>
       )}
@@ -501,18 +501,18 @@ export function IntegrationsSection() {
       <Card>
         <div className="grid grid-cols-3 gap-4">
           <div>
-            <p className="text-xs text-slate-500">Available</p>
-            <p className="mt-0.5 text-lg font-semibold text-slate-100">
+            <p className="text-xs text-fg-muted">Available</p>
+            <p className="mt-0.5 text-lg font-semibold text-fg">
               {sources.filter((s) => s.available).length}
             </p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Connections</p>
-            <p className="mt-0.5 text-lg font-semibold text-sky-400">{totalConnections}</p>
+            <p className="text-xs text-fg-muted">Connections</p>
+            <p className="mt-0.5 text-lg font-semibold text-info-fg">{totalConnections}</p>
           </div>
           <div>
-            <p className="text-xs text-slate-500">Healthy</p>
-            <p className="mt-0.5 text-lg font-semibold text-emerald-400">{healthyConnections}</p>
+            <p className="text-xs text-fg-muted">Healthy</p>
+            <p className="mt-0.5 text-lg font-semibold text-success-fg">{healthyConnections}</p>
           </div>
         </div>
       </Card>

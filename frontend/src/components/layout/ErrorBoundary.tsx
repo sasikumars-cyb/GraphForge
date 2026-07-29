@@ -40,20 +40,20 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   render() {
     if (this.state.error) {
       return (
-        <div className="flex min-h-screen items-center justify-center bg-slate-950 px-6">
+        <div className="flex min-h-screen items-center justify-center bg-canvas px-6">
           <div className="flex max-w-md flex-col items-center gap-4 text-center">
-            <div className="rounded-full bg-rose-500/10 p-3 ring-1 ring-inset ring-rose-500/30">
-              <AlertTriangle className="h-6 w-6 text-rose-400" aria-hidden="true" />
+            <div className="rounded-full bg-danger-bg p-3 ring-1 ring-inset ring-danger-line/30">
+              <AlertTriangle className="h-6 w-6 text-danger-fg" aria-hidden="true" />
             </div>
-            <h1 className="text-lg font-semibold text-slate-100">Something went wrong</h1>
-            <p className="text-sm text-slate-400">
+            <h1 className="text-lg font-semibold text-fg">Something went wrong</h1>
+            <p className="text-sm text-fg-muted">
               An unexpected error occurred while rendering this page. Reloading usually fixes it —
               nothing you were working on was lost on the server.
             </p>
             <button
               type="button"
               onClick={this.handleReload}
-              className="rounded-lg bg-brand-500 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-brand-400"
+              className="rounded-lg bg-accent-solid px-4 py-2 text-sm font-medium text-accent-on-solid transition-colors hover:brightness-110"
             >
               Reload page
             </button>

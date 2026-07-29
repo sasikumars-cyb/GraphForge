@@ -119,7 +119,13 @@ export function deriveWorkflowState(workflow: WorkflowStateInput): WorkflowUiSta
     phase = "blueprint_approval";
   } else if (currentStageInfo?.status === "failed") {
     phase = "failed";
-  } else if (currentStageInfo?.status === "running") {
+  } else if (currentStageInfo?.status === "running" || currentStageInfo?.status === "queued") {
+    // "queued" means the Run row exists and has been picked up for this
+    // stage but hasn't started agent work yet — still in flight, not a
+    // stage waiting on a human decision. Treating only "running" as
+    // in-flight let a queued stage fall through to "awaiting_approval"
+    // below, rendering the approve-to-continue banner for a stage that
+    // hadn't actually run at all yet.
     phase = "running";
   } else {
     // current stage exists but hasn't been attempted yet ("pending") —

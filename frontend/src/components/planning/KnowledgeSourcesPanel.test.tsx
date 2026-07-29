@@ -41,7 +41,7 @@ describe("KnowledgeSourcesPanel — Confluence status distinctions", () => {
       />,
     );
     const row = screen.getByText("No relevant Confluence content found.").closest("li");
-    expect(row?.querySelector(".bg-emerald-400")).toBeNull();
+    expect(row?.querySelector(".bg-success-solid")).toBeNull();
   });
 
   it("distinguishes 'unavailable' (not configured) from 'not_found' (searched, nothing relevant)", () => {
@@ -64,7 +64,7 @@ describe("KnowledgeSourcesPanel — Confluence status distinctions", () => {
       />,
     );
     const row = screen.getByText("timeout").closest("li");
-    expect(row?.querySelector(".text-rose-400")).not.toBeNull();
+    expect(row?.querySelector(".text-danger-fg")).not.toBeNull();
   });
 
   it("falls back to text-based inference for legacy evidence with no status field", () => {
@@ -82,6 +82,6 @@ describe("KnowledgeSourcesPanel — Confluence status distinctions", () => {
       />,
     );
     const row = screen.getByText("No relevant Confluence content found.").closest("li");
-    expect(row?.querySelector(".bg-emerald-400")).toBeNull();
+    expect(row?.querySelector(".bg-success-solid")).toBeNull();
   });
 });

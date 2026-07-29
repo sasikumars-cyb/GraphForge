@@ -14,17 +14,17 @@ interface Factor {
 }
 
 function scoreColor(score: number | null): string {
-  if (score === null) return "text-slate-400";
-  if (score >= 0.8) return "text-emerald-400";
-  if (score >= 0.5) return "text-amber-400";
-  return "text-rose-400";
+  if (score === null) return "text-fg-muted";
+  if (score >= 0.8) return "text-success-fg";
+  if (score >= 0.5) return "text-warning-fg";
+  return "text-danger-fg";
 }
 
 function scoreBarColor(score: number | null): string {
-  if (score === null) return "bg-slate-600";
-  if (score >= 0.8) return "bg-emerald-500";
-  if (score >= 0.5) return "bg-amber-500";
-  return "bg-rose-500";
+  if (score === null) return "bg-line-strong";
+  if (score >= 0.8) return "bg-success-solid";
+  if (score >= 0.5) return "bg-warning-solid";
+  return "bg-danger-solid";
 }
 
 function deriveFactors(result: PlanningResult | undefined): Factor[] {
@@ -88,7 +88,7 @@ export function PlanningConfidencePanel({ confidence, result }: PlanningConfiden
             {pct}%
           </span>
           <div className="mb-1 flex-1">
-            <div className="h-2 overflow-hidden rounded-full bg-slate-800">
+            <div className="h-2 overflow-hidden rounded-full bg-surface-raised">
               <div
                 className={`h-2 rounded-full transition-all duration-500 ${scoreBarColor(confidence.score)}`}
                 style={{ width: `${pct}%` }}
@@ -102,17 +102,17 @@ export function PlanningConfidencePanel({ confidence, result }: PlanningConfiden
           {factors.map((f) => (
             <li key={f.label} className="flex items-center gap-2">
               {f.met ? (
-                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-400" aria-hidden="true" />
+                <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success-fg" aria-hidden="true" />
               ) : (
-                <XCircle className="h-3.5 w-3.5 shrink-0 text-slate-600" aria-hidden="true" />
+                <XCircle className="h-3.5 w-3.5 shrink-0 text-fg-subtle" aria-hidden="true" />
               )}
               <span
-                className={`text-xs ${f.met ? "text-slate-300" : f.weight === "high" ? "text-slate-400" : "text-slate-500"}`}
+                className={`text-xs ${f.met ? "text-fg-secondary" : f.weight === "high" ? "text-fg-muted" : "text-fg-muted"}`}
               >
                 {f.label}
               </span>
               {!f.met && f.weight === "high" && (
-                <span className="ml-auto shrink-0 rounded bg-rose-500/10 px-1 py-0.5 text-[10px] font-medium text-rose-400">
+                <span className="ml-auto shrink-0 rounded bg-danger-bg px-1 py-0.5 text-[10px] font-medium text-danger-fg">
                   missing
                 </span>
               )}
@@ -122,8 +122,8 @@ export function PlanningConfidencePanel({ confidence, result }: PlanningConfiden
 
         {/* Recommendation */}
         {missingTotal > 0 && (
-          <div className="rounded-lg border border-sky-500/20 bg-sky-500/5 px-3 py-2">
-            <p className="text-xs text-sky-300">
+          <div className="rounded-lg border border-info-line/20 bg-info-bg px-3 py-2">
+            <p className="text-xs text-info-fg">
               {missingHigh > 0
                 ? `Connect ${missingHigh} missing engineering system${missingHigh === 1 ? "" : "s"} to significantly improve confidence.`
                 : "Connect Jira and Confluence to improve context quality."}

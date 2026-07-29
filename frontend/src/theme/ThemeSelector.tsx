@@ -20,12 +20,12 @@ export function ThemeSelector() {
             aria-pressed={isActive}
             className={`group relative flex flex-col gap-3 rounded-lg border p-3 text-left transition-colors ${
               isActive
-                ? "border-brand-400 ring-1 ring-brand-400"
-                : "border-slate-700 hover:border-slate-500"
+                ? "border-accent-line ring-1 ring-accent-line"
+                : "border-line hover:border-line-strong"
             }`}
           >
             <span
-              className="flex h-14 w-full items-center gap-1.5 overflow-hidden rounded-md border border-slate-800/60 p-2"
+              className="flex h-14 w-full items-center gap-1.5 overflow-hidden rounded-md border border-line-muted p-2"
               style={{ background: option.swatch.background }}
               aria-hidden="true"
             >
@@ -47,11 +47,11 @@ export function ThemeSelector() {
 
             <span className="flex items-center justify-between gap-2">
               <span>
-                <span className="block text-sm font-medium text-slate-100">{option.label}</span>
-                <span className="block text-xs text-slate-500">{option.description}</span>
+                <span className="block text-sm font-medium text-fg">{option.label}</span>
+                <span className="block text-xs text-fg-muted">{option.description}</span>
               </span>
               {isActive && (
-                <Check className="h-4 w-4 shrink-0 text-brand-400" aria-hidden="true" />
+                <Check className="h-4 w-4 shrink-0 text-accent-fg" aria-hidden="true" />
               )}
             </span>
           </button>

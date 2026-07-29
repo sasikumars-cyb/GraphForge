@@ -68,7 +68,7 @@ export function RunDetailPage() {
   if (isLoading) {
     return (
       <div className="flex flex-col gap-6">
-        <p className="text-sm text-slate-400">Loading run details…</p>
+        <p className="text-sm text-fg-muted">Loading run details…</p>
       </div>
     );
   }
@@ -78,12 +78,12 @@ export function RunDetailPage() {
       <div className="flex flex-col gap-6">
         <Link
           to="/runs"
-          className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
+          className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg-secondary"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
           Back to history
         </Link>
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error ?? "Run not found."}
         </div>
       </div>
@@ -101,7 +101,7 @@ export function RunDetailPage() {
     <div className="flex flex-col gap-6">
       <Link
         to="/runs"
-        className="inline-flex items-center gap-1 text-sm text-slate-400 hover:text-slate-200"
+        className="inline-flex items-center gap-1 text-sm text-fg-muted hover:text-fg-secondary"
       >
         <ArrowLeft className="h-4 w-4" aria-hidden="true" />
         Back to history
@@ -111,20 +111,20 @@ export function RunDetailPage() {
           up front, since reaching a run directly (rather than through the
           Workflow page) otherwise reads as an isolated, archived record. */}
       {run.workflow_id && (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-brand-500/30 bg-brand-500/10 px-4 py-3 text-sm">
-          <span className="flex items-center gap-2 text-brand-200">
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-accent-line/30 bg-accent-bg px-4 py-3 text-sm">
+          <span className="flex items-center gap-2 text-accent-fg">
             <GitMerge className="h-4 w-4 shrink-0" aria-hidden="true" />
             Part of workflow:{" "}
-            <strong className="text-brand-100">
+            <strong className="text-accent-fg">
               {run.subject.display_name || run.subject.subject_id}
             </strong>
             {run.workflow_stage && (
-              <span className="text-brand-300"> — {stageLabel(run.workflow_stage)} stage</span>
+              <span className="text-accent-fg"> — {stageLabel(run.workflow_stage)} stage</span>
             )}
           </span>
           <Link
             to={`/workflows/${run.workflow_id}`}
-            className="shrink-0 rounded-md bg-brand-500/20 px-3 py-1.5 text-xs font-medium text-brand-200 ring-1 ring-inset ring-brand-500/40 transition-colors hover:bg-brand-500/30"
+            className="shrink-0 rounded-md bg-accent-bg px-3 py-1.5 text-xs font-medium text-accent-fg ring-1 ring-inset ring-accent-line/40 transition-colors hover:bg-accent-bg"
           >
             Open full workflow →
           </Link>
@@ -140,7 +140,7 @@ export function RunDetailPage() {
 
       {/* Header */}
       <div>
-        <h2 className="text-xl font-semibold text-slate-50">
+        <h2 className="text-xl font-semibold text-fg">
           {run.title ?? run.subject.display_name ?? run.subject.subject_id}
         </h2>
         <div className="mt-2 flex items-center gap-3">
@@ -153,81 +153,81 @@ export function RunDetailPage() {
       <Card title="Run Details">
         <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
           <div>
-            <dt className="text-xs text-slate-500">Run ID</dt>
-            <dd className="truncate font-mono text-xs text-slate-300" title={run.run_id}>
+            <dt className="text-xs text-fg-muted">Run ID</dt>
+            <dd className="truncate font-mono text-xs text-fg-secondary" title={run.run_id}>
               {run.run_id}
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-slate-500">Goal</dt>
-            <dd className="text-slate-200">{run.goal}</dd>
+            <dt className="text-xs text-fg-muted">Goal</dt>
+            <dd className="text-fg-secondary">{run.goal}</dd>
           </div>
           <div>
-            <dt className="text-xs text-slate-500">Subject</dt>
-            <dd className="truncate text-slate-200" title={run.subject.display_name}>
+            <dt className="text-xs text-fg-muted">Subject</dt>
+            <dd className="truncate text-fg-secondary" title={run.subject.display_name}>
               {run.subject.display_name || run.subject.subject_id}
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-slate-500">Type</dt>
-            <dd className="text-slate-200">{run.subject.subject_type}</dd>
+            <dt className="text-xs text-fg-muted">Type</dt>
+            <dd className="text-fg-secondary">{run.subject.subject_type}</dd>
           </div>
           <div>
-            <dt className="text-xs text-slate-500">Status</dt>
+            <dt className="text-xs text-fg-muted">Status</dt>
             <dd>
               <RunStatusBadge status={run.status} />
             </dd>
           </div>
           <div>
-            <dt className="text-xs text-slate-500">Confidence</dt>
+            <dt className="text-xs text-fg-muted">Confidence</dt>
             <dd>
               {step?.confidence ? (
                 <ConfidenceBadge confidence={step.confidence} showReasoning />
               ) : (
-                <span className="text-slate-500">—</span>
+                <span className="text-fg-muted">—</span>
               )}
             </dd>
           </div>
           {run.started_at && (
             <div>
-              <dt className="text-xs text-slate-500">Started</dt>
-              <dd className="text-slate-200">{new Date(run.started_at).toLocaleString()}</dd>
+              <dt className="text-xs text-fg-muted">Started</dt>
+              <dd className="text-fg-secondary">{new Date(run.started_at).toLocaleString()}</dd>
             </div>
           )}
           {run.completed_at && (
             <div>
-              <dt className="text-xs text-slate-500">Completed</dt>
-              <dd className="text-slate-200">{new Date(run.completed_at).toLocaleString()}</dd>
+              <dt className="text-xs text-fg-muted">Completed</dt>
+              <dd className="text-fg-secondary">{new Date(run.completed_at).toLocaleString()}</dd>
             </div>
           )}
           {step?.latency_ms != null && (
             <div>
-              <dt className="text-xs text-slate-500">Duration</dt>
-              <dd className="text-slate-200">{(step.latency_ms / 1000).toFixed(1)}s</dd>
+              <dt className="text-xs text-fg-muted">Duration</dt>
+              <dd className="text-fg-secondary">{(step.latency_ms / 1000).toFixed(1)}s</dd>
             </div>
           )}
           {run.model && (
             <div>
-              <dt className="text-xs text-slate-500">Model</dt>
-              <dd className="text-slate-200">{run.model}</dd>
+              <dt className="text-xs text-fg-muted">Model</dt>
+              <dd className="text-fg-secondary">{run.model}</dd>
             </div>
           )}
           {run.provider && (
             <div>
-              <dt className="text-xs text-slate-500">Provider</dt>
-              <dd className="text-slate-200">{run.provider}</dd>
+              <dt className="text-xs text-fg-muted">Provider</dt>
+              <dd className="text-fg-secondary">{run.provider}</dd>
             </div>
           )}
           {run.user && (
             <div>
-              <dt className="text-xs text-slate-500">User</dt>
-              <dd className="text-slate-200">{run.user}</dd>
+              <dt className="text-xs text-fg-muted">User</dt>
+              <dd className="text-fg-secondary">{run.user}</dd>
             </div>
           )}
           {run.repository && (
             <div>
-              <dt className="text-xs text-slate-500">Repository</dt>
-              <dd className="truncate text-slate-200" title={run.repository}>
+              <dt className="text-xs text-fg-muted">Repository</dt>
+              <dd className="truncate text-fg-secondary" title={run.repository}>
                 {run.repository}
               </dd>
             </div>
@@ -237,7 +237,7 @@ export function RunDetailPage() {
 
       {/* Error */}
       {run.status === "failed" && run.error_message && (
-        <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-300">
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           <strong>Error:</strong> {run.error_message}
         </div>
       )}

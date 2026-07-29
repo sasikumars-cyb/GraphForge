@@ -11,11 +11,11 @@ interface ExecutionLogPanelProps {
 }
 
 const KIND_STYLE: Record<string, string> = {
-  lifecycle: "text-slate-500",
-  tool_call: "text-sky-400",
-  graph_traversal: "text-violet-400",
-  graph_fact: "text-emerald-400",
-  llm_reasoning: "text-amber-400",
+  lifecycle: "text-fg-muted",
+  tool_call: "text-info-fg",
+  graph_traversal: "text-cat-7-fg",
+  graph_fact: "text-success-fg",
+  llm_reasoning: "text-warning-fg",
 };
 
 /** Feature 7 — a scrolling, timestamped log for a stage. Anchor
@@ -28,23 +28,23 @@ export function ExecutionLogPanel({ step, agentLabel, llmTrace }: ExecutionLogPa
   const lines = buildExecutionLog(step, agentLabel);
 
   if (lines.length === 0 && !llmTrace) {
-    return <p className="text-xs text-slate-500">No log entries yet.</p>;
+    return <p className="text-xs text-fg-muted">No log entries yet.</p>;
   }
 
   return (
     <div className="flex flex-col gap-3">
       {lines.length > 0 && (
-        <div className="rounded-lg bg-slate-950 p-3 font-mono text-[11.5px] leading-relaxed">
+        <div className="rounded-lg bg-canvas p-3 font-mono text-[11.5px] leading-relaxed">
           {lines.map((line) => (
             <div key={line.key} className="grid grid-cols-[68px_1fr] gap-3 py-0.5">
-              <span className="text-slate-600">{line.time}</span>
+              <span className="text-fg-subtle">{line.time}</span>
               <span>
                 {line.reference && (
-                  <span className="mr-1.5 rounded bg-slate-800 px-1 py-0.5 text-[10px] font-semibold text-slate-400">
+                  <span className="mr-1.5 rounded bg-surface-raised px-1 py-0.5 text-[10px] font-semibold text-fg-muted">
                     {line.reference}
                   </span>
                 )}
-                <span className={KIND_STYLE[line.kind] ?? "text-slate-300"}>{line.text}</span>
+                <span className={KIND_STYLE[line.kind] ?? "text-fg-secondary"}>{line.text}</span>
               </span>
             </div>
           ))}
@@ -52,11 +52,11 @@ export function ExecutionLogPanel({ step, agentLabel, llmTrace }: ExecutionLogPa
       )}
 
       {llmTrace && (
-        <details className="group rounded-lg border border-slate-800 bg-slate-950">
-          <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-xs font-medium text-slate-400 hover:text-slate-200">
+        <details className="group rounded-lg border border-line-muted bg-canvas">
+          <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-2 text-xs font-medium text-fg-muted hover:text-fg-secondary">
             <span>
               Full LLM Prompt &amp; Response
-              <span className="ml-2 font-normal text-slate-600">
+              <span className="ml-2 font-normal text-fg-subtle">
                 {llmTrace.provider ? `${llmTrace.provider} · ` : ""}
                 {llmTrace.model}
                 {llmTrace.latency_ms != null && ` · ${(llmTrace.latency_ms / 1000).toFixed(1)}s`}
@@ -65,12 +65,12 @@ export function ExecutionLogPanel({ step, agentLabel, llmTrace }: ExecutionLogPa
                   ` · ~$${llmTrace.estimated_cost_usd.toFixed(4)}`}
               </span>
             </span>
-            <span className="text-slate-600 group-open:hidden">Expand</span>
-            <span className="hidden text-slate-600 group-open:inline">Collapse</span>
+            <span className="text-fg-subtle group-open:hidden">Expand</span>
+            <span className="hidden text-fg-subtle group-open:inline">Collapse</span>
           </summary>
-          <div className="flex flex-col gap-3 border-t border-slate-800 p-3">
+          <div className="flex flex-col gap-3 border-t border-line-muted p-3">
             {(llmTrace.prompt_tokens != null || llmTrace.completion_tokens != null) && (
-              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500">
+              <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-fg-muted">
                 {llmTrace.prompt_tokens != null && (
                   <span>Prompt: {llmTrace.prompt_tokens.toLocaleString()} tokens</span>
                 )}
@@ -83,18 +83,18 @@ export function ExecutionLogPanel({ step, agentLabel, llmTrace }: ExecutionLogPa
               </div>
             )}
             <div>
-              <p className="mb-1 text-[10.5px] font-semibold tracking-wide text-slate-500 uppercase">
+              <p className="mb-1 text-[10.5px] font-semibold tracking-wide text-fg-muted uppercase">
                 Prompt sent to the model
               </p>
-              <pre className="max-h-72 overflow-auto rounded-md bg-black/40 p-2 font-mono text-[11px] whitespace-pre-wrap text-slate-300">
+              <pre className="max-h-72 overflow-auto rounded-md bg-black/40 p-2 font-mono text-[11px] whitespace-pre-wrap text-fg-secondary">
                 {llmTrace.prompt}
               </pre>
             </div>
             <div>
-              <p className="mb-1 text-[10.5px] font-semibold tracking-wide text-slate-500 uppercase">
+              <p className="mb-1 text-[10.5px] font-semibold tracking-wide text-fg-muted uppercase">
                 Raw model response
               </p>
-              <pre className="max-h-72 overflow-auto rounded-md bg-black/40 p-2 font-mono text-[11px] whitespace-pre-wrap text-slate-300">
+              <pre className="max-h-72 overflow-auto rounded-md bg-black/40 p-2 font-mono text-[11px] whitespace-pre-wrap text-fg-secondary">
                 {llmTrace.raw_response}
               </pre>
             </div>

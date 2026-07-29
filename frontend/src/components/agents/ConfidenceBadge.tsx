@@ -6,10 +6,10 @@ interface ConfidenceBadgeProps {
 }
 
 function scoreColor(score: number | null): string {
-  if (score === null) return "bg-slate-500/10 text-slate-300 ring-slate-500/30";
-  if (score >= 0.8) return "bg-emerald-500/10 text-emerald-300 ring-emerald-500/30";
-  if (score >= 0.5) return "bg-amber-500/10 text-amber-300 ring-amber-500/30";
-  return "bg-rose-500/10 text-rose-300 ring-rose-500/30";
+  if (score === null) return "bg-neutral-bg text-fg-secondary ring-line";
+  if (score >= 0.8) return "bg-success-bg text-success-fg ring-success-line/30";
+  if (score >= 0.5) return "bg-warning-bg text-warning-fg ring-warning-line/30";
+  return "bg-danger-bg text-danger-fg ring-danger-line/30";
 }
 
 function scoreLabel(score: number | null): string {
@@ -29,7 +29,7 @@ export function ConfidenceBadge({ confidence, showReasoning = false }: Confidenc
         {scoreLabel(confidence.score)}
       </span>
       {showReasoning && confidence.reasoning && (
-        <p className="text-xs text-slate-400">{confidence.reasoning}</p>
+        <p className="text-xs text-fg-muted">{confidence.reasoning}</p>
       )}
     </div>
   );
