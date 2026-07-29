@@ -336,13 +336,27 @@ export function PullRequestDetailPage() {
     }
     let cancelled = false;
     (async () => {
-      const [existingDeterministic, existingAi] = await Promise.all([
-        orNull(getDeterministicAnalysis(token, id)),
-        orNull(getAiAnalysis(token, id)),
-      ]);
-      if (!cancelled) {
-        if (existingDeterministic) setDeterministic(existingDeterministic);
-        if (existingAi) setAiAnalysis(existingAi);
+      try {
+        const [existingDeterministic, existingAi] = await Promise.all([
+          orNull(getDeterministicAnalysis(token, id)),
+          orNull(getAiAnalysis(token, id)),
+        ]);
+        if (!cancelled) {
+          if (existingDeterministic) setDeterministic(existingDeterministic);
+          if (existingAi) setAiAnalysis(existingAi);
+        }
+      } catch (err) {
+        // `orNull` already absorbs "not analyzed yet" (404) — anything
+        // that reaches here is a genuine failure (expired token, network
+        // error, 5xx). Previously unhandled: this fetch runs fire-and-
+        // forget from a useEffect with no caller to catch it, so any
+        // non-404 error became an unhandled promise rejection instead of
+        // the same error banner every other action on this page shows.
+        if (!cancelled) {
+          setError(
+            err instanceof Error ? err.message : "Failed to load existing analysis results."
+          );
+        }
       }
     })();
     return () => {

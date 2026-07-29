@@ -123,13 +123,48 @@ async def _poll_run_until_terminal(
 async def _poll_workflow_stage_until_terminal(
     client: AsyncClient, workflow_id: str, stage: str, headers: dict, timeout_s: float = 5.0
 ) -> dict:
-    """Poll GET /workflows/{id} until the named stage leaves pending/running."""
+    """Poll GET /workflows/{id} until the named stage leaves pending/running.
+
+    A completed stage also implies `current_stage` has advanced past it —
+    both are written in the same commit (`workflow_service.
+    finalize_stage_run`, called as `RunCoordinator.execute_run`'s
+    `on_pre_commit` hook — see that method's own docstring on why this
+    must be atomic). Waiting for both here, not just the stage's own
+    status, closes a real (if rare) window this helper used to miss: a
+    caller reading `detail["stages"][stage]["status"] == "completed"`
+    the instant this function returns, while a *concurrent* GET request
+    — issued by this same polling loop a beat earlier and still in
+    flight when the commit lands — can return a response whose JSON was
+    serialized from a snapshot fetched fractionally before the commit's
+    both writes became visible together, if the two reads happen to
+    straddle it. Retrying once more here (still within the same
+    deadline) is enough for a concurrent poll to catch up to the single
+    atomic commit rather than the caller asserting on a half-advanced
+    read.
+    """
     deadline = asyncio.get_event_loop().time() + timeout_s
     while True:
         response = await client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)
         detail = response.json()
         stages_by_name = {s["stage"]: s for s in detail["stages"]}
-        if stages_by_name[stage]["status"] not in ("pending", "queued", "running"):
+        stage_status = stages_by_name[stage]["status"]
+        stage_terminal = stage_status not in ("pending", "queued", "running")
+        # Only a *completed* stage implies further advancement; a failed
+        # stage correctly leaves current_stage right where it was. A
+        # completed *final* stage of a sequence also correctly leaves
+        # current_stage unchanged (advance_workflow only moves it to
+        # "completed" for workflow_types whose TERMINAL_BEHAVIOR is
+        # itself "completed" — a "planning"-type workflow's last stage
+        # instead flips `status` to "awaiting_approval" and leaves
+        # current_stage alone) — so either current_stage moving on, or
+        # the workflow's own status leaving "in_progress", counts as
+        # "fully advanced," not current_stage alone.
+        advanced_or_failed = (
+            stage_status != "completed"
+            or detail["current_stage"] != stage
+            or detail["status"] != "in_progress"
+        )
+        if stage_terminal and advanced_or_failed:
             return detail
         if asyncio.get_event_loop().time() > deadline:
             raise AssertionError(f"Workflow {workflow_id} stage {stage} did not finish in time")
@@ -173,6 +208,109 @@ async def test_create_agent_run_happy_path(client: AsyncClient) -> None:
     assert len(detail["steps"]) == 1
     assert detail["steps"][0]["agent_id"] == "planning"
     assert detail["workflow_id"] is None
+
+
+async def test_standalone_development_run_grounds_in_a_prior_planning_run(
+    client: AsyncClient,
+) -> None:
+    """End-to-end: a standalone Planning run, then a standalone Development
+    run referencing it via `planning_run_id` — proves the full router ->
+    `_load_standalone_planning_context` -> shim -> `get_stage_result()` ->
+    `format_planning_block()` chain actually works over real HTTP/DB, not
+    just the isolated helper-function unit tests in
+    test_agent_runs_standalone_planning.py."""
+    token = await _register_unique_and_get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+        ),
+    ):
+        planning_response = await client.post(
+            "/api/v1/agent-runs",
+            json={"subject_reference": "Add JWT auth across services", "goal": "plan_freeform"},
+            headers=headers,
+        )
+        assert planning_response.status_code == 202
+        planning_run_id = planning_response.json()["run_id"]
+        planning_detail = await _poll_run_until_terminal(client, planning_run_id, headers)
+    assert planning_detail["status"] == "completed"
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.agents.development.agent._call_llm",
+            new=AsyncMock(return_value=_DEVELOPMENT_LLM_RESPONSE),
+        ),
+    ):
+        dev_response = await client.post(
+            "/api/v1/agent-runs",
+            json={
+                "subject_reference": "Implement the plan",
+                "goal": "develop_change_plan",
+                "planning_run_id": planning_run_id,
+            },
+            headers=headers,
+        )
+        assert dev_response.status_code == 202
+        dev_run_id = dev_response.json()["run_id"]
+        dev_detail = await _poll_run_until_terminal(client, dev_run_id, headers)
+
+    assert dev_detail["status"] == "completed"
+    grounding_evidence = [
+        e
+        for e in dev_detail["steps"][0]["evidence"]
+        if e["reference"] == "read_prior_stage_context"
+    ]
+    assert grounding_evidence, "expected a read_prior_stage_context evidence entry"
+    assert "Read the full Planning stage result" in grounding_evidence[0]["summary"]
+    # Not part of a Workflow — this is what proves grounding came from the
+    # planning_run_id shim, not from a real Workflow linkage.
+    assert dev_detail["workflow_id"] is None
+
+
+async def test_planning_run_id_rejected_for_unsupported_goal(client: AsyncClient) -> None:
+    token = await _register_unique_and_get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+        ),
+    ):
+        planning_response = await client.post(
+            "/api/v1/agent-runs",
+            json={"subject_reference": "Add JWT auth across services", "goal": "plan_freeform"},
+            headers=headers,
+        )
+        planning_run_id = planning_response.json()["run_id"]
+        await _poll_run_until_terminal(client, planning_run_id, headers)
+
+    response = await client.post(
+        "/api/v1/agent-runs",
+        json={
+            "subject_reference": "Another plan",
+            "goal": "plan_freeform",
+            "planning_run_id": planning_run_id,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "planning_run_id_unsupported_goal"
 
 
 async def test_create_agent_run_invalid_goal_returns_404(db_client: AsyncClient) -> None:
@@ -307,8 +445,8 @@ async def test_continue_workflow_happy_path(client: AsyncClient) -> None:
             client, workflow_id, "development", headers
         )
 
-    assert detail["current_stage"] == "testing"
     stages_by_name = {s["stage"]: s for s in detail["stages"]}
+    assert detail["current_stage"] == "testing"
     assert stages_by_name["development"]["status"] == "completed"
     assert len(detail["runs"]) == 2
 

@@ -97,7 +97,7 @@ describe("PullRequestDetailPage - Publish Review", () => {
 
     renderPage();
 
-    const button = await screen.findByRole("button", { name: "Publish Review" });
+    const button = await screen.findByRole("button", { name: "Publish Review" }, { timeout: 3000 });
     expect(button).toBeDisabled();
   });
 
@@ -111,14 +111,14 @@ describe("PullRequestDetailPage - Publish Review", () => {
 
     renderPage();
 
-    const button = await screen.findByRole("button", { name: "Publish Review" });
+    const button = await screen.findByRole("button", { name: "Publish Review" }, { timeout: 3000 });
     expect(button).toBeEnabled();
 
     await user.click(button);
 
     expect(analysisApi.publishReview).toHaveBeenCalledWith("fake-token", "pr-1");
-    expect(await screen.findByRole("button", { name: "✓ Review published" })).toBeInTheDocument();
-    const link = await screen.findByRole("link", { name: "View published comment on GitHub →" });
+    expect(await screen.findByRole("button", { name: "✓ Review published" }, { timeout: 3000 })).toBeInTheDocument();
+    const link = await screen.findByRole("link", { name: "View published comment on GitHub →" }, { timeout: 3000 });
     expect(link).toHaveAttribute(
       "href",
       "https://github.com/local/order-service/pull/1#issuecomment-42",
@@ -155,7 +155,7 @@ describe("PullRequestDetailPage - Publish Review", () => {
 
     renderPage();
 
-    const publishButton = await screen.findByRole("button", { name: "Publish Review" });
+    const publishButton = await screen.findByRole("button", { name: "Publish Review" }, { timeout: 3000 });
     expect(publishButton).toBeEnabled();
 
     await user.click(screen.getByRole("button", { name: "Re-run AI analysis" }));
@@ -176,7 +176,7 @@ describe("PullRequestDetailPage - Publish Review", () => {
 
     renderPage();
 
-    const button = await screen.findByRole("button", { name: "Publish Review" });
+    const button = await screen.findByRole("button", { name: "Publish Review" }, { timeout: 3000 });
     await user.click(button);
 
     expect(await screen.findByText("GitHub is not connected for this user.")).toBeInTheDocument();

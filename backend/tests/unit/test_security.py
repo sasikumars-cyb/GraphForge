@@ -61,7 +61,21 @@ class TestAccessTokens:
 
     def test_token_with_wrong_signature_is_rejected(self):
         token = create_access_token(subject="user-123")
-        tampered = token[:-1] + ("A" if token[-1] != "A" else "B")
+        # Flip the second-to-last character, not the last one: a JWT's
+        # trailing base64url character can carry fewer than 6 significant
+        # bits (a 32-byte HMAC-SHA256 signature isn't a multiple of 3
+        # bytes, so its base64 encoding has discarded/padding bits in the
+        # final character only) — swapping "A" <-> "B" specifically
+        # differs only in that lowest, sometimes-discarded bit, so roughly
+        # 1 in 32 real signatures decode "tampered" to byte-identical
+        # bytes and the token verifies anyway (a real, reproduced flake,
+        # not a race condition). Every non-final character is always
+        # fully 6-bit significant, so tampering one position earlier
+        # guarantees an actual byte change regardless of the real
+        # signature's content.
+        index = -2
+        replacement = "A" if token[index] != "A" else "B"
+        tampered = token[:index] + replacement + token[index + 1 :]
         with pytest.raises(UnauthorizedError):
             decode_access_token(tampered)
 
