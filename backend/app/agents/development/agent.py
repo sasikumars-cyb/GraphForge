@@ -23,7 +23,6 @@ additive grounding, not a replacement.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -54,10 +53,9 @@ from app.agents.development.tools import (
     to_evidence,
 )
 from app.agents.git_ops._artifact_reader import get_stage_result
-from app.agents.prompt_utils import render_prompt_template
+from app.agents.llm import STAGE_DEVELOPMENT, invoke_llm_json, stage_for
+from app.agents.prompt_utils import parse_json_response, render_prompt_template
 from app.agents.stage_context import format_planning_block
-from app.ai.providers.base import LLMRequestOptions, ResponseFormat
-from app.ai.providers.factory import create_llm_provider
 from app.core.exceptions import AppError
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
@@ -85,22 +83,21 @@ class DevelopmentLLMError(AppError):
     error_code = "development_llm_error"
 
 
-async def _call_llm(user_prompt: str, model: str | None = None) -> str:
+async def _call_llm(
+    user_prompt: str, model: str | None = None, stage: str = STAGE_DEVELOPMENT
+) -> str:
     """Send a single JSON-mode completion through the configured AI
-    provider and return the raw content string. See planning/agent.py's
-    `_call_llm` for the full rationale — identical shape."""
-    try:
-        provider = create_llm_provider(model=model)
-        response = await provider.complete(
-            system_prompt=_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            options=LLMRequestOptions(response_format=ResponseFormat.JSON),
-        )
-    except AppError as exc:
-        error = DevelopmentLLMError(exc.message)
-        error.provider_error = getattr(exc, "provider_error", None)  # type: ignore[attr-defined]
-        raise error from exc
-    return response.text
+    provider and return the raw content string. Delegates to the shared
+    `app.agents.llm.invoke_llm_json` — see its docstring for the full
+    rationale; kept as a module-level function so existing test seams
+    (`patch("...agent._call_llm", ...)`) stay stable."""
+    return await invoke_llm_json(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        stage=stage,
+        model=model,
+        error_cls=DevelopmentLLMError,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -122,10 +119,7 @@ def _render_prompt(task_description: str, graph_context: str) -> str:
 
 def _parse_llm_response(raw: str, goal: str) -> DevelopmentPlan:
     """Parse the LLM's JSON response into a DevelopmentPlan."""
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise DevelopmentLLMError(f"LLM response is not valid JSON: {exc}") from exc
+    data = parse_json_response(raw, DevelopmentLLMError)
 
     repositories = [
         AffectedRepository(
@@ -228,8 +222,12 @@ class DevelopmentAgent:
         )
 
         db: AsyncSession = context.extras["db"]
-        driver = get_driver()
-        graph_repo = Neo4jGraphRepository(driver)
+        # Prefer the hop-budgeted repository RunCoordinator's Context
+        # Preparation step builds from this agent's own manifest
+        # (max_graph_hops=3 — see manifest.py); construct a plain,
+        # unbudgeted one only when running outside that dispatcher (e.g.
+        # a unit test calling `.run()` directly).
+        graph_repo = context.extras.get("graph_repository") or Neo4jGraphRepository(get_driver())
 
         evidence: list[Evidence] = []
 
@@ -335,7 +333,11 @@ class DevelopmentAgent:
         )
 
         try:
-            raw_response = await _call_llm(user_prompt=prompt, model=context.model)
+            raw_response = await _call_llm(
+                user_prompt=prompt,
+                model=context.model,
+                stage=stage_for(context.extras, STAGE_DEVELOPMENT),
+            )
             plan = _parse_llm_response(raw_response, task_description)
         except DevelopmentLLMError as exc:
             logger.error("development_agent_llm_failed error=%s", str(exc))

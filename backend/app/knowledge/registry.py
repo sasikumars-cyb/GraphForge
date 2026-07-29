@@ -44,7 +44,16 @@ class AuthMethod(StrEnum):
 
 @dataclass(frozen=True)
 class TransportSpec:
-    """One supported transport for a knowledge source."""
+    """One supported transport for a knowledge source.
+
+    Fields below the UI-facing block are the Tool Registry integration
+    metadata (Part 2 of the MCP platform refactor): everything
+    `app.tools.setup` needs to activate the matching `ITool` for a
+    Knowledge Connection using this transport, without a second,
+    hand-maintained map keyed by (source_type, transport). This
+    `TransportSpec` — reached via `get_source(source_type).transports` —
+    is the single source of truth for that mapping.
+    """
 
     transport: Transport
     label: str
@@ -60,6 +69,30 @@ class TransportSpec:
     # user already entered for REST as the MCP bearer token (see
     # app.tools.setup.sync_knowledge_connection_to_tool).
     known_mcp_endpoint: str | None = None
+
+    # --- Tool Registry integration metadata ---
+    #
+    # The Tool Registry `tool_id` this transport activates when a Knowledge
+    # Connection using it is created, updated, or replayed at startup. None
+    # means this transport has no corresponding ITool at all (Neo4j's Bolt
+    # driver, the local filesystem indexer) — `app.tools.setup` skips it
+    # entirely rather than guessing.
+    tool_id: str | None = None
+    # KnowledgeConnection's generic config/credential field name -> this
+    # tool's own (prefixed) config key, e.g.
+    # {"base_url": "jira_base_url", "api_token": "jira_api_token"}. Empty
+    # means "no fields to translate" (same as tool_id=None, kept separate
+    # so a future transport can declare a tool_id with an intentionally
+    # empty mapping without that reading as a data-entry mistake).
+    credential_field_map: dict[str, str] = field(default_factory=dict)
+    # REST TransportSpecs only: the KEY (not tool config key) in this
+    # transport's own `credential_field_map` whose value should be reused
+    # as the MCP bearer token when auto-wiring this source's REST
+    # connection to its sibling MCP TransportSpec's `known_mcp_endpoint` —
+    # see app.tools.setup's registration-metadata-driven auto-wire step.
+    # None disables auto-wire for this source (or is simply irrelevant on
+    # a non-REST TransportSpec).
+    auto_wire_credential: str | None = None
 
 
 @dataclass(frozen=True)
@@ -145,6 +178,13 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                     "pat": ["base_url", "token"],
                     "oauth": ["base_url"],
                 },
+                tool_id="jira",
+                credential_field_map={
+                    "base_url": "jira_base_url",
+                    "email": "jira_email",
+                    "api_token": "jira_api_token",
+                },
+                auto_wire_credential="api_token",
             ),
             TransportSpec(
                 transport=Transport.MCP,
@@ -152,6 +192,11 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                 auth_methods=(AuthMethod.API_KEY,),
                 auth_fields={"api_key": ["server_url", "api_key"]},
                 known_mcp_endpoint=_settings.jira_mcp_default_server_url,
+                tool_id="jira",
+                credential_field_map={
+                    "server_url": "jira_mcp_server_url",
+                    "api_key": "jira_mcp_api_key",
+                },
             ),
         ),
     ),
@@ -175,6 +220,13 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                     "basic": ["base_url", "email", "api_token"],
                     "pat": ["base_url", "token"],
                 },
+                tool_id="confluence",
+                credential_field_map={
+                    "base_url": "confluence_base_url",
+                    "email": "confluence_email",
+                    "api_token": "confluence_api_token",
+                },
+                auto_wire_credential="api_token",
             ),
             TransportSpec(
                 transport=Transport.MCP,
@@ -182,6 +234,11 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                 auth_methods=(AuthMethod.API_KEY,),
                 auth_fields={"api_key": ["server_url", "api_key"]},
                 known_mcp_endpoint=_settings.confluence_mcp_default_server_url,
+                tool_id="confluence",
+                credential_field_map={
+                    "server_url": "confluence_mcp_server_url",
+                    "api_key": "confluence_mcp_api_key",
+                },
             ),
         ),
     ),

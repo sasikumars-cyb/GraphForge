@@ -34,8 +34,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import Evidence
+from app.agents.llm import STAGE_PLANNING, StageAwareLLMProvider
 from app.ai.providers.base import ToolSpec, ToolTurnResult
-from app.ai.providers.factory import create_llm_provider
 from app.core.crypto import decrypt_secret
 from app.core.exceptions import AppError
 from app.models.knowledge_connection import KnowledgeConnection
@@ -159,6 +159,7 @@ async def gather_confluence_context(
     jira_issue_key: str,
     task_description: str,
     model: str | None,
+    stage: str = STAGE_PLANNING,
 ) -> tuple[str | None, list[Evidence]]:
     """Runs a bounded, LLM-driven discover-then-fetch loop against
     Atlassian's Teamwork Graph MCP tools, anchored on `jira_issue_key`.
@@ -170,7 +171,8 @@ async def gather_confluence_context(
     enrichment in planning/agent.py), so it never raises.
     """
     try:
-        provider = create_llm_provider(model=model)
+        provider = StageAwareLLMProvider(stage=stage, model=model)
+        provider.preview()  # fail fast on misconfiguration, before any turn
     except AppError:
         return None, []
 

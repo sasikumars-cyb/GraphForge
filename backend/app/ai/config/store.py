@@ -44,6 +44,7 @@ class ProviderRecord:
     max_tokens: int | None
     enabled: bool
     status: str
+    provider_options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -150,6 +151,7 @@ async def refresh(db: AsyncSession) -> ConfigSnapshot:
             max_tokens=row.max_tokens,
             enabled=row.enabled,
             status=row.status,
+            provider_options=dict(row.provider_options or {}),
         )
 
     profiles: dict[str, ProfileRecord] = {}

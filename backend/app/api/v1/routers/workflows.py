@@ -403,6 +403,12 @@ async def create_workflow(
     # mechanism — the parent's completed stage(s) become "source" context
     # — plus the human's own refinement note appended as its own fenced
     # block. For a plain "New Workflow" (neither), the title suffices.
+    # Threaded into extras below (in addition to shaping `subject`) so
+    # deterministic verification (e.g. code_generation's repository scope
+    # check) can read the source blueprint's structured stage results, not
+    # just the flattened text `enriched_ref` folds it into.
+    source_workflow: Workflow | None = None
+
     if workflow.source_workflow_id:
         source_workflow = await workflow_service.get_workflow(db, workflow.source_workflow_id)
         # A freshly created workflow genuinely has zero runs yet — set the
@@ -480,7 +486,7 @@ async def create_workflow(
         subject=subject,
         goal=goal,
         model=body.model,
-        extras={"workflow": workflow, "user_id": user.id},
+        extras={"workflow": workflow, "user_id": user.id, "source_workflow": source_workflow},
         agent_id=agent_id,
         registry=global_registry,
         on_complete=_workflow_stage_finalizer(workflow.id),
@@ -737,7 +743,7 @@ async def continue_workflow(
         subject=subject,
         goal=goal,
         model=body.model,
-        extras={"workflow": workflow, "user_id": user.id},
+        extras={"workflow": workflow, "user_id": user.id, "source_workflow": source_workflow},
         agent_id=agent_id,
         registry=global_registry,
         on_complete=_workflow_stage_finalizer(workflow.id),

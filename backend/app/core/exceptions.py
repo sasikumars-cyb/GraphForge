@@ -97,3 +97,14 @@ class AgentDisabledError(AppError):
 
     status_code = 503
     error_code = "agent_disabled"
+
+
+class SubjectTypeMismatchError(AppError):
+    """Raised by RunCoordinator.create_pending_run when a subject's
+    `subject_type` is not in the selected agent's
+    `AgentManifest.accepted_subject_types`. Raised before the agent is ever
+    invoked — an unsupported subject must never reach an agent's LLM
+    call."""
+
+    status_code = 422
+    error_code = "subject_type_mismatch"

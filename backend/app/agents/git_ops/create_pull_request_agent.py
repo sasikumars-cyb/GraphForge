@@ -35,7 +35,8 @@ from app.agents._contract import (
 from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.git_ops.schemas import PullRequestInfo
 from app.core.exceptions import AppError
-from app.integrations.github import GitHubApiError, GitHubVersionControlProvider
+from app.integrations.factory import create_git_write_provider
+from app.integrations.github import GitHubApiError
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
 from app.services.github_service import get_decrypted_access_token
@@ -147,7 +148,7 @@ class CreatePullRequestAgent:
             )
             return _build_output(subject_id, existing_pr, repository, body, evidence)
 
-        vcs = GitHubVersionControlProvider()
+        vcs = create_git_write_provider()
 
         # --- Create the PR on GitHub (or recover from a concurrent create) ---
         pr_data: dict[str, Any] | None

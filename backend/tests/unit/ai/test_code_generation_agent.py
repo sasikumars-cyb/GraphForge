@@ -2,6 +2,10 @@
 
 Covers:
 - Happy path: successful generation, schema validation, evidence/result shape
+- Deterministic repository verification: valid, untracked, out-of-workflow-scope
+- Deterministic file operation validation: unsafe path, unknown modify target
+- Deterministic confidence: computed from verification evidence, never from
+  the LLM's own self-reported value
 - Validation errors: malformed JSON, missing fields, invalid operations,
   duplicate paths, empty files, content violations
 - LLM failure propagation
@@ -13,6 +17,9 @@ Covers:
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import UTC, datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -21,15 +28,65 @@ from app.agents._contract import AgentContext, Subject
 from app.agents.code_generation.agent import (
     CodeGenerationAgent,
     CodeGenerationLLMError,
+    CodeGenerationRepositoryError,
     CodeGenerationValidationError,
     _validate_and_parse,
 )
 from app.agents.code_generation.manifest import CODE_GENERATION_MANIFEST
 from app.agents.code_generation.schemas import GeneratedCodeResult, GeneratedFile
 
+_USER_ID = uuid.uuid4()
+_REPO = "demo-org/api-gateway"
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+def _make_step(result: dict) -> SimpleNamespace:
+    return SimpleNamespace(result=result)
+
+
+def _make_run(stage: str, result: dict, status: str = "completed") -> SimpleNamespace:
+    return SimpleNamespace(
+        workflow_stage=stage,
+        status=status,
+        created_at=datetime.now(UTC),
+        steps=[_make_step(result)],
+    )
+
+
+def _make_workflow(runs: list[SimpleNamespace]) -> SimpleNamespace:
+    return SimpleNamespace(runs=runs)
+
+
+def _make_source_workflow(repository: str = _REPO, file_paths: list[str] | None = None) -> SimpleNamespace:
+    """A source (Planning) workflow whose Development stage's own graph
+    traversal already consulted `repository` — the deterministic ground
+    truth `verify_repository` checks the LLM's claim against."""
+    components = [
+        {"repository": repository, "file_path": path}
+        for path in (file_paths or ["src/main/java/com/example/RateLimiterConfig.java"])
+    ]
+    development_result = {
+        "repositories_consulted": [repository],
+        "components": components,
+    }
+    return _make_workflow([_make_run("development", development_result)])
+
+
+class _FakeReposScalar:
+    def __init__(self, found: bool) -> None:
+        self._found = found
+
+    def scalar_one_or_none(self):
+        return object() if self._found else None
+
+
+def _make_db(tracked: bool = True) -> AsyncMock:
+    db = AsyncMock()
+    db.execute = AsyncMock(return_value=_FakeReposScalar(tracked))
+    return db
 
 
 def _make_context(
@@ -40,19 +97,29 @@ def _make_context(
         "Affected Repositories: demo-org/api-gateway\n"
         "Implementation Phases: Phase 1 - RateLimiterService, Phase 2 - Config"
     ),
+    *,
+    db: AsyncMock | None = None,
+    user_id: uuid.UUID | None = _USER_ID,
+    workflow: SimpleNamespace | None = None,
+    source_workflow: SimpleNamespace | None = None,
 ) -> AgentContext:
     subject = Subject(
         subject_id="freetext:blueprint-exec",
         subject_type="freetext",
         display_name=display_name,
     )
-    return AgentContext(subject=subject, goal="generate_code", extras={"db": AsyncMock()})
+    extras = {
+        "db": db if db is not None else _make_db(),
+        "user_id": user_id,
+        "workflow": workflow,
+        "source_workflow": source_workflow if source_workflow is not None else _make_source_workflow(),
+    }
+    return AgentContext(subject=subject, goal="generate_code", extras=extras)
 
 
 def _make_llm_response(
-    repository: str = "demo-org/api-gateway",
+    repository: str = _REPO,
     files: list[dict] | None = None,
-    confidence: float = 0.85,
 ) -> str:
     if files is None:
         files = [
@@ -63,8 +130,8 @@ def _make_llm_response(
             },
             {
                 "path": "src/main/java/com/example/RateLimiterConfig.java",
-                "operation": "create",
-                "content": "package com.example;\n\npublic class RateLimiterConfig {}",
+                "operation": "modify",
+                "content": "package com.example;\n\npublic class RateLimiterConfig { /* updated */ }",
             },
         ]
     return json.dumps(
@@ -72,7 +139,10 @@ def _make_llm_response(
             "executive_summary": "Generated rate limiter service and config.",
             "repository": repository,
             "commit_message": "feat: add Redis-based rate limiter",
-            "confidence": confidence,
+            # An LLM-reported confidence is included here on purpose: the
+            # agent must never read it (see
+            # test_code_generation_agent_ignores_llm_reported_confidence).
+            "confidence": 0.99,
             "files": files,
         }
     )
@@ -101,45 +171,121 @@ async def test_code_generation_agent_happy_path() -> None:
 
     # Result shape
     assert output.result["executive_summary"] == "Generated rate limiter service and config."
-    assert output.result["repository"] == "demo-org/api-gateway"
+    assert output.result["repository"] == _REPO
     assert output.result["commit_message"] == "feat: add Redis-based rate limiter"
     assert len(output.result["files"]) == 2
-    assert output.result["files"][0]["path"] == "src/main/java/com/example/RateLimiterService.java"
-    assert output.result["files"][0]["operation"] == "create"
-    assert "RateLimiterService" in output.result["files"][0]["content"]
-    assert output.result["confidence"] == 0.85
 
     # AgentOutput metadata
     assert output.agent_id == "code_generation"
     assert output.subject_id == "freetext:blueprint-exec"
     assert output.prompt_version == "1.0"
-    assert output.confidence.score == 0.85
 
 
 @pytest.mark.asyncio
-async def test_code_generation_agent_confidence_tracks_llm_value() -> None:
+async def test_code_generation_agent_reads_full_untruncated_blueprint_context() -> None:
+    """context.subject.display_name is truncated to 256 chars by
+    app.context.resolvers.freetext.resolve() — a limit sized for a short
+    label, not a multi-stage blueprint. The agent must build its prompt
+    from the untruncated Development stage result (get_stage_result), not
+    just the short display_name, exactly like Engineering Review already
+    does."""
+    long_change_description = "x" * 2000
+    source_workflow = _make_source_workflow(file_paths=["src/main/Foo.java"])
+    source_workflow.runs[0].steps[0].result["components"] = [
+        {
+            "repository": _REPO,
+            "file_path": "src/main/Foo.java",
+            "change_description": long_change_description,
+        }
+    ]
+    files = [
+        {
+            "path": "src/main/java/com/example/NewThing.java",
+            "operation": "create",
+            "content": "package com.example;\n\npublic class NewThing {}",
+        }
+    ]
+
+    context = _make_context(
+        display_name="short label",  # well under 256 chars either way
+        source_workflow=source_workflow,
+    )
+
+    with patch(
+        "app.agents.code_generation.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(files=files)),
+    ) as mock_call_llm:
+        agent = CodeGenerationAgent()
+        await agent.run(context)
+
+    prompt = mock_call_llm.call_args.kwargs["user_prompt"]
+    assert long_change_description in prompt
+    assert "Development Stage" in prompt
+
+
+@pytest.mark.asyncio
+async def test_code_generation_agent_falls_back_to_display_name_without_workflow() -> None:
+    """No workflow/source_workflow at all (a standalone run) — prompt
+    construction must not crash and must fall back to
+    context.subject.display_name exactly as before this fix. (The run
+    still fails afterward on repository verification — no prior-stage
+    evidence at all means no repository can ever be confirmed in scope —
+    but that is a separate, already-covered gate; this test is only about
+    blueprint context assembly.)"""
+    subject = Subject(
+        subject_id="freetext:blueprint-exec",
+        subject_type="freetext",
+        display_name="Implement rate limiting",
+    )
+    context = AgentContext(
+        subject=subject,
+        goal="generate_code",
+        extras={"db": _make_db(), "user_id": _USER_ID, "workflow": None, "source_workflow": None},
+    )
+
+    with (
+        patch(
+            "app.agents.code_generation.agent._call_llm",
+            new=AsyncMock(return_value=_make_llm_response()),
+        ) as mock_call_llm,
+        pytest.raises(CodeGenerationRepositoryError),
+    ):
+        agent = CodeGenerationAgent()
+        await agent.run(context)
+
+    prompt = mock_call_llm.call_args.kwargs["user_prompt"]
+    assert "Implement rate limiting" in prompt
+
+
+@pytest.mark.asyncio
+async def test_code_generation_agent_ignores_llm_reported_confidence() -> None:
+    """The LLM response claims confidence=0.99 (see _make_llm_response).
+    The agent must never surface that value — only its own deterministic
+    computation."""
     context = _make_context()
 
     with patch(
         "app.agents.code_generation.agent._call_llm",
-        new=AsyncMock(return_value=_make_llm_response(confidence=0.6)),
+        new=AsyncMock(return_value=_make_llm_response()),
     ):
         agent = CodeGenerationAgent()
         output = await agent.run(context)
 
-    assert output.confidence.score == 0.6
-    assert output.result["confidence"] == 0.6
+    assert output.confidence.score != 0.99
+    assert output.result["confidence"] != 0.99
+    assert "Deterministic confidence" in output.confidence.reasoning
 
 
 @pytest.mark.asyncio
 async def test_code_generation_agent_delete_operation() -> None:
-    context = _make_context()
+    known_path = "src/old/DeprecatedService.java"
+    context = _make_context(
+        source_workflow=_make_source_workflow(
+            file_paths=[known_path, "src/main/java/com/example/NewService.java"]
+        )
+    )
     files = [
-        {
-            "path": "src/old/DeprecatedService.java",
-            "operation": "delete",
-            "content": "",
-        },
+        {"path": known_path, "operation": "delete", "content": ""},
         {
             "path": "src/main/java/com/example/NewService.java",
             "operation": "create",
@@ -157,6 +303,101 @@ async def test_code_generation_agent_delete_operation() -> None:
     assert output.result["files"][0]["operation"] == "delete"
     assert output.result["files"][0]["content"] == ""
     assert output.result["files"][1]["operation"] == "create"
+
+
+# ---------------------------------------------------------------------------
+# Repository verification (Part 1.3 / Part 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_code_generation_agent_rejects_untracked_repository() -> None:
+    """Repository is in workflow scope (Development consulted it) but this
+    user never tracked/selected it — must fail."""
+    context = _make_context(db=_make_db(tracked=False))
+
+    with patch(
+        "app.agents.code_generation.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response()),
+    ):
+        agent = CodeGenerationAgent()
+        with pytest.raises(CodeGenerationRepositoryError, match="not tracked"):
+            await agent.run(context)
+
+
+@pytest.mark.asyncio
+async def test_code_generation_agent_rejects_repository_outside_workflow_scope() -> None:
+    """LLM names a real-looking repository the workflow never actually
+    consulted — must fail rather than silently substitute anything."""
+    context = _make_context(source_workflow=_make_source_workflow(repository="other-org/other-repo"))
+
+    with patch(
+        "app.agents.code_generation.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(repository=_REPO)),
+    ):
+        agent = CodeGenerationAgent()
+        with pytest.raises(CodeGenerationRepositoryError, match="outside the scope"):
+            await agent.run(context)
+
+
+@pytest.mark.asyncio
+async def test_code_generation_agent_rejects_malformed_repository_name() -> None:
+    context = _make_context()
+
+    with patch(
+        "app.agents.code_generation.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(repository="not-a-repo-name")),
+    ):
+        agent = CodeGenerationAgent()
+        with pytest.raises(CodeGenerationRepositoryError, match="owner/repo"):
+            await agent.run(context)
+
+
+# ---------------------------------------------------------------------------
+# File operation validation (Part 1.4 / Part 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_code_generation_agent_rejects_modify_of_unknown_file() -> None:
+    """Development's own graph traversal reported known file paths for
+    this repository, and the claimed 'modify' target isn't one of them."""
+    context = _make_context()
+    files = [
+        {
+            "path": "src/main/java/com/example/DoesNotExist.java",
+            "operation": "modify",
+            "content": "package com.example;",
+        }
+    ]
+
+    with patch(
+        "app.agents.code_generation.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(files=files)),
+    ):
+        agent = CodeGenerationAgent()
+        with pytest.raises(CodeGenerationValidationError, match="does not appear"):
+            await agent.run(context)
+
+
+@pytest.mark.asyncio
+async def test_code_generation_agent_rejects_path_traversal_destination() -> None:
+    context = _make_context()
+    files = [
+        {
+            "path": "../../etc/passwd",
+            "operation": "create",
+            "content": "malicious",
+        }
+    ]
+
+    with patch(
+        "app.agents.code_generation.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(files=files)),
+    ):
+        agent = CodeGenerationAgent()
+        with pytest.raises(CodeGenerationValidationError, match="unsafe or invalid"):
+            await agent.run(context)
 
 
 # ---------------------------------------------------------------------------
@@ -278,35 +519,28 @@ def test_validate_rejects_missing_path() -> None:
         _validate_and_parse(json.dumps(data))
 
 
-def test_validate_clamps_confidence() -> None:
-    data = {
-        "executive_summary": "x",
-        "repository": "org/repo",
-        "commit_message": "feat: x",
-        "confidence": 5.0,
-        "files": [{"path": "a.py", "operation": "create", "content": "x"}],
-    }
-    result = _validate_and_parse(json.dumps(data))
-    assert result.confidence == 1.0
-
-
-def test_validate_defaults_confidence_on_invalid_type() -> None:
-    data = {
-        "executive_summary": "x",
-        "repository": "org/repo",
-        "commit_message": "feat: x",
-        "confidence": "high",
-        "files": [{"path": "a.py", "operation": "create", "content": "x"}],
-    }
-    result = _validate_and_parse(json.dumps(data))
-    assert result.confidence == 0.7
+def test_validate_never_reads_llm_reported_confidence() -> None:
+    """Whatever the LLM puts in `confidence` — a plausible float, an
+    absurd one, or garbage — _validate_and_parse must never surface it.
+    Execution confidence is computed later, deterministically, in
+    CodeGenerationAgent.run."""
+    for bogus_confidence in (5.0, "high", -3, None):
+        data = {
+            "executive_summary": "x",
+            "repository": "org/repo",
+            "commit_message": "feat: x",
+            "confidence": bogus_confidence,
+            "files": [{"path": "a.py", "operation": "create", "content": "x"}],
+        }
+        result = _validate_and_parse(json.dumps(data))
+        assert result.confidence == 0.0  # schema default — never LLM-derived
 
 
 def test_validate_happy_path_returns_result() -> None:
     raw = _make_llm_response()
     result = _validate_and_parse(raw)
     assert isinstance(result, GeneratedCodeResult)
-    assert result.repository == "demo-org/api-gateway"
+    assert result.repository == _REPO
     assert result.goal == "generate_code"
     assert len(result.files) == 2
 
@@ -324,7 +558,7 @@ def test_generated_code_result_schema_defaults() -> None:
         commit_message="feat: x",
     )
     assert result.files == []
-    assert result.confidence == 0.7
+    assert result.confidence == 0.0
     assert result.prompt_version == "1.0"
 
 
@@ -363,7 +597,7 @@ async def test_code_generation_result_is_serializable_dict() -> None:
     # It round-trips through JSON
     serialized = json.dumps(output.result)
     deserialized = json.loads(serialized)
-    assert deserialized["repository"] == "demo-org/api-gateway"
+    assert deserialized["repository"] == _REPO
     assert len(deserialized["files"]) == 2
 
 

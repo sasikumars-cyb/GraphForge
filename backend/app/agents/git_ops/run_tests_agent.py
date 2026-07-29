@@ -33,7 +33,8 @@ from app.agents._contract import (
 from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.git_ops.schemas import TestRunInfo
 from app.core.exceptions import AppError
-from app.integrations.github import GitHubApiError, GitHubVersionControlProvider
+from app.integrations.factory import create_git_write_provider
+from app.integrations.github import GitHubApiError
 from app.services.github_service import get_decrypted_access_token
 
 logger = logging.getLogger(__name__)
@@ -98,7 +99,7 @@ class TestRunnerAgent:
         max_poll_interval = context.extras.get("max_poll_interval", DEFAULT_MAX_POLL_INTERVAL)
         timeout = context.extras.get("timeout", DEFAULT_TIMEOUT)
 
-        vcs = GitHubVersionControlProvider()
+        vcs = create_git_write_provider()
         evidence: list[Evidence] = []
 
         # --- Poll loop ---

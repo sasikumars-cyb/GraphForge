@@ -44,6 +44,7 @@ class ProviderInfo(BaseModel):
     enabled: bool = True
     api_key_configured: bool = False
     model: str | None = None
+    provider_options: dict[str, Any] = Field(default_factory=dict)
     base_url: str | None = None
     temperature: float | None = None
     max_tokens: int | None = None
@@ -66,6 +67,11 @@ class ProviderUpsertRequest(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     enabled: bool | None = None
+    # Structured provider-specific settings (Bedrock's region, a future
+    # Azure OpenAI deployment/api_version, ...) — see
+    # AIProviderConfig.provider_options. Omit to leave stored options
+    # untouched; send {} to clear them.
+    provider_options: dict[str, Any] | None = None
 
 
 class ValidationResponse(BaseModel):

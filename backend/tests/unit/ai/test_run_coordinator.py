@@ -24,7 +24,7 @@ from app.agents._contract import (
     Evidence,
     Subject,
 )
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import NotFoundError, SubjectTypeMismatchError
 from app.orchestrator.registry import AgentRegistry
 from app.orchestrator.run_coordinator import RunCoordinator
 from app.orchestrator.selector import AgentSelector
@@ -240,6 +240,42 @@ async def test_missing_agent_marks_run_as_failed() -> None:
     run = mock_db.add.call_args_list[0][0][0]
     assert run.status == "failed"
     mock_db.commit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Manifest enforcement — accepted_subject_types (Part 2 / Part 4)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_subject_type_mismatch_fails_deterministically_without_invoking_agent() -> None:
+    """A subject whose subject_type the target agent's manifest doesn't
+    accept must be rejected by the dispatcher itself — the agent's run()
+    (and therefore any LLM call inside it) must never be invoked."""
+    coordinator, mock_db, mock_agent = _build_coordinator()
+    subject = Subject(
+        subject_id="pull_request:42",
+        subject_type="pull_request",  # manifest only accepts "freetext"
+        display_name="A PR",
+    )
+
+    with pytest.raises(SubjectTypeMismatchError, match="does not accept subject_type"):
+        await coordinator.execute(subject, "plan_freeform")
+
+    mock_agent.run.assert_not_called()
+    run = mock_db.add.call_args_list[0][0][0]
+    assert run.status == "failed"
+
+
+@pytest.mark.asyncio
+async def test_subject_type_match_proceeds_normally() -> None:
+    coordinator, mock_db, mock_agent = _build_coordinator()
+    subject = _make_subject()  # subject_type="freetext", matches manifest
+
+    run = await coordinator.execute(subject, "plan_freeform")
+
+    assert run.status == "completed"
+    mock_agent.run.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

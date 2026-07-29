@@ -15,7 +15,7 @@ Adding a provider is a `ProviderSpec` in the registry; nothing here changes.
 
 from __future__ import annotations
 
-from app.ai.config.resolver import resolve
+from app.ai.config.resolver import ResolvedProvider, resolve
 from app.ai.interfaces.llm_provider import ILLMProvider
 from app.ai.providers.registry import (
     UnsupportedProviderError,
@@ -30,6 +30,7 @@ __all__ = [
     "UnsupportedModelError",
     "UnsupportedProviderError",
     "create_llm_provider",
+    "validate_resolution",
 ]
 
 # Retained for backward compatibility: existing imports and tests reference
@@ -61,15 +62,28 @@ def create_llm_provider(
     environment variables and behaves exactly as it did before.
     """
     resolved = resolve(provider=provider, model=model, stage=stage, settings=settings)
+    validate_resolution(resolved, requested_model=model)
+    return resolved.spec.build(resolved.config)
 
+
+def validate_resolution(resolved: ResolvedProvider, *, requested_model: str | None = None) -> None:
+    """Guard a resolution before anything is built or sent.
+
+    Extracted from `create_llm_provider` so the stage-aware execution path
+    (`app.agents.llm.StageAwareLLMProvider`, which resolves and sends via
+    `app.ai.config.fallback` rather than building here) enforces exactly the
+    same rules, with the same exception types and messages, instead of
+    re-deriving them. One implementation, two callers — the alternative was
+    a second copy of these three checks drifting out of sync with this one.
+    """
     if not resolved.spec.implemented:
         raise UnsupportedProviderError(f"{resolved.spec.label} provider is not yet implemented.")
 
     # Only validate an explicitly requested model. A configured or default
     # model is trusted — an operator who typed a brand-new model ID into
     # settings should not be blocked by our catalogue being a release behind.
-    if model is not None and not is_known_model(resolved.key, model):
-        raise UnsupportedModelError(f"Unsupported AI model: '{model}'.")
+    if requested_model is not None and not is_known_model(resolved.key, requested_model):
+        raise UnsupportedModelError(f"Unsupported AI model: '{requested_model}'.")
 
     if resolved.spec.requires_api_key and not resolved.config.api_key:
         # Named after the actual env var (e.g. "OPENAI_API_KEY") rather than
@@ -82,5 +96,3 @@ def create_llm_provider(
             status_code=503,
             error_code="ai_provider_not_configured",
         )
-
-    return resolved.spec.build(resolved.config)

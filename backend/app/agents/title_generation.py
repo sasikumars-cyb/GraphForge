@@ -11,8 +11,8 @@ from __future__ import annotations
 
 import logging
 
+from app.agents.llm import StageAwareLLMProvider
 from app.ai.providers.base import LLMRequestOptions, ResponseFormat
-from app.ai.providers.factory import create_llm_provider
 from app.core.exceptions import AppError
 
 logger = logging.getLogger(__name__)
@@ -67,7 +67,7 @@ async def generate_title(objective: str, *, model: str | None = None) -> str:
     itself rather than raising and blocking workflow/run creation.
     """
     try:
-        provider = create_llm_provider(model=model)
+        provider = StageAwareLLMProvider(stage=None, model=model)
         response = await provider.complete(
             system_prompt=_SYSTEM_PROMPT,
             user_prompt=objective,

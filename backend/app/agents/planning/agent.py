@@ -23,7 +23,6 @@ empty results (empty = real graph query, just no data yet).
 from __future__ import annotations
 
 import contextlib
-import json
 import logging
 import re
 import time
@@ -40,6 +39,7 @@ from app.agents._contract import (
     Evidence,
 )
 from app.agents.blueprint.factory import BlueprintFactory
+from app.agents.llm import STAGE_PLANNING, invoke_llm_json, stage_for
 from app.agents.planning.classifier import PlanningProfile, analyse, pattern_for_key
 from app.agents.planning.confluence_context import (
     gather_confluence_context,
@@ -57,11 +57,13 @@ from app.agents.planning.schemas import (
     RiskItem,
 )
 from app.agents.planning.tools import PlanningObservation, stars_for_rank, to_evidence
-from app.agents.prompt_utils import render_prompt_template, wrap_untrusted_content
-from app.ai.providers.base import LLMRequestOptions, ResponseFormat
-from app.ai.providers.factory import create_llm_provider
+from app.agents.prompt_utils import (
+    parse_json_response,
+    render_prompt_template,
+    wrap_untrusted_content,
+)
+from app.agents.reflection import run_with_reflection
 from app.ai.providers.pricing import estimate_cost_usd
-from app.core.config import get_settings
 from app.core.exceptions import AppError
 from app.core.redact import redact_secrets
 from app.tools import ContextBuilder, ToolExecutor, ToolInput, get_tool_registry
@@ -104,108 +106,59 @@ class PlanningLLMError(AppError):
     error_code = "planning_llm_error"
 
 
-# Fixed, stable order — not cost- or latency-optimized (that's a real
-# tradeoff decision this isn't trying to make), just predictable. Used only
-# as a reliability fallback when the *primary* provider hits a rate limit;
-# every other AI provider error (auth, malformed response) is raised
-# immediately instead of masked, since a different vendor won't fix a bad
-# credential or a bad prompt — only "this one is temporarily out of quota"
-# is actually solved by trying another one.
-_FALLBACK_PROVIDER_ORDER = ("openai", "gemini", "groq")
-
-
-def _other_configured_providers(exclude: str) -> list[str]:
-    settings = get_settings()
-    keys = {
-        "openai": settings.openai_api_key,
-        "gemini": settings.gemini_api_key,
-        "groq": settings.groq_api_key,
-    }
-    return [p for p in _FALLBACK_PROVIDER_ORDER if p != exclude and keys.get(p)]
-
-
 async def _call_llm(
-    user_prompt: str, model: str | None = None, _metadata_out: dict[str, Any] | None = None
+    user_prompt: str,
+    model: str | None = None,
+    _metadata_out: dict[str, Any] | None = None,
+    stage: str = STAGE_PLANNING,
 ) -> str:
-    """Send a single JSON-mode completion through the configured AI
-    provider and return the raw content string.
+    """Send a single JSON-mode completion through the AI configuration layer
+    and return the raw content string.
 
-    Transport is entirely delegated to create_llm_provider()/
-    Provider.complete() — the one LLM transport implementation in this
-    codebase. On a rate-limit failure from the primary provider, retries
-    against each other *configured* provider in turn (see
-    _other_configured_providers) before giving up — this app already
-    stores three provider keys (openai/gemini/groq) and a rate-limited
-    request used to just fail outright even when a working alternative
-    (e.g. Groq's free tier) sat unused. Any other provider-level failure
-    (auth, timeout, malformed response, unconfigured provider) is remapped
-    to `PlanningLLMError` immediately, same as before, so existing
-    callers/tests keep seeing this agent's own error type; kept as a
-    module-level function so existing test seams
+    Provider/model selection, AI Profile resolution, and cross-vendor
+    fallback are all delegated to `app.agents.llm.StageAwareLLMProvider`,
+    which resolves under `stage` and sends via
+    `app.ai.config.fallback.complete_with_fallback`.
+
+    This agent previously carried its own inline fallback ladder over a
+    hardcoded ("openai", "gemini", "groq") tuple, triggered on rate limits
+    and keyed off whether those env vars happened to be set. That was
+    replaced, not reimplemented: the shared engine covers strictly more
+    failure modes (rate limit *and* timeout *and* upstream 5xx, versus rate
+    limit only), covers all nine registered providers rather than three, and
+    — importantly — only crosses vendors when an operator has explicitly
+    enabled fallback and chosen an order. The old ladder crossed vendors
+    silently whenever two keys were present, which
+    `app.ai.config.resolver.fallback_chain` documents as the thing not to
+    do. Any provider-level failure that the shared engine declines to
+    recover from is remapped to `PlanningLLMError`, exactly as before, so
+    callers and tests keep seeing this agent's own error type.
+
+    Kept as a module-level function so existing test seams
     (`patch("...agent._call_llm", ...)`) stay stable.
 
     `_metadata_out`, when given, is filled in-place with whichever provider
-    actually served the request plus its reported token usage — an
-    optional out-param instead of changing the return type, so every
-    existing caller/test (including the cross-agent suite in
-    test_agent_llm_migration.py, which calls this directly with no such
-    kwarg) sees identical behavior. run() below is the one real caller
-    that passes it, to build LLMTrace's cost/token fields.
+    actually served the request plus its reported token usage — an optional
+    out-param instead of changing the return type, so every existing
+    caller/test sees identical behavior. It now reports the provider that
+    *truly* served the call (including after a fallback hop) rather than the
+    process-wide env default, since the resolution result carries it.
+
+    The body itself now lives in `app.agents.llm.invoke_llm_json` — the
+    same shared function `development`, `testing`, `documentation_planning`,
+    `engineering_review`, and `code_generation` delegate to. This function
+    stays as the thin, stage/error-class-bound wrapper those agents also
+    keep, so the reflection retry below (and every existing caller/test)
+    keeps calling `_call_llm` unchanged.
     """
-    from app.ai.providers.errors import AIProviderRateLimitError
-
-    settings = get_settings()
-    primary_key = settings.ai_provider.lower()
-
-    async def _complete(provider_override: str | None) -> str:
-        # Only pass `provider=` on an actual fallback attempt — a bare
-        # `provider=None` is functionally the same as omitting it, but
-        # showed up as an unexpected kwarg to shared call-signature tests
-        # (test_agent_llm_migration.py) asserting create_llm_provider's
-        # exact call args across all five freeform agents.
-        provider = (
-            create_llm_provider(model=model)
-            if provider_override is None
-            else create_llm_provider(provider=provider_override)
-        )
-        response = await provider.complete(
-            system_prompt=_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            options=LLMRequestOptions(response_format=ResponseFormat.JSON),
-        )
-        if _metadata_out is not None:
-            _metadata_out["provider"] = provider_override or primary_key
-            _metadata_out["model"] = response.model_name or model or ""
-            _metadata_out["prompt_tokens"] = response.prompt_tokens
-            _metadata_out["completion_tokens"] = response.completion_tokens
-            _metadata_out["total_tokens"] = response.total_tokens
-        return response.text
-
-    try:
-        return await _complete(None)
-    except AIProviderRateLimitError as exc:
-        for fallback_key in _other_configured_providers(exclude=primary_key):
-            try:
-                logger.warning(
-                    "planning_agent_provider_fallback from=%s to=%s reason=rate_limit",
-                    primary_key,
-                    fallback_key,
-                )
-                return await _complete(fallback_key)
-            except AppError:
-                logger.warning(
-                    "planning_agent_provider_fallback_failed provider=%s",
-                    fallback_key,
-                    exc_info=True,
-                )
-                continue
-        error = PlanningLLMError(exc.message)
-        error.provider_error = getattr(exc, "provider_error", None)  # type: ignore[attr-defined]
-        raise error from exc
-    except AppError as exc:
-        error = PlanningLLMError(exc.message)
-        error.provider_error = getattr(exc, "provider_error", None)  # type: ignore[attr-defined]
-        raise error from exc
+    return await invoke_llm_json(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        stage=stage,
+        model=model,
+        error_cls=PlanningLLMError,
+        metadata_out=_metadata_out,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -330,25 +283,6 @@ def _safe_list(raw_data: object, model_cls: type) -> list[Any]:
     return result
 
 
-_MARKDOWN_FENCE_PATTERN = re.compile(r"^\s*```(?:json)?\s*\n?(.*?)\n?```\s*$", re.DOTALL)
-
-
-def _strip_markdown_fence(raw: str) -> str:
-    """Strip a ```json ... ``` (or bare ```) wrapper some models add despite
-    the system prompt's explicit "no markdown fences" instruction.
-
-    Providers with an API-level JSON mode (OpenAI, Gemini) enforce this
-    structurally and never do it; Bedrock's Converse API has no such mode
-    for this agent's request shape (see BedrockProvider._send_completion —
-    `options.response_format` is accepted but unused there), so it's purely
-    prompt-instruction-dependent, and Claude on Bedrock does not reliably
-    follow it. Returns `raw` unchanged if it doesn't look fenced, so this
-    is a no-op for every provider that already behaves.
-    """
-    match = _MARKDOWN_FENCE_PATTERN.match(raw)
-    return match.group(1) if match else raw
-
-
 def _parse_llm_response(
     raw: str, task_description: str, profile: PlanningProfile | None = None
 ) -> PlanningResult:
@@ -361,11 +295,13 @@ def _parse_llm_response(
     echoes an `architecture_pattern` back; when it names a pattern we
     recognise, its answer wins (it read the whole brief, the analyser only
     matched keywords). Anything unrecognised keeps the derived pattern.
+
+    Markdown-fence stripping now lives in the shared
+    `app.agents.prompt_utils.parse_json_response` (every other freeform-JSON
+    agent uses the exact same call) — this used to be a Planning-only
+    protection the other five agents didn't have.
     """
-    try:
-        data = json.loads(_strip_markdown_fence(raw))
-    except json.JSONDecodeError as exc:
-        raise PlanningLLMError(f"LLM response is not valid JSON: {exc}") from exc
+    data = parse_json_response(raw, PlanningLLMError)
 
     analysis = profile or analyse("")
     pattern = analysis.pattern
@@ -446,6 +382,9 @@ class PlanningAgent:
         )
 
         db: AsyncSession = context.extras["db"]
+        # Stage key for AI configuration resolution — the run's real
+        # workflow_stage when it has one, else this agent's own default.
+        stage = stage_for(context.extras, STAGE_PLANNING)
 
         evidence: list[Evidence] = []
 
@@ -500,6 +439,7 @@ class PlanningAgent:
                         jira_issue_key=issue_key,
                         task_description=original_task_description,
                         model=context.model,
+                        stage=stage,
                     )
                     evidence.extend(confluence_evidence)
                     if confluence_text:
@@ -603,6 +543,11 @@ class PlanningAgent:
                 # allowing that — see Neo4jGraphTool.execute).
                 "user_id": context.extras.get("user_id"),
                 "relevance_terms": profile.search_terms,
+                # Hop-budgeted repository built by RunCoordinator's Context
+                # Preparation step from PLANNING_MANIFEST.max_graph_hops
+                # (see app.graph.hop_budget). None outside that dispatcher
+                # — Neo4jGraphTool falls back to an unbudgeted repository.
+                "graph_repo": context.extras.get("graph_repository"),
             },
         )
 
@@ -755,7 +700,10 @@ class PlanningAgent:
         llm_metadata: dict[str, Any] = {}
         try:
             raw_response = await _call_llm(
-                user_prompt=prompt, model=context.model, _metadata_out=llm_metadata
+                user_prompt=prompt,
+                model=context.model,
+                _metadata_out=llm_metadata,
+                stage=stage,
             )
             planning_result = _parse_llm_response(raw_response, original_task_description, profile)
         except PlanningLLMError as exc:
@@ -764,68 +712,63 @@ class PlanningAgent:
             raise
 
         # ------------------------------------------------------------------
-        # Reflection: one bounded critique-and-refine pass. Gap-finding is
-        # deterministic (see _find_quality_gaps) so this never spends an LLM
-        # call just to *judge* the first draft — a second call only fires
-        # when a real structural gap is found, and at most once, so cost
-        # stays bounded (see app.core.rate_limit's docstring on why
-        # unbounded LLM calls are a real risk here, not a hypothetical one).
+        # Reflection: one bounded critique-and-refine pass, via the shared
+        # app.agents.reflection.run_with_reflection helper (see its module
+        # docstring for how this relates to the other two retry shapes in
+        # this codebase: provider fallback, and the Review Agent's
+        # confidence-triggered retry). Gap-finding is deterministic (see
+        # _find_quality_gaps) so this never spends an LLM call just to
+        # *judge* the first draft — a second call only fires when a real
+        # structural gap is found, and at most once, so cost stays bounded
+        # (see app.core.rate_limit's docstring on why unbounded LLM calls
+        # are a real risk here, not a hypothetical one).
         # ------------------------------------------------------------------
-        quality_gaps = _find_quality_gaps(planning_result, has_graph_data)
-        if quality_gaps:
-            logger.info("planning_agent_reflection_triggered gaps=%s", quality_gaps)
-            refine_prompt = (
-                f"{prompt}\n\n--- SELF-REVIEW ---\n"
+        def _build_refine_prompt(base_prompt: str, prior_raw: str, gaps: list[str]) -> str:
+            return (
+                f"{base_prompt}\n\n--- SELF-REVIEW ---\n"
                 "Your previous response (JSON below) had these gaps:\n"
-                + "\n".join(f"- {g}" for g in quality_gaps)
-                + f"\n\nYour previous response:\n{raw_response[:_MAX_TRACE_CHARS]}\n\n"
+                + "\n".join(f"- {g}" for g in gaps)
+                + f"\n\nYour previous response:\n{prior_raw}\n\n"
                 "Produce a corrected JSON response, fixing every gap above, in the same schema."
             )
-            try:
-                refined_metadata: dict[str, Any] = {}
-                refined_raw = await _call_llm(
-                    user_prompt=refine_prompt, model=context.model, _metadata_out=refined_metadata
+
+        async def _call_llm_for_reflection(refine_prompt: str, metadata_out: dict[str, Any]) -> str:
+            return await _call_llm(
+                user_prompt=refine_prompt,
+                model=context.model,
+                _metadata_out=metadata_out,
+                stage=stage,
+            )
+
+        reflection = await run_with_reflection(
+            initial_prompt=prompt,
+            initial_raw=raw_response,
+            initial_result=planning_result,
+            initial_metadata=llm_metadata,
+            find_gaps=lambda result: _find_quality_gaps(result, has_graph_data),
+            parse=lambda raw: _parse_llm_response(raw, original_task_description, profile),
+            call_llm=_call_llm_for_reflection,
+            build_refine_prompt=_build_refine_prompt,
+            recoverable_error=PlanningLLMError,
+            max_trace_chars=_MAX_TRACE_CHARS,
+        )
+        quality_gaps = reflection.gaps
+        prompt, raw_response, planning_result = (
+            reflection.prompt,
+            reflection.raw_response,
+            reflection.result,
+        )
+        if reflection.applied:
+            evidence.append(
+                Evidence(
+                    kind="llm_reasoning",
+                    reference="llm_reflection",
+                    summary=(
+                        "Reflection pass fixed gaps in the first draft: "
+                        + "; ".join(quality_gaps)
+                    ),
                 )
-                refined_result = _parse_llm_response(
-                    refined_raw, original_task_description, profile
-                )
-                # Both calls cost real money regardless of which draft wins —
-                # sum token counts across both rather than reporting only
-                # the final one, so the trace reflects actual spend for
-                # this run, not just the surviving draft's share of it.
-                for tok_field in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                    if refined_metadata.get(tok_field) is not None:
-                        llm_metadata[tok_field] = (
-                            llm_metadata.get(tok_field) or 0
-                        ) + refined_metadata[tok_field]
-                if not _find_quality_gaps(refined_result, has_graph_data):
-                    prompt, raw_response, planning_result = (
-                        refine_prompt,
-                        refined_raw,
-                        refined_result,
-                    )
-                    llm_metadata["provider"] = refined_metadata.get(
-                        "provider", llm_metadata.get("provider")
-                    )
-                    llm_metadata["model"] = refined_metadata.get("model", llm_metadata.get("model"))
-                    evidence.append(
-                        Evidence(
-                            kind="llm_reasoning",
-                            reference="llm_reflection",
-                            summary=(
-                                "Reflection pass fixed gaps in the first draft: "
-                                + "; ".join(quality_gaps)
-                            ),
-                        )
-                    )
-                else:
-                    logger.info("planning_agent_reflection_did_not_resolve_gaps")
-            except PlanningLLMError:
-                # Reflection is a best-effort quality pass, never a hard
-                # dependency — if the refine call fails, keep the original
-                # (still-valid, just imperfect) result rather than failing
-                # the whole run over a quality-improvement step.
-                logger.warning("planning_agent_reflection_call_failed", exc_info=True)
+            )
 
         llm_latency_ms = int((time.monotonic() - llm_started) * 1000)
 

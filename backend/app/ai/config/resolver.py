@@ -141,18 +141,28 @@ def _resolve_provider_options(
 ) -> dict[str, str]:
     """Build provider_options from stored config and env fallback.
 
-    For Bedrock the stored "base_url" column in the database holds the region
-    (the UI writes it there). This is a presentation concern of the DB schema
-    — within the provider itself, the value lives in provider_options["region"]
-    where its semantics are explicit.
+    `ProviderRecord.provider_options` (backed by `AIProviderConfig.
+    provider_options`, a JSONB column) is the structured home for this —
+    Bedrock's region, a future Azure OpenAI deployment/api_version, a
+    custom model family, custom headers. Precedence: stored
+    `provider_options` > legacy Bedrock-region-in-`base_url` (see below) >
+    environment.
+
+    The legacy fallback exists only for backward compatibility with rows
+    written before `provider_options` existed: earlier, Bedrock's region
+    had nowhere else to live but the `base_url` column (it has no actual
+    URL for that provider), so a row saved back then still has it there
+    instead of in `provider_options`. Once such a row is next saved
+    through the UI, `upsert_provider` (app.api.v1.routers.ai_workspace)
+    writes it into `provider_options` and this fallback stops applying to
+    that row — no explicit data migration needed.
     """
     # Start with env-level options as the fallback.
     options = _env_provider_options(spec_key, settings)
 
-    # Stored config overrides env. Bedrock stores region in the base_url
-    # column (it has no actual URL). Other providers might store options in
-    # a JSONB column in the future — for now this covers the one case.
-    if spec_key == "bedrock" and record is not None and record.base_url:
+    if record is not None and record.provider_options:
+        options.update(record.provider_options)
+    elif spec_key == "bedrock" and record is not None and record.base_url:
         options["region"] = record.base_url
 
     return options
@@ -192,7 +202,23 @@ def _pick_model(
     if stage:
         override = snapshot.stage_overrides.get(stage) or {}
         if isinstance(override, dict) and override.get("model"):
-            return str(override["model"])
+            # A stage's model belongs to that stage's provider — the same
+            # rule the stored global default already enforces a few lines
+            # below, for the same reason. Without this guard, resolving a
+            # *different* vendor while a stage override is active carries
+            # the wrong vendor's model id across: the fallback engine
+            # (app.ai.config.fallback) resolves each fallback provider with
+            # `resolve(provider=key, stage=stage)`, so a stage pinned to
+            # openai/"gpt-5" would send "gpt-5" to Gemini on the fallback
+            # hop and take a guaranteed 404 — turning a recoverable rate
+            # limit into a hard failure.
+            #
+            # Latent until now: no caller passed `stage`, and nothing
+            # called the fallback engine, so the two conditions required to
+            # reach it never co-occurred.
+            stage_provider = override.get("provider")
+            if not stage_provider or str(stage_provider) == spec.key:
+                return str(override["model"])
 
     record = snapshot.provider(spec.key)
     if record and record.model:

@@ -29,6 +29,7 @@ from typing import Any
 
 import httpx
 
+from app.integrations.interfaces import IIssueTrackerProvider
 from app.tools.interfaces import (
     ToolCategory,
     ToolHealth,
@@ -476,3 +477,41 @@ class JiraTool:
             return ToolHealth.HEALTHY
         except httpx.HTTPError:
             return ToolHealth.OFFLINE
+
+
+class JiraIssueTrackerAdapter(IIssueTrackerProvider):
+    """Adapts `JiraTool` to the tracker-agnostic `IIssueTrackerProvider`
+    port (`app.integrations.interfaces`).
+
+    Deliberately a thin wrapper, not a rewrite: every method here delegates
+    straight to `JiraTool`'s own existing, unchanged logic (REST-or-MCP
+    `execute()`, `extract_issue_key`, the `context_text` `_build_result`
+    already assembles). Nothing about Jira's own behavior changes.
+
+    This is the extension point itself, not a rewiring of the Planning
+    Agent — Planning Agent still calls `executor.execute("jira", ...)`
+    directly today, unchanged (see planning/agent.py's Jira enrichment
+    block). A future Linear/ServiceNow/Azure Boards/GitHub Issues adapter
+    implementing this same interface needs no Planning Agent change to
+    *exist*; wiring the Planning Agent to dispatch across multiple
+    registered trackers (rather than the one hardcoded "jira" tool_id) is
+    a separate, larger, and deliberately out-of-scope change — see the
+    interface's own docstring and the "do not over-engineer" instruction
+    this adapter was scoped against.
+    """
+
+    def __init__(self, tool: JiraTool) -> None:
+        self._tool = tool
+
+    async def create_issue(self, project_key: str, summary: str, description: str) -> Any:
+        raise NotImplementedError("Jira issue creation is not implemented (read-only today).")
+
+    async def get_issue(self, issue_key: str) -> dict[str, Any] | None:
+        result = await self._tool.execute(ToolInput(query=issue_key))
+        return dict(result.data) if result.success else None
+
+    def extract_issue_key(self, text: str) -> str | None:
+        return extract_issue_key(text)
+
+    def build_context_text(self, issue: dict[str, Any]) -> str:
+        return str(issue.get("context_text", ""))

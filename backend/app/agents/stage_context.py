@@ -132,6 +132,34 @@ def format_development_block(result: dict[str, Any] | None) -> str:
     return "\n".join(lines)
 
 
+def format_engineering_review_block(result: dict[str, Any] | None) -> str:
+    if not result:
+        return "### Engineering Review Stage\n(No completed Engineering Review stage result available.)"
+
+    lines = [
+        "### Engineering Review Stage",
+        f"Summary: {result.get('executive_summary') or '(none)'}",
+        f"Readiness status: {result.get('readiness_status') or '(unspecified)'}",
+    ]
+    if blocking := result.get("blocking_issues"):
+        lines.append("Blocking issues: " + "; ".join(blocking))
+    if risks := result.get("risk_assessment"):
+        lines.append(
+            "Risk assessment: "
+            + _join(
+                risks,
+                lambda r: (
+                    f"{r.get('description', '')} "
+                    f"[{'mitigated' if r.get('adequately_mitigated') else 'unmitigated'}]"
+                    + (f" — {r.get('concern')}" if r.get("concern") else "")
+                ),
+            )
+        )
+    if recs := result.get("recommendations"):
+        lines.append("Recommendations: " + "; ".join(recs))
+    return "\n".join(lines)
+
+
 def format_documentation_block(result: dict[str, Any] | None) -> str:
     if not result:
         return (

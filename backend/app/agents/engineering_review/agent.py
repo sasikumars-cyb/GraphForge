@@ -31,7 +31,6 @@ this agent does not call and which never runs inside a Planning workflow.
 
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 from typing import Any
@@ -49,7 +48,8 @@ from app.agents.engineering_review.schemas import (
     RiskAssessment,
 )
 from app.agents.git_ops._artifact_reader import get_stage_result
-from app.agents.prompt_utils import render_prompt_template
+from app.agents.llm import STAGE_ENGINEERING_REVIEW, invoke_llm_json, stage_for
+from app.agents.prompt_utils import parse_json_response, render_prompt_template
 from app.agents.stage_context import (
     format_development_block as _format_development_block,
 )
@@ -62,8 +62,6 @@ from app.agents.stage_context import (
 from app.agents.stage_context import (
     format_testing_block as _format_testing_block,
 )
-from app.ai.providers.base import LLMRequestOptions, ResponseFormat
-from app.ai.providers.factory import create_llm_provider
 from app.core.exceptions import AppError
 
 logger = logging.getLogger(__name__)
@@ -153,7 +151,8 @@ def _build_blueprint_context(
 
 # ---------------------------------------------------------------------------
 # LLM call — engineering-review-specific, same mechanics as Planning/
-# Development/Testing/Code Generation (via create_llm_provider()), separate
+# Development/Testing/Code Generation (via app.agents.llm's
+# StageAwareLLMProvider), separate
 # error class per the existing per-agent convention.
 # ---------------------------------------------------------------------------
 
@@ -169,19 +168,19 @@ class EngineeringReviewLLMError(AppError):
     error_code = "engineering_review_llm_error"
 
 
-async def _call_llm(user_prompt: str, model: str | None = None) -> str:
-    try:
-        provider = create_llm_provider(model=model)
-        response = await provider.complete(
-            system_prompt=_SYSTEM_PROMPT,
-            user_prompt=user_prompt,
-            options=LLMRequestOptions(response_format=ResponseFormat.JSON),
-        )
-    except AppError as exc:
-        error = EngineeringReviewLLMError(exc.message)
-        error.provider_error = getattr(exc, "provider_error", None)  # type: ignore[attr-defined]
-        raise error from exc
-    return response.text
+async def _call_llm(
+    user_prompt: str, model: str | None = None, stage: str = STAGE_ENGINEERING_REVIEW
+) -> str:
+    """Delegates to the shared `app.agents.llm.invoke_llm_json` — kept as a
+    module-level function so existing test seams
+    (`patch("...agent._call_llm", ...)`) stay stable."""
+    return await invoke_llm_json(
+        system_prompt=_SYSTEM_PROMPT,
+        user_prompt=user_prompt,
+        stage=stage,
+        model=model,
+        error_cls=EngineeringReviewLLMError,
+    )
 
 
 def _render_prompt(blueprint_context: str) -> str:
@@ -194,10 +193,7 @@ def _render_prompt(blueprint_context: str) -> str:
 
 
 def _parse_llm_response(raw: str, goal: str) -> EngineeringReadinessReport:
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError as exc:
-        raise EngineeringReviewLLMError(f"LLM response is not valid JSON: {exc}") from exc
+    data = parse_json_response(raw, EngineeringReviewLLMError)
 
     completeness_findings = [
         CompletenessFinding(
@@ -327,7 +323,11 @@ class EngineeringReviewAgent:
         prompt = _render_prompt(blueprint_context)
 
         try:
-            raw_response = await _call_llm(user_prompt=prompt, model=context.model)
+            raw_response = await _call_llm(
+                user_prompt=prompt,
+                model=context.model,
+                stage=stage_for(context.extras, STAGE_ENGINEERING_REVIEW),
+            )
             report = _parse_llm_response(raw_response, context.goal)
         except EngineeringReviewLLMError as exc:
             logger.error("engineering_review_agent_llm_failed error=%s", str(exc))

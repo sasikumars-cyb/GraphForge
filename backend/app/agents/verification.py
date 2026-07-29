@@ -218,38 +218,17 @@ def find_unindexed_sibling_references(text: str, indexed_repo_names: list[str]) 
 # ---------------------------------------------------------------------------
 # 2. Claim-vs-evidence verification
 # ---------------------------------------------------------------------------
+#
+# Case/separator/path canonicalization is centralized in
+# app.agents.normalization — the same module app.agents.code_generation.
+# verification uses for repository/file-path checks, so every deterministic
+# validator in this codebase applies identical normalization rules rather
+# than each keeping its own slightly-different copy.
 
+from app.agents.normalization import normalize_path, normalize_text, squash, tokenize
 
-_TOKEN_BOUNDARY_RE = re.compile(r"[^a-z0-9]+")
-_CAMEL_BOUNDARY_RE = re.compile(r"([a-z0-9])([A-Z])")
-
-
-def _normalize(s: str) -> str:
-    """Case/whitespace-fold, and split camelCase boundaries with an
-    underscore before lowercasing — not after.
-
-    Lowercasing first and camelCase-splitting second (the order
-    `_tokenize` alone would produce if it received an already-normalized
-    string) destroys the very information the split needs: "Transform
-    ManifestParser" only has a detectable boundary while the "M" is still
-    uppercase. Doing it here means both the exact-match path and the
-    token-containment path in `_claim_supported` see "transform_manifest_
-    parser" for a component genuinely named `TransformManifestParser`,
-    instead of a single glued token no claim could ever match against.
-    """
-    spaced = _CAMEL_BOUNDARY_RE.sub(r"\1_\2", s)
-    return re.sub(r"\s+", " ", spaced.strip().lower())
-
-
-def _tokenize(s: str) -> frozenset[str]:
-    """Split into sub-word tokens on snake_case/dotted/slash/camelCase
-    boundaries — the same tokenization `app.agents.planning.tools` uses for
-    ranking, kept as a local copy rather than a shared import so this
-    module stays dependency-free (see the module docstring). Tokens under
-    3 characters are dropped: they are exactly the generic fragments
-    (`id`, `db`, `is`) that make token-set containment gameable."""
-    spaced = _CAMEL_BOUNDARY_RE.sub(r"\1_\2", s)
-    return frozenset(t for t in _TOKEN_BOUNDARY_RE.split(spaced.lower()) if len(t) >= 3)
+_normalize = normalize_text  # local alias — kept so existing call sites/tests
+_tokenize = tokenize  # in this module don't all need renaming.
 
 
 def build_evidence_pool(*groups: list[str]) -> set[str]:
@@ -260,14 +239,16 @@ def build_evidence_pool(*groups: list[str]) -> set[str]:
     for group in groups:
         for item in group:
             if item:
-                pool.add(_normalize(str(item)))
+                pool.add(normalize_text(normalize_path(str(item))))
     return pool
 
 
 def _claim_supported(claim: str, evidence_pool: set[str]) -> bool:
-    """A claim is supported if it matches an evidence string exactly, is a
-    path-segment-anchored match, or its tokens are fully contained in a
-    single evidence item's tokens — case- and whitespace-insensitive.
+    """A claim is supported if it matches an evidence string exactly (after
+    path/case/separator normalization), is a path-segment-anchored match,
+    its tokens are fully contained in a single evidence item's tokens, or
+    its squashed (all-non-alphanumeric-stripped) form exactly equals a
+    single evidence item's squashed form.
 
     This used to also accept `evidence in claim_n` — evidence as a bare
     substring anywhere inside the claim — which made verification close to
@@ -278,13 +259,17 @@ def _claim_supported(claim: str, evidence_pool: set[str]) -> bool:
     enough incidental characters with *something* in the pooled evidence to
     match on a bare `in` check.
 
-    Only two directions survive, both anchored rather than raw substring:
+    Three directions survive, all anchored rather than raw substring:
 
     - `claim_n in evidence`, but only when `claim_n` is the evidence's
       trailing path segment (or dot-suffix) — tolerates the LLM citing a
       bare filename ("pipeline_config.py") against a full path
       ("soco_ingest/src/config/pipeline_config.py") without accepting an
-      arbitrary fragment match.
+      arbitrary fragment match. Both sides are path-normalized first (a
+      leading "./", backslashes, duplicate slashes) so "./pipeline_config.py"
+      and "pipeline_config.py" are treated identically — a real gap: a
+      literal string comparison here previously rejected that pair as
+      different claims.
     - Token-set containment: every token of the claim (snake_case/dotted/
       camelCase-split, 3+ chars) must appear among a single evidence item's
       tokens. Tolerates reordering and case/separator differences between
@@ -292,11 +277,20 @@ def _claim_supported(claim: str, evidence_pool: set[str]) -> bool:
       letting one short generic word carry an otherwise-unrelated claim —
       a claim with only one token that itself doesn't already exact- or
       path-match gets no benefit from this path.
+    - Squash equality: `PaymentService`, `paymentservice`, `PAYMENTSERVICE`,
+      `payment-service`, `payment_service`, and `payment.service` all
+      squash to the same `"paymentservice"` key. This is the one case
+      token-containment cannot catch: a *single* glued word (no internal
+      separator, no camelCase boundary once already lowercased) written
+      with different casing or separators than the evidence. Squash
+      equality requires every letter/digit to match, in order — it adds no
+      false-positive risk beyond what containment already accepts.
     """
-    claim_n = _normalize(claim)
+    claim_n = normalize_text(normalize_path(claim))
     if not claim_n:
         return True  # nothing to check
-    claim_tokens = _tokenize(claim_n)
+    claim_tokens = tokenize(claim_n)
+    claim_squashed = squash(claim_n)
     for evidence in evidence_pool:
         if claim_n == evidence:
             return True
@@ -306,7 +300,9 @@ def _claim_supported(claim: str, evidence_pool: set[str]) -> bool:
             or evidence.endswith("." + claim_n)
         ):
             return True
-        if len(claim_tokens) >= 2 and claim_tokens.issubset(_tokenize(evidence)):
+        if len(claim_tokens) >= 2 and claim_tokens.issubset(tokenize(evidence)):
+            return True
+        if claim_squashed and claim_squashed == squash(evidence):
             return True
     return False
 

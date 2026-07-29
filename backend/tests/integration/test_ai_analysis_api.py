@@ -195,7 +195,7 @@ async def test_post_ai_analysis_then_get(
             ),
         ),
         patch(
-            "app.api.v1.routers.ai_analysis.create_llm_provider",
+            "app.api.v1.routers.ai_analysis.StageAwareLLMProvider",
             return_value=mock_provider,
         ),
     ):
@@ -309,7 +309,7 @@ async def test_post_investigate_returns_analysis_and_reasoning_log(
             AsyncMock(return_value={"OrderEventProducer.java": ["alice"]}),
         ),
         patch(
-            "app.api.v1.routers.ai_analysis.create_llm_provider",
+            "app.api.v1.routers.ai_analysis.StageAwareLLMProvider",
             return_value=mock_provider,
         ),
     ):

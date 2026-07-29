@@ -22,6 +22,11 @@ class GeneratedCodeResult(BaseModel):
 
     Stored as the AgentStep result — consumed by later stages
     (create_branch, commit_changes) when those agents are implemented.
+
+    `confidence` is always the deterministic score computed by
+    `app.agents.code_generation.confidence.calculate_confidence` from this
+    run's own verification evidence — never the LLM's self-reported value.
+    See `CodeGenerationAgent.run` for where it is overwritten.
     """
 
     goal: str
@@ -29,6 +34,6 @@ class GeneratedCodeResult(BaseModel):
     repository: str  # e.g. "owner/repo-name"
     commit_message: str
     files: list[GeneratedFile] = Field(default_factory=list)
-    confidence: float = Field(ge=0.0, le=1.0, default=0.7)
+    confidence: float = Field(ge=0.0, le=1.0, default=0.0)
 
     prompt_version: str = "1.0"

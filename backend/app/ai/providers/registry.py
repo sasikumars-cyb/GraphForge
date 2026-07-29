@@ -316,7 +316,35 @@ _SPECS: tuple[ProviderSpec, ...] = (
         capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION},
         models=(ModelSpec("gpt-4o", "GPT-4o (Azure deployment)", 128_000),),
         implemented=False,
-        notes="Requires per-deployment endpoint and api-key header auth.",
+        notes=(
+            "Requires per-deployment endpoint and api-key header auth — "
+            "store the deployment name and api-version in provider_options "
+            "(see ProviderBuildConfig), not base_url/model."
+        ),
+    ),
+    ProviderSpec(
+        key="vertex_ai",
+        label="Google Vertex AI",
+        build=_unimplemented("Vertex AI"),
+        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION, Capability.REASONING},
+        models=(
+            ModelSpec("gemini-3.6-pro", "Gemini 3.6 Pro (Vertex)", 2_000_000),
+            ModelSpec("gemini-2.0-flash", "Gemini 2.0 Flash (Vertex)", 1_000_000),
+        ),
+        implemented=False,
+        requires_api_key=False,
+        notes=(
+            "Declared but not yet built (Part 11 extensibility check): needs a "
+            "GCP service-account adapter (google-auth + the Vertex AI SDK or "
+            "REST endpoint), not an API key. project/location belong in "
+            "provider_options (e.g. {'project': '...', 'location': 'us-central1'}), "
+            "the same structured-options seam Bedrock's region already uses — "
+            "see ProviderBuildConfig.provider_options. Implementation steps: (1) "
+            "a VertexAIProvider(ILLMProvider) adapter in app/ai/providers/, (2) "
+            "replace build=_unimplemented(...) with it here, (3) set "
+            "implemented=True. No resolver/factory/UI change needed — both "
+            "already read every field from this ProviderSpec generically."
+        ),
     ),
 )
 

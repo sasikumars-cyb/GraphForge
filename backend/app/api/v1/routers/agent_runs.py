@@ -6,6 +6,7 @@ GET /api/v1/agent-runs/{run_id}, GET /api/v1/agent-runs (paginated).
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 
@@ -16,7 +17,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.agents.llm import default_stage_for_agent
 from app.agents.title_generation import generate_title
+from app.ai.config.resolver import resolve
 from app.api.v1.dependencies import get_current_user, require_admin
 from app.context.resolvers.freetext import resolve as resolve_freetext
 from app.core.config import get_settings
@@ -28,6 +31,8 @@ from app.models.user import User
 from app.models.workflow import Workflow
 from app.orchestrator.registry import global_registry
 from app.orchestrator.selector import AgentSelector
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent-runs", tags=["agent-runs"])
 
@@ -344,7 +349,18 @@ async def create_run(
         ) from exc
 
     run.title = await generate_title(subject.display_name)
-    run.provider = get_settings().ai_provider
+    # Record the provider that will actually serve this run, resolved through
+    # the AI configuration layer under the stage this agent runs as — not the
+    # raw `AI_PROVIDER` env var, which ignored every stage override, AI
+    # Profile, and stored default and so displayed the wrong vendor in Run
+    # History whenever any of those were configured. Falls back to the env
+    # value only if resolution fails, so a misconfiguration still records
+    # something rather than nothing.
+    try:
+        run.provider = resolve(model=body.model, stage=default_stage_for_agent(agent_id)).key
+    except Exception:  # noqa: BLE001 — display metadata must never fail a run
+        logger.warning("run_provider_resolution_failed run_id=%s", str(run.id), exc_info=True)
+        run.provider = get_settings().ai_provider
     run.user_id = user.id
     await db.commit()
 

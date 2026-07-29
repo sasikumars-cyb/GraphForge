@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.llm import STAGE_REVIEW, StageAwareLLMProvider
 from app.ai.agent.investigation_agent import InvestigationAgent
-from app.ai.providers.factory import create_llm_provider
 from app.ai.schemas.analysis_result import (
     AIAnalysisResult,
     BreakingChange,
@@ -27,8 +27,7 @@ from app.core.exceptions import AppError, NotFoundError, UnauthorizedError
 from app.database.session import get_db_session
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
-from app.integrations.factory import create_version_control_provider
-from app.integrations.github import GitHubVersionControlProvider
+from app.integrations.factory import create_git_write_provider, create_version_control_provider
 from app.models.pull_request import PullRequest
 from app.models.pull_request_ai_analysis import PullRequestAIAnalysis
 from app.models.pull_request_analysis import PullRequestAnalysis
@@ -70,7 +69,7 @@ def _build_ai_service(db: AsyncSession, model: str | None = None) -> AIAnalysisS
         impact_graph_reader=Neo4jImpactGraphReader(driver),
         version_control_provider=create_version_control_provider(get_settings()),
     )
-    llm_provider = create_llm_provider(model=model)
+    llm_provider = StageAwareLLMProvider(stage=STAGE_REVIEW, model=model)
     return AIAnalysisService(
         db=db,
         llm_provider=llm_provider,
@@ -85,7 +84,7 @@ def _build_investigation_agent(db: AsyncSession, model: str | None = None) -> In
         graph_repository=Neo4jGraphRepository(driver),
         impact_graph_reader=Neo4jImpactGraphReader(driver),
         version_control_provider=create_version_control_provider(get_settings()),
-        llm_provider=create_llm_provider(model=model),
+        llm_provider=StageAwareLLMProvider(stage=STAGE_REVIEW, model=model),
     )
 
 
@@ -286,7 +285,7 @@ async def publish_review(
         ),
     )
 
-    provider = GitHubVersionControlProvider()
+    provider = create_git_write_provider()
     posted = await provider.post_pull_request_comment(
         owner=repository.owner,
         repo=repository.name,

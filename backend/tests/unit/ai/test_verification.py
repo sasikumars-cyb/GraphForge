@@ -198,3 +198,113 @@ class TestVerifyClaims:
         pool = build_evidence_pool(["some_unrelated_manifest_utility"])
         result = verify_claims(["manifest"], pool)
         assert result.unverified == ["manifest"]
+
+
+class TestVerifyClaimsNormalization:
+    """Part 8 deterministic test coverage: case, separator, path,
+    namespace, extension, duplicate, and ambiguous-name variations for
+    claim verification — the false-negative reduction this task adds."""
+
+    # --- Case differences ---
+
+    def test_camel_case_matches_all_lowercase_glued(self):
+        pool = build_evidence_pool(["paymentservice"])
+        assert verify_claims(["PaymentService"], pool).all_verified
+
+    def test_all_caps_matches_lowercase(self):
+        pool = build_evidence_pool(["payment-service"])
+        assert verify_claims(["PAYMENTSERVICE"], pool).all_verified
+
+    # --- Underscore vs hyphen vs slash vs dot ---
+
+    def test_hyphen_underscore_slash_dot_all_verify_against_each_other(self):
+        pool = build_evidence_pool(["payment-service"])
+        for claim in (
+            "payment_service",
+            "payment/service",
+            "payment.service",
+            "paymentservice",
+            "PaymentService",
+        ):
+            assert verify_claims([claim], pool).all_verified, claim
+
+    # --- Path variations ---
+
+    def test_leading_dot_slash_does_not_block_verification(self):
+        pool = build_evidence_pool(["src/payment_service.py"])
+        assert verify_claims(["./src/payment_service.py"], pool).all_verified
+
+    def test_bare_filename_verifies_against_leading_dot_slash_evidence(self):
+        pool = build_evidence_pool(["./src/payment_service.py"])
+        assert verify_claims(["payment_service.py"], pool).all_verified
+
+    def test_backslash_path_verifies_against_forward_slash_evidence(self):
+        pool = build_evidence_pool(["src/payment_service.py"])
+        assert verify_claims(["src\\payment_service.py"], pool).all_verified
+
+    # --- Namespace variations ---
+
+    def test_bare_class_name_verifies_against_full_dotted_namespace(self):
+        pool = build_evidence_pool(["com.company.payment.PaymentService"])
+        assert verify_claims(["PaymentService"], pool).all_verified
+
+    def test_partial_namespace_verifies_against_full_namespace(self):
+        pool = build_evidence_pool(["com.company.payment.PaymentService"])
+        assert verify_claims(["payment.PaymentService"], pool).all_verified
+
+    def test_more_specific_claim_than_evidence_does_not_verify(self):
+        """Containment is intentionally asymmetric: the claim's tokens must
+        be a subset of a single evidence item's tokens, never the reverse.
+        A claim naming a MORE specific namespace than what evidence
+        actually recorded (e.g. guessing a package prefix the indexer
+        never saw) must not verify just because it shares the tail
+        segments — otherwise any claim could pad itself with plausible-
+        looking extra qualifiers and still "verify" against a shorter
+        evidence string."""
+        pool = build_evidence_pool(["payment.PaymentService"])
+        result = verify_claims(["com.company.payment.PaymentService"], pool)
+        assert result.unverified == ["com.company.payment.PaymentService"]
+
+    # --- Extension variations (deliberately narrow — see
+    # app.agents.normalization's module docstring) ---
+
+    def test_extension_present_in_evidence_does_not_block_multi_token_match(self):
+        pool = build_evidence_pool(["src/PaymentService.java"])
+        assert verify_claims(["PaymentService"], pool).all_verified
+
+    def test_cross_language_bare_extension_is_not_equated(self):
+        """Intentionally unsupported: a bare 'payment.py' claim must NOT
+        verify against 'payment.java' evidence — conflating two different
+        real files in different languages is a correctness risk, not a
+        normalization win (see app.agents.normalization's module
+        docstring)."""
+        pool = build_evidence_pool(["payment.java"])
+        assert verify_claims(["payment.py"], pool).unverified == ["payment.py"]
+
+    # --- Duplicate / ambiguous names ---
+
+    def test_claim_matching_multiple_pool_entries_still_verifies(self):
+        """Verification proves 'this claim corresponds to *something* real
+        this run saw' — it does not (and is not meant to) disambiguate
+        which of several similarly-named evidence items is the true
+        referent. Duplicates across repositories/components must not
+        cause a spurious rejection."""
+        pool = build_evidence_pool(
+            ["repo-a/src/PaymentService.java", "repo-b/src/PaymentService.java"]
+        )
+        assert verify_claims(["PaymentService"], pool).all_verified
+
+    def test_ambiguous_single_generic_word_is_not_verified_by_containment(self):
+        # Same protection as test_single_generic_token_claim_does_not_ride_
+        # on_token_containment, restated as an explicit "ambiguous name"
+        # case: a single common word must not verify against an unrelated
+        # multi-word evidence item just by sharing that word.
+        pool = build_evidence_pool(["order_service_utility"])
+        assert verify_claims(["service"], pool).unverified == ["service"]
+
+    # --- Repeatability ---
+
+    def test_verification_is_repeatable_across_calls(self):
+        pool = build_evidence_pool(["PaymentService"])
+        results = [verify_claims(["payment-service"], pool).all_verified for _ in range(10)]
+        assert all(results)

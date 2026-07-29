@@ -30,8 +30,8 @@ from app.agents._contract import (
     Evidence,
     Subject,
 )
+from app.agents.llm import STAGE_REVIEW, StageAwareLLMProvider, stage_for
 from app.ai.agent.investigation_agent import InvestigationAgent, InvestigationResult
-from app.ai.providers.factory import create_llm_provider
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
 from app.core.config import get_settings
 from app.core.exceptions import NotFoundError
@@ -144,14 +144,24 @@ class ReviewAgentAdapter:
     as _build_investigation_agent() in the existing ai_analysis router.
     """
 
-    def _build_agent(self, db: AsyncSession, model: str | None) -> InvestigationAgent:
+    def _build_agent(
+        self,
+        db: AsyncSession,
+        model: str | None,
+        stage: str,
+        graph_repository: object | None = None,
+    ) -> InvestigationAgent:
         driver = get_driver()
+        # Prefer the hop-budgeted repository RunCoordinator's Context
+        # Preparation step builds from REVIEW_MANIFEST.max_graph_hops;
+        # construct a plain, unbudgeted one only when running outside
+        # that dispatcher (e.g. a unit test calling `.run()` directly).
         return InvestigationAgent(
             db=db,
-            graph_repository=Neo4jGraphRepository(driver),
+            graph_repository=graph_repository or Neo4jGraphRepository(driver),
             impact_graph_reader=Neo4jImpactGraphReader(driver),
             version_control_provider=create_version_control_provider(get_settings()),
-            llm_provider=create_llm_provider(model=model),
+            llm_provider=StageAwareLLMProvider(stage=stage, model=model),
         )
 
     async def run(self, context: AgentContext) -> AgentOutput:
@@ -165,7 +175,12 @@ class ReviewAgentAdapter:
             context.model,
         )
 
-        agent = self._build_agent(db, context.model)
+        agent = self._build_agent(
+            db,
+            context.model,
+            stage_for(context.extras, STAGE_REVIEW),
+            graph_repository=context.extras.get("graph_repository"),
+        )
         result = await agent.investigate(pr_uuid)
 
         evidence = _map_evidence(result)

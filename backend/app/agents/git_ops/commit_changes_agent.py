@@ -22,7 +22,8 @@ from app.agents._contract import (
 from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.git_ops.schemas import CommitInfo
 from app.core.exceptions import AppError
-from app.integrations.github import GitHubApiError, GitHubVersionControlProvider
+from app.integrations.factory import create_git_write_provider
+from app.integrations.github import GitHubApiError
 from app.services.github_service import get_decrypted_access_token
 
 logger = logging.getLogger(__name__)
@@ -85,7 +86,7 @@ class CommitChangesAgent:
                 "No GitHub connection found. Connect GitHub before running execution workflows."
             )
 
-        vcs = GitHubVersionControlProvider()
+        vcs = create_git_write_provider()
         evidence: list[Evidence] = []
 
         # --- Idempotency: check if branch HEAD already has our commit ---

@@ -18,10 +18,12 @@ from app.agents._contract import (
     Confidence,
     Evidence,
 )
+from app.agents.code_generation.verification import verify_repository
 from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.git_ops.schemas import BranchInfo
 from app.core.exceptions import AppError
-from app.integrations.github import GitHubApiError, GitHubVersionControlProvider
+from app.integrations.factory import create_git_write_provider
+from app.integrations.github import GitHubApiError
 from app.services.github_service import get_decrypted_access_token
 
 logger = logging.getLogger(__name__)
@@ -54,21 +56,42 @@ class CreateBranchAgent:
                 f"Invalid repository in generate_code result: '{repository}'"
             )
 
+        user_id = context.extras.get("user_id")
+        if user_id is None:
+            raise CreateBranchExecutionError("create_branch requires user_id in context extras.")
+
+        # --- Re-verify the repository before this workflow's first git
+        # write. generate_code already gated on this (see
+        # app.agents.code_generation.verification), but create_branch is
+        # the first agent to actually touch GitHub, so it re-checks rather
+        # than trusting that an upstream gate ran and passed — a stage
+        # result read straight out of Postgres is exactly the kind of
+        # value that must never be assumed still valid without re-proof. ---
+        repo_verification = await verify_repository(
+            repository,
+            db=db,
+            user_id=user_id,
+            workflow=workflow,
+            source_workflow=context.extras.get("source_workflow"),
+        )
+        if not repo_verification.passed:
+            raise CreateBranchExecutionError(
+                f"Repository verification failed for '{repository}': "
+                + "; ".join(repo_verification.errors)
+            )
+
         owner, repo = repository.split("/", 1)
         workflow_id_short = str(workflow.id).split("-")[0]
         branch_name = f"graphforge/exec-{workflow_id_short}"
 
         # --- Get access token ---
-        user_id = context.extras.get("user_id")
-        if user_id is None:
-            raise CreateBranchExecutionError("create_branch requires user_id in context extras.")
         access_token = await get_decrypted_access_token(db, user_id)
         if access_token is None:
             raise CreateBranchExecutionError(
                 "No GitHub connection found. Connect GitHub before running execution workflows."
             )
 
-        vcs = GitHubVersionControlProvider()
+        vcs = create_git_write_provider()
         evidence: list[Evidence] = []
 
         # --- Idempotency: check if branch already exists ---

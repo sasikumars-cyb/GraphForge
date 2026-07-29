@@ -51,6 +51,18 @@ class AIProviderConfig(Base):
     temperature: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
+    # Structured, provider-specific settings that don't fit the generic
+    # fields above — Bedrock's region, a future Azure OpenAI deployment/
+    # api_version, a custom model family, custom headers, etc. (mirrors
+    # ProviderBuildConfig.provider_options in app.ai.providers.registry).
+    # Introduced to stop overloading `base_url` with per-provider semantics
+    # (Bedrock previously had nowhere else to put its region — see
+    # app.ai.config.resolver._resolve_provider_options for the backward-
+    # compatible read path over rows written before this column existed).
+    provider_options: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict[str, Any], nullable=False
+    )
+
     enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     # ── Health, written by validation and by real request outcomes ──

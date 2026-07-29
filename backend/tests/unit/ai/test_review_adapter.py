@@ -255,7 +255,7 @@ async def test_review_agent_adapter_run_builds_correct_agent_output() -> None:
         patch(
             "app.agents.review_adapter.create_version_control_provider", return_value=MagicMock()
         ),
-        patch("app.agents.review_adapter.create_llm_provider", return_value=MagicMock()),
+        patch("app.agents.review_adapter.StageAwareLLMProvider", return_value=MagicMock()),
         patch(
             "app.agents.review_adapter.InvestigationAgent", return_value=mock_investigation_agent
         ),

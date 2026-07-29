@@ -21,7 +21,7 @@ def _mock_provider(text: str) -> MagicMock:
 @pytest.mark.asyncio
 async def test_generate_title_returns_provider_text_stripped_of_quotes() -> None:
     with patch(
-        "app.agents.title_generation.create_llm_provider",
+        "app.agents.title_generation.StageAwareLLMProvider",
         return_value=_mock_provider('"Refactor Authentication Module"'),
     ):
         title = await generate_title("Please refactor the auth module to use JWT.")
@@ -32,16 +32,16 @@ async def test_generate_title_returns_provider_text_stripped_of_quotes() -> None
 @pytest.mark.asyncio
 async def test_generate_title_passes_model_through_to_factory() -> None:
     mock_factory = MagicMock(return_value=_mock_provider("A Title"))
-    with patch("app.agents.title_generation.create_llm_provider", mock_factory):
+    with patch("app.agents.title_generation.StageAwareLLMProvider", mock_factory):
         await generate_title("Do the thing.", model="gpt-5")
 
-    mock_factory.assert_called_once_with(model="gpt-5")
+    mock_factory.assert_called_once_with(stage=None, model="gpt-5")
 
 
 @pytest.mark.asyncio
 async def test_generate_title_falls_back_on_provider_error() -> None:
     with patch(
-        "app.agents.title_generation.create_llm_provider",
+        "app.agents.title_generation.StageAwareLLMProvider",
         side_effect=AIProviderRateLimitError("Rate limited."),
     ):
         title = await generate_title("Add caching to the search service.")
@@ -52,7 +52,7 @@ async def test_generate_title_falls_back_on_provider_error() -> None:
 @pytest.mark.asyncio
 async def test_generate_title_falls_back_on_not_configured_error() -> None:
     with patch(
-        "app.agents.title_generation.create_llm_provider",
+        "app.agents.title_generation.StageAwareLLMProvider",
         side_effect=AppError("OPENAI_API_KEY is not configured."),
     ):
         title = await generate_title("Short objective.")
@@ -63,7 +63,7 @@ async def test_generate_title_falls_back_on_not_configured_error() -> None:
 @pytest.mark.asyncio
 async def test_generate_title_falls_back_on_empty_provider_response() -> None:
     with patch(
-        "app.agents.title_generation.create_llm_provider",
+        "app.agents.title_generation.StageAwareLLMProvider",
         return_value=_mock_provider("   "),
     ):
         title = await generate_title("Investigate the CI pipeline failure.")
@@ -79,7 +79,7 @@ async def test_generate_title_fallback_truncates_long_objective_at_word_boundary
         "purchase amount for each month, ignoring cancelled and refunded orders."
     )
     with patch(
-        "app.agents.title_generation.create_llm_provider",
+        "app.agents.title_generation.StageAwareLLMProvider",
         side_effect=AppError("Not configured."),
     ):
         title = await generate_title(objective)
@@ -95,7 +95,7 @@ async def test_generate_title_fallback_truncates_long_objective_at_word_boundary
 @pytest.mark.asyncio
 async def test_generate_title_fallback_collapses_whitespace() -> None:
     with patch(
-        "app.agents.title_generation.create_llm_provider",
+        "app.agents.title_generation.StageAwareLLMProvider",
         side_effect=AppError("Not configured."),
     ):
         title = await generate_title("Line one\n\n  Line two\twith tabs")
@@ -108,7 +108,7 @@ async def test_generate_title_fallback_collapses_whitespace() -> None:
 @pytest.mark.asyncio
 async def test_generate_title_fallback_never_empty_for_empty_objective() -> None:
     with patch(
-        "app.agents.title_generation.create_llm_provider",
+        "app.agents.title_generation.StageAwareLLMProvider",
         side_effect=AppError("Not configured."),
     ):
         title = await generate_title("   ")
@@ -132,7 +132,7 @@ async def test_generate_title_falls_back_when_provider_returns_a_refusal_sentenc
         "title for you."
     )
     with patch(
-        "app.agents.title_generation.create_llm_provider",
+        "app.agents.title_generation.StageAwareLLMProvider",
         return_value=_mock_provider(refusal),
     ):
         title = await generate_title(objective)
@@ -144,7 +144,7 @@ async def test_generate_title_falls_back_when_provider_returns_a_refusal_sentenc
 @pytest.mark.asyncio
 async def test_generate_title_falls_back_when_provider_returns_multiple_lines() -> None:
     with patch(
-        "app.agents.title_generation.create_llm_provider",
+        "app.agents.title_generation.StageAwareLLMProvider",
         return_value=_mock_provider("A Title\nWith extra commentary on a second line."),
     ):
         title = await generate_title("Add caching to the search service.")

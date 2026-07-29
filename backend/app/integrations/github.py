@@ -18,6 +18,7 @@ import httpx
 from app.core.exceptions import AppError
 from app.integrations.interfaces import (
     ChangedFile,
+    IGitWriteProvider,
     IOAuthProvider,
     IVersionControlProvider,
     OAuthUserProfile,
@@ -155,7 +156,7 @@ class GitHubOAuthProvider(IOAuthProvider):
         ]
 
 
-class GitHubVersionControlProvider(IVersionControlProvider):
+class GitHubVersionControlProvider(IVersionControlProvider, IGitWriteProvider):
     """A real, working `IVersionControlProvider` — used by Phase 7's
     deterministic impact analysis to read a pull request's changed file
     paths. Stateless: unlike `GitHubOAuthProvider`, it needs no OAuth App
@@ -298,8 +299,11 @@ class GitHubVersionControlProvider(IVersionControlProvider):
         return PostedComment(id=data["id"], html_url=data["html_url"])
 
     # ------------------------------------------------------------------
-    # Write methods — NOT part of IVersionControlProvider. Used by the
-    # create_branch and commit_changes execution agents (Phase 5 PR #4).
+    # Write methods — part of IGitWriteProvider, not IVersionControlProvider
+    # (see that interface's docstring for why they're split). Used by the
+    # create_branch, commit_changes, create_pull_request, and run_tests
+    # execution agents via app.integrations.factory.create_git_write_provider,
+    # never constructed by class name at those call sites.
     # ------------------------------------------------------------------
 
     async def get_branch_sha(

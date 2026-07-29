@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from app.tools.interfaces import ITool, ToolCategory
@@ -143,9 +142,10 @@ def register_all_tools() -> None:
             capabilities=["design_documents", "adrs", "runbooks", "documentation"],
             factory=lambda cfg: ConfluenceTool(cfg),
             requires_auth=True,
-            # REST fields are stored/health-checked but execute() has no REST
-            # path yet — search needs a query DSL (CQL) this tool doesn't
-            # build. MCP is the only working transport today.
+            # Both transports are fully functional: REST searches via CQL
+            # (Confluence Query Language) against /wiki/rest/api/search;
+            # MCP is attempted first when configured, falling back to REST
+            # on a recoverable failure (see ConfluenceTool.execute).
             auth_fields=[
                 "confluence_base_url",
                 "confluence_email",
@@ -156,8 +156,10 @@ def register_all_tools() -> None:
             default_enabled=False,
             icon="📚",
             notes=(
-                "MCP: a Confluence MCP server URL (+ optional API key). REST "
-                "credentials are stored but search is not yet implemented."
+                "REST: Confluence base URL + email + API token (CQL search). Or "
+                "MCP: a Confluence MCP server URL (+ optional API key) — set "
+                "confluence_mcp_server_url to try it first, with automatic "
+                "fallback to REST."
             ),
         )
     )
@@ -180,75 +182,39 @@ def register_all_tools() -> None:
 # and calls registry.configure(). Called after a connection is created/
 # updated (knowledge.py) and once at startup to pick up connections made in
 # an earlier process (see app.main's lifespan).
-
-# (source_type, transport) -> (tool_id, field map). Two entries per source
-# that supports MCP (see knowledge/registry.py's TransportSpec declarations)
-# — REST and MCP land on the *same* tool_id, since a tool's config keys are
-# how it decides which transport to actually use internally (e.g.
-# JiraTool.__init__ picks MCP over REST purely based on which keys are
-# present). Adding a new MCP-backed source is: one more entry here, plus
-# whatever the tool implementation itself needs.
-_KNOWLEDGE_CONNECTION_TOOL_MAP: dict[tuple[str, str], tuple[str, dict[str, str]]] = {
-    ("jira", "rest"): (
-        "jira",
-        {
-            "base_url": "jira_base_url",
-            "email": "jira_email",
-            "api_token": "jira_api_token",
-        },
-    ),
-    ("jira", "mcp"): (
-        "jira",
-        {
-            "server_url": "jira_mcp_server_url",
-            "api_key": "jira_mcp_api_key",
-        },
-    ),
-    ("confluence", "rest"): (
-        "confluence",
-        {
-            "base_url": "confluence_base_url",
-            "email": "confluence_email",
-            "api_token": "confluence_api_token",
-        },
-    ),
-    ("confluence", "mcp"): (
-        "confluence",
-        {
-            "server_url": "confluence_mcp_server_url",
-            "api_key": "confluence_mcp_api_key",
-        },
-    ),
-}
-
-# Auto-wires a REST connection's own credential into the same tool's MCP
-# config keys, so the tool can try the vendor's known MCP server first and
-# fall back to the REST path it was already using - no second connection,
-# no extra field in the Integrations UI. Only applies when the source has a
-# `known_mcp_endpoint` configured (knowledge/registry.py's TransportSpec,
-# sourced from app.core.config's jira/confluence_mcp_default_server_url —
-# both point at Atlassian's official hosted MCP server, confirmed to accept
-# a plain bearer-token API key, not OAuth-only as originally assumed).
-# source_type -> (rest credential field to reuse, mcp_server_url key, mcp_api_key key)
-_MCP_AUTO_WIRE: dict[str, tuple[str, str, str]] = {
-    "jira": ("api_token", "jira_mcp_server_url", "jira_mcp_api_key"),
-    "confluence": ("api_token", "confluence_mcp_server_url", "confluence_mcp_api_key"),
-}
+#
+# There is no source-specific map here anymore: every piece of translation
+# metadata (which tool_id a transport activates, its credential field map,
+# and whether/how to auto-wire a REST credential onto a known MCP endpoint)
+# lives on that source's own `TransportSpec` in `app.knowledge.registry` —
+# reached via `get_source(source_type).transports`. Adding a new MCP-backed
+# source is exactly Part 3's two steps: one registry entry (with its
+# TransportSpecs' `tool_id`/`credential_field_map`/`auto_wire_credential`
+# filled in) plus one `ITool` implementation — nothing in this module
+# changes.
 
 
 def _build_tool_config(
     source_type: str, transport: str, config: dict[str, Any], credentials: dict[str, Any]
 ) -> tuple[str, dict[str, Any]] | None:
     """Translate one Knowledge Connection's generic fields into a tool's own
-    config dict. Returns None when there's no matching tool, or the
-    connection's required fields aren't all present yet. Shared by the
-    registry-sync path and the ad-hoc per-connection path below — the two
-    differ only in what they do with the resulting (tool_id, config).
+    config dict, using the matching `TransportSpec`'s metadata as the sole
+    source of truth. Returns None when the source/transport has no matching
+    tool (`tool_id` unset), or the connection's required fields aren't all
+    present yet. Shared by the registry-sync path and the ad-hoc
+    per-connection path below — the two differ only in what they do with
+    the resulting (tool_id, config).
     """
-    mapping = _KNOWLEDGE_CONNECTION_TOOL_MAP.get((source_type, transport))
-    if mapping is None:
+    from app.knowledge.registry import Transport, get_source
+
+    source_spec = get_source(source_type)
+    if source_spec is None:
         return None
-    tool_id, field_map = mapping
+    transport_spec = next((t for t in source_spec.transports if t.transport == transport), None)
+    if transport_spec is None or transport_spec.tool_id is None or not transport_spec.credential_field_map:
+        return None
+    tool_id = transport_spec.tool_id
+    field_map = transport_spec.credential_field_map
 
     merged = {**config, **credentials}
     tool_config = {
@@ -265,26 +231,25 @@ def _build_tool_config(
         )
         return None
 
-    if transport == "rest":
-        auto_wire = _MCP_AUTO_WIRE.get(source_type)
-        if auto_wire is not None:
-            cred_field, server_url_key, api_key_key = auto_wire
-            from app.knowledge.registry import get_source
-
-            source_spec = get_source(source_type)
-            known_endpoint = next(
-                (
-                    t.known_mcp_endpoint
-                    for t in (source_spec.transports if source_spec else ())
-                    if t.transport == "mcp" and t.known_mcp_endpoint
-                ),
-                None,
-            )
-            token = merged.get(cred_field)
-            if known_endpoint and token:
-                tool_config[server_url_key] = known_endpoint
+    # Auto-wire: reuse this REST connection's own credential as the MCP
+    # bearer token against the sibling MCP TransportSpec's known endpoint —
+    # no second connection, no extra field in the Integrations UI. Declared
+    # per-source via `auto_wire_credential`/`known_mcp_endpoint` rather than
+    # a second hardcoded map (see knowledge/registry.py's TransportSpec).
+    if transport == Transport.REST and transport_spec.auto_wire_credential:
+        mcp_spec = next((t for t in source_spec.transports if t.transport == Transport.MCP), None)
+        if mcp_spec is not None and mcp_spec.known_mcp_endpoint:
+            token = merged.get(transport_spec.auto_wire_credential)
+            server_url_key = mcp_spec.credential_field_map.get("server_url")
+            api_key_key = mcp_spec.credential_field_map.get("api_key")
+            if token and server_url_key and api_key_key:
+                tool_config[server_url_key] = mcp_spec.known_mcp_endpoint
                 tool_config[api_key_key] = token
-                logger.info("tool_sync_mcp_auto_wired tool=%s endpoint=%s", tool_id, known_endpoint)
+                logger.info(
+                    "tool_sync_mcp_auto_wired tool=%s endpoint=%s",
+                    tool_id,
+                    mcp_spec.known_mcp_endpoint,
+                )
 
     return tool_id, tool_config
 
@@ -309,21 +274,6 @@ def sync_knowledge_connection_to_tool(
     )
 
 
-_TOOL_FACTORIES: dict[str, Callable[[dict[str, Any]], ITool]] = {}
-
-
-def _tool_factories() -> dict[str, Callable[[dict[str, Any]], ITool]]:
-    """Lazily built tool_id -> constructor map, for the ad-hoc path below.
-    Local imports on first use, same reasoning as register_all_tools()."""
-    if not _TOOL_FACTORIES:
-        from app.tools.implementations.confluence_tool import ConfluenceTool
-        from app.tools.implementations.jira_tool import JiraTool
-
-        _TOOL_FACTORIES["jira"] = JiraTool
-        _TOOL_FACTORIES["confluence"] = ConfluenceTool
-    return _TOOL_FACTORIES
-
-
 def build_tool_for_connection(
     source_type: str, transport: str, config: dict[str, Any], credentials: dict[str, Any]
 ) -> ITool | None:
@@ -334,16 +284,23 @@ def build_tool_for_connection(
     however many Knowledge Connections share that source_type. A live health
     check must prove *this* connection's credentials work, not whichever
     connection happened to sync into the registry most recently — so this
-    builds an independent instance instead of reading `get_tool_registry()`.
+    builds an independent instance instead of reading `get_tool_registry().
+    get_tool()`.
+
+    The constructor itself, though, comes from the same `ToolSpec.factory`
+    `register_all_tools()` already registered — no second tool_id ->
+    constructor map to keep in sync with the first. Only tools already
+    registered there (and therefore already reachable via the Tool Registry
+    UI) can ever be built this way.
     """
     built = _build_tool_config(source_type, transport, config, credentials)
     if built is None:
         return None
     tool_id, tool_config = built
-    factory = _tool_factories().get(tool_id)
-    if factory is None:
+    spec = next((s for s in get_tool_registry().all_specs() if s.tool_id == tool_id), None)
+    if spec is None:
         return None
-    return factory(tool_config)
+    return spec.factory(tool_config)
 
 
 async def sync_all_knowledge_connections_to_tools(db: AsyncSession) -> None:

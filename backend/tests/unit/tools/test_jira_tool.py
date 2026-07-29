@@ -12,7 +12,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.tools.implementations.jira_tool import JiraTool, extract_issue_key
+from app.integrations.interfaces import IIssueTrackerProvider
+from app.tools.implementations.jira_tool import JiraIssueTrackerAdapter, JiraTool, extract_issue_key
 from app.tools.interfaces import ToolInput
 from app.tools.mcp_support import MCPToolError
 
@@ -203,3 +204,70 @@ async def test_execute_via_rest_and_mcp_return_same_shape():
         mcp_result = await mcp_tool.execute(ToolInput(query="NPT-6"))
 
     assert set(rest_result.data.keys()) == set(mcp_result.data.keys())
+
+
+# ---------------------------------------------------------------------------
+# JiraIssueTrackerAdapter — IIssueTrackerProvider extension point (Part 5/12)
+# ---------------------------------------------------------------------------
+
+
+def test_adapter_implements_issue_tracker_provider():
+    adapter = JiraIssueTrackerAdapter(JiraTool({}))
+    assert isinstance(adapter, IIssueTrackerProvider)
+
+
+def test_adapter_extract_issue_key_delegates_to_module_function():
+    adapter = JiraIssueTrackerAdapter(JiraTool({}))
+    assert adapter.extract_issue_key("Plan for NPT-6") == "NPT-6"
+    assert adapter.extract_issue_key("no ticket here") is None
+
+
+def test_adapter_build_context_text_reads_context_text_field():
+    adapter = JiraIssueTrackerAdapter(JiraTool({}))
+    assert adapter.build_context_text({"context_text": "Jira Story NPT-6 — Summary"}) == (
+        "Jira Story NPT-6 — Summary"
+    )
+    assert adapter.build_context_text({}) == ""
+
+
+@pytest.mark.asyncio
+async def test_adapter_get_issue_delegates_to_tool_execute():
+    tool = JiraTool(
+        {
+            "jira_base_url": "https://example.atlassian.net",
+            "jira_email": "a@b.com",
+            "jira_api_token": "token",
+        }
+    )
+    adapter = JiraIssueTrackerAdapter(tool)
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "fields": {
+                    "summary": "S",
+                    "description": None,
+                    "status": {"name": "To Do"},
+                    "issuetype": {"name": "Story"},
+                    "priority": {"name": "Medium"},
+                    "labels": [],
+                }
+            }
+
+    with patch("httpx.AsyncClient.get", new=AsyncMock(return_value=FakeResponse())):
+        issue = await adapter.get_issue("NPT-6")
+
+    assert issue is not None
+    assert issue["summary"] == "S"
+
+
+@pytest.mark.asyncio
+async def test_adapter_get_issue_returns_none_on_failure():
+    adapter = JiraIssueTrackerAdapter(JiraTool({}))
+    assert await adapter.get_issue("NPT-6") is None

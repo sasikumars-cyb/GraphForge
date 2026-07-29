@@ -258,7 +258,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -292,7 +292,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -325,7 +325,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
             patch(
                 "app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock
             ) as mock_sleep,
@@ -361,7 +361,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
             patch(
                 "app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock
             ) as mock_sleep,
@@ -400,7 +400,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -433,7 +433,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -521,7 +521,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -555,7 +555,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
             patch(
                 "app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock
             ) as mock_sleep,
@@ -600,7 +600,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
             patch(
                 "app.agents.git_ops.run_tests_agent.asyncio.sleep", new_callable=AsyncMock
             ) as mock_sleep,
@@ -638,7 +638,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -670,7 +670,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -738,7 +738,7 @@ class TestTestRunnerAgent:
                 "app.agents.git_ops.run_tests_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch("app.agents.git_ops.run_tests_agent.GitHubVersionControlProvider") as MockVCS,
+            patch("app.agents.git_ops.run_tests_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value

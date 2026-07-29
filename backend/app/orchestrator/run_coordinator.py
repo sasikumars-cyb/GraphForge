@@ -136,7 +136,26 @@ class RunCoordinator:
 
             raise AgentDisabledError(f"Agent '{agent_id}' is disabled.")
 
-        _manifest, agent = entry
+        manifest, agent = entry
+
+        # Manifest enforcement, centralized here (the one dispatch point
+        # every caller already goes through) rather than duplicated per
+        # agent: an unsupported subject_type fails deterministically and
+        # the agent — and its LLM call — is never invoked.
+        if subject.subject_type not in manifest.accepted_subject_types:
+            await self._fail_run(
+                run,
+                f"Agent '{agent_id}' does not accept subject_type "
+                f"'{subject.subject_type}'. Accepted: {sorted(manifest.accepted_subject_types)}.",
+            )
+            await self._db.commit()
+            from app.core.exceptions import SubjectTypeMismatchError
+
+            raise SubjectTypeMismatchError(
+                f"Agent '{agent_id}' does not accept subject_type "
+                f"'{subject.subject_type}'. Accepted: {sorted(manifest.accepted_subject_types)}."
+            )
+
         return run, agent_id, agent
 
     async def execute_run(
@@ -197,9 +216,41 @@ class RunCoordinator:
         # time execution starts (see agent_runs.py), and agents need it to
         # resolve per-user credentials (e.g. a GitHub OAuth connection)
         # rather than an install-wide config.
-        ctx_extras: dict[str, Any] = {"db": self._db, "user_id": run.user_id}
+        # `stage` rides along so agents can resolve AI configuration under the
+        # stage key the AI Workspace stores overrides against (see
+        # app.agents.llm.stage_for). It is the run's real `workflow_stage`
+        # when there is one; a standalone run has none, and each agent falls
+        # back to its own default stage key. This is what makes the review
+        # agent resolve as `review` vs `ai_pr_review` correctly — the same
+        # agent, two separately configurable stages.
+        ctx_extras: dict[str, Any] = {
+            "db": self._db,
+            "user_id": run.user_id,
+            "stage": run.workflow_stage,
+        }
         if extras:
             ctx_extras.update(extras)
+
+        # --- Manifest-driven context preparation (Part 2: max_graph_hops).
+        # Built once per run from the dispatched agent's own manifest —
+        # never from anything the agent or caller supplies — so every
+        # graph-reading agent gets the same enforcement without
+        # agent-specific wiring. Only fills the slot when the caller
+        # hasn't already provided one: tests routinely inject a stub/mock
+        # `graph_repository` via `extras`, and that must keep working
+        # unbudgeted rather than being silently replaced.
+        if "graph_repository" not in ctx_extras:
+            manifest_entry = self._registry.get(agent_id)
+            if manifest_entry is not None:
+                manifest, _ = manifest_entry
+                from app.graph.hop_budget import build_hop_budgeted_repository
+                from app.graph.neo4j_repository import Neo4jGraphRepository
+                from app.graph.session import get_driver
+
+                ctx_extras["graph_repository"] = build_hop_budgeted_repository(
+                    Neo4jGraphRepository(get_driver()), manifest.max_graph_hops, agent_id
+                )
+
         context = AgentContext(subject=subject, goal=goal, model=model, extras=ctx_extras)
         start_ms = time.monotonic()
 

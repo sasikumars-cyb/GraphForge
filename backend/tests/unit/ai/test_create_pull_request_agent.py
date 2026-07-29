@@ -158,7 +158,7 @@ def _patched_agent(**vcs_methods):
     for name, mock in vcs_methods.items():
         setattr(vcs, name, mock)
     return patch(
-        "app.agents.git_ops.create_pull_request_agent.GitHubVersionControlProvider",
+        "app.agents.git_ops.create_pull_request_agent.create_git_write_provider",
         return_value=vcs,
     )
 

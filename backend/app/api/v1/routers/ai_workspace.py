@@ -95,6 +95,7 @@ def _build_provider_info(spec: ProviderSpec, config: AIProviderConfig | None) ->
         enabled=config.enabled if config else True,
         api_key_configured=bool(config and config.encrypted_api_key),
         model=config.model if config else None,
+        provider_options=dict(config.provider_options) if config and config.provider_options else {},
         base_url=config.base_url if config else None,
         temperature=config.temperature if config else None,
         max_tokens=config.max_tokens if config else None,
@@ -290,7 +291,7 @@ async def upsert_provider(
         row.status = "unknown"
         row.status_detail = None
 
-    for field in ("model", "base_url", "temperature", "max_tokens", "enabled"):
+    for field in ("model", "base_url", "temperature", "max_tokens", "enabled", "provider_options"):
         value = getattr(body, field)
         if value is not None:
             setattr(row, field, value)
