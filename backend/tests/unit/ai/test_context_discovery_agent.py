@@ -1,14 +1,16 @@
 """Unit tests for the Context Discovery Agent (goal=discover_context).
 
 Covers:
-- build_context_discovery_result: projection from EnrichedPlanningRequest
-- _confidence_for: the three-tier confidence formula (unavailable / has
-  data / healthy-empty), mirrored from Planning's own historical formula
-- ContextDiscoveryAgent.run(): AgentOutput envelope, evidence, and that
-  the pipeline is invoked with the right arguments
+- build_context_discovery_result: flat projection from a nested
+  WorkingContext (Planning's read shape must stay unchanged)
+- _working_context_from_result: the resume-path inverse
+- _confidence_for: derives its single score from capability-specific
+  confidence (overall()), never the other way around
+- ContextDiscoveryAgent.run(): AgentOutput envelope, evidence, and the
+  fresh-vs-resume dispatch to run_discovery_loop/resume_discovery
 
-No real Neo4j/LLM/DB — ContextResolutionPipeline.resolve() is mocked to
-return a hand-built EnrichedPlanningRequest.
+No real Neo4j/LLM/DB — `run_discovery_loop`/`resume_discovery` are mocked
+to return a hand-built `DiscoveryLoopResult`.
 """
 
 from __future__ import annotations
@@ -21,229 +23,310 @@ from app.agents._contract import AgentContext, Evidence, Subject
 from app.agents.context_discovery.agent import (
     ContextDiscoveryAgent,
     _confidence_for,
+    _working_context_from_result,
     build_context_discovery_result,
 )
-from app.agents.planning.classifier import analyse
-from app.context_pipeline.models import (
-    AdditionalContextRecommendation,
-    EnrichedPlanningRequest,
-    ProviderCapability,
-    Reference,
-    ReferenceType,
+from app.context_pipeline.reasoning_loop import DiscoveryLoopResult
+from app.context_pipeline.working_context import (
+    BlockingIssue,
+    CapabilityConfidence,
+    ClarificationQuestion,
+    Compatibility,
+    ContextMetadata,
+    GraphKnowledge,
+    Knowledge,
+    Reasoning,
+    WorkingContext,
 )
 
 
-def _make_enriched(
+def _make_working_context(
     *,
-    graph_available: bool = True,
-    graph_has_data: bool = False,
-    indexed_repositories: list | None = None,
-    graph_components: list | None = None,
-    graph_topics: list | None = None,
-    resolved_references: list[Reference] | None = None,
-    recommendation: AdditionalContextRecommendation | None = None,
-) -> EnrichedPlanningRequest:
-    request = "Add a rate limiter to the payment API"
-    return EnrichedPlanningRequest(
-        original_request=request,
-        enriched_text=request,
-        resolved_references=resolved_references or [],
-        artifacts=[],
-        profile=analyse(request),
-        indexed_repositories=indexed_repositories or [],
-        graph_components=graph_components or [],
-        graph_topics=graph_topics or [],
-        ranked_repository_names=[],
-        graph_context_text="",
-        graph_available=graph_available,
-        graph_has_data=graph_has_data,
-        additional_context_recommendation=recommendation,
-        evidence=[
-            Evidence(kind="tool_call", reference="neo4j_graph", summary="Queried the graph.")
-        ],
-        planning_metadata={"references_detected": 0},
+    confidence: CapabilityConfidence | None = None,
+    blocking_issues: list[BlockingIssue] | None = None,
+) -> WorkingContext:
+    return WorkingContext(
+        metadata=ContextMetadata(
+            goal="Add a rate limiter to the payment API",
+            iteration=1,
+        ),
+        knowledge=Knowledge(
+            entities=[],
+            repositories=[{"id": "r1", "name": "payment-service", "owner": "acme"}],
+            architecture={
+                "components": [{"id": "c1", "name": "RateLimiter"}],
+                "topics": [{"id": "t1", "name": "payment.throttled"}],
+            },
+            implementation_candidates=["payment-service"],
+            graph=GraphKnowledge(available=True, has_data=True),
+        ),
+        reasoning=Reasoning(
+            confidence=confidence
+            or CapabilityConfidence(
+                work_item=1.0,
+                repository=0.9,
+                architecture=0.85,
+                implementation_candidates=0.8,
+                documentation=0.85,
+            ),
+            blocking_issues=blocking_issues or [],
+        ),
+        compatibility=Compatibility(
+            original_request="Add a rate limiter to the payment API",
+            enriched_text="Add a rate limiter to the payment API",
+        ),
     )
 
 
-def _make_context(display_name: str = "Add a rate limiter to the payment API") -> AgentContext:
+def _blocking_issue(question_id: str = "repo_not_found") -> BlockingIssue:
+    return BlockingIssue(
+        issue_id=question_id,
+        type="repository_not_found",
+        severity="blocking",
+        message="No repository matched.",
+        reason="No repository matched.",
+        clarification_question=ClarificationQuestion(
+            question_id=question_id, question="Which repository?", why="No match found."
+        ),
+    )
+
+
+def _make_context(
+    display_name: str = "Add a rate limiter to the payment API",
+    resume: dict | None = None,
+) -> AgentContext:
     subject = Subject(
         subject_id="freetext:abc123",
         subject_type="freetext",
         display_name=display_name,
     )
-    return AgentContext(
-        subject=subject,
-        goal="discover_context",
-        extras={"db": AsyncMock(), "user_id": "user-1"},
-    )
+    extras = {"db": AsyncMock(), "user_id": "user-1"}
+    if resume is not None:
+        extras["resume"] = resume
+    return AgentContext(subject=subject, goal="discover_context", extras=extras)
 
 
 # ---------------------------------------------------------------------------
-# build_context_discovery_result
+# build_context_discovery_result / _working_context_from_result round-trip
 # ---------------------------------------------------------------------------
 
 
 def test_build_context_discovery_result_projects_core_fields() -> None:
-    enriched = _make_enriched(
-        graph_has_data=True,
-        indexed_repositories=[{"id": "r1", "name": "payment-service", "owner": "acme"}],
-        graph_components=[{"id": "c1", "name": "RateLimiter"}],
-        graph_topics=[{"id": "t1", "name": "payment.throttled"}],
-    )
+    wc = _make_working_context()
+    wc.reasoning.readiness = "READY"
+    result = build_context_discovery_result(wc)
 
-    result = build_context_discovery_result(enriched)
-
-    assert result.original_request == enriched.original_request
-    assert result.enriched_text == enriched.enriched_text
-    assert result.indexed_repositories == enriched.indexed_repositories
-    assert result.graph_components == enriched.graph_components
-    assert result.graph_topics == enriched.graph_topics
+    assert result.original_request == wc.compatibility.original_request
+    assert result.enriched_text == wc.compatibility.enriched_text
+    assert result.indexed_repositories == wc.knowledge.repositories
+    assert result.graph_components == wc.knowledge.architecture["components"]
+    assert result.graph_topics == wc.knowledge.architecture["topics"]
     assert result.graph_available is True
     assert result.graph_has_data is True
-    assert result.prompt_version == "1.0"
+    assert result.readiness == "READY"
+    assert result.confidence == wc.reasoning.confidence.overall()
+    assert result.prompt_version == "3.0"
+    assert result.capability_confidence["repository"] == 0.9
+    assert result.discovery_summary["readiness"] == "READY"
 
 
-def test_build_context_discovery_result_serializes_references() -> None:
-    ref = Reference(
-        type=ReferenceType.JIRA_ISSUE,
-        provider="jira",
-        confidence=0.95,
-        raw_value="PROT-123",
-        normalized_value="PROT-123",
-    )
-    enriched = _make_enriched(resolved_references=[ref])
+def test_build_context_discovery_result_serializes_unresolved_questions() -> None:
+    wc = _make_working_context(blocking_issues=[_blocking_issue("repo_ambiguous")])
+    wc.reasoning.readiness = "BLOCKED"
+    result = build_context_discovery_result(wc)
 
-    result = build_context_discovery_result(enriched)
-
-    assert len(result.resolved_references) == 1
-    serialized = result.resolved_references[0]
-    # The StrEnum must be flattened to a plain string for JSON storage.
-    assert serialized["type"] == "jira_issue"
-    assert isinstance(serialized["type"], str)
-    assert serialized["raw_value"] == "PROT-123"
+    assert len(result.unresolved_questions) == 1
+    q = result.unresolved_questions[0]
+    assert q["question_id"] == "repo_ambiguous"
+    assert q["blocking"] is True
+    assert result.blocking_reasons == ["No repository matched."]
+    assert len(result.blocking_issues) == 1
 
 
-def test_build_context_discovery_result_no_recommendation_is_none() -> None:
-    enriched = _make_enriched(recommendation=None)
-    result = build_context_discovery_result(enriched)
-    assert result.additional_context_recommendation is None
+def test_build_context_discovery_result_excludes_resolved_issues_from_unresolved() -> None:
+    issue = _blocking_issue("repo_not_found")
+    wc = _make_working_context(blocking_issues=[issue])
+    wc.reasoning.resolve_issue("repo_not_found", "payment-service")
+    result = build_context_discovery_result(wc)
+
+    assert result.unresolved_questions == []
+    assert result.blocking_reasons == []
+    # Still present in the full structured list for the Discovery Summary /
+    # audit trail — resolved, not deleted.
+    assert len(result.blocking_issues) == 1
+    assert result.blocking_issues[0]["resolved"] is True
 
 
-def test_build_context_discovery_result_serializes_recommendation() -> None:
-    recommendation = AdditionalContextRecommendation(
-        should_search=True,
-        capability=ProviderCapability.DOCUMENTATION,
-        reasoning="The brief references a design doc that wasn't resolved.",
-    )
-    enriched = _make_enriched(recommendation=recommendation)
+def test_working_context_from_result_round_trips_persisted_shape() -> None:
+    wc = _make_working_context(blocking_issues=[_blocking_issue("repo_ambiguous")])
+    wc.reasoning.readiness = "BLOCKED"
+    persisted = build_context_discovery_result(wc).model_dump()
 
-    result = build_context_discovery_result(enriched)
+    reconstructed = _working_context_from_result(persisted)
 
-    assert result.additional_context_recommendation == {
-        "should_search": True,
-        "capability": "documentation",
-        "reasoning": "The brief references a design doc that wasn't resolved.",
-    }
-
-
-# ---------------------------------------------------------------------------
-# _confidence_for — three-tier formula
-# ---------------------------------------------------------------------------
-
-
-def test_confidence_graph_unavailable_is_low() -> None:
-    enriched = _make_enriched(graph_available=False)
-    confidence = _confidence_for(enriched)
-    assert confidence.score == 0.25
-    assert "unavailable" in confidence.reasoning.lower()
-
-
-def test_confidence_graph_has_data_is_high() -> None:
-    enriched = _make_enriched(
-        graph_available=True,
-        graph_has_data=True,
-        indexed_repositories=[{"id": "r1", "name": "payment-service"}],
-        graph_components=[{"id": "c1", "name": "RateLimiter"}],
-        graph_topics=[],
-    )
-    confidence = _confidence_for(enriched)
-    assert confidence.score == 0.85
-    assert "1 component" in confidence.reasoning
-
-
-def test_confidence_graph_healthy_but_empty_is_moderate() -> None:
-    enriched = _make_enriched(graph_available=True, graph_has_data=False)
-    confidence = _confidence_for(enriched)
-    assert confidence.score == 0.40
-    assert "healthy" in confidence.reasoning.lower()
+    assert reconstructed.compatibility.original_request == wc.compatibility.original_request
+    assert reconstructed.knowledge.repositories == wc.knowledge.repositories
+    assert reconstructed.knowledge.architecture == wc.knowledge.architecture
+    assert reconstructed.reasoning.readiness == "BLOCKED"
+    assert len(reconstructed.reasoning.blocking_issues) == 1
+    assert reconstructed.reasoning.blocking_issues[0].issue_id == "repo_ambiguous"
+    assert reconstructed.reasoning.confidence.repository == 0.9
 
 
 # ---------------------------------------------------------------------------
-# ContextDiscoveryAgent.run()
+# _confidence_for
+# ---------------------------------------------------------------------------
+
+
+def test_confidence_for_reads_capability_overall() -> None:
+    wc = _make_working_context()
+    wc.reasoning.readiness = "READY"
+    confidence = _confidence_for(wc)
+    assert confidence.score == wc.reasoning.confidence.overall()
+    assert "READY" in confidence.reasoning
+
+
+def test_confidence_for_reports_blocked_readiness_and_open_issues() -> None:
+    wc = _make_working_context(blocking_issues=[_blocking_issue("q1")])
+    wc.reasoning.readiness = "BLOCKED"
+    confidence = _confidence_for(wc)
+    assert confidence.score == wc.reasoning.confidence.overall()
+    assert "BLOCKED" in confidence.reasoning
+    assert "1 open issue" in confidence.reasoning
+
+
+# ---------------------------------------------------------------------------
+# ContextDiscoveryAgent.run() — fresh discovery
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_context_discovery_agent_happy_path_output_contract() -> None:
+async def test_agent_run_fresh_happy_path_output_contract() -> None:
     context = _make_context()
-    enriched = _make_enriched(
-        graph_has_data=True,
-        indexed_repositories=[{"id": "r1", "name": "payment-service", "owner": "acme"}],
-        graph_components=[{"id": "c1", "name": "RateLimiter"}],
+    wc = _make_working_context()
+    wc.reasoning.readiness = "READY"
+    loop_result = DiscoveryLoopResult(
+        working_context=wc,
+        evidence=[Evidence(kind="tool_call", reference="neo4j_graph", summary="Queried graph.")],
     )
 
     with patch(
-        "app.agents.context_discovery.agent.ContextResolutionPipeline"
-    ) as mock_pipeline_cls:
-        mock_pipeline_cls.return_value.resolve = AsyncMock(return_value=enriched)
+        "app.agents.context_discovery.agent.run_discovery_loop",
+        new=AsyncMock(return_value=loop_result),
+    ) as mock_loop:
         agent = ContextDiscoveryAgent()
         output = await agent.run(context)
 
+    mock_loop.assert_awaited_once()
     assert output.agent_id == "context_discovery"
     assert output.subject_id == "freetext:abc123"
-    assert 0.0 <= output.confidence.score <= 1.0
-    assert isinstance(output.result, dict)
-    assert output.result["original_request"] == enriched.original_request
-    assert output.prompt_version == "1.0"
+    assert output.confidence.score == wc.reasoning.confidence.overall()
+    assert output.awaiting_input is False
+    assert output.pending_question is None
+    assert output.result["readiness"] == "READY"
 
 
 @pytest.mark.asyncio
-async def test_context_discovery_agent_appends_summary_evidence_to_pipeline_evidence() -> None:
-    """The pipeline's own evidence (graph/provider calls) must be
-    preserved verbatim, with exactly one additional llm_reasoning summary
-    entry appended — never replaced."""
+async def test_agent_run_pauses_and_sets_pending_question() -> None:
     context = _make_context()
-    enriched = _make_enriched()
+    wc = _make_working_context(blocking_issues=[_blocking_issue("repo_not_found")])
+    wc.reasoning.readiness = "BLOCKED"
+    loop_result = DiscoveryLoopResult(working_context=wc, evidence=[])
 
     with patch(
-        "app.agents.context_discovery.agent.ContextResolutionPipeline"
-    ) as mock_pipeline_cls:
-        mock_pipeline_cls.return_value.resolve = AsyncMock(return_value=enriched)
+        "app.agents.context_discovery.agent.run_discovery_loop",
+        new=AsyncMock(return_value=loop_result),
+    ):
         agent = ContextDiscoveryAgent()
         output = await agent.run(context)
 
-    assert len(output.evidence) == len(enriched.evidence) + 1
-    assert output.evidence[:-1] == enriched.evidence
-    summary_evidence = output.evidence[-1]
-    assert summary_evidence.kind == "llm_reasoning"
-    assert summary_evidence.reference == "context_discovery_summary"
+    assert output.awaiting_input is True
+    assert output.pending_question is not None
+    assert output.pending_question["question_id"] == "repo_not_found"
 
 
 @pytest.mark.asyncio
-async def test_context_discovery_agent_passes_subject_and_user_to_pipeline() -> None:
-    context = _make_context(display_name="Fix the null pointer crash in the export job")
-    enriched = _make_enriched()
+async def test_agent_run_does_not_pause_once_exhausted() -> None:
+    """A WorkingContext that's BLOCKED-but-exhausted (round cap reached)
+    must complete, not pause again — otherwise the loop would keep asking
+    past the cap it just enforced."""
+    context = _make_context()
+    wc = _make_working_context(blocking_issues=[_blocking_issue("repo_not_found")])
+    wc.reasoning.readiness = "BLOCKED"
+    wc.reasoning.exhausted = True
+    loop_result = DiscoveryLoopResult(working_context=wc, evidence=[])
 
     with patch(
-        "app.agents.context_discovery.agent.ContextResolutionPipeline"
-    ) as mock_pipeline_cls:
-        mock_resolve = AsyncMock(return_value=enriched)
-        mock_pipeline_cls.return_value.resolve = mock_resolve
+        "app.agents.context_discovery.agent.run_discovery_loop",
+        new=AsyncMock(return_value=loop_result),
+    ):
         agent = ContextDiscoveryAgent()
-        await agent.run(context)
+        output = await agent.run(context)
 
-    mock_resolve.assert_awaited_once()
-    call_kwargs = mock_resolve.await_args.kwargs
-    assert call_kwargs["raw_request"] == "Fix the null pointer crash in the export job"
-    assert call_kwargs["user_id"] == "user-1"
+    assert output.awaiting_input is False
+    assert output.pending_question is None
+    assert output.result["readiness"] == "BLOCKED"
+
+
+@pytest.mark.asyncio
+async def test_agent_run_appends_summary_evidence() -> None:
+    context = _make_context()
+    wc = _make_working_context()
+    wc.reasoning.readiness = "READY"
+    base_evidence = [Evidence(kind="tool_call", reference="neo4j_graph", summary="Queried graph.")]
+    loop_result = DiscoveryLoopResult(working_context=wc, evidence=list(base_evidence))
+
+    with patch(
+        "app.agents.context_discovery.agent.run_discovery_loop",
+        new=AsyncMock(return_value=loop_result),
+    ):
+        agent = ContextDiscoveryAgent()
+        output = await agent.run(context)
+
+    assert len(output.evidence) == len(base_evidence) + 1
+    assert output.evidence[:-1] == base_evidence
+    assert output.evidence[-1].kind == "llm_reasoning"
+    assert output.evidence[-1].reference == "context_discovery_summary"
+
+
+# ---------------------------------------------------------------------------
+# ContextDiscoveryAgent.run() — resume
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_agent_run_resume_dispatches_to_resume_discovery() -> None:
+    seed = _make_working_context(blocking_issues=[_blocking_issue("repo_not_found")])
+    seed.reasoning.readiness = "BLOCKED"
+    persisted = build_context_discovery_result(seed).model_dump()
+    context = _make_context(
+        resume={
+            "working_context": persisted,
+            "answer": {"question_id": "repo_not_found", "answer": "payment-service"},
+        }
+    )
+    resumed_wc = _make_working_context()
+    resumed_wc.reasoning.readiness = "READY"
+    loop_result = DiscoveryLoopResult(working_context=resumed_wc, evidence=[])
+
+    with (
+        patch(
+            "app.agents.context_discovery.agent.resume_discovery",
+            new=AsyncMock(return_value=loop_result),
+        ) as mock_resume,
+        patch(
+            "app.agents.context_discovery.agent.run_discovery_loop",
+            new=AsyncMock(),
+        ) as mock_fresh,
+    ):
+        agent = ContextDiscoveryAgent()
+        output = await agent.run(context)
+
+    mock_resume.assert_awaited_once()
+    mock_fresh.assert_not_called()
+    call_kwargs = mock_resume.await_args.kwargs
+    assert call_kwargs["question_id"] == "repo_not_found"
+    assert call_kwargs["answer"] == "payment-service"
     assert call_kwargs["db"] is context.extras["db"]
+    assert output.result["readiness"] == "READY"
+    assert output.awaiting_input is False

@@ -77,7 +77,12 @@ export function workflowTypeLabel(workflowType: string): string {
 // ---------------------------------------------------------------------------
 
 export type WorkflowPhase =
-  "running" | "awaiting_approval" | "blueprint_approval" | "failed" | "completed";
+  | "running"
+  | "awaiting_approval"
+  | "awaiting_clarification"
+  | "blueprint_approval"
+  | "failed"
+  | "completed";
 
 export interface WorkflowUiState {
   phase: WorkflowPhase;
@@ -108,6 +113,12 @@ export function deriveWorkflowState(workflow: WorkflowStateInput): WorkflowUiSta
   let phase: WorkflowPhase;
   if (workflow.status === "completed") {
     phase = "completed";
+  } else if (workflow.status === "awaiting_clarification") {
+    // Context Discovery paused on a blocking question — distinct from
+    // "awaiting_approval" below (which means a stage finished and is
+    // waiting on a human to continue): here the stage itself hasn't
+    // finished, it's mid-reasoning and needs an answer to proceed.
+    phase = "awaiting_clarification";
   } else if (
     workflow.status === "awaiting_approval" ||
     workflow.status === "approved" ||
@@ -156,17 +167,20 @@ export function workflowStatusDisplay(
   return STATUS_CONFIG[phase];
 }
 
-const STATUS_CONFIG: Record<WorkflowPhase, { label: string; tone: "success" | "info" | "danger" }> =
-  {
-    completed: { label: "Completed", tone: "success" },
-    failed: { label: "Failed", tone: "danger" },
-    running: { label: "In Progress", tone: "info" },
-    awaiting_approval: { label: "In Progress", tone: "info" },
-    // Never actually looked up directly — workflowStatusDisplay() always
-    // branches before reaching here for this phase — but every WorkflowPhase
-    // key must be present for the Record type to be exhaustive.
-    blueprint_approval: { label: "Awaiting Approval", tone: "info" },
-  };
+const STATUS_CONFIG: Record<
+  WorkflowPhase,
+  { label: string; tone: "success" | "info" | "danger" | "warning" }
+> = {
+  completed: { label: "Completed", tone: "success" },
+  failed: { label: "Failed", tone: "danger" },
+  running: { label: "In Progress", tone: "info" },
+  awaiting_approval: { label: "In Progress", tone: "info" },
+  awaiting_clarification: { label: "Needs Your Input", tone: "warning" },
+  // Never actually looked up directly — workflowStatusDisplay() always
+  // branches before reaching here for this phase — but every WorkflowPhase
+  // key must be present for the Record type to be exhaustive.
+  blueprint_approval: { label: "Awaiting Approval", tone: "info" },
+};
 
 // ---------------------------------------------------------------------------
 // Duration / progress

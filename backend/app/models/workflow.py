@@ -55,7 +55,11 @@ class Workflow(Base):
     # depends on workflow_type (see WORKFLOW_TYPE_STAGES in workflow_service.py)
     current_stage: Mapped[str] = mapped_column(String(64), nullable=False, default="planning")
 
-    # "in_progress" | "completed" | "awaiting_approval" | "approved" | "rejected"
+    # "in_progress" | "completed" | "awaiting_approval" | "approved" |
+    # "rejected" | "awaiting_clarification" (a stage paused for a
+    # clarification question — see workflow_service.
+    # pause_workflow_for_clarification and POST /{id}/clarify. Only
+    # "context_discovery" sets this today.)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="in_progress")
 
     # Selects which stage sequence this workflow runs — see

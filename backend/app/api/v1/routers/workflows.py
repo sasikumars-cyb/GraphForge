@@ -4,6 +4,7 @@ POST /workflows                    → Create a workflow and run the first stage
 GET  /workflows                    → List workflows (paginated)
 GET  /workflows/{workflow_id}      → Get workflow with all stages and runs
 POST /workflows/{workflow_id}/continue → Continue to the next stage
+POST /workflows/{workflow_id}/clarify  → Answer Context Discovery's pending question
 POST /workflows/{workflow_id}/approve  → Approve a completed Planning blueprint
 POST /workflows/{workflow_id}/reject   → Reject a completed Planning blueprint
 """
@@ -79,6 +80,23 @@ class CreateWorkflowRequest(BaseModel):
 
 class ContinueWorkflowRequest(BaseModel):
     model: str | None = None
+    # Required to advance past a stage whose persisted result reported
+    # readiness="PARTIAL" (see workflow_service.STAGE_GOALS' context_discovery
+    # entry and the readiness gate in continue_workflow below). Ignored for
+    # any other stage transition.
+    acknowledge_partial: bool = False
+
+
+class ClarifyWorkflowRequest(BaseModel):
+    question_id: str
+    answer: str = Field(..., min_length=1, max_length=2000)
+
+
+class PendingClarificationResponse(BaseModel):
+    question_id: str
+    question: str
+    why: str
+    options: list[str] = Field(default_factory=list)
 
 
 class OverrideStageResultRequest(BaseModel):
@@ -130,6 +148,9 @@ class WorkflowDetailResponse(BaseModel):
     version: int = 1
     parent_workflow_id: str | None = None
     refinement_note: str | None = None
+    # The single question Context Discovery is waiting on, when
+    # status == "awaiting_clarification". None otherwise.
+    pending_clarification: PendingClarificationResponse | None = None
 
 
 class WorkflowListItem(BaseModel):
@@ -203,6 +224,40 @@ def _build_stages(workflow: Workflow) -> list[WorkflowStageResponse]:
             )
         )
     return stages
+
+
+def _awaiting_input_step(workflow: Workflow, stage: str) -> tuple[Run, Any] | None:
+    """The most recent (run, step) pair for `stage` still paused at
+    "awaiting_input", or None. There is at most one live paused run per
+    stage at a time — `continue_workflow`'s "stage already has a run" check
+    prevents a second one from ever being started alongside it."""
+    for run in sorted(workflow.runs or [], key=lambda r: r.created_at, reverse=True):
+        if run.workflow_stage == stage and run.status == "awaiting_input":
+            step = run.steps[0] if run.steps else None
+            if step is not None:
+                return run, step
+    return None
+
+
+def _pending_clarification(workflow: Workflow) -> PendingClarificationResponse | None:
+    if workflow.status != "awaiting_clarification":
+        return None
+    found = _awaiting_input_step(workflow, "context_discovery")
+    if found is None:
+        return None
+    _run, step = found
+    questions = (step.result or {}).get("unresolved_questions") or []
+    for q in questions:
+        if q.get("blocking") and q.get("question_id") not in (step.result or {}).get(
+            "user_answers", {}
+        ):
+            return PendingClarificationResponse(
+                question_id=q["question_id"],
+                question=q["question"],
+                why=q.get("why", ""),
+                options=q.get("options") or [],
+            )
+    return None
 
 
 async def _resolve_approver_names(
@@ -609,6 +664,7 @@ async def get_workflow(
             str(workflow.parent_workflow_id) if workflow.parent_workflow_id else None
         ),
         refinement_note=workflow.refinement_note,
+        pending_clarification=_pending_clarification(workflow),
     )
 
 
@@ -683,9 +739,20 @@ async def continue_workflow(
 
     workflow = await workflow_service.get_workflow_for_update(db, wid, user_id=user.id)
 
-    if workflow.status in ("completed", "awaiting_approval", "approved", "rejected"):
+    if workflow.status in (
+        "completed",
+        "awaiting_approval",
+        "approved",
+        "rejected",
+        "awaiting_clarification",
+    ):
+        detail = (
+            "Answer the pending clarification question first (POST .../clarify)."
+            if workflow.status == "awaiting_clarification"
+            else "no further stages can run."
+        )
         raise AppError(
-            f"Workflow is {workflow.status.replace('_', ' ')} — no further stages can run.",
+            f"Workflow is {workflow.status.replace('_', ' ')} — {detail}",
             status_code=400,
             error_code="workflow_terminal",
         )
@@ -709,6 +776,32 @@ async def continue_workflow(
                 f"Stage '{target_stage}' already has a run.",
                 status_code=400,
                 error_code="stage_already_run",
+            )
+
+    # Readiness gate: Planning may only start once Context Discovery is
+    # READY, or the human has explicitly acknowledged a PARTIAL result.
+    # BLOCKED can never be pushed past — see the Context Discovery /
+    # Context Explorer architecture review's readiness design.
+    if target_stage == "planning":
+        cd_result = get_stage_result(workflow, "context_discovery")
+        readiness = (cd_result or {}).get("readiness", "READY")
+        if readiness == "BLOCKED":
+            reasons = "; ".join((cd_result or {}).get("blocking_reasons", [])) or "unspecified"
+            remediation = "; ".join((cd_result or {}).get("remediation_steps", []))
+            raise AppError(
+                "Context Discovery could not establish enough context to plan "
+                f"(blocking: {reasons}). Remediation: {remediation or 'retry discovery'}.",
+                status_code=400,
+                error_code="context_discovery_blocked",
+            )
+        if readiness == "PARTIAL" and not body.acknowledge_partial:
+            reasons = "; ".join((cd_result or {}).get("blocking_reasons", [])) or "low confidence"
+            confidence = (cd_result or {}).get("confidence", 0.0)
+            raise AppError(
+                f"Context Discovery only reached partial confidence ({confidence:.0%}, "
+                f"{reasons}). Resend with acknowledge_partial=true to continue anyway.",
+                status_code=409,
+                error_code="context_discovery_partial",
             )
 
     # Find the previous run in this workflow
@@ -787,6 +880,117 @@ async def continue_workflow(
         workflow_id=str(workflow.id),
         run_id=str(run.id),
         stage=target_stage,
+        status=run.status,
+    )
+
+
+@router.post("/{workflow_id}/clarify", status_code=202, response_model=ContinueWorkflowResponse)
+async def clarify_workflow(
+    workflow_id: str,
+    body: ClarifyWorkflowRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> ContinueWorkflowResponse:
+    """Answer Context Discovery's pending clarification question and resume
+    it from where it paused (see `RunCoordinator.resume_step` and
+    `reasoning_loop.resume_discovery`). Backgrounded exactly like /continue —
+    a real LLM call, so it must survive the client disconnecting.
+
+    Only Context Discovery can be paused today (see the reasoning-driven
+    Context Discovery design) — this endpoint is written generically enough
+    (it resumes whatever stage is actually paused) for a future stage to
+    reuse the same mechanism.
+    """
+    from app.orchestrator.background_execution import schedule_resume_execution
+
+    check_rate_limit(
+        f"stage_start:{user.id}",
+        max_requests=_STAGE_START_RATE_LIMIT,
+        window_seconds=_STAGE_START_RATE_WINDOW_SECONDS,
+    )
+
+    try:
+        wid = uuid.UUID(workflow_id)
+    except ValueError as exc:
+        raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
+
+    workflow = await workflow_service.get_workflow_for_update(db, wid, user_id=user.id)
+
+    if workflow.status != "awaiting_clarification":
+        raise AppError(
+            f"Workflow is not awaiting clarification (status: {workflow.status}).",
+            status_code=409,
+            error_code="not_awaiting_clarification",
+        )
+
+    found = _awaiting_input_step(workflow, "context_discovery")
+    if found is None:
+        raise AppError(
+            "No paused Context Discovery step found to resume.",
+            status_code=409,
+            error_code="no_paused_step",
+        )
+    run, step = found
+
+    result = step.result or {}
+    questions = result.get("unresolved_questions") or []
+    current = next(
+        (
+            q
+            for q in questions
+            if q.get("question_id") == body.question_id and q.get("blocking")
+        ),
+        None,
+    )
+    if current is None:
+        raise AppError(
+            "That question is no longer pending — it may have already been answered.",
+            status_code=409,
+            error_code="stale_question",
+        )
+
+    if global_registry.get(step.agent_id) is None:
+        raise AppError(
+            f"Agent '{step.agent_id}' is no longer registered.",
+            status_code=500,
+            error_code="agent_not_found",
+        )
+
+    enriched_ref = workflow_service.build_stage_context(
+        workflow,
+        original_request=workflow.original_prompt,
+        target_stage="context_discovery",
+    )
+    subject = _resolve_stage_subject(workflow, "context_discovery", enriched_ref)
+
+    step.status = "running"
+    run.status = "running"
+    await db.commit()
+
+    set_workflow_context(workflow_id=str(workflow.id), workflow_run_id=str(run.id))
+
+    schedule_resume_execution(
+        run_id=run.id,
+        step_id=step.id,
+        subject=subject,
+        goal=run.goal,
+        model=run.model,
+        extras={
+            "user_id": user.id,
+            "resume": {
+                "working_context": result,
+                "answer": {"question_id": body.question_id, "answer": body.answer},
+            },
+        },
+        agent_id=step.agent_id,
+        registry=global_registry,
+        on_complete=_workflow_stage_finalizer(workflow.id),
+    )
+
+    return ContinueWorkflowResponse(
+        workflow_id=str(workflow.id),
+        run_id=str(run.id),
+        stage="context_discovery",
         status=run.status,
     )
 

@@ -69,3 +69,27 @@ class ContextDiscoveryResult(BaseModel):
     planning_metadata: dict[str, Any] = Field(default_factory=dict)
 
     prompt_version: str = "1.0"
+
+    # --- WorkingContext fields (additive — reasoning-driven discovery) ---
+    # These mirror app.context_pipeline.working_context.WorkingContext. Kept
+    # additive so every field above stays exactly what Planning already
+    # reads via get_stage_result() — nothing here changes shape for it.
+    goal: str = ""
+    assumptions: list[str] = Field(default_factory=list)
+    unresolved_questions: list[dict[str, Any]] = Field(default_factory=list)
+    user_answers: dict[str, str] = Field(default_factory=dict)
+    confidence: float = 0.0
+    readiness: str = "PARTIAL"
+    blocking_reasons: list[str] = Field(default_factory=list)
+    remediation_steps: list[str] = Field(default_factory=list)
+    clarification_rounds: int = 0
+
+    # --- Structured refinements (capability-specific confidence, generic
+    # BlockingIssue, human-facing summary) — additive, all derived from the
+    # same WorkingContext the flat fields above are; nothing here is a
+    # second source of truth. `confidence`/`readiness`/`blocking_reasons`/
+    # `unresolved_questions` above remain exactly what workflows.py's
+    # readiness gate and existing UI already read. ---
+    capability_confidence: dict[str, float] = Field(default_factory=dict)
+    blocking_issues: list[dict[str, Any]] = Field(default_factory=list)
+    discovery_summary: dict[str, Any] = Field(default_factory=dict)

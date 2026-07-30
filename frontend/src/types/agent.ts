@@ -29,7 +29,13 @@ export interface Confidence {
 
 // --- Run DTOs ---
 
-export type RunStatus = "queued" | "running" | "completed" | "partial" | "failed";
+export type RunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "partial"
+  | "failed"
+  | "awaiting_input";
 
 export interface AgentStep {
   step_id: string;
@@ -443,6 +449,64 @@ export interface ContextDiscoveryResult {
   additional_context_recommendation: AdditionalContextRecommendationResult | null;
   planning_metadata: Record<string, unknown>;
   prompt_version: string;
+  // --- WorkingContext fields (reasoning-driven discovery) ---
+  goal: string;
+  assumptions: string[];
+  unresolved_questions: ClarificationQuestionResult[];
+  user_answers: Record<string, string>;
+  confidence: number;
+  readiness: ContextReadiness;
+  blocking_reasons: string[];
+  remediation_steps: string[];
+  clarification_rounds: number;
+  // --- Structured refinements: capability-specific confidence, generic
+  // BlockingIssue, and a human-facing Discovery Summary — all derived from
+  // the same WorkingContext the fields above are, not a second source of
+  // truth. See app.context_pipeline.working_context on the backend.
+  capability_confidence: CapabilityConfidence;
+  blocking_issues: BlockingIssueResult[];
+  discovery_summary: DiscoverySummary;
+}
+
+export type ContextReadiness = "READY" | "PARTIAL" | "BLOCKED";
+
+export interface ClarificationQuestionResult {
+  question_id: string;
+  question: string;
+  why: string;
+  options: string[];
+  blocking: boolean;
+}
+
+export interface CapabilityConfidence {
+  work_item: number;
+  repository: number;
+  architecture: number;
+  implementation_candidates: number;
+  documentation: number;
+}
+
+export interface BlockingIssueResult {
+  issue_id: string;
+  type: string;
+  severity: "blocking" | "warning";
+  message: string;
+  reason: string;
+  recommended_action: string[];
+  clarification_question: ClarificationQuestionResult | null;
+  resolved: boolean;
+}
+
+export interface DiscoverySummaryItem {
+  label: string;
+  status: "ok" | "warning" | "error";
+  detail: string;
+}
+
+export interface DiscoverySummary {
+  items: DiscoverySummaryItem[];
+  readiness: ContextReadiness;
+  headline: string;
 }
 
 // --- Workflow Types ---
@@ -456,7 +520,19 @@ export type WorkflowStage =
   | "engineering_review"
   | "review";
 export type WorkflowStatus =
-  "in_progress" | "completed" | "awaiting_approval" | "approved" | "rejected";
+  | "in_progress"
+  | "completed"
+  | "awaiting_approval"
+  | "approved"
+  | "rejected"
+  | "awaiting_clarification";
+
+export interface PendingClarification {
+  question_id: string;
+  question: string;
+  why: string;
+  options: string[];
+}
 
 export interface WorkflowStageInfo {
   stage: string;
@@ -469,7 +545,7 @@ export interface WorkflowStageInfo {
   // the same static, no-spinner treatment as an untouched future stage —
   // indistinguishable from "nothing has happened yet" even while the run
   // was genuinely in flight.
-  status: "completed" | "running" | "queued" | "partial" | "failed" | "pending";
+  status: "completed" | "running" | "queued" | "partial" | "failed" | "pending" | "awaiting_input";
   run_id: string | null;
 }
 
@@ -508,6 +584,11 @@ export interface WorkflowDetail {
   version: number;
   parent_workflow_id: string | null;
   refinement_note: string | null;
+  // The single question Context Discovery is waiting on, when
+  // status === "awaiting_clarification". Null/undefined otherwise —
+  // optional so existing test fixtures that predate this field don't all
+  // need updating.
+  pending_clarification?: PendingClarification | null;
 }
 
 export interface WorkflowListItem {

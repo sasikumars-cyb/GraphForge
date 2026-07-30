@@ -160,6 +160,97 @@ def schedule_run_execution(
     return task
 
 
+async def _resume_step_task(
+    run_id: uuid.UUID,
+    step_id: uuid.UUID,
+    subject: Subject,
+    goal: str,
+    model: str | None,
+    extras: dict[str, Any] | None,
+    agent_id: str,
+    registry: AgentRegistry,
+    on_complete: OnComplete | None,
+) -> None:
+    """Mirrors `_execute_run_task`, but resumes an existing paused
+    `AgentStep` (`RunCoordinator.resume_step`) instead of creating a new
+    one — how `POST /workflows/{id}/clarify` answers get applied off the
+    request lifecycle, for the same reasons `_execute_run_task` is."""
+    from app.models.agent_step import AgentStep
+
+    async with AsyncSessionLocal() as db:
+        try:
+            run = await db.get(Run, run_id)
+            step = await db.get(AgentStep, step_id)
+            if run is None or step is None:
+                logger.error(
+                    "background_resume_vanished run_id=%s step_id=%s", run_id, step_id
+                )
+                return
+
+            entry = registry.get(agent_id)
+            if entry is None:
+                run.status = "failed"
+                run.error_message = f"Agent '{agent_id}' vanished from the registry."
+                step.status = "failed"
+                await db.commit()
+                return
+            _manifest, agent = entry
+
+            coordinator = RunCoordinator(db=db, registry=registry, selector=None)
+            try:
+                await coordinator.resume_step(
+                    run, step, agent_id, agent, subject, goal, model, extras,
+                    on_pre_commit=on_complete,
+                )
+            except Exception:
+                logger.exception(
+                    "background_resume_failed run_id=%s agent_id=%s", run_id, agent_id
+                )
+        except Exception:
+            logger.exception("background_resume_task_error run_id=%s", run_id)
+            try:
+                run = await db.get(Run, run_id)
+                if run is not None and run.status not in ("completed", "failed"):
+                    run.status = "failed"
+                    run.error_message = "Execution failed unexpectedly."
+                    await db.commit()
+            except Exception:
+                logger.exception("background_resume_failure_persist_failed run_id=%s", run_id)
+
+
+def schedule_resume_execution(
+    run_id: uuid.UUID,
+    step_id: uuid.UUID,
+    subject: Subject,
+    goal: str,
+    model: str | None,
+    extras: dict[str, Any] | None,
+    agent_id: str,
+    registry: AgentRegistry,
+    on_complete: OnComplete | None = None,
+) -> Any:
+    """Fire-and-forget a paused step's resumption, decoupled from the
+    calling request — same shape as `schedule_run_execution`. Returns the
+    created asyncio.Task (mainly useful for tests)."""
+    import asyncio
+
+    task = asyncio.create_task(
+        _resume_step_task(
+            run_id, step_id, subject, goal, model, extras, agent_id, registry, on_complete
+        )
+    )
+    _running_tasks.add(task)
+    _tasks_by_run_id[run_id] = task
+
+    def _cleanup(t: Any) -> None:
+        _running_tasks.discard(t)
+        if _tasks_by_run_id.get(run_id) is t:
+            del _tasks_by_run_id[run_id]
+
+    task.add_done_callback(_cleanup)
+    return task
+
+
 async def recover_orphaned_runs(db: AsyncSession) -> int:
     """Mark any Run left at status="running" or "queued" as failed.
 

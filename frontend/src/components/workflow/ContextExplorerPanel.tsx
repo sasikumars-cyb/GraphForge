@@ -1,9 +1,51 @@
 import { useState } from "react";
-import { GitBranch, ListTodo, PenLine, X } from "lucide-react";
+import { AlertTriangle, CheckCircle2, GitBranch, ListTodo, PenLine, XCircle, X } from "lucide-react";
 import { Card } from "../Card";
-import type { ContextDiscoveryResult } from "../../types/agent";
+import type { ContextDiscoveryResult, DiscoverySummaryItem } from "../../types/agent";
 import { overrideStageResult } from "../../lib/api/workflows";
 import { useAuth } from "../../app/auth-context";
+
+const SUMMARY_ICON: Record<DiscoverySummaryItem["status"], typeof CheckCircle2> = {
+  ok: CheckCircle2,
+  warning: AlertTriangle,
+  error: XCircle,
+};
+
+const SUMMARY_COLOR: Record<DiscoverySummaryItem["status"], string> = {
+  ok: "text-success-fg",
+  warning: "text-warning-fg",
+  error: "text-danger-fg",
+};
+
+/** The human-facing report generated *from* WorkingContext on the backend
+ * (see reasoning_loop.build_discovery_summary) — downstream agents consume
+ * the structured result; this is what a human reviewing Context Discovery
+ * actually reads instead of the raw repository/component lists. */
+function DiscoverySummarySection({ result }: { result: ContextDiscoveryResult }) {
+  const summary = result.discovery_summary;
+  if (!summary || summary.items.length === 0) return null;
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-line-muted bg-surface-raised px-3 py-2.5">
+      <div className="flex items-center justify-between">
+        <p className="text-xs font-semibold text-fg-secondary">Discovery Summary</p>
+        <span className="text-xs font-medium text-fg-muted">Readiness: {summary.readiness}</span>
+      </div>
+      <ul className="flex flex-col gap-1">
+        {summary.items.map((item, i) => {
+          const Icon = SUMMARY_ICON[item.status];
+          return (
+            <li key={i} className={`flex items-start gap-1.5 text-xs ${SUMMARY_COLOR[item.status]}`}>
+              <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              <span>{item.label}</span>
+            </li>
+          );
+        })}
+      </ul>
+      {summary.headline && <p className="text-xs text-fg-muted">{summary.headline}</p>}
+    </div>
+  );
+}
 
 interface ContextExplorerPanelProps {
   workflowId: string;
@@ -83,6 +125,8 @@ export function ContextExplorerPanel({
       }
     >
       <div className="flex flex-col gap-4">
+        <DiscoverySummarySection result={result} />
+
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-lg bg-surface-raised px-3 py-2">
             <p className="text-xs text-fg-muted">Indexed repositories</p>

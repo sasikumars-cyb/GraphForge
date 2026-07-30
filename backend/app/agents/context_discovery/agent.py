@@ -1,111 +1,167 @@
 """Context Discovery Agent — goal=discover_context.
 
-Implements the IAgent protocol as a thin wrapper around the existing
-`ContextResolutionPipeline` (app.context_pipeline) — the module the
-Planning Agent used to call directly. Wrapping it as its own agent is
-what turns context resolution into a first-class workflow stage: a real
-Run, a real AgentStep, a real confidence score, gated by the same
-approve/reject/continue machinery every other stage already uses (see
-the Context Discovery / Context Explorer architecture review).
+Runs the reasoning loop (`app.context_pipeline.reasoning_loop`) instead of a
+fixed-sequence retrieval pass: gather evidence through the existing Jira/
+Confluence/GitHub/Graph providers, then reason about what's actually known,
+computing a `WorkingContext` with a `readiness` verdict (READY/PARTIAL/
+BLOCKED) derived from policy checks over its capabilities — never a bare
+confidence threshold. When a genuine blocking ambiguity remains (repository
+can't be determined, two repositories tie, a Jira reference didn't
+resolve), the agent returns `awaiting_input=True` with a `pending_question`
+instead of completing — the RunCoordinator persists that as a paused step
+rather than a finished one (see `run_coordinator._apply_agent_output`), and
+the workflow moves to `awaiting_clarification` until a human answers via
+`POST /workflows/{id}/clarify`.
 
-This agent performs no reasoning about *what to build* — that is
-Planning's job, and Planning's alone. It answers exactly one question:
-what exists (repositories, components, topics, Jira/Confluence/GitHub
-content) that a plan might need? Its result is a `ContextDiscoveryResult`
-(schemas.py), persisted into AgentStep.result exactly like every other
-agent's output, and read back downstream via `get_stage_result()` — the
-same function Development, Testing, Documentation Planning, and
-Engineering Review already use to consume prior stages.
+This agent still performs no reasoning about *what to build* — that stays
+Planning's job. It answers "what exists, and what's still unclear about it?"
+Its result is a `ContextDiscoveryResult` (schemas.py) — a deliberately flat
+projection of the nested `WorkingContext` (see `build_context_discovery_
+result`), persisted into AgentStep.result exactly like every other agent's
+output, and read back downstream via `get_stage_result()`.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from dataclasses import asdict
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import AgentContext, AgentOutput, Confidence, Evidence
 from app.agents.context_discovery.schemas import ContextDiscoveryResult
-from app.context_pipeline import ContextResolutionPipeline
-from app.context_pipeline.models import EnrichedPlanningRequest, Reference
+from app.agents.llm import STAGE_CONTEXT_DISCOVERY, stage_for
+from app.context_pipeline.reasoning_loop import (
+    DiscoveryLoopResult,
+    build_discovery_summary,
+    evaluate_readiness_checks,
+    resume_discovery,
+    run_discovery_loop,
+)
+from app.context_pipeline.working_context import (
+    BlockingIssue,
+    CapabilityConfidence,
+    Compatibility,
+    ContextMetadata,
+    GraphKnowledge,
+    Knowledge,
+    Reasoning,
+    WorkingContext,
+)
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_VERSION = "1.0"
+_PROMPT_VERSION = "3.0"
 
 
-def _serialize_reference(ref: Reference) -> dict[str, Any]:
-    data = asdict(ref)
-    data["type"] = ref.type.value  # StrEnum -> plain str for JSON storage
-    return data
+def _working_context_from_result(result: dict[str, Any]) -> WorkingContext:
+    """Reconstruct a nested `WorkingContext` from a previously-persisted,
+    paused `AgentStep.result` (a flat `ContextDiscoveryResult` dump) — the
+    inverse of `build_context_discovery_result`. Used only on resume;
+    `blocking_issues` round-trips from the additive structured field
+    (schemas.py), not from the flat `unresolved_questions`/`blocking_
+    reasons` — those are one-way projections for older/external
+    consumers, not a second source of truth to reconstruct from."""
+    blocking_issues = [BlockingIssue.model_validate(i) for i in result.get("blocking_issues", [])]
+    capability_confidence = CapabilityConfidence(**result.get("capability_confidence", {}))
 
-
-def build_context_discovery_result(
-    enriched: EnrichedPlanningRequest,
-) -> ContextDiscoveryResult:
-    """Project the pipeline's in-memory `EnrichedPlanningRequest` into the
-    JSON-serializable shape that actually gets persisted. Kept as its own
-    function (rather than inlined in `run()`) so a test can exercise the
-    projection without constructing a full AgentContext."""
-    recommendation = enriched.additional_context_recommendation
-    return ContextDiscoveryResult(
-        original_request=enriched.original_request,
-        enriched_text=enriched.enriched_text,
-        resolved_references=[_serialize_reference(r) for r in enriched.resolved_references],
-        indexed_repositories=enriched.indexed_repositories,
-        graph_components=enriched.graph_components,
-        graph_topics=enriched.graph_topics,
-        ranked_repository_names=enriched.ranked_repository_names,
-        graph_context_text=enriched.graph_context_text,
-        graph_available=enriched.graph_available,
-        graph_has_data=enriched.graph_has_data,
-        additional_context_recommendation=(
-            {
-                "should_search": recommendation.should_search,
-                "capability": (
-                    recommendation.capability.value if recommendation.capability else None
-                ),
-                "reasoning": recommendation.reasoning,
-            }
-            if recommendation is not None
-            else None
+    return WorkingContext(
+        metadata=ContextMetadata(
+            goal=result.get("goal", ""),
+            clarification_rounds=result.get("clarification_rounds", 0),
+            iteration=1,
         ),
-        planning_metadata=enriched.planning_metadata,
-        prompt_version=_PROMPT_VERSION,
+        knowledge=Knowledge(
+            entities=result.get("resolved_references", []),
+            repositories=result.get("indexed_repositories", []),
+            architecture={
+                "components": result.get("graph_components", []),
+                "topics": result.get("graph_topics", []),
+            },
+            implementation_candidates=result.get("ranked_repository_names", []),
+            graph=GraphKnowledge(
+                available=result.get("graph_available", False),
+                has_data=result.get("graph_has_data", False),
+                context_text=result.get("graph_context_text", ""),
+            ),
+        ),
+        reasoning=Reasoning(
+            assumptions=result.get("assumptions", []),
+            blocking_issues=blocking_issues,
+            user_answers=result.get("user_answers", {}),
+            confidence=capability_confidence,
+            readiness=result.get("readiness", "PARTIAL"),
+        ),
+        compatibility=Compatibility(
+            original_request=result.get("original_request", ""),
+            enriched_text=result.get("enriched_text", ""),
+            planning_metadata=result.get("planning_metadata", {}),
+        ),
     )
 
 
-def _confidence_for(enriched: EnrichedPlanningRequest) -> Confidence:
-    """Same three-tier formula Planning has always used to judge its own
-    graph grounding (base_confidence in agents/planning/agent.py) — Context
-    Discovery is the stage actually doing the discovering now, so it, not
-    Planning, is what that confidence score should describe."""
-    if not enriched.graph_available:
-        return Confidence(
-            score=0.25,
-            reasoning=(
-                "Knowledge Graph was unavailable (infrastructure error); only "
-                "Jira/Confluence/GitHub content (if any) could be resolved."
-            ),
-        )
-    if enriched.graph_has_data:
-        return Confidence(
-            score=0.85,
-            reasoning=(
-                f"Graph traversal found {len(enriched.graph_components)} component(s) "
-                f"and {len(enriched.graph_topics)} topic(s) across "
-                f"{len(enriched.indexed_repositories)} indexed repositories."
-            ),
-        )
+def build_context_discovery_result(wc: WorkingContext) -> ContextDiscoveryResult:
+    """Project the reasoning loop's nested `WorkingContext` into the flat,
+    JSON-serializable shape actually persisted — deliberately unchanged
+    from before this refactor's nesting/BlockingIssue/capability-confidence
+    additions, so Planning's `get_stage_result()` read path needs zero
+    changes. Kept as its own function so a test can exercise the
+    projection without constructing a full AgentContext."""
+    k = wc.knowledge
+    r = wc.reasoning
+    unresolved = [i for i in r.blocking_issues if i.clarification_question is not None and not i.resolved]
+    blocking_only = [i for i in r.blocking_issues if i.severity == "blocking" and not i.resolved]
+
+    return ContextDiscoveryResult(
+        original_request=wc.compatibility.original_request,
+        enriched_text=wc.compatibility.enriched_text,
+        resolved_references=k.entities,
+        indexed_repositories=k.repositories,
+        graph_components=k.architecture.get("components", []),
+        graph_topics=k.architecture.get("topics", []),
+        ranked_repository_names=k.implementation_candidates,
+        graph_context_text=k.graph.context_text,
+        graph_available=k.graph.available,
+        graph_has_data=k.graph.has_data,
+        additional_context_recommendation=None,
+        planning_metadata=wc.compatibility.planning_metadata,
+        prompt_version=_PROMPT_VERSION,
+        goal=wc.metadata.goal,
+        assumptions=r.assumptions,
+        unresolved_questions=[
+            {**i.clarification_question.model_dump(), "blocking": True} for i in unresolved
+        ],
+        user_answers=r.user_answers,
+        confidence=r.confidence.overall(),
+        readiness=r.readiness,
+        blocking_reasons=[i.message for i in blocking_only],
+        remediation_steps=[step for i in blocking_only for step in i.recommended_action],
+        clarification_rounds=wc.metadata.clarification_rounds,
+        capability_confidence=r.confidence.model_dump(),
+        blocking_issues=[i.model_dump() for i in r.blocking_issues],
+        discovery_summary=build_discovery_summary(wc).model_dump(),
+    )
+
+
+def _confidence_for(wc: WorkingContext) -> Confidence:
+    """Confidence now comes straight from the reasoning pass's own
+    capability-specific assessment (`WorkingContext.reasoning.confidence.
+    overall()`) rather than a fixed three-tier formula — Context Discovery
+    is the stage doing the reasoning, so its own assessed confidence is
+    what this should report."""
+    r = wc.reasoning
     return Confidence(
-        score=0.40,
+        score=r.confidence.overall(),
         reasoning=(
-            f"Graph is healthy but contains no architecture data "
-            f"({len(enriched.indexed_repositories)} indexed repositories, "
-            "0 components, 0 topics)."
+            f"Readiness={r.readiness} after {wc.metadata.iteration} gathering "
+            f"iteration(s) and {wc.metadata.clarification_rounds} clarification "
+            f"round(s). Capability confidence: work_item={r.confidence.work_item:.2f} "
+            f"repository={r.confidence.repository:.2f} architecture={r.confidence.architecture:.2f} "
+            f"implementation_candidates={r.confidence.implementation_candidates:.2f} "
+            f"documentation={r.confidence.documentation:.2f}. "
+            f"{len([i for i in r.blocking_issues if not i.resolved])} open issue(s), "
+            f"{len(r.assumptions)} assumption(s) made."
         ),
     )
 
@@ -122,51 +178,83 @@ class ContextDiscoveryAgent:
         raw_request: str = context.subject.display_name
         subject_id: str = context.subject.subject_id
 
-        logger.info(
-            "context_discovery_agent_started subject_id=%s request=%.80s",
-            subject_id,
-            raw_request,
-        )
-
         db: AsyncSession = context.extras["db"]
         user_id: uuid.UUID | None = context.extras.get("user_id")
+        model = context.model
+        stage = stage_for(context.extras, STAGE_CONTEXT_DISCOVERY)
+        graph_repo_override = context.extras.get("graph_repository")
 
-        enriched = await ContextResolutionPipeline().resolve(
-            raw_request=raw_request,
-            db=db,
-            graph_repo_override=context.extras.get("graph_repository"),
-            user_id=user_id,
-            model=context.model,
-            extras=context.extras,
-        )
+        resume = context.extras.get("resume")
+        loop_result: DiscoveryLoopResult
+        evidence: list[Evidence]
 
-        result = build_context_discovery_result(enriched)
-        confidence = _confidence_for(enriched)
+        if resume is not None:
+            logger.info(
+                "context_discovery_agent_resumed subject_id=%s question_id=%s",
+                subject_id,
+                resume["answer"]["question_id"],
+            )
+            wc = _working_context_from_result(resume["working_context"])
+            loop_result = await resume_discovery(
+                working_context=wc,
+                question_id=resume["answer"]["question_id"],
+                answer=resume["answer"]["answer"],
+                model=model,
+                stage=stage,
+                db=db,
+                user_id=user_id,
+                graph_repo_override=graph_repo_override,
+            )
+            evidence = loop_result.evidence
+        else:
+            logger.info(
+                "context_discovery_agent_started subject_id=%s request=%.80s",
+                subject_id,
+                raw_request,
+            )
+            loop_result = await run_discovery_loop(
+                raw_request=raw_request,
+                db=db,
+                graph_repo_override=graph_repo_override,
+                user_id=user_id,
+                model=model,
+                extras=context.extras,
+                stage=stage,
+            )
+            evidence = loop_result.evidence
 
-        evidence: list[Evidence] = list(enriched.evidence)
+        wc = loop_result.working_context
+        confidence = _confidence_for(wc)
+
+        open_issues = [i for i in wc.reasoning.blocking_issues if not i.resolved]
         evidence.append(
             Evidence(
                 kind="llm_reasoning",
                 reference="context_discovery_summary",
                 summary=(
-                    f"Resolved {len(enriched.resolved_references)} reference(s), "
-                    f"{len(enriched.indexed_repositories)} indexed repositor"
-                    f"{'y' if len(enriched.indexed_repositories) == 1 else 'ies'}, "
-                    f"{len(enriched.graph_components)} component(s), and "
-                    f"{len(enriched.graph_topics)} topic(s) for: {raw_request[:80]}"
+                    f"readiness={wc.reasoning.readiness} confidence={confidence.score:.2f} "
+                    f"entities={len(wc.knowledge.entities)} "
+                    f"repositories={len(wc.knowledge.repositories)} "
+                    f"open_issues={len(open_issues)} for: {raw_request[:80]}"
                 ),
             )
         )
 
         logger.info(
-            "context_discovery_agent_completed subject_id=%s confidence=%.2f "
-            "reference_count=%d indexed_repo_count=%d component_count=%d",
+            "context_discovery_agent_completed subject_id=%s readiness=%s "
+            "confidence=%.2f paused=%s",
             subject_id,
+            wc.reasoning.readiness,
             confidence.score,
-            len(enriched.resolved_references),
-            len(enriched.indexed_repositories),
-            len(enriched.graph_components),
+            loop_result.paused,
         )
+
+        # Populate the checks the Discovery Summary reads, in case this
+        # WorkingContext is about to be persisted mid-loop (paused) and
+        # read back later without going through evaluate_readiness again.
+        wc.reasoning.checks = evaluate_readiness_checks(wc)
+        result = build_context_discovery_result(wc)
+        pending = loop_result.pending_question
 
         return AgentOutput(
             agent_id="context_discovery",
@@ -175,4 +263,6 @@ class ContextDiscoveryAgent:
             evidence=evidence,
             result=result.model_dump(),
             prompt_version=_PROMPT_VERSION,
+            awaiting_input=loop_result.paused,
+            pending_question=pending.model_dump() if pending is not None else None,
         )

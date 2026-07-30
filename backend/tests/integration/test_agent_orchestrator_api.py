@@ -440,7 +440,7 @@ async def test_continue_workflow_happy_path(client: AsyncClient) -> None:
         new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
     ):
         continue_response = await client.post(
-            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+            f"/api/v1/workflows/{workflow_id}/continue", json={"acknowledge_partial": True}, headers=headers
         )
         assert continue_response.status_code == 202
         assert continue_response.json()["stage"] == "planning"
@@ -502,7 +502,7 @@ async def test_continue_workflow_failed_stage_is_linked_to_workflow(client: Asyn
         new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
     ):
         continue_response = await client.post(
-            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+            f"/api/v1/workflows/{workflow_id}/continue", json={"acknowledge_partial": True}, headers=headers
         )
         assert continue_response.status_code == 202
         await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
@@ -582,7 +582,7 @@ async def test_create_workflow_planning_failure_is_linked_and_error_preserved(
         new=AsyncMock(side_effect=PlanningLLMError(rate_limit_message)),
     ):
         continue_response = await client.post(
-            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+            f"/api/v1/workflows/{workflow_id}/continue", json={"acknowledge_partial": True}, headers=headers
         )
         assert continue_response.status_code == 202
 
@@ -756,7 +756,7 @@ async def test_override_context_discovery_result_is_consumed_by_planning(
 
     with patch("app.agents.planning.agent._call_llm", new=_capture_prompt):
         continue_response = await client.post(
-            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+            f"/api/v1/workflows/{workflow_id}/continue", json={"acknowledge_partial": True}, headers=headers
         )
         assert continue_response.status_code == 202
         await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)

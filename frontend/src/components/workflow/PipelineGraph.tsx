@@ -1,4 +1,4 @@
-import { CheckCircle2, Loader2, XCircle, Clock } from "lucide-react";
+import { CheckCircle2, Loader2, XCircle, Clock, HelpCircle } from "lucide-react";
 import type { WorkflowStageInfo } from "../../types/agent";
 
 interface PipelineGraphProps {
@@ -60,6 +60,16 @@ const NODE_CONFIG: Record<
     iconColor: "text-fg-subtle",
     subLabel: "Queued",
     subColor: "text-fg-muted",
+  },
+  // Context Discovery's reasoning loop paused on a blocking question — see
+  // ContextClarificationBanner. Distinct from "partial"/"failed": nothing
+  // went wrong, it's waiting on a human answer to keep reasoning.
+  awaiting_input: {
+    icon: HelpCircle,
+    ring: "border-warning-line/60",
+    iconColor: "text-warning-fg",
+    subLabel: "Needs input",
+    subColor: "text-warning-fg",
   },
 };
 

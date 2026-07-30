@@ -270,10 +270,118 @@ class RunCoordinator:
             raise
 
         latency_ms = int((time.monotonic() - start_ms) * 1000)
+        await self._apply_agent_output(step, run, output, latency_ms, on_pre_commit)
+
+        logger.info(
+            "agent_run_completed run_id=%s agent_id=%s subject_id=%s "
+            "confidence=%.2f evidence_count=%d latency_ms=%d awaiting_input=%s",
+            str(run.id),
+            agent_id,
+            subject.subject_id,
+            output.confidence.score,
+            len(output.evidence),
+            latency_ms,
+            output.awaiting_input,
+        )
+
+        return run
+
+    async def resume_step(
+        self,
+        run: Run,
+        step: AgentStep,
+        agent_id: str,
+        agent: object,
+        subject: Subject,
+        goal: str,
+        model: str | None = None,
+        extras: dict[str, Any] | None = None,
+        on_pre_commit: Callable[[AsyncSession, Run], Awaitable[None]] | None = None,
+    ) -> Run:
+        """Re-invoke `agent` against an existing, previously-paused `step`
+        (status "awaiting_input") instead of creating a new one — how a
+        `POST /workflows/{id}/clarify` answer resumes Context Discovery from
+        where it left off. `run`/`step` must already exist in this
+        coordinator's session (fetched by the caller under
+        `get_workflow_for_update`'s row lock).
+
+        Mirrors `execute_run`'s tail exactly (same `_apply_agent_output`
+        branch, same failure handling) — the only difference is that no new
+        `AgentStep` row is created here.
+        """
+        step.status = "running"
+        run.status = "running"
+        await self._db.flush()
+
+        ctx_extras: dict[str, Any] = {
+            "db": self._db,
+            "user_id": run.user_id,
+            "stage": run.workflow_stage,
+        }
+        if extras:
+            ctx_extras.update(extras)
+
+        if "graph_repository" not in ctx_extras:
+            manifest_entry = self._registry.get(agent_id)
+            if manifest_entry is not None:
+                manifest, _ = manifest_entry
+                from app.graph.hop_budget import build_hop_budgeted_repository
+                from app.graph.neo4j_repository import Neo4jGraphRepository
+                from app.graph.session import get_driver
+
+                ctx_extras["graph_repository"] = build_hop_budgeted_repository(
+                    Neo4jGraphRepository(get_driver()), manifest.max_graph_hops, agent_id
+                )
+
+        context = AgentContext(subject=subject, goal=goal, model=model, extras=ctx_extras)
+        start_ms = time.monotonic()
+
+        try:
+            output: AgentOutput = await agent.run(context)  # type: ignore[attr-defined]
+        except Exception as exc:
+            latency_ms = int((time.monotonic() - start_ms) * 1000)
+            await self._fail_step(step, str(exc), latency_ms)
+            await self._fail_run(run, str(exc))
+            await self._commit_with_hook(run, on_pre_commit)
+            logger.error(
+                "agent_run_resume_failed run_id=%s agent_id=%s error=%s",
+                str(run.id),
+                agent_id,
+                str(exc),
+            )
+            raise
+
+        latency_ms = int((time.monotonic() - start_ms) * 1000)
+        await self._apply_agent_output(step, run, output, latency_ms, on_pre_commit)
+
+        logger.info(
+            "agent_run_resumed run_id=%s agent_id=%s subject_id=%s "
+            "confidence=%.2f latency_ms=%d awaiting_input=%s",
+            str(run.id),
+            agent_id,
+            subject.subject_id,
+            output.confidence.score,
+            latency_ms,
+            output.awaiting_input,
+        )
+
+        return run
+
+    async def _apply_agent_output(
+        self,
+        step: AgentStep,
+        run: Run,
+        output: AgentOutput,
+        latency_ms: int,
+        on_pre_commit: Callable[[AsyncSession, Run], Awaitable[None]] | None,
+    ) -> None:
+        """Persist `output` onto `step`/`run`, branching on whether the agent
+        is pausing for human input (`output.awaiting_input`) or has actually
+        finished. Shared by `execute_run` and `resume_step` so both paths
+        agree on exactly what "completed" vs "awaiting_input" means.
+        """
         now = datetime.now(UTC)
 
-        # Persist AgentOutput into the step row
-        step.status = "completed"
         step.confidence_score = output.confidence.score
         step.confidence_reasoning = output.confidence.reasoning
         step.evidence = [e.model_dump() for e in output.evidence]
@@ -282,25 +390,17 @@ class RunCoordinator:
         step.prompt_version = output.prompt_version
         step.output_ref = output.output_ref
         step.latency_ms = latency_ms
-        step.completed_at = now
 
-        run.status = "completed"
-        run.completed_at = now
+        if output.awaiting_input:
+            step.status = "awaiting_input"
+            run.status = "awaiting_input"
+        else:
+            step.status = "completed"
+            step.completed_at = now
+            run.status = "completed"
+            run.completed_at = now
 
         await self._commit_with_hook(run, on_pre_commit)
-
-        logger.info(
-            "agent_run_completed run_id=%s agent_id=%s subject_id=%s "
-            "confidence=%.2f evidence_count=%d latency_ms=%d",
-            str(run.id),
-            agent_id,
-            subject.subject_id,
-            output.confidence.score,
-            len(output.evidence),
-            latency_ms,
-        )
-
-        return run
 
     async def _commit_with_hook(
         self,

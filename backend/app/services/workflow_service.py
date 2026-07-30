@@ -452,6 +452,13 @@ async def advance_workflow(
     (see the /approve and /reject endpoints). current_stage deliberately
     stays at the stage that just ran (there's nothing to advance to yet,
     and nothing has actually "completed" until a human decides).
+
+    A run left at "awaiting_input" (Context Discovery paused for a
+    clarification question — see run_coordinator._apply_agent_output) is
+    handled by `pause_workflow_for_clarification` instead of here; this
+    function no-ops for it exactly like it already no-ops for "failed"/
+    "partial", so calling both unconditionally from the same finalizer is
+    safe.
     """
     if completed_run.status != "completed":
         return
@@ -481,9 +488,30 @@ async def advance_workflow(
     )
 
 
+async def pause_workflow_for_clarification(db: AsyncSession, workflow: Workflow) -> None:
+    """A stage run paused (`run.status == "awaiting_input"`) instead of
+    completing — see run_coordinator._apply_agent_output. `current_stage`
+    stays exactly where it is (nothing has advanced; the same stage will
+    resume once the user answers via POST /workflows/{id}/clarify).
+
+    Generic on the Workflow model — any stage's agent could set
+    `awaiting_input` — but only Context Discovery does so in this pass
+    (see ContextDiscoveryAgent), so `workflow.current_stage` at this point
+    is always `"context_discovery"` in practice today.
+    """
+    workflow.status = "awaiting_clarification"
+    workflow.updated_at = datetime.now(UTC)
+    await db.flush()
+    logger.info(
+        "workflow_paused_for_clarification id=%s stage=%s",
+        str(workflow.id),
+        workflow.current_stage,
+    )
+
+
 async def finalize_stage_run(db: AsyncSession, workflow_id: uuid.UUID, run: Run) -> Workflow:
-    """Advance a workflow based on one of its stage runs, once that run has
-    reached a terminal status.
+    """Advance (or pause) a workflow based on one of its stage runs, once
+    that run has reached a stable status.
 
     This is the callback the background-execution path (see
     app.orchestrator.background_execution) invokes after a stage's
@@ -493,13 +521,17 @@ async def finalize_stage_run(db: AsyncSession, workflow_id: uuid.UUID, run: Run)
     this ran inline in the router, right after the now-backgrounded
     `RunCoordinator.execute()` call returned).
 
-    Delegates entirely to `advance_workflow`, which already no-ops if
-    `run.status != "completed"` — safe to call even if this fires for a
-    run that ended up failing, without the caller needing to branch on
-    status first.
+    Branches on `run.status`: "awaiting_input" pauses the workflow for a
+    clarification answer; anything else delegates to `advance_workflow`,
+    which already no-ops if `run.status != "completed"` (e.g. "failed") —
+    safe to call unconditionally without the caller branching on status
+    first.
     """
     workflow = await get_workflow(db, workflow_id)
-    await advance_workflow(db, workflow, run)
+    if run.status == "awaiting_input":
+        await pause_workflow_for_clarification(db, workflow)
+    else:
+        await advance_workflow(db, workflow, run)
     await db.commit()
     return workflow
 

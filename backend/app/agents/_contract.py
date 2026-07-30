@@ -90,6 +90,16 @@ class AgentOutput(BaseModel):
     prompt_version: str = "1.0"
     output_ref: str | None = None
 
+    # Additive pause/resume signal: an agent sets `awaiting_input=True` (with
+    # `pending_question` describing what it needs) instead of completing when
+    # it has a genuine blocking uncertainty it wants a human to resolve before
+    # continuing. `result` still carries whatever resumable state the agent
+    # needs to pick up where it left off — see RunCoordinator._apply_agent_output
+    # and RunCoordinator.resume_step. Every agent that never sets this behaves
+    # exactly as before: default False/None, always the "completed" path.
+    awaiting_input: bool = False
+    pending_question: dict[str, Any] | None = None
+
 
 # ---------------------------------------------------------------------------
 # Agent Manifest

@@ -222,7 +222,9 @@ async def test_continue_workflow_returns_before_stage_completes(
     )
 
     continue_resp = await client.post(
-        f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+        f"/api/v1/workflows/{workflow_id}/continue",
+        json={"acknowledge_partial": True},
+        headers=headers,
     )
     assert continue_resp.status_code == 202
 

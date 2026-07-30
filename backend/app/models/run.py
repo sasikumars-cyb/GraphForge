@@ -57,7 +57,10 @@ class Run(Base):
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
-    # "queued" | "running" | "completed" | "partial" | "failed"
+    # "queued" | "running" | "completed" | "partial" | "failed" |
+    # "awaiting_input" (paused — the agent set AgentOutput.awaiting_input;
+    # see run_coordinator._apply_agent_output. Resumed via
+    # RunCoordinator.resume_step without a new Run/AgentStep row.)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

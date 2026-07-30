@@ -1,4 +1,4 @@
-import { Loader2, CheckCircle2, XCircle, Clock, AlertTriangle } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Clock, AlertTriangle, HelpCircle } from "lucide-react";
 import type { RunStatus } from "../../types/agent";
 
 interface RunProgressProps {
@@ -15,6 +15,11 @@ const STATUS_CONFIG: Record<
   completed: { icon: CheckCircle2, label: "Completed", color: "text-success-fg" },
   partial: { icon: AlertTriangle, label: "Partial — completed with issues", color: "text-warning-fg" },
   failed: { icon: XCircle, label: "Failed", color: "text-danger-fg" },
+  awaiting_input: {
+    icon: HelpCircle,
+    label: "Needs your input to continue",
+    color: "text-warning-fg",
+  },
 };
 
 /** A compact status indicator for in-progress or completed runs. */

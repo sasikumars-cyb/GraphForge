@@ -60,13 +60,33 @@ export function continueWorkflow(
   token: string,
   workflowId: string,
   model?: string,
+  acknowledgePartial?: boolean,
 ): Promise<ContinueWorkflowResponse> {
   return apiFetch<ContinueWorkflowResponse>(
     `/workflows/${encodeURIComponent(workflowId)}/continue`,
     {
       method: "POST",
       token,
-      body: { model: model ?? null },
+      body: { model: model ?? null, acknowledge_partial: acknowledgePartial ?? false },
+    },
+  );
+}
+
+/** Answer Context Discovery's pending clarification question — resumes the
+ * paused stage from where it left off (see the backend's
+ * `POST /workflows/{id}/clarify`, reasoning_loop.resume_discovery). */
+export function clarifyWorkflow(
+  token: string,
+  workflowId: string,
+  questionId: string,
+  answer: string,
+): Promise<ContinueWorkflowResponse> {
+  return apiFetch<ContinueWorkflowResponse>(
+    `/workflows/${encodeURIComponent(workflowId)}/clarify`,
+    {
+      method: "POST",
+      token,
+      body: { question_id: questionId, answer },
     },
   );
 }

@@ -12,6 +12,7 @@ Covers:
 
 from __future__ import annotations
 
+import uuid
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -25,6 +26,8 @@ from app.agents._contract import (
     Subject,
 )
 from app.core.exceptions import NotFoundError, SubjectTypeMismatchError
+from app.models.agent_step import AgentStep
+from app.models.run import Run
 from app.orchestrator.registry import AgentRegistry
 from app.orchestrator.run_coordinator import RunCoordinator
 from app.orchestrator.selector import AgentSelector
@@ -369,3 +372,130 @@ async def test_status_transitions_agent_failure() -> None:
     run = mock_db.add.call_args_list[0][0][0]
     assert run.status == "failed"
     assert run.completed_at is not None
+
+
+# ---------------------------------------------------------------------------
+# Pause/resume (awaiting_input) — reasoning-driven Context Discovery
+# ---------------------------------------------------------------------------
+
+
+def _make_awaiting_input_output(agent_id: str = "context_discovery") -> AgentOutput:
+    return AgentOutput(
+        agent_id=agent_id,
+        subject_id="freetext:abc123",
+        confidence=Confidence(score=0.3, reasoning="Blocked on a clarification question."),
+        evidence=[Evidence(kind="tool_call", reference="neo4j_graph", summary="Queried the graph.")],
+        result={"readiness": "BLOCKED", "unresolved_questions": [{"question_id": "q1"}]},
+        prompt_version="2.0",
+        awaiting_input=True,
+        pending_question={"question_id": "q1", "question": "Which repo?"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_execute_run_awaiting_input_does_not_complete() -> None:
+    """An agent that sets awaiting_input=True must leave the run/step at
+    'awaiting_input', never 'completed' — completing would let Planning
+    read a paused, mid-reasoning result via get_stage_result()."""
+    coordinator, mock_db, mock_agent = _build_coordinator(
+        agent_id="context_discovery", goal="discover_context"
+    )
+    mock_agent.run = AsyncMock(return_value=_make_awaiting_input_output())
+    subject = _make_subject()
+
+    run = await coordinator.execute(subject, "discover_context")
+
+    assert run.status == "awaiting_input"
+    assert run.completed_at is None
+    step = mock_db.add.call_args_list[1][0][0]
+    assert step.status == "awaiting_input"
+    assert step.completed_at is None
+    assert step.result["readiness"] == "BLOCKED"
+    mock_db.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_resume_step_completes_on_non_paused_output() -> None:
+    """resume_step reuses the existing AgentStep row (no new one created)
+    and applies the same completed/awaiting_input branch as execute_run."""
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+    mock_db.commit = AsyncMock()
+    mock_db.add = MagicMock()
+
+    registry = AgentRegistry()
+    manifest = _make_manifest("context_discovery", "discover_context")
+    mock_agent = AsyncMock()
+    mock_agent.run = AsyncMock(return_value=_make_output("context_discovery"))
+    registry.register(manifest, mock_agent)
+
+    coordinator = RunCoordinator(db=mock_db, registry=registry, selector=None)
+
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:abc123",
+        subject_type="freetext",
+        display_name="Test task",
+        goal="discover_context",
+        status="awaiting_input",
+    )
+    step = AgentStep(id=uuid.uuid4(), run_id=run.id, agent_id="context_discovery", status="awaiting_input")
+
+    resumed = await coordinator.resume_step(
+        run,
+        step,
+        "context_discovery",
+        mock_agent,
+        _make_subject(),
+        "discover_context",
+        extras={"resume": {"working_context": {}, "answer": {"question_id": "q1", "answer": "yes"}}},
+    )
+
+    assert resumed.status == "completed"
+    assert step.status == "completed"
+    # No second AgentStep was created for the resume — db.add is only
+    # called by db mocking elsewhere in this test file's setup, never here.
+    mock_db.add.assert_not_called()
+    mock_agent.run.assert_awaited_once()
+    call_extras = mock_agent.run.await_args[0][0].extras
+    assert call_extras["resume"]["answer"]["question_id"] == "q1"
+
+
+@pytest.mark.asyncio
+async def test_resume_step_stays_paused_when_output_awaiting_input_again() -> None:
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+    mock_db.commit = AsyncMock()
+    mock_db.add = MagicMock()
+
+    registry = AgentRegistry()
+    registry.register(
+        _make_manifest("context_discovery", "discover_context"), AsyncMock()
+    )
+    mock_agent = AsyncMock()
+    mock_agent.run = AsyncMock(return_value=_make_awaiting_input_output())
+
+    coordinator = RunCoordinator(db=mock_db, registry=registry, selector=None)
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:abc123",
+        subject_type="freetext",
+        display_name="Test task",
+        goal="discover_context",
+        status="awaiting_input",
+    )
+    step = AgentStep(id=uuid.uuid4(), run_id=run.id, agent_id="context_discovery", status="awaiting_input")
+
+    resumed = await coordinator.resume_step(
+        run,
+        step,
+        "context_discovery",
+        mock_agent,
+        _make_subject(),
+        "discover_context",
+        extras={"resume": {"working_context": {}, "answer": {"question_id": "q1", "answer": "no"}}},
+    )
+
+    assert resumed.status == "awaiting_input"
+    assert step.status == "awaiting_input"
+    assert step.completed_at is None

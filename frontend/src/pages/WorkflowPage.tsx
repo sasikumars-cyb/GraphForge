@@ -8,6 +8,7 @@ import { WorkflowHeader } from "../components/workflow/WorkflowHeader";
 import { AgentActivityFeed } from "../components/workflow/AgentActivityFeed";
 import { ApprovalGateBanner } from "../components/workflow/ApprovalGateBanner";
 import { WorkflowApprovalBanner } from "../components/workflow/WorkflowApprovalBanner";
+import { ContextClarificationBanner } from "../components/workflow/ContextClarificationBanner";
 import { WorkflowSummaryHero } from "../components/workflow/WorkflowSummaryHero";
 import { WorkflowReplayPanel } from "../components/workflow/WorkflowReplayPanel";
 import { StageResultPanel } from "../components/runs/StageResultPanel";
@@ -16,11 +17,13 @@ import { ContextExplorerPanel } from "../components/workflow/ContextExplorerPane
 import { useAuth } from "../app/auth-context";
 import {
   approveWorkflow,
+  clarifyWorkflow,
   continueWorkflow,
   createWorkflow,
   getWorkflow,
   rejectWorkflow,
 } from "../lib/api/workflows";
+import { ApiError } from "../lib/api/client";
 import { getAgentRun } from "../lib/api/agentRuns";
 import type { AgentStep, ContextDiscoveryResult, RunDetail, WorkflowDetail } from "../types/agent";
 import { deriveWorkflowState, STAGE_AGENT_LABEL } from "../lib/workflowDerived";
@@ -37,6 +40,11 @@ export function WorkflowPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showReplay, setShowReplay] = useState(false);
+  // Set when /continue rejects with "context_discovery_partial" (409) —
+  // Context Discovery only reached partial confidence. The message is the
+  // backend's own explanation (confidence + reasons); confirming retries
+  // the same continue call with acknowledge_partial=true.
+  const [partialConfirm, setPartialConfirm] = useState<string | null>(null);
   const hasSelectedRef = useRef(false);
 
   const loadWorkflow = useCallback(
@@ -98,18 +106,30 @@ export function WorkflowPage() {
     };
   }, [workflow?.status, loadWorkflow]);
 
-  const handleApprove = async () => {
+  const handleApprove = async (acknowledgePartial = false) => {
     if (!token || !workflowId) return;
     setIsSubmitting(true);
     setError(null);
+    if (acknowledgePartial) setPartialConfirm(null);
     try {
-      const response = await continueWorkflow(token, workflowId);
+      const response = acknowledgePartial
+        ? await continueWorkflow(token, workflowId, undefined, true)
+        : await continueWorkflow(token, workflowId);
       const detail = await getWorkflow(token, workflowId);
       setWorkflow(detail);
       const runDetail = await getAgentRun(token, response.run_id);
       setRunsById((prev) => new Map(prev).set(runDetail.run_id, runDetail));
       setSelectedRunId(runDetail.run_id);
     } catch (err) {
+      // "Context Discovery only reached partial confidence" — offer a
+      // confirm step instead of just showing it as a hard failure; BLOCKED
+      // (any other AppError code) still falls through to the generic
+      // error banner below, since there's nothing to confirm past.
+      if (err instanceof ApiError && err.code === "context_discovery_partial") {
+        setPartialConfirm(err.message);
+        setIsSubmitting(false);
+        return;
+      }
       setError(err instanceof Error ? err.message : "Failed to continue workflow.");
       // The backend already persisted a failed Run and left current_stage
       // pointed at it before this request threw — without this, the header/
@@ -117,6 +137,20 @@ export function WorkflowPage() {
       // 2.5s poll tick, which is exactly the kind of contradiction this
       // page should never show.
       await loadWorkflow(false);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const handleClarify = async (questionId: string, answer: string) => {
+    if (!token || !workflowId) return;
+    setIsSubmitting(true);
+    setError(null);
+    try {
+      await clarifyWorkflow(token, workflowId, questionId, answer);
+      await loadWorkflow(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to submit answer.");
     } finally {
       setIsSubmitting(false);
     }
@@ -265,6 +299,38 @@ export function WorkflowPage() {
         </div>
       )}
 
+      {phase === "awaiting_clarification" && workflow.pending_clarification && (
+        <ContextClarificationBanner
+          pendingClarification={workflow.pending_clarification}
+          isSubmitting={isSubmitting}
+          onAnswer={handleClarify}
+        />
+      )}
+
+      {partialConfirm && (
+        <div className="flex flex-col gap-3 rounded-xl border border-warning-line/40 bg-warning-bg px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-warning-fg">{partialConfirm}</p>
+          <div className="flex shrink-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setPartialConfirm(null)}
+              disabled={isSubmitting}
+              className="focus-ring inline-flex items-center rounded-md px-3 py-2 text-xs font-medium text-fg-secondary ring-1 ring-inset ring-line transition-colors hover:bg-surface-hover disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => handleApprove(true)}
+              disabled={isSubmitting}
+              className="focus-ring inline-flex items-center rounded-md bg-accent-solid px-4 py-2 text-xs font-semibold text-accent-on-solid shadow-xs transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Continue anyway
+            </button>
+          </div>
+        </div>
+      )}
+
       {canContinue &&
         lastCompletedStage &&
         lastCompletedStage.stage === "context_discovery" &&
@@ -287,7 +353,7 @@ export function WorkflowPage() {
           workflowTitle={workflow.title}
           workflowId={workflow.workflow_id}
           isSubmitting={isSubmitting}
-          onApprove={handleApprove}
+          onApprove={() => handleApprove()}
           onReject={handleRejectWorkflow}
         />
       )}
@@ -299,7 +365,7 @@ export function WorkflowPage() {
           workflowTitle={workflow.title}
           workflowId={workflow.workflow_id}
           isSubmitting={isSubmitting}
-          onApprove={handleApprove}
+          onApprove={() => handleApprove()}
           onReject={handleRejectWorkflow}
           failure={{
             stage: currentStageInfo.stage,

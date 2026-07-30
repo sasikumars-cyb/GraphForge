@@ -8,6 +8,7 @@ const STATUS_MAP: Record<RunStatus, { label: string; tone: StatusTone }> = {
   completed: { label: "Completed", tone: "success" },
   partial: { label: "Partial", tone: "warning" },
   failed: { label: "Failed", tone: "danger" },
+  awaiting_input: { label: "Needs Input", tone: "warning" },
 };
 
 interface RunStatusBadgeProps {
