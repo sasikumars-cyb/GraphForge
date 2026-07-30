@@ -53,6 +53,40 @@ def format_planning_block(result: dict[str, Any] | None) -> str:
         lines.append("Risk considerations: " + ", ".join(risks))
     if repos := result.get("repositories_consulted"):
         lines.append("Repositories consulted: " + ", ".join(repos))
+    if targets := result.get("target_repositories"):
+        lines.append("Target repositories (confirmed scope): " + ", ".join(targets))
+    return "\n".join(lines)
+
+
+def format_repository_relationships_block(result: dict[str, Any] | None) -> str:
+    """The Context Discovery stage's multi-repository selection — which
+    repositories are explicitly in scope, which the knowledge graph's real
+    cross-repository edges (see `app.indexer.graph.cross_repo_linker`)
+    suggested and why, and the confirmed selection. Absent (returns "") for
+    a result predating multi-repository selection, or when there's only ever
+    been a single repository — a single-repository blueprint has nothing
+    cross-repository to report, so this section shouldn't clutter the
+    review prompt for the common case.
+    """
+    if not result:
+        return ""
+    explicit = result.get("explicit_repositories") or []
+    suggested = result.get("suggested_repositories") or []
+    selected = result.get("selected_repositories") or []
+    if len(explicit) + len(suggested) < 2 and len(selected) < 2:
+        return ""
+    lines = ["### Repository Relationships (Context Discovery)"]
+    if explicit:
+        lines.append(
+            "Explicitly referenced: " + ", ".join(r.get("name", "?") for r in explicit)
+        )
+    if suggested:
+        lines.append(
+            "Suggested by the knowledge graph: "
+            + _join(suggested, lambda r: f"{r.get('name', '?')} ({r.get('reason', '')})")
+        )
+    if selected:
+        lines.append("Confirmed selection: " + ", ".join(r.get("name", "?") for r in selected))
     return "\n".join(lines)
 
 

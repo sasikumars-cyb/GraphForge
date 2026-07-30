@@ -42,7 +42,7 @@ from app.context_pipeline.providers import (
     GraphProvider,
     JiraProvider,
 )
-from app.context_pipeline.reasoning.capabilities import GRAPH_TRAVERSAL_ACTION
+from app.context_pipeline.reasoning.capabilities import GRAPH_TRAVERSAL_ACTION, TIE_RATIO
 from app.context_pipeline.reasoning.investigation import (
     InvestigationAction,
     InvestigationOutcome,
@@ -53,17 +53,6 @@ from app.context_pipeline.reasoning.memory import WorkingContext
 from app.context_pipeline.reference_detection import detect_references
 
 logger = logging.getLogger(__name__)
-
-# A runner-up repository within this fraction of the leader's relevance score
-# is treated as equally plausible, so both survive as candidates and the
-# `repository` capability's "Owning repository identified" signal stays
-# unsatisfied. Ambiguity is therefore represented as *two live inferences*,
-# not as a special-cased ambiguity flag — nothing downstream needs to know
-# the concept exists.
-_TIE_RATIO = 0.9
-
-_REPO_REFERENCE_TYPES = ("local_repository", "github_repository")
-
 
 def _reference_from_fact_value(value: dict[str, Any]) -> Reference:
     """Rebuild a provider-facing `Reference` from the flat fact that recorded
@@ -172,6 +161,33 @@ class RequestParseInvestigator:
                 )
             )
 
+        # ADR 0010 (Theme E) — a second, independent comparison against every
+        # repository the user *tracks*, not only the ones actually indexed.
+        # A request naming a tracked-but-unindexed repository used to be
+        # invisible: no match against the (indexed-only) set above, no
+        # evidence, no gap, nothing distinguishing it from a repository that
+        # was never mentioned at all. Gated on the same precondition as
+        # `match_repository_names` so both passes narrate in a coherent
+        # order and the dedup below (`existing`) already covers a name
+        # matched by *both* — see `run()`.
+        if ledger.has_fact("repository") and not ledger.attempted(
+            self.name, "match_tracked_repository_names"
+        ):
+            actions.append(
+                InvestigationAction(
+                    provider=self.name,
+                    key="match_tracked_repository_names",
+                    intent="I'll also check whether the request names a repository "
+                    "you're tracking but haven't indexed yet.",
+                    targets="repository",
+                    params={
+                        "text": state.derived.get("enriched_text") or state.metadata.goal,
+                        "existing": existing,
+                    },
+                    cost=0,
+                )
+            )
+
         return actions
 
     @staticmethod
@@ -186,9 +202,14 @@ class RequestParseInvestigator:
         self, action: InvestigationAction, session: SessionContext, recorder: Recorder
     ) -> InvestigationOutcome:
         state_text: str = action.params["text"]
-        known_repos: frozenset[str] = action.params.get("known_repositories", frozenset())
         existing: set[str] = action.params.get("existing", set())
 
+        if action.key == "match_tracked_repository_names":
+            return await self._match_tracked_repository_names(
+                state_text, existing, session, recorder
+            )
+
+        known_repos: frozenset[str] = action.params.get("known_repositories", frozenset())
         references = detect_references(state_text, known_repo_names=known_repos)
         # Only local-repository matches are new on the repository-name pass;
         # everything else was already found against the raw text and must not
@@ -218,6 +239,73 @@ class RequestParseInvestigator:
             + ".",
         )
         for ref in fresh:
+            value: dict[str, Any] = {
+                "type": ref.type.value,
+                "provider": ref.provider,
+                "confidence": ref.confidence,
+                "raw_value": ref.raw_value,
+                "normalized_value": ref.normalized_value,
+            }
+            if action.key == "match_repository_names":
+                # Explicit, not merely the absence of the Theme E marker —
+                # so `capabilities.py` never has to guess what an old fact
+                # recorded before this field existed means.
+                value["indexed"] = True
+            recorder.fact("reference", ref.normalized_value, value=value)
+
+        described = ", ".join(f"{r.normalized_value}" for r in fresh)
+        return InvestigationOutcome(
+            observation=f"I found {len(fresh)} reference(s) I can resolve: {described}.",
+            yielded=True,
+        )
+
+    @staticmethod
+    async def _match_tracked_repository_names(
+        state_text: str, existing: set[str], session: SessionContext, recorder: Recorder
+    ) -> InvestigationOutcome:
+        """ADR 0010 (Theme E) — a repository the user tracks but has never
+        indexed is otherwise invisible to the whole pipeline if the request
+        names it: `match_repository_names` above only ever compares against
+        *indexed* repositories, so a tracked-but-unindexed match produces no
+        reference, no evidence, no gap. Recording it here, with `indexed:
+        False`, is what lets `capabilities._repository_signals` phrase the
+        actionable gap ("X was mentioned but hasn't been indexed yet")
+        instead of the generic "the request does not name a known
+        repository" — no new capability, no new fact kind, just a marker on
+        the same `reference` fact kind every other pass already uses.
+        """
+        from sqlalchemy import select
+
+        from app.models.repository import Repository
+
+        result = await session.db.execute(
+            select(Repository.name).where(Repository.user_id == session.user_id)
+        )
+        tracked_names = frozenset(name for (name,) in result.all())
+
+        references = [
+            r
+            for r in detect_references(state_text, known_repo_names=tracked_names)
+            if r.type == ReferenceType.LOCAL_REPOSITORY
+        ]
+        fresh = [r for r in references if r.normalized_value not in existing]
+
+        looked_for = (
+            f"Checked the request against the {len(tracked_names)} tracked repository name(s)"
+        )
+        if not fresh:
+            recorder.evidence("not_found", f"{looked_for} — nothing new found.")
+            return InvestigationOutcome(
+                observation=f"{looked_for} — nothing new to flag.", yielded=False
+            )
+
+        recorder.evidence(
+            "success",
+            f"{looked_for} — found "
+            + ", ".join(f"{r.normalized_value} (not indexed)" for r in fresh)
+            + ".",
+        )
+        for ref in fresh:
             recorder.fact(
                 "reference",
                 ref.normalized_value,
@@ -227,12 +315,16 @@ class RequestParseInvestigator:
                     "confidence": ref.confidence,
                     "raw_value": ref.raw_value,
                     "normalized_value": ref.normalized_value,
+                    "indexed": False,
                 },
             )
 
-        described = ", ".join(f"{r.normalized_value}" for r in fresh)
+        described = ", ".join(r.normalized_value for r in fresh)
         return InvestigationOutcome(
-            observation=f"I found {len(fresh)} reference(s) I can resolve: {described}.",
+            observation=(
+                f"I found {len(fresh)} repository name(s) you're tracking but haven't "
+                f"indexed: {described}."
+            ),
             yielded=True,
         )
 
@@ -553,8 +645,19 @@ class GraphInvestigator:
 
         # -- verify: a human claim outranks everything else, because until
         # it's checked the engine is holding an unverified belief.
+        #
+        # Scoped to `repository` claims only: a claimed gap on *any*
+        # capability used to reach this loop, so answering a work_item
+        # clarification question (a corrected Jira key) was treated as a
+        # repository name to verify. That ran a real graph query for a
+        # ticket key, narrated a nonsensical "You pointed me at 'PROJ-456'"
+        # intent, and — because `_reassess_candidates` unconditionally
+        # withdraws every live `repository_candidate` inference before
+        # deciding whether the focus matched anything — silently destroyed
+        # an already-correct, already-satisfied repository identification
+        # any time an unrelated claim was being settled.
         for gap in state.gaps:
-            if gap.status != "claimed" or not gap.user_claim:
+            if gap.capability != "repository" or gap.status != "claimed" or not gap.user_claim:
                 continue
             key = f"verify_repository:{gap.user_claim}"
             if ledger.attempted(self.name, key):
@@ -719,9 +822,22 @@ class GraphInvestigator:
         if components or topics:
             derived["graph_context_text"] = ContextBuilder().build([result]).context_text
 
-        observation, ranked = self._reassess_candidates(
+        observation, ranked = self._record_observations(
             recorder, repo_facts, components, terms, focus
         )
+        recorded_relationships = self._record_relationships(
+            recorder, result.data.get("cross_repository_edges", []), repo_facts, repos_evidence
+        )
+        if recorded_relationships:
+            # Purely descriptive: these are relationships *observed*, not
+            # relationships *promoted* into suggestions — deciding which of
+            # them become a suggested candidate is `capabilities.resync_
+            # relationship_candidates`'s job, not this investigator's (ADR
+            # 0010, invariant I1). This never claims more than was recorded.
+            observation += (
+                f" Found {len(recorded_relationships)} relationship(s) to other repositories "
+                "in the knowledge graph."
+            )
         if ranked:
             # The full relevance ordering of every indexed repository, best
             # first — distinct from the candidate shortlist. Planning consumes
@@ -830,7 +946,7 @@ class GraphInvestigator:
                 unique_on=("repository",),
             )
 
-    def _reassess_candidates(
+    def _record_observations(
         self,
         recorder: Recorder,
         repo_facts: list[Any],
@@ -838,22 +954,20 @@ class GraphInvestigator:
         terms: list[str],
         focus: str | None,
     ) -> tuple[str, list[str]]:
-        """Re-derive which repositories are plausible implementation sites.
+        """Record what this query observed about repository ranking —
+        nothing more. Interpretation of what these observations mean for
+        candidacy (explicit/suggested, single-leader-vs-tie) belongs
+        exclusively to `capabilities.LEDGER_RESYNC_HOOKS` (ADR 0010,
+        invariant I1) — this method writes only `Fact`s (via `recorder`,
+        which has no way to write an `Inference` at all) and returns
+        human-readable narration.
 
-        Candidates are *inferences* citing repository facts, never facts
-        themselves — "this is where the work probably goes" is an
-        interpretation, and keeping it on the inference side of the ledger is
-        what stops it from being read back later as established truth.
-
-        Ambiguity needs no special representation: two surviving candidates
-        leave `repository`'s "Owning repository identified" signal
-        unsatisfied, which is what eventually produces the question. One
-        surviving candidate satisfies it.
+        Returns `(observation, ranked_names)` — `ranked_names` is the full
+        relevance ordering of every indexed repository, best first (or, for
+        a focused query, the focused repository first and the rest stably
+        ordered); Planning consumes this positionally regardless of what
+        became a candidate.
         """
-        # Superseded, not deleted — a later scoped query replaces an earlier
-        # broad query's shortlist.
-        recorder.withdraw("repository_candidate")
-
         if not repo_facts:
             return (
                 "No repositories are indexed in the knowledge graph, so I can't tell which "
@@ -864,9 +978,11 @@ class GraphInvestigator:
         by_name = {f.subject: f for f in repo_facts}
 
         # A verification/scoping query names its target explicitly: if the
-        # graph confirms that repository exists, it *is* the candidate, cited
-        # to the fact proving it exists. No ranking heuristic needed, and no
-        # fabricated fallback when the name isn't there.
+        # graph confirms that repository exists, the `repository` fact
+        # already recorded above *is* the observation — nothing further to
+        # record here. No ranking is computed for a focused query, matching
+        # what a focused query has always meant: "tell me about this one,"
+        # not "rank everything."
         if focus is not None:
             match = by_name.get(focus)
             if match is None:
@@ -875,15 +991,10 @@ class GraphInvestigator:
                     f"what I do have is: {', '.join(sorted(by_name))}.",
                     [],
                 )
-            recorder.inference("repository_candidate", focus, [match])
             # The confirmed repository leads the ordering; the rest keep a
             # stable position so Planning's per-repository star ranking still
             # covers every indexed repository.
             rest = sorted(n for n in by_name if n != focus)
-            # Say what the traversal actually returned. "Traversed it for
-            # architecture" read as success even when the repository turned out
-            # to hold nothing, which is the one case the user most needs to know
-            # about.
             observation = (
                 f"Confirmed '{focus}' is indexed, and traversed it for architecture."
                 if components
@@ -893,18 +1004,6 @@ class GraphInvestigator:
 
         if len(by_name) == 1:
             only = next(iter(by_name.values()))
-            recorder.inference("repository_candidate", only.subject, [only])
-            # Reasoning from absence, not from a match: nothing in the request
-            # actually pointed at this repository, it is simply the only one
-            # indexed. That is an assumption and is recorded as one, so the user
-            # sees it stated rather than discovering later that "the repository"
-            # was a default.
-            recorder.inference(
-                "assumption",
-                f"This work belongs to '{only.subject}' — it is the only indexed repository, "
-                "not something the request named.",
-                [only],
-            )
             return (
                 f"Only one repository is indexed — '{only.subject}' — "
                 "so that's the one I'll use.",
@@ -924,11 +1023,16 @@ class GraphInvestigator:
             scored = []
 
         ranked = [name for _score, name in scored]
+        # Recorded even when nothing scored — `resync_ranked_candidates`
+        # needs to see "we tried, nothing matched" as much as a real ranking,
+        # and a fact is the only honest way to say that happened.
+        recorder.fact(
+            "repository_ranking",
+            "ranking",
+            value={"scored": [[score, name] for score, name in scored]},
+        )
+
         if not scored or scored[0][0] <= 0:
-            # Nothing in the request matched anything in the graph. Honest
-            # outcome: no *candidate* at all, rather than arbitrarily promoting
-            # whichever repository happened to sort first. The ranking is still
-            # returned — it is an ordering, not a claim of ownership.
             return (
                 f"I found {len(by_name)} indexed repositories but nothing in the request "
                 "matches any of them strongly enough for me to pick one.",
@@ -936,35 +1040,72 @@ class GraphInvestigator:
             )
 
         top_score = scored[0][0]
-        leaders = [name for score, name in scored if score >= top_score * _TIE_RATIO]
-        for name in leaders:
-            fact = by_name.get(name)
-            if fact is not None:
-                recorder.inference("repository_candidate", name, [fact])
-
+        leaders = [name for score, name in scored if score >= top_score * TIE_RATIO]
         if len(leaders) == 1:
-            leader_fact = by_name.get(leaders[0])
-            if leader_fact is not None and not any(
-                f.subject == leaders[0]
-                for f in recorder.facts_of("reference")
-                if f.value.get("type") in _REPO_REFERENCE_TYPES
-            ):
-                # Chosen by component-name relevance, not because the request
-                # named it. Worth stating: relevance ranking is a heuristic, and
-                # a user who disagrees can only push back if they know it was a
-                # judgement rather than a lookup.
-                recorder.inference(
-                    "assumption",
-                    f"This work belongs to '{leaders[0]}' — inferred from how closely its "
-                    "components match the request, which did not name a repository.",
-                    [leader_fact],
-                )
             return f"'{leaders[0]}' is the clear match for this request.", ranked
         return (
             f"{len(leaders)} repositories score almost identically for this request: "
             f"{', '.join(leaders)}.",
             ranked,
         )
+
+    @staticmethod
+    def _relationship_reason(source_repo: str, rel_type: str, properties: dict[str, Any]) -> str:
+        if rel_type == "CALLS_SERVICE":
+            return f"Called by {source_repo} via a Feign client."
+        if rel_type == "SHARES_TOPIC":
+            topics = properties.get("topics") or []
+            topic_text = ", ".join(f"'{t}'" for t in topics) if topics else "a Kafka topic"
+            return f"Shares Kafka topic {topic_text} with {source_repo}."
+        if rel_type == "DEPENDS_ON_REPOSITORY":
+            return f"{source_repo} declares a dependency matching this repository's name."
+        return f"Related to {source_repo} in the knowledge graph."
+
+    def _record_relationships(
+        self,
+        recorder: Recorder,
+        cross_repository_edges: list[dict[str, Any]],
+        repo_facts: list[Any],
+        repos_evidence: Any,
+    ) -> list[str]:
+        """Record a `repository_relationship` fact for *every* real
+        cross-repository graph edge observed (see
+        `app.indexer.graph.cross_repo_linker`), unconditionally — this sole
+        renderer of `reason` text (`_relationship_reason`) stores it onto the
+        fact so `capabilities.resync_relationship_candidates` never needs to
+        recompute it or call back into this module.
+
+        Deciding *which* of these ever becomes a suggested candidate (only
+        ever from an already-explicit source, per ADR 0010 Theme A) is not
+        this method's job — it happens later, in the resync hook, which can
+        run on a cycle after this one recorded the fact. Recording every edge
+        here regardless of whether its source is explicit *yet* is exactly
+        what closes the ordering gap the original implementation had.
+        """
+        by_name = {f.subject: f for f in repo_facts}
+        recorded: list[str] = []
+        for edge in cross_repository_edges:
+            source_repo = str(edge.get("source_repository", ""))
+            target_repo = str(edge.get("target_repository", ""))
+            if not source_repo or target_repo not in by_name:
+                continue
+            rel_type = str(edge.get("type", ""))
+            properties = dict(edge.get("properties") or {})
+            reason = self._relationship_reason(source_repo, rel_type, properties)
+            fact = recorder.fact_once(
+                "repository_relationship",
+                target_repo,
+                value={
+                    "via": rel_type,
+                    "source_repository": source_repo,
+                    "reason": reason,
+                    **properties,
+                },
+                evidence=repos_evidence,
+                unique_on=("via", "source_repository"),
+            )
+            recorded.append(fact.subject)
+        return recorded
 
 
 def default_investigators() -> list[Any]:

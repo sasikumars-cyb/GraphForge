@@ -42,7 +42,7 @@ from collections import defaultdict
 
 from app.core.exceptions import AppError
 from app.graph.interfaces import IGraphRepository
-from app.graph.models import GraphNode, GraphPayload
+from app.graph.models import GraphEdge, GraphNode, GraphPayload
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,18 @@ class GraphHopBudgetRepository(IGraphRepository):
         # regardless of budget, same reasoning `verify_repository` already
         # relies on (see app.agents.code_generation.verification).
         return await self._inner.has_graph(repository_id)
+
+    async def replace_cross_repository_edges(
+        self, source_repository_id: str, edges: list[GraphEdge]
+    ) -> None:
+        raise NotImplementedError(
+            "GraphHopBudgetRepository is read-only — cross-repository edges are written "
+            "by the indexer's cross_repo_linker, never by an agent run."
+        )
+
+    async def get_outgoing_cross_repository_edges(self, repository_id: str) -> list[GraphEdge]:
+        self._consume(repository_id, "get_outgoing_cross_repository_edges")
+        return await self._inner.get_outgoing_cross_repository_edges(repository_id)
 
 
 def build_hop_budgeted_repository(

@@ -44,6 +44,7 @@ from app.agents._contract import (
 from app.agents.confidence import WeightedEvidence, calculate_weighted_confidence
 from app.agents.engineering_review.schemas import (
     CompletenessFinding,
+    CrossRepositoryImpact,
     DependencyAssessment,
     EngineeringReadinessReport,
     RiskAssessment,
@@ -59,6 +60,9 @@ from app.agents.stage_context import (
 )
 from app.agents.stage_context import (
     format_planning_block as _format_planning_block,
+)
+from app.agents.stage_context import (
+    format_repository_relationships_block as _format_repository_relationships_block,
 )
 from app.agents.stage_context import (
     format_testing_block as _format_testing_block,
@@ -165,6 +169,7 @@ def _build_blueprint_context(
     testing_result: dict[str, Any] | None,
     documentation_result: dict[str, Any] | None,
     verification_warnings: list[str],
+    context_discovery_result: dict[str, Any] | None = None,
 ) -> str:
     sections = [
         f"## Original Objective\n{original_objective}",
@@ -173,6 +178,8 @@ def _build_blueprint_context(
         _format_testing_block(testing_result),
         _format_documentation_block(documentation_result),
     ]
+    if relationships_block := _format_repository_relationships_block(context_discovery_result):
+        sections.append(relationships_block)
     if verification_warnings:
         sections.append(
             "## Pre-existing Verification Warnings (deterministic, not LLM-generated)\n"
@@ -264,6 +271,15 @@ def _parse_llm_response(raw: str, goal: str) -> EngineeringReadinessReport:
         for d in data.get("dependency_assessment", [])
     ]
 
+    cross_repository_impact = [
+        CrossRepositoryImpact(
+            repository=c.get("repository", ""),
+            depends_on=c.get("depends_on", []),
+            concern=c.get("concern", ""),
+        )
+        for c in data.get("cross_repository_impact", [])
+    ]
+
     return EngineeringReadinessReport(
         goal=goal,
         executive_summary=data.get("executive_summary", ""),
@@ -273,6 +289,7 @@ def _parse_llm_response(raw: str, goal: str) -> EngineeringReadinessReport:
         component_review=data.get("component_review", []),
         risk_assessment=risk_assessment,
         dependency_assessment=dependency_assessment,
+        cross_repository_impact=cross_repository_impact,
         test_strategy_review=data.get("test_strategy_review", []),
         blocking_issues=data.get("blocking_issues", []),
         recommendations=data.get("recommendations", []),
@@ -302,6 +319,14 @@ class EngineeringReviewAgent:
         documentation_result = (
             get_stage_result(workflow, "documentation_planning") if workflow else None
         )
+        # Read-only, same pattern as the four stage reads above — this agent
+        # runs no tools, so a repository-relationships section (when Context
+        # Discovery found more than one repository in scope) is the only way
+        # it ever sees *why* a suggested repository was included, beyond
+        # whatever Planning's own `target_repositories` line already named.
+        context_discovery_result = (
+            get_stage_result(workflow, "context_discovery") if workflow else None
+        )
 
         prior_verification_warnings = _collect_verification_warnings(
             planning_result, development_result, testing_result, documentation_result
@@ -313,6 +338,7 @@ class EngineeringReviewAgent:
             testing_result,
             documentation_result,
             prior_verification_warnings,
+            context_discovery_result,
         )
 
         logger.info(

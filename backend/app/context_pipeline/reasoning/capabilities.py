@@ -40,7 +40,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -345,13 +345,37 @@ def _verify_work_item(ledger: Ledger, claim: str) -> bool:
 def _repository_signals(ledger: Ledger) -> list[ConfidenceSignal]:
     repositories = ledger.facts_of("repository")
     candidates = ledger.live_inferences("repository_candidate")
+    # Explicit candidates (the request itself named the repository, or a
+    # human's claim was corroborated) always satisfy "identified" on their
+    # own, however many *suggested* candidates also exist — two repositories
+    # the request named together is not ambiguity. Ambiguity is only ever
+    # among suggested candidates with no explicit match, which is exactly
+    # the `len(candidates) == 1` fallback below.
+    explicit_candidates = [c for c in candidates if c.value.get("source") == "explicit"]
+    identified = bool(explicit_candidates) or len(candidates) == 1
+    identified_fact_ids = (
+        [fid for c in explicit_candidates for fid in c.supporting_fact_ids]
+        if explicit_candidates
+        else (candidates[0].supporting_fact_ids if identified else [])
+    )
     repo_names = {f.subject for f in repositories}
     matched_refs = [
         f
         for f in ledger.facts_of("reference")
         if f.value.get("type") in _REPOSITORY_REFERENCE_TYPES and f.subject in repo_names
     ]
-    identified = len(candidates) == 1
+    # ADR 0010 (Theme E) — a repository the request names that the user
+    # tracks but hasn't indexed (`RequestParseInvestigator.
+    # _match_tracked_repository_names`, `value["indexed"] is False`) is a
+    # different, more actionable situation than "the request doesn't name
+    # a known repository at all" — this signal stays unsatisfied either
+    # way (an unindexed repository still can't be used), but the detail
+    # text tells the user specifically what to do.
+    unindexed_refs = [
+        f
+        for f in ledger.facts_of("reference")
+        if f.value.get("type") in _REPOSITORY_REFERENCE_TYPES and f.value.get("indexed") is False
+    ]
 
     return [
         signal(
@@ -372,15 +396,35 @@ def _repository_signals(ledger: Ledger) -> list[ConfidenceSignal]:
                 else "no repository could be matched to this request"
             ),
             evidence_ids=ledger.evidence_for("repository"),
-            fact_ids=candidates[0].supporting_fact_ids if identified else [],
+            fact_ids=identified_fact_ids,
         ),
         signal(
             "Request names a repository that matched an indexed one",
             bool(matched_refs),
             1.0,
-            detail="the request does not name a known repository",
+            detail=(
+                f"'{unindexed_refs[0].subject}' was mentioned but hasn't been indexed yet"
+                if unindexed_refs
+                else "the request does not name a known repository"
+            ),
             evidence_ids=[f.evidence_id for f in matched_refs],
             fact_ids=[f.fact_id for f in matched_refs],
+        ),
+        # Subsumes the retired `implementation_candidates` capability's
+        # "ranked" signal (ADR 0010, Theme B) — `repository` is now the sole
+        # owner of every "do we know which repository/repositories this
+        # work touches" signal, so this and "Owning repository identified"
+        # can never drift into two different definitions of the same thing
+        # again. Deliberately distinct from "identified": a request can have
+        # live candidates (this signal) without any of them being explicit
+        # or a lone survivor (that signal) — the genuine-ambiguity case.
+        signal(
+            "Candidate implementation sites found",
+            bool(candidates),
+            1.0,
+            detail="no repository could be ranked or suggested as a candidate",
+            evidence_ids=ledger.evidence_for("repository"),
+            fact_ids=[fid for c in candidates for fid in c.supporting_fact_ids],
         ),
     ]
 
@@ -432,12 +476,293 @@ def _repository_question(ctx: QuestionContext) -> ClarificationQuestion | None:
 
 
 def _verify_repository(ledger: Ledger, claim: str) -> bool:
-    # Corroboration means a *subsequent investigation* produced a candidate
-    # for exactly this repository — never that the answer string looked
-    # plausible.
+    # Corroboration means the graph independently confirmed this repository
+    # exists — checked against the `repository` FACT itself, never against a
+    # derived `repository_candidate` inference. Checking the inference would
+    # be circular: the inference that would corroborate a verified claim is
+    # only (re)computed by `resync_verified_claim_candidates`, which itself
+    # runs *after* `engine._settle_claims` decides whether this claim held
+    # (see ADR 0010 §7, item 1) — so at the moment this function is called,
+    # no such inference can exist yet even for a claim that's about to be
+    # corroborated.
+    return any(f.subject.lower() == claim.lower() for f in ledger.facts_of("repository"))
+
+
+# Runner-up repository within this fraction of the leader's relevance score
+# is treated as equally plausible, so both survive as candidates and the
+# `repository` capability's "Owning repository identified" signal stays
+# unsatisfied unless one of them is separately explicit. Public (not
+# underscore-prefixed): `investigators.GraphInvestigator` imports this same
+# constant to phrase its observation text ("'X' is the clear match" vs "N
+# repositories score almost identically"), so the two modules can never
+# describe a ranking differently from how `resync_ranked_candidates`
+# actually interprets it — interpreting a ranking is still exclusively the
+# resync hooks' job (ADR 0010, invariant I3); this constant is shared
+# because both a narration and a decision need to agree on what "tied"
+# means, not because the investigator makes the decision too.
+TIE_RATIO = 0.9
+
+
+def _has_live_candidate(ledger: Ledger, name: str) -> bool:
     return any(
-        c.statement.lower() == claim.lower() for c in ledger.live_inferences("repository_candidate")
+        i.kind == "repository_candidate" and not i.withdrawn and i.statement == name
+        for i in ledger.inferences
     )
+
+
+def _has_live_assumption(ledger: Ledger, statement: str) -> bool:
+    return any(
+        i.kind == "assumption" and not i.withdrawn and i.statement == statement
+        for i in ledger.inferences
+    )
+
+
+def _is_explicit_repository(ledger: Ledger, name: str) -> bool:
+    """Whether `name` qualifies as an *explicit* repository candidate,
+    computed directly from facts — never from a previously-written
+    inference. This is what makes `resync_ranked_candidates` and
+    `resync_relationship_candidates` safe to call in any order relative to
+    `resync_repository_candidates`/`resync_verified_claim_candidates`
+    (ADR 0010, invariant I3's order-independence requirement): if this
+    instead read `live_inferences(...)`, a suggested-candidate hook running
+    before the explicit-candidate hooks in a given pass would see nothing
+    explicit yet and wrongly promote the same name as merely suggested.
+    """
+    if name not in {f.subject for f in ledger.facts_of("repository")}:
+        return False
+    for ref in ledger.facts_of("reference"):
+        if ref.subject == name and ref.value.get("type") in _REPOSITORY_REFERENCE_TYPES:
+            return True
+    for claim in ledger.facts_of("user_statement", verified_only=True):
+        if claim.subject == name and claim.value.get("capability") == "repository":
+            return True
+    return False
+
+
+def resync_repository_candidates(ledger: Ledger) -> None:
+    """Ledger invariant, re-established every reasoning cycle: every indexed
+    repository explicitly referenced in the request text has a live
+    `repository_candidate` inference tagged `source: "explicit"`.
+
+    Pure and I/O-free — it only reads `reference`/`repository` facts already
+    in the ledger, so it runs on *every* cycle (see `engine._resync`), not
+    only when `GraphInvestigator` itself happens to run. This matters
+    because of a real ordering gap: a local repository name can only be
+    recognized once repository facts exist (see `RequestParseInvestigator`'s
+    `match_repository_names` pass), which can land on a cycle *after*
+    ranking already satisfied the `repository` capability with a single
+    (merely suggested) leader — at which point nothing would ever propose
+    another graph action, and a second, explicitly-named repository would
+    never get promoted at all. Re-deriving this invariant on every cycle,
+    independent of investigator scheduling, is what closes that gap.
+
+    Additive only — withdrawal of stale `repository_candidate` inferences is
+    owned centrally by `engine._resync`, once per resync pass, before any
+    hook runs (ADR 0010 §7). A hook that withdrew its own kind's inferences
+    could erase what an earlier hook in the same pass already wrote.
+    """
+    repositories = {f.subject: f for f in ledger.facts_of("repository")}
+    if not repositories:
+        return
+    for ref in ledger.facts_of("reference"):
+        if ref.value.get("type") not in _REPOSITORY_REFERENCE_TYPES:
+            continue
+        repo_fact = repositories.get(ref.subject)
+        if repo_fact is None or _has_live_candidate(ledger, ref.subject):
+            continue
+        ledger.add_inference(
+            kind="repository_candidate",
+            statement=ref.subject,
+            supporting_fact_ids=[repo_fact.fact_id, ref.fact_id],
+            value={"source": "explicit", "reason": "Named directly in the request."},
+        )
+
+
+def resync_verified_claim_candidates(ledger: Ledger) -> None:
+    """Promotes a corroborated human answer about which repository this work
+    belongs to into an explicit candidate — the second of the two `source:
+    "explicit"` origins (the first is `resync_repository_candidates`, for
+    text the request itself named).
+
+    A claim counts as corroborated once `Fact.verified` is raised `True`
+    (only `engine._settle_claims` ever does that) for a `user_statement`
+    fact whose `value["capability"] == "repository"`, and the ledger also
+    holds a `repository` fact with the claimed name — see
+    `_verify_repository`'s own docstring for why that fact-level check, not
+    an inference-level one, is what this depends on.
+    """
+    repositories = {f.subject: f for f in ledger.facts_of("repository")}
+    if not repositories:
+        return
+    for claim in ledger.facts_of("user_statement", verified_only=True):
+        if claim.value.get("capability") != "repository":
+            continue
+        repo_fact = repositories.get(claim.subject)
+        if repo_fact is None or _has_live_candidate(ledger, claim.subject):
+            continue
+        ledger.add_inference(
+            kind="repository_candidate",
+            statement=claim.subject,
+            supporting_fact_ids=[repo_fact.fact_id, claim.fact_id],
+            value={"source": "explicit", "reason": "Confirmed by your answer."},
+        )
+
+
+def resync_ranked_candidates(ledger: Ledger) -> None:
+    """Promotes `source: "suggested"` candidates from two fact sources
+    `GraphInvestigator` only ever *observes*, never interprets (ADR 0010,
+    invariant I1):
+
+    - Exactly one repository indexed at all — unconditionally the sole
+      candidate, cited to the `repository` fact itself, with an `assumption`
+      inference stating the choice was made from absence, not a match.
+    - Two or more repositories indexed and a `repository_ranking` fact
+      exists (the investigator's `rank_repositories` output, recorded
+      verbatim) — every repository scoring within `TIE_RATIO` of the
+      leader is promoted; a single leader also gets an `assumption`
+      inference.
+
+    Both branches skip any name `_is_explicit_repository` already covers —
+    an explicit match is never also listed as merely suggested.
+    """
+    by_name = {f.subject: f for f in ledger.facts_of("repository")}
+    if not by_name:
+        return
+
+    if len(by_name) == 1:
+        only = next(iter(by_name.values()))
+        if not _is_explicit_repository(ledger, only.subject) and not _has_live_candidate(
+            ledger, only.subject
+        ):
+            ledger.add_inference(
+                kind="repository_candidate",
+                statement=only.subject,
+                supporting_fact_ids=[only.fact_id],
+                value={"source": "suggested", "reason": "Only indexed repository."},
+            )
+            statement = (
+                f"This work belongs to '{only.subject}' — it is the only indexed repository, "
+                "not something the request named."
+            )
+            if not _has_live_assumption(ledger, statement):
+                ledger.add_inference(
+                    kind="assumption",
+                    statement=statement,
+                    supporting_fact_ids=[only.fact_id],
+                )
+        return
+
+    ranking_facts = ledger.facts_of("repository_ranking")
+    if not ranking_facts:
+        return
+    if any(_is_explicit_repository(ledger, name) for name in by_name):
+        # A ranking's suggestions are a best guess for when nothing about
+        # this request is confirmed yet. Once any repository is explicit —
+        # named directly, or a corroborated human answer — the ranking's
+        # guess about a *different* repository is superseded, not merely one
+        # candidate among several: continuing to suggest it would relitigate
+        # an ambiguity an explicit answer already resolved. (Relationship-
+        # based suggestions are the opposite: they only ever fire *because*
+        # an explicit repository exists — see `resync_relationship_
+        # candidates` — so they are unaffected by this check.)
+        return
+    scored: list[list[Any]] = ranking_facts[-1].value.get("scored") or []
+    if not scored or scored[0][0] <= 0:
+        return
+
+    top_score = scored[0][0]
+    leaders = [name for score, name in scored if score >= top_score * TIE_RATIO]
+    for name in leaders:
+        fact = by_name.get(name)
+        if (
+            fact is None
+            or _is_explicit_repository(ledger, name)
+            or _has_live_candidate(ledger, name)
+        ):
+            continue
+        ledger.add_inference(
+            kind="repository_candidate",
+            statement=name,
+            supporting_fact_ids=[fact.fact_id],
+            value={"source": "suggested", "reason": "Ranks closely against this request's terms."},
+        )
+
+    if len(leaders) == 1 and not _is_explicit_repository(ledger, leaders[0]):
+        leader_fact = by_name.get(leaders[0])
+        if leader_fact is not None:
+            statement = (
+                f"This work belongs to '{leaders[0]}' — inferred from how closely its "
+                "components match the request, which did not name a repository."
+            )
+            if not _has_live_assumption(ledger, statement):
+                ledger.add_inference(
+                    kind="assumption",
+                    statement=statement,
+                    supporting_fact_ids=[leader_fact.fact_id],
+                )
+
+
+def resync_relationship_candidates(ledger: Ledger) -> None:
+    """Promotes `source: "suggested"` candidates from real cross-repository
+    graph edges (see `app.indexer.graph.cross_repo_linker`), recorded as
+    `repository_relationship` facts by `GraphInvestigator` for *every* edge
+    it observes, unconditionally (ADR 0010, Theme A).
+
+    Only ever promotes a relationship whose `source_repository` is currently
+    explicit — `_is_explicit_repository`, not `live_inferences`, so this is
+    correct regardless of whether this hook runs before or after the
+    explicit-candidate hooks in the same pass. A suggested candidate's own
+    relationships are never chained into further suggestions (no
+    heuristic-on-heuristic compounding).
+    """
+    by_name = {f.subject: f for f in ledger.facts_of("repository")}
+    if not by_name:
+        return
+    for fact in ledger.facts_of("repository_relationship"):
+        source_repo = str(fact.value.get("source_repository", ""))
+        target_repo = fact.subject
+        if (
+            target_repo not in by_name
+            or not _is_explicit_repository(ledger, source_repo)
+            or _is_explicit_repository(ledger, target_repo)
+            or _has_live_candidate(ledger, target_repo)
+        ):
+            continue
+        ledger.add_inference(
+            kind="repository_candidate",
+            statement=target_repo,
+            supporting_fact_ids=[by_name[target_repo].fact_id, fact.fact_id],
+            value={
+                "source": "suggested",
+                "reason": str(fact.value.get("reason", "")),
+                "relationship": str(fact.value.get("via", "")),
+                # ADR 0010 (Theme E) — "structural" (a literal Feign target
+                # or Kafka topic name) or "heuristic" (a dependency-name
+                # match); threaded through to `RepositoryCandidate` so the
+                # UI can distinguish the two rather than presenting every
+                # suggestion with equal certainty.
+                "confidence": str(fact.value.get("confidence", "")),
+            },
+        )
+
+
+# Pure, no-I/O ledger-consistency steps run every reasoning cycle (see
+# `engine._resync`), regardless of which investigator (if any) acted this
+# cycle. Order matters only for which of two *explicit* sources wins the
+# displayed `reason` text on the rare case both are true for the same
+# repository in the same cycle (`resync_repository_candidates` wins ties
+# over `resync_verified_claim_candidates`) — it never affects which names
+# end up live or whether a name is explicit vs suggested, since
+# `_is_explicit_repository` recomputes that from facts, not from what an
+# earlier hook in this list happened to have written already. A registry,
+# not a hardcoded call, so a future candidate source is one more entry, not
+# an engine change.
+LEDGER_RESYNC_HOOKS: tuple[Callable[[Ledger], None], ...] = (
+    resync_repository_candidates,
+    resync_verified_claim_candidates,
+    resync_ranked_candidates,
+    resync_relationship_candidates,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -538,36 +863,6 @@ def _architecture_remediation(ledger: Ledger) -> list[str]:
 
 
 # ---------------------------------------------------------------------------
-# implementation_candidates
-# ---------------------------------------------------------------------------
-
-
-def _candidates_signals(ledger: Ledger) -> list[ConfidenceSignal]:
-    candidates = ledger.live_inferences("repository_candidate")
-    return [
-        signal(
-            "Candidate implementation sites ranked",
-            bool(candidates),
-            2.0,
-            detail="no repository could be ranked as a candidate",
-            evidence_ids=ledger.evidence_for("repository"),
-            fact_ids=[fid for c in candidates for fid in c.supporting_fact_ids],
-        ),
-        signal(
-            "A single leading candidate",
-            len(candidates) == 1,
-            1.0,
-            detail=(
-                f"{len(candidates)} candidates remain equally ranked"
-                if len(candidates) > 1
-                else "no candidate identified"
-            ),
-            evidence_ids=ledger.evidence_for("repository"),
-        ),
-    ]
-
-
-# ---------------------------------------------------------------------------
 # documentation
 # ---------------------------------------------------------------------------
 
@@ -655,18 +950,6 @@ CAPABILITIES: tuple[Capability, ...] = (
         # No answer a human types can index a repository, so this is
         # remediation-only — and by the question/verify pairing rule it
         # therefore cannot offer a question at all.
-    ),
-    Capability(
-        key="implementation_candidates",
-        label="Implementation candidates",
-        gap_summary="No implementation site could be ranked for this request.",
-        gap_why=(
-            "Knowing the likely implementation site lets Planning talk about real components "
-            "instead of generic advice."
-        ),
-        necessity=lambda _l: "recommended",
-        signals=_candidates_signals,
-        remediation=lambda _l: ["Index the repository"],
     ),
     Capability(
         key="documentation",

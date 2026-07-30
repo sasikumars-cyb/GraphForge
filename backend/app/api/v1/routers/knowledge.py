@@ -39,7 +39,11 @@ from app.schemas.knowledge import (
     KnowledgeSourceInfo,
     TransportInfo,
 )
-from app.tools.setup import build_tool_for_connection, sync_knowledge_connection_to_tool
+from app.tools.setup import (
+    build_tool_for_connection,
+    resync_knowledge_connections_for_source,
+    sync_knowledge_connection_to_tool,
+)
 
 router = APIRouter(prefix="/knowledge", tags=["knowledge-sources"])
 
@@ -287,13 +291,13 @@ async def update_connection(
     await db.commit()
     await db.refresh(row)
 
-    credentials: dict[str, Any] = {}
-    if row.encrypted_credentials:
-        try:
-            credentials = json.loads(decrypt_secret(row.encrypted_credentials))
-        except Exception:
-            credentials = {}
-    sync_knowledge_connection_to_tool(row.source_type, row.transport, row.config or {}, credentials)
+    # Re-derive the Tool Registry from the DB rather than pushing this one
+    # row's config directly: if the edit just disabled this connection (or
+    # left its credentials incomplete), pushing it as-is would activate a
+    # broken/disabled connection — or, if it happened to be the connection
+    # the registry was already serving, leave the registry stuck on stale
+    # config with no way to notice it should fall back to another one.
+    await resync_knowledge_connections_for_source(db, row.source_type)
 
     return _row_to_info(row)
 
@@ -309,8 +313,16 @@ async def delete_connection(
 ) -> None:
     row = await db.get(KnowledgeConnection, connection_id)
     if row is not None:
+        source_type = row.source_type
         await db.delete(row)
         await db.commit()
+        # The Tool Registry holds one live instance per tool, independent of
+        # the row that configured it — deleting the row alone left that
+        # instance (and the now-deleted connection's decrypted credentials)
+        # serving every lookup indefinitely, since nothing else ever
+        # re-reads the table until the process restarts. Re-sync immediately
+        # so a deleted connection stops being usable the moment it's gone.
+        await resync_knowledge_connections_for_source(db, source_type)
         return
 
     # Not a generic connection — check whether it's the caller's synthetic

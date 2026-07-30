@@ -52,10 +52,26 @@ FactKind = Literal[
     "pull_request",
     # A repository that exists and is indexed in the knowledge graph.
     "repository",
+    # The relevance-ranked scoring of every indexed repository against the
+    # request, as computed by `rank_repositories` during a broad (unfocused)
+    # graph survey. Subject is always the fixed literal "ranking"; `value`
+    # carries the scored list. Investigators only ever *observe* this score
+    # — see `app.context_pipeline.reasoning.capabilities.resync_ranked_
+    # candidates`, the sole interpreter of what a ranking means for
+    # candidacy (ADR 0010, invariant I3).
+    "repository_ranking",
     # An architecture component discovered by graph traversal.
     "component",
     # A Kafka topic discovered by graph traversal.
     "topic",
+    # A real cross-repository graph edge (see
+    # `app.indexer.graph.cross_repo_linker`) from an already-identified
+    # repository to another indexed one — subject is the *other*
+    # repository's name, `value` carries the edge's type and properties.
+    # What a `repository_candidate` inference with `source: "suggested"`
+    # cites as its evidence, so a suggestion is always traceable to a real
+    # graph relationship rather than only a ranking score.
+    "repository_relationship",
     # Something the human asserted. A claim, NOT a verified fact — see
     # `Fact.verified` and engine.py's verify-then-resolve flow.
     "user_statement",
@@ -149,6 +165,11 @@ class Inference(BaseModel):
     kind: InferenceKind
     statement: str
     supporting_fact_ids: list[str] = Field(default_factory=list)
+    # Structured detail beyond the statement string — e.g. a
+    # `repository_candidate`'s `{"source": "explicit" | "suggested", "reason":
+    # ..., "relationship": ...}`. Defaults to `{}` so every inference
+    # recorded before this field existed deserializes unchanged.
+    value: dict[str, Any] = Field(default_factory=dict)
     iteration: int = 0
     withdrawn: bool = False
 
@@ -230,6 +251,7 @@ class Ledger(BaseModel):
         kind: InferenceKind,
         statement: str,
         supporting_fact_ids: list[str],
+        value: dict[str, Any] | None = None,
         iteration: int = 0,
     ) -> Inference:
         """Record an interpretation. Requires at least one supporting fact —
@@ -245,6 +267,7 @@ class Ledger(BaseModel):
             kind=kind,
             statement=statement,
             supporting_fact_ids=list(supporting_fact_ids),
+            value=value or {},
             iteration=iteration,
         )
         self.inferences.append(inference)

@@ -48,8 +48,26 @@ _ALLOWED_REL_TYPES = frozenset(
         "INHERITS_FROM",
         "READS_FROM",
         "WRITES_TO",
+        # Cross-repository relationships — see
+        # app.indexer.graph.cross_repo_linker, the only writer of these.
+        # Unlike every other relationship above, both endpoints of these
+        # three carry *different* `repository_id` values (each repository's
+        # own `Repository` node) - the one deliberate exception to this
+        # module's per-repository isolation.
+        "CALLS_SERVICE",
+        "SHARES_TOPIC",
+        "DEPENDS_ON_REPOSITORY",
     }
 )
+
+# The subset of `_ALLOWED_REL_TYPES` that cross repository boundaries -
+# `replace_cross_repository_edges`'s delete is scoped to exactly these so it
+# can never touch the per-repository edges `replace_repository_graph` owns.
+_CROSS_REPO_REL_TYPES = frozenset({"CALLS_SERVICE", "SHARES_TOPIC", "DEPENDS_ON_REPOSITORY"})
+
+
+def _repository_node_id(repository_id: str) -> str:
+    return f"{repository_id}:repository"
 
 # Base label every node gets, regardless of its semantic labels - lets a
 # single index cover `id`/`repository_id` lookups for every node type.
@@ -192,3 +210,46 @@ class Neo4jGraphRepository(IGraphRepository):
             )
             record = await result.single()
             return bool(record["has_nodes"]) if record else False
+
+    async def replace_cross_repository_edges(
+        self, source_repository_id: str, edges: list[GraphEdge]
+    ) -> None:
+        source_node_id = _repository_node_id(source_repository_id)
+        async with self._driver.session() as session, await session.begin_transaction() as tx:
+            # Scoped on both the source node id AND the cross-repo rel-type
+            # set, so this can never delete a same-repository edge that
+            # happens to start at the Repository node (e.g. CONTAINS) nor
+            # another repository's own outgoing cross-repo edges.
+            await tx.run(
+                f"""
+                MATCH (a {{id: $source_node_id}})-[r]->(b)
+                WHERE type(r) IN {list(_CROSS_REPO_REL_TYPES)!r}
+                DELETE r
+                """,
+                source_node_id=source_node_id,
+            )
+            await self._write_edges(tx, edges)
+            await tx.commit()
+
+    async def get_outgoing_cross_repository_edges(self, repository_id: str) -> list[GraphEdge]:
+        source_node_id = _repository_node_id(repository_id)
+        async with self._driver.session() as session:
+            result = await session.run(
+                f"""
+                MATCH (a {{id: $source_node_id}})-[r]->(b)
+                WHERE type(r) IN {list(_CROSS_REPO_REL_TYPES)!r}
+                RETURN r, b
+                """,
+                source_node_id=source_node_id,
+            )
+            records = [record async for record in result]
+
+        return [
+            GraphEdge(
+                source_id=record["r"].start_node["id"],
+                target_id=record["b"]["id"],
+                type=record["r"].type,
+                properties=dict(record["r"]),
+            )
+            for record in records
+        ]

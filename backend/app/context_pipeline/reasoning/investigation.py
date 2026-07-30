@@ -24,8 +24,6 @@ from app.context_pipeline.reasoning.ledger import (
     EvidenceRecord,
     Fact,
     FactKind,
-    Inference,
-    InferenceKind,
     Ledger,
     Outcome,
 )
@@ -186,16 +184,15 @@ class Recorder:
             return found
         return self.fact(kind, subject, value=value, text=text, evidence=evidence)
 
-    def inference(self, kind: InferenceKind, statement: str, supporting: list[Fact]) -> Inference:
-        return self._ledger.add_inference(
-            kind=kind,
-            statement=statement,
-            supporting_fact_ids=[f.fact_id for f in supporting],
-            iteration=self._iteration,
-        )
-
-    def withdraw(self, kind: InferenceKind) -> None:
-        self._ledger.withdraw_inferences(kind)
+    # No `inference()`/`withdraw()` methods here, deliberately (ADR 0010,
+    # invariant I1 — "Investigators observe. They never interpret."). An
+    # investigator's `run()` receives only this `Recorder`, and this
+    # `Recorder` has no method capable of writing or withdrawing an
+    # `Inference` — interpretation of facts into inferences happens
+    # exclusively in `capabilities.LEDGER_RESYNC_HOOKS`, which operate on a
+    # raw `Ledger` (see `engine._resync`), not on a `Recorder`. This is
+    # structural enforcement, not a convention: there is no API surface here
+    # for an investigator to violate the invariant with even if it wanted to.
 
 
 @dataclass

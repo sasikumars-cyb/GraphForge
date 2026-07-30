@@ -201,6 +201,29 @@ def _select(
 # ---------------------------------------------------------------------------
 
 
+def _resync(state: WorkingContext) -> None:
+    """Re-establish every ledger interpretation invariant from the facts
+    currently in `state.ledger` — the single place `repository_candidate`
+    inferences are withdrawn and recomputed (ADR 0010, invariant I3).
+
+    Withdrawal happens once, here, before any hook runs — never inside a
+    hook itself. A hook that withdrew its own kind's inferences could erase
+    what an earlier hook in the same pass already wrote; centralizing it
+    here is what lets every hook in `capabilities.LEDGER_RESYNC_HOOKS` be
+    purely additive and therefore safe to run in any order.
+
+    Called on every reasoning cycle (`investigate`'s loop), once more after
+    the loop exits, and once more after `_settle_claims` in `resume()` —
+    that third call site matters: `_settle_claims` is the only place a
+    `Fact.verified` flips, and it runs *after* `investigate()` returns, so
+    without resyncing again afterward a claim verified in this call would
+    never be reflected in the readiness/gaps `resume()`'s caller sees.
+    """
+    state.ledger.withdraw_inferences("repository_candidate")
+    for hook in capabilities.LEDGER_RESYNC_HOOKS:
+        hook(state.ledger)
+
+
 async def investigate(
     state: WorkingContext,
     session: SessionContext,
@@ -219,6 +242,7 @@ async def investigate(
         state.metadata.iteration += 1
         iteration = state.metadata.iteration
 
+        _resync(state)
         state.refresh_assessments()
 
         candidates = _candidate_actions(state, pool)
@@ -277,6 +301,7 @@ async def investigate(
     # Whether we ran out of proposals or out of budget, automated
     # investigation is over — this is the gate `next_question()` waits on.
     state.metadata.providers_exhausted = True
+    _resync(state)
     state.refresh_assessments()
     _sync_gaps(state)
     state.derived["enriched_text"] = render_enriched_text(state)
@@ -325,8 +350,19 @@ def _settle_claims(state: WorkingContext) -> None:
             # user_statement fact stops being an outstanding claim. This is the
             # only place a fact's `verified` flag is ever raised, and it only
             # happens after `_verify_claim` found real supporting evidence.
+            #
+            # Matched by question_id, not by answer text: two different
+            # clarification questions answered with the same literal string
+            # in one run (e.g. both answered "payment-service") must not let
+            # verifying one silently verify the other's fact too — each
+            # claim is corroborated (or not) independently.
+            question_id = gap.question.question_id if gap.question else None
             for fact in state.ledger.facts_of("user_statement", verified_only=False):
-                if fact.subject == gap.user_claim and not fact.verified:
+                if (
+                    fact.subject == gap.user_claim
+                    and fact.value.get("question_id") == question_id
+                    and not fact.verified
+                ):
                     fact.verified = True
             state.transcript.say(
                 "conclusion",
@@ -553,6 +589,12 @@ async def resume(
         max_cycles=state.metadata.iteration + MAX_CYCLES,
     )
     _settle_claims(state)
+    # `_settle_claims` is the only place a `Fact.verified` flips (a claimed
+    # `user_statement` becoming corroborated) — resync once more so a claim
+    # verified in this very call is reflected as an explicit candidate
+    # before readiness/gaps are computed below (ADR 0010 §7, item 1; see
+    # `_resync`'s own docstring for why this call site exists).
+    _resync(state)
     state.refresh_assessments()
     _sync_gaps(state)
     _conclude(state)

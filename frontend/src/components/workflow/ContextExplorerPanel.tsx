@@ -20,6 +20,7 @@ import type {
 } from "../../types/agent";
 import { overrideStageResult } from "../../lib/api/workflows";
 import { useAuth } from "../../app/auth-context";
+import { RepositorySelector } from "./RepositorySelector";
 
 /** How the reasoning engine narrates itself. `intent` lines are what it was
  * about to do; `observation` lines are what it found. Rendering them
@@ -330,6 +331,13 @@ export function ContextExplorerPanel({
           </div>
           {report?.headline && <p className="text-xs text-fg-secondary">{report.headline}</p>}
         </div>
+
+        <RepositorySelector
+          workflowId={workflowId}
+          result={result}
+          humanOverride={humanOverride}
+          onOverridden={onOverridden}
+        />
 
         {/* How it got there. */}
         {report?.transcript && report.transcript.length > 0 && (

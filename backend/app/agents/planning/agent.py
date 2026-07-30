@@ -43,6 +43,7 @@ import contextlib
 import logging
 import re
 import time
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -384,10 +385,58 @@ class _ResolvedContext:
     graph_components: list[dict[str, Any]]
     graph_topics: list[dict[str, Any]]
     ranked_repo_names: list[str]
+    # The confirmed set of repositories this work touches — Context
+    # Discovery's explicit-plus-human-selected repositories (or, for a
+    # result persisted before multi-repository selection existed, the
+    # single repository the old single-candidate behavior would have used).
+    # Always non-empty when `ranked_repo_names` is; `ranked_repo_names[0]`
+    # remains in here as element `[0]` whenever selection couldn't be
+    # determined, so every existing single-repo caller of `ranked_repo_
+    # names[0]` keeps working unchanged.
+    selected_repo_names: list[str]
     graph_context_text: str
     graph_available: bool
     graph_has_data: bool
     evidence: list[Evidence]
+
+
+def _selected_repo_names(result: dict[str, Any], ranked_repo_names: list[str]) -> list[str]:
+    """The repositories Planning should treat as confirmed for this work.
+
+    `repositories` (ADR 0010 §2's canonical model) is checked first and, if
+    present, is authoritative — `selected` is re-derived from it directly
+    rather than trusted from the stored `selected_repositories` projection
+    key, because a human override always targets `repositories` itself
+    (`_OVERRIDABLE_FIELDS["context_discovery"]` in `workflow_service.py`)
+    and `get_stage_result()`'s merge is a shallow dict replace: it never
+    recomputes `selected_repositories` after `repositories` changes, so
+    trusting the stored projection would silently ignore an override
+    (invariant I6).
+
+    For a result persisted before `repositories` existed, the fallback
+    chain continues through `selected_repositories`, then the older
+    `implementation_candidates` (a single-candidate result predating
+    multi-repository selection), then `ranked_repo_names[:1]` (a result
+    predating even that) — every step a real prior schema this codebase has
+    shipped, so an old persisted `AgentStep.result` always resolves to
+    *something* rather than an empty selection.
+    """
+    if "repositories" in result:
+        names = [
+            str(r.get("name", ""))
+            for r in (result.get("repositories") or [])
+            if r.get("selected")
+        ]
+        return names or ranked_repo_names[:1]
+    selected = result.get("selected_repositories")
+    if selected:
+        names = [str(r.get("name", "")) for r in selected if r.get("name")]
+        if names:
+            return names
+    candidates = result.get("implementation_candidates")
+    if candidates:
+        return list(candidates)
+    return ranked_repo_names[:1]
 
 
 async def _resolve_context(context: AgentContext, db: AsyncSession) -> _ResolvedContext:
@@ -411,13 +460,15 @@ async def _resolve_context(context: AgentContext, db: AsyncSession) -> _Resolved
             len(context_discovery_result.get("graph_components") or []),
             len(context_discovery_result.get("graph_topics") or []),
         )
+        ranked_repo_names = context_discovery_result.get("ranked_repository_names") or []
         return _ResolvedContext(
             task_description=enriched_text,
             profile=analyse(enriched_text),
             indexed_repos=context_discovery_result.get("indexed_repositories") or [],
             graph_components=context_discovery_result.get("graph_components") or [],
             graph_topics=context_discovery_result.get("graph_topics") or [],
-            ranked_repo_names=context_discovery_result.get("ranked_repository_names") or [],
+            ranked_repo_names=ranked_repo_names,
+            selected_repo_names=_selected_repo_names(context_discovery_result, ranked_repo_names),
             graph_context_text=context_discovery_result.get("graph_context_text") or "",
             graph_available=bool(context_discovery_result.get("graph_available")),
             graph_has_data=bool(context_discovery_result.get("graph_has_data")),
@@ -482,6 +533,7 @@ async def _resolve_context(context: AgentContext, db: AsyncSession) -> _Resolved
         graph_components=discovered["graph_components"],
         graph_topics=discovered["graph_topics"],
         ranked_repo_names=discovered["ranked_repository_names"],
+        selected_repo_names=_selected_repo_names(discovered, discovered["ranked_repository_names"]),
         graph_context_text=discovered["graph_context_text"],
         graph_available=discovered["graph_available"],
         graph_has_data=discovered["graph_has_data"],
@@ -543,6 +595,7 @@ class PlanningAgent:
         graph_components: list[dict[str, Any]] = resolved.graph_components
         graph_topics: list[dict[str, Any]] = resolved.graph_topics
         ranked_repo_names: list[str] = resolved.ranked_repo_names
+        selected_repo_names: list[str] = resolved.selected_repo_names
         component_count = len(graph_components)
         topic_count = len(graph_topics)
 
@@ -607,12 +660,17 @@ class PlanningAgent:
             for repo, comps in components_by_repo.items()
         }
 
-        def _owning_repo(claim: str, exclude: str | None) -> str | None:
+        def _owning_repo(claim: str, exclude: Collection[str] | None) -> str | None:
             """Which OTHER indexed repository's own pool actually supports
             this claim, if any — lets a misattribution warning name the
-            real owner instead of just saying "not found"."""
+            real owner instead of just saying "not found". `exclude` is every
+            repository already checked (a single `repository_usage` entry's
+            own name, or the full set of selected/target repositories) —
+            never just one, now that more than one repository can be in
+            scope at once."""
+            excluded = set(exclude or ())
             for repo, pool in per_repo_pool.items():
-                if repo == exclude:
+                if repo in excluded:
                     continue
                 if verification.verify_claims([claim], pool).all_verified:
                     return repo
@@ -749,6 +807,7 @@ class PlanningAgent:
 
         # Back-fill repositories_consulted from the graph traversal
         planning_result.repositories_consulted = [r["name"] for r in indexed_repos]
+        planning_result.target_repositories = list(selected_repo_names)
 
         # Never trust the LLM's self-reported graph_context_used — derive it
         # from what the tools actually returned. If traversal failed or the
@@ -784,7 +843,7 @@ class PlanningAgent:
             )
             verified_file_paths.extend(files_check.verified)
             for path in files_check.unverified:
-                owner = _owning_repo(path, exclude=usage.name)
+                owner = _owning_repo(path, exclude={usage.name})
                 if owner:
                     verification_warnings.append(
                         f"File '{path}' claimed for '{usage.name}' is indexed under "
@@ -805,21 +864,31 @@ class PlanningAgent:
             verification_warnings.append(reuse_mismatch)
 
         # `affected_components` is plan-wide rather than per-repository, so
-        # it's checked against the top-ranked (target) repository's own
-        # pool — the repository the plan is actually about — falling back
-        # to the pooled evidence only when nothing was ranked at all.
-        target_repo = ranked_repo_names[0] if ranked_repo_names else None
-        target_pool = per_repo_pool.get(target_repo, set()) if target_repo else evidence_pool
+        # it's checked against the *union* of every confirmed target
+        # repository's own pool — the repositories the plan is actually
+        # about, however many there are — falling back to the pooled
+        # evidence only when nothing was ranked/selected at all. A single
+        # selected repository (today's exact prior behavior) reduces this
+        # to exactly the old single-`target_repo` check.
+        target_repos: list[str] = selected_repo_names or (
+            [ranked_repo_names[0]] if ranked_repo_names else []
+        )
+        target_pool: set[str] = set()
+        for repo in target_repos:
+            target_pool |= per_repo_pool.get(repo, set())
+        if not target_repos:
+            target_pool = evidence_pool
         components_check = verification.verify_claims(
             planning_result.affected_components, target_pool
         )
         for name in components_check.unverified:
-            owner = _owning_repo(name, exclude=target_repo)
+            owner = _owning_repo(name, exclude=target_repos)
             if owner:
                 verification_warnings.append(
                     f"Affected component '{name}' is indexed under '{owner}', not "
-                    f"under the target repository '{target_repo}' — likely "
-                    "misattributed to the wrong repository."
+                    f"under any of the target repositories "
+                    f"({', '.join(target_repos) or 'none'}) — likely misattributed to "
+                    "the wrong repository."
                 )
             else:
                 verification_warnings.append(

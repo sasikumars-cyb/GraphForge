@@ -115,6 +115,19 @@ function makeResult(overrides: Partial<ContextDiscoveryResult> = {}): ContextDis
     graph_topics: [],
     ranked_repository_names: ["payment-service"],
     implementation_candidates: ["payment-service"],
+    repositories: [
+      {
+        name: "payment-service",
+        source: "suggested",
+        selected: true,
+        reason: "Only indexed repository.",
+      },
+    ],
+    explicit_repositories: [],
+    suggested_repositories: [],
+    selected_repositories: [
+      { name: "payment-service", source: "suggested", selected: true, reason: "Only indexed repository." },
+    ],
     graph_context_text: "graph blob",
     graph_available: true,
     graph_has_data: true,
@@ -283,7 +296,9 @@ describe("ContextExplorerPanel", () => {
     renderWithAuth(
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
-    expect(screen.getByText("payment-service")).toBeInTheDocument();
+    // "payment-service" now also appears in the Repositories panel above
+    // the findings section, so this asserts presence rather than uniqueness.
+    expect(screen.getAllByText("payment-service").length).toBeGreaterThan(0);
     expect(screen.getAllByText(/Queried the graph: 1 repository\./).length).toBeGreaterThan(0);
   });
 

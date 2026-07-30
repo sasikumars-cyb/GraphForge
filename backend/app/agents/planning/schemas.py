@@ -171,6 +171,13 @@ class PlanningResult(BaseModel):
     risk_considerations: list[str] = Field(default_factory=list)
     graph_context_used: bool = False
     repositories_consulted: list[str] = Field(default_factory=list)
+    # The confirmed subset of `repositories_consulted` this work is actually
+    # about — Context Discovery's explicit/selected repositories (see
+    # `reasoning.projection.build_result`'s `selected_repositories`), not
+    # merely every repository the graph traversal happened to touch.
+    # Development/Testing/Engineering Review read this to scope their own
+    # work to what's confirmed rather than everything consulted for context.
+    target_repositories: list[str] = Field(default_factory=list)
     blueprint: dict[str, Any] | None = Field(default=None)
     prompt_version: str = "1.0"
 

@@ -30,6 +30,7 @@ from app.context_pipeline.reasoning.capabilities import assess, overall_confiden
 from app.context_pipeline.reasoning.engine import (
     MAX_CLARIFICATION_ROUNDS,
     _select,
+    _settle_claims,
     discover,
     resume,
 )
@@ -39,9 +40,12 @@ from app.context_pipeline.reasoning.investigation import (
     Recorder,
     SessionContext,
 )
-from app.context_pipeline.reasoning.investigators import GraphInvestigator
+from app.context_pipeline.reasoning.investigators import (
+    GraphInvestigator,
+    RequestParseInvestigator,
+)
 from app.context_pipeline.reasoning.ledger import Ledger
-from app.context_pipeline.reasoning.memory import WorkingContext
+from app.context_pipeline.reasoning.memory import KnowledgeGap, WorkingContext
 from app.context_pipeline.reasoning.projection import build_result, to_contract_evidence
 from app.tools.interfaces import ToolResult
 
@@ -111,8 +115,21 @@ class FakeInvestigator:
                     value={"name": comp, "repository": repo},
                     evidence=traversal,
                 )
-        for fact in facts:
-            recorder.inference("repository_candidate", fact.subject, [fact])
+        if len(facts) > 1:
+            # Simulate a broad, unfocused survey that found every repository
+            # equally plausible — the real `GraphInvestigator` records this
+            # same fact kind (`repository_ranking`); interpreting it into
+            # `repository_candidate` inferences happens entirely in
+            # `capabilities.LEDGER_RESYNC_HOOKS`, never inside an
+            # investigator's `run()` (ADR 0010, invariant I1). A single
+            # repository needs no ranking fact at all — `resync_ranked_
+            # candidates` promotes "the only indexed repository" from the
+            # `repository` fact alone.
+            recorder.fact(
+                "repository_ranking",
+                "ranking",
+                value={"scored": [[1.0, fact.subject] for fact in facts]},
+            )
         return InvestigationOutcome(
             observation=f"{self.name} found {len(self._repositories)} repos.",
             yielded=bool(facts),
@@ -424,13 +441,17 @@ async def test_a_corroborated_answer_verifies_and_moves_confidence() -> None:
             return []
 
         async def run(self, action, session, recorder):  # type: ignore[no-untyped-def]
+            # Records only what it observed — whether the claimed repository
+            # is indexed. Promoting a corroborated claim into an explicit
+            # `repository_candidate` inference is `capabilities.resync_
+            # verified_claim_candidates`'s job, triggered once
+            # `engine._settle_claims` raises `Fact.verified` on the
+            # underlying `user_statement` fact (ADR 0010, invariant I1).
             claim = action.params["claim"]
-            recorder.withdraw("repository_candidate")
             recorder.evidence("success", f"Confirmed {claim} is indexed.")
             existing = recorder.existing_fact("repository", claim)
             if existing is None:
                 return InvestigationOutcome(observation=f"{claim} is not indexed.", yielded=False)
-            recorder.inference("repository_candidate", claim, [existing])
             return InvestigationOutcome(observation=f"Confirmed {claim}.", yielded=True)
 
     resumed = await resume(
@@ -536,6 +557,89 @@ async def test_clarification_rounds_are_capped() -> None:
     gap = state.gap_for("repository")
     assert gap is not None and gap.status == "unresolvable"
     assert gap.recommended_action, "an unresolvable gap must still say what to do"
+
+
+def test_verifying_one_claim_does_not_verify_a_different_claim_with_the_same_text() -> None:
+    """Two different clarification questions answered with the same literal
+    string in one run (e.g. both answered "payment-service") must be
+    corroborated independently. `_settle_claims` used to match a claim's
+    `user_statement` fact by answer text alone, so confirming one gap's
+    claim silently flipped `verified=True` on every other gap's fact that
+    happened to carry the same text — including one that was never itself
+    corroborated."""
+    ledger = Ledger()
+
+    ev1 = ledger.add_evidence(provider="user", action="answer:q1", outcome="success", summary="s1")
+    ledger.add_fact(
+        kind="user_statement",
+        subject="same-answer",
+        provider="user",
+        evidence_id=ev1.evidence_id,
+        value={"question_id": "q1", "capability": "repository"},
+        verified=False,
+    )
+    ev2 = ledger.add_evidence(provider="user", action="answer:q2", outcome="success", summary="s2")
+    ledger.add_fact(
+        kind="user_statement",
+        subject="same-answer",
+        provider="user",
+        evidence_id=ev2.evidence_id,
+        value={"question_id": "q2", "capability": "work_item"},
+        verified=False,
+    )
+    # Only the repository claim gets independently corroborated.
+    repo_fact = ledger.add_fact(
+        kind="repository", subject="same-answer", provider="graph", evidence_id=ev1.evidence_id
+    )
+    ledger.add_inference(
+        kind="repository_candidate",
+        statement="same-answer",
+        supporting_fact_ids=[repo_fact.fact_id],
+    )
+
+    state = WorkingContext(ledger=ledger)
+    state.gaps.append(
+        KnowledgeGap(
+            gap_id="gap_repository",
+            capability="repository",
+            summary="s",
+            why="w",
+            severity="blocking",
+            status="claimed",
+            user_claim="same-answer",
+            question=capabilities.ClarificationQuestion(question_id="q1", question="q", why="w"),
+        )
+    )
+    state.gaps.append(
+        KnowledgeGap(
+            gap_id="gap_work_item",
+            capability="work_item",
+            summary="s",
+            why="w",
+            severity="blocking",
+            status="claimed",
+            user_claim="same-answer",
+            question=capabilities.ClarificationQuestion(question_id="q2", question="q", why="w"),
+        )
+    )
+
+    _settle_claims(state)
+
+    repository_gap = state.gap_for("repository")
+    work_item_gap = state.gap_for("work_item")
+    assert repository_gap is not None and repository_gap.status == "verified"
+    assert work_item_gap is not None and work_item_gap.status == "refuted", (
+        "work_item's own claim was never independently corroborated"
+    )
+
+    facts_by_question = {
+        f.value.get("question_id"): f
+        for f in state.ledger.facts_of("user_statement", verified_only=False)
+    }
+    assert facts_by_question["q1"].verified is True
+    assert facts_by_question["q2"].verified is False, (
+        "verifying q1's claim must not verify q2's fact just because the text matched"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -787,6 +891,63 @@ async def test_a_relevance_ranked_choice_is_also_recorded_as_an_assumption() -> 
 
 
 @pytest.mark.asyncio
+async def test_a_work_item_claim_is_never_proposed_as_a_repository_verification() -> None:
+    """Regression: `GraphInvestigator.propose` looped over every `claimed`
+    gap regardless of its capability, so answering a work_item clarification
+    question (a corrected Jira key) was treated as a repository name to
+    verify. That queried the graph for the ticket key and — because
+    `_reassess_candidates` unconditionally withdraws every live
+    `repository_candidate` inference before checking whether the focus
+    matched anything — silently destroyed an already-correct, already-
+    satisfied repository identification established earlier in the same
+    run, flipping readiness from satisfied to blocked for a reason that had
+    nothing to do with the repository at all.
+    """
+    with patch(
+        "app.context_pipeline.reasoning.investigators.GraphProvider.retrieve",
+        new=AsyncMock(
+            return_value=_graph_tool_result(
+                ["payment-service"], [("RateLimiter", "payment-service")]
+            )
+        ),
+    ):
+        state = await discover(
+            request="Add a rate limiter", session=_session(), investigators=[GraphInvestigator()]
+        )
+
+    assert [i.statement for i in state.ledger.live_inferences("repository_candidate")] == [
+        "payment-service"
+    ]
+    repository = state.assessment_for("repository")
+    assert repository is not None and repository.satisfied is True
+
+    # Simulate a work_item clarification question having just been answered
+    # — nothing to do with the repository, which was already resolved above.
+    state.gaps.append(
+        KnowledgeGap(
+            gap_id="gap_work_item",
+            capability="work_item",
+            summary="s",
+            why="w",
+            severity="blocking",
+            status="claimed",
+            user_claim="PROJ-456",
+        )
+    )
+
+    actions = GraphInvestigator().propose(state)
+    assert not any(a.key.startswith("verify_repository:") for a in actions), (
+        "a work_item claim must never be proposed as a repository verification"
+    )
+
+    # And the already-established repository candidate must survive being
+    # asked to propose again — not merely "no action proposed this time".
+    assert [i.statement for i in state.ledger.live_inferences("repository_candidate")] == [
+        "payment-service"
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_failed_graph_traversal_is_never_grounding_evidence() -> None:
     """The agent contract treats `graph_traversal` as proof the graph was
     consulted. A failed attempt must stay visible but must not carry that kind,
@@ -950,3 +1111,79 @@ def test_architecture_remediation_does_not_blame_a_healthy_graph() -> None:
         summary="connection refused",
     )
     assert "Check the Neo4j connection" in architecture.remediation(broken)
+
+
+# ---------------------------------------------------------------------------
+# Multi-repository selection: explicit vs. suggested
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_two_explicitly_named_repositories_are_both_selected_without_a_question() -> None:
+    """A Jira naming two repositories together must put both in scope, not
+    force a pick-one — the exact bug this feature fixes: 'Repo:
+    ingestion-framework, etl-core' used to read as ambiguity."""
+    with patch(
+        "app.context_pipeline.reasoning.investigators.GraphProvider.retrieve",
+        new=AsyncMock(
+            return_value=_graph_tool_result(
+                ["ingestion-framework", "etl-core", "streaming-pipeline"],
+                [
+                    ("SchemaMerger", "ingestion-framework"),
+                    ("DeltaWriter", "etl-core"),
+                ],
+            )
+        ),
+    ):
+        state = await discover(
+            request=(
+                "Enable Delta Lake mergeSchema for nested struct fields. "
+                "Repo: ingestion-framework, etl-core"
+            ),
+            session=_session(),
+            investigators=[RequestParseInvestigator(), GraphInvestigator()],
+        )
+
+    result = build_result(state)
+    explicit_names = {r["name"] for r in result["explicit_repositories"]}
+    selected_names = {r["name"] for r in result["selected_repositories"]}
+    assert explicit_names == {"ingestion-framework", "etl-core"}
+    assert selected_names == {"ingestion-framework", "etl-core"}
+    assert "streaming-pipeline" not in selected_names
+
+    repository = state.assessment_for("repository")
+    assert repository is not None and repository.satisfied is True
+    assert state.readiness != "BLOCKED"
+    # Two explicit repositories is not ambiguity — no question should ever
+    # be raised over which one to use.
+    repo_gap = state.gap_for("repository")
+    assert repo_gap is None or repo_gap.status != "open"
+
+
+@pytest.mark.asyncio
+async def test_suggested_repositories_are_not_auto_selected_alongside_explicit_ones() -> None:
+    """A repository the ranking merely finds relevant, but the request never
+    named, stays `source: "suggested"` and out of the default selection —
+    the human opts it in via the Repositories panel, it is never silently
+    folded in alongside an explicit repository."""
+    with patch(
+        "app.context_pipeline.reasoning.investigators.GraphProvider.retrieve",
+        new=AsyncMock(
+            return_value=_graph_tool_result(
+                ["ingestion-framework", "etl-core"],
+                [("SchemaMerger", "ingestion-framework"), ("DeltaWriter", "etl-core")],
+            )
+        ),
+    ):
+        state = await discover(
+            request="Enable Delta Lake mergeSchema. Repo: ingestion-framework",
+            session=_session(),
+            investigators=[RequestParseInvestigator(), GraphInvestigator()],
+        )
+
+    result = build_result(state)
+    explicit_names = {r["name"] for r in result["explicit_repositories"]}
+    assert explicit_names == {"ingestion-framework"}
+    selected_names = {r["name"] for r in result["selected_repositories"]}
+    assert selected_names == {"ingestion-framework"}
+    assert "etl-core" not in selected_names

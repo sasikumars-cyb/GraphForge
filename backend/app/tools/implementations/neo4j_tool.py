@@ -112,6 +112,30 @@ class Neo4jGraphTool:
             component_count = len(traverse_obs.data.get("components", []))
             topic_count = len(traverse_obs.data.get("kafka_topics", []))
 
+            # Real cross-repository relationships (see
+            # app.indexer.graph.cross_repo_linker) — one Neo4j read per
+            # indexed repository, each already-cheap relative to the
+            # component/topic traversal above. Only ever connects repos
+            # already in `indexed_repos` (the same user's own), by
+            # construction of the linker that wrote them.
+            id_to_name = {repo["id"]: repo["name"] for repo in indexed_repos}
+            cross_repository_edges: list[dict[str, Any]] = []
+            for repo in indexed_repos:
+                edges = await graph_repo.get_outgoing_cross_repository_edges(repo["id"])
+                for edge in edges:
+                    target_repository_id = edge.target_id.rsplit(":repository", 1)[0]
+                    target_name = id_to_name.get(target_repository_id)
+                    if target_name is None:
+                        continue
+                    cross_repository_edges.append(
+                        {
+                            "source_repository": repo["name"],
+                            "target_repository": target_name,
+                            "type": edge.type,
+                            "properties": dict(edge.properties),
+                        }
+                    )
+
             # Best-first repository names by the same deterministic score
             # `format_graph_context` used to build `context_text` — exposed as
             # its own field so callers (e.g. the entity/tenant mismatch check
@@ -140,6 +164,7 @@ class Neo4jGraphTool:
                     "ranked_repositories": ranked_repositories,
                     "components": traverse_obs.data.get("components", []),
                     "kafka_topics": traverse_obs.data.get("kafka_topics", []),
+                    "cross_repository_edges": cross_repository_edges,
                     # Carry individual observations so the planning agent can
                     # still build its Evidence objects with the correct kinds.
                     "_repos_succeeded": repos_obs.succeeded,

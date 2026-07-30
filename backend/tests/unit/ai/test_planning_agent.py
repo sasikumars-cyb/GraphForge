@@ -23,6 +23,7 @@ from app.agents.planning.agent import (
     PlanningLLMError,
     _render_prompt,
     _reuse_percent_mismatch,
+    _selected_repo_names,
 )
 from app.agents.planning.classifier import analyse, detect_task_mode, extract_key_terms
 from app.agents.planning.schemas import RepositoryUsage
@@ -1169,6 +1170,7 @@ async def test_planning_agent_graph_context_used_true_when_graph_has_data() -> N
     mock_graph_repo.get_nodes_by_label = AsyncMock(
         side_effect=lambda repo_id, label: [component_node] if label == "Component" else []
     )
+    mock_graph_repo.get_outgoing_cross_repository_edges = AsyncMock(return_value=[])
 
     mock_db = context.extras["db"]
     mock_repo = MagicMock()
@@ -1342,6 +1344,7 @@ def _make_two_repo_context() -> tuple[AgentContext, MagicMock]:
         return {"repo-target": [target_component], "repo-other": [other_component]}.get(repo_id, [])
 
     mock_graph_repo.get_nodes_by_label = AsyncMock(side_effect=_nodes_for)
+    mock_graph_repo.get_outgoing_cross_repository_edges = AsyncMock(return_value=[])
 
     mock_db = context.extras["db"]
     # `MagicMock(name=...)` is reserved (sets the mock's own debug name, not
@@ -1494,3 +1497,54 @@ async def test_planning_agent_flags_unindexed_sibling_repo_reference() -> None:
     assert any("MPC" in w and "not itself indexed" in w for w in warnings), (
         f"expected an unindexed-sibling-repo warning, got: {warnings}"
     )
+
+
+# ---------------------------------------------------------------------------
+# ADR 0010 §7 P2 (Theme D) — `_selected_repo_names` reads the canonical
+# `repositories` field, never the stale `selected_repositories` projection
+# ---------------------------------------------------------------------------
+
+
+def test_selected_repo_names_reads_the_canonical_repositories_field() -> None:
+    result = {
+        "repositories": [
+            {"name": "ingestion-framework", "selected": True},
+            {"name": "etl-core", "selected": True},
+            {"name": "streaming-pipeline", "selected": False},
+        ]
+    }
+    assert set(_selected_repo_names(result, [])) == {"ingestion-framework", "etl-core"}
+
+
+def test_selected_repo_names_ignores_a_stale_selected_repositories_key() -> None:
+    """The exact bug this fix closes: after a human override replaces
+    `repositories`, `get_stage_result()`'s shallow merge never recomputes
+    `selected_repositories` — it's still whatever `build_result` originally
+    stored. `repositories` must win whenever it's present at all (ADR 0010,
+    invariant I6)."""
+    result = {
+        "repositories": [{"name": "billing-service", "selected": True}],
+        # Stale — computed from the *pre-override* repositories, must be
+        # ignored now that `repositories` itself is present.
+        "selected_repositories": [{"name": "payment-service"}],
+    }
+    assert _selected_repo_names(result, []) == ["billing-service"]
+
+
+def test_selected_repo_names_falls_back_to_ranked_repo_names_when_nothing_selected() -> None:
+    result = {"repositories": [{"name": "payment-service", "selected": False}]}
+    assert _selected_repo_names(result, ["payment-service", "billing-service"]) == [
+        "payment-service"
+    ]
+
+
+def test_selected_repo_names_falls_back_through_legacy_shapes_when_repositories_is_absent() -> None:
+    """A result persisted before ADR 0010 (no `repositories` key at all)
+    must still resolve via the pre-existing fallback chain."""
+    assert _selected_repo_names(
+        {"selected_repositories": [{"name": "legacy-service"}]}, []
+    ) == ["legacy-service"]
+    assert _selected_repo_names(
+        {"implementation_candidates": ["older-service"]}, []
+    ) == ["older-service"]
+    assert _selected_repo_names({}, ["oldest-service"]) == ["oldest-service"]

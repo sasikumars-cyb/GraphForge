@@ -9,7 +9,7 @@ here, no change to the indexer or the API routers.
 
 from abc import ABC, abstractmethod
 
-from app.graph.models import GraphNode, GraphPayload
+from app.graph.models import GraphEdge, GraphNode, GraphPayload
 
 
 class IGraphRepository(ABC):
@@ -35,4 +35,26 @@ class IGraphRepository(ABC):
     @abstractmethod
     async def has_graph(self, repository_id: str) -> bool:
         """Whether `repository_id` has ever been successfully indexed."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def replace_cross_repository_edges(
+        self, source_repository_id: str, edges: list[GraphEdge]
+    ) -> None:
+        """Delete every previously-computed cross-repository edge whose
+        *source* is `source_repository_id`'s own Repository node, then write
+        `edges` in its place.
+
+        Scoped to `source_repository_id` specifically so re-linking one
+        repository never touches edges another repository's own linking pass
+        created — each repository owns exactly the edges it points *out*
+        from. See `app.indexer.graph.cross_repo_linker`, the only writer.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def get_outgoing_cross_repository_edges(self, repository_id: str) -> list[GraphEdge]:
+        """Every cross-repository edge whose source is `repository_id`'s own
+        Repository node — what Context Discovery reads to turn a real graph
+        relationship into a suggested repository."""
         raise NotImplementedError

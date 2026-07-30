@@ -68,6 +68,26 @@ class ContextDiscoveryResult(BaseModel):
     # is what holds the `repository` capability unsatisfied and, once providers
     # are exhausted, produces the clarification question.
     implementation_candidates: list[str] = Field(default_factory=list)
+
+    # --- Multi-repository selection (ADR 0010 §2 — the canonical model) --
+    # `repositories` is the ONLY field anything ever populates directly —
+    # each entry is `{name, source, selected, reason, relationship, rank,
+    # graph_version}` (see `reasoning.projection.RepositoryCandidate`).
+    # Every field below it is a READ-ONLY compatibility projection, derived
+    # from `repositories` by `reasoning.projection.project_repositories`
+    # and nothing else (invariant I6) — new code must read `repositories`
+    # directly, never these. They're kept only because
+    # `explicit_repositories`/`suggested_repositories`/`selected_
+    # repositories` are pre-existing callers' contract, and `implementation_
+    # candidates`/`ranked_repository_names` (above) predate this model
+    # entirely. Absent from a result persisted before this field existed;
+    # every reader falls back to `implementation_candidates`/
+    # `ranked_repository_names` in that case.
+    repositories: list[dict[str, Any]] = Field(default_factory=list)
+    explicit_repositories: list[dict[str, Any]] = Field(default_factory=list)
+    suggested_repositories: list[dict[str, Any]] = Field(default_factory=list)
+    selected_repositories: list[dict[str, Any]] = Field(default_factory=list)
+
     graph_context_text: str = ""
     graph_available: bool = False
     graph_has_data: bool = False

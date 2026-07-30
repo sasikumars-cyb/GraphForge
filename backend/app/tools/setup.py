@@ -331,3 +331,85 @@ async def sync_all_knowledge_connections_to_tools(db: AsyncSession) -> None:
         sync_knowledge_connection_to_tool(
             row.source_type, row.transport, row.config or {}, credentials
         )
+
+
+async def resync_knowledge_connections_for_source(db: AsyncSession, source_type: str) -> None:
+    """Re-derive the Tool Registry's state for one source type strictly from
+    the connections currently in the database.
+
+    The registry holds exactly one live instance per `tool_id` — "last write
+    wins across however many Knowledge Connections share that source_type"
+    (see `build_tool_for_connection`). That's fine the moment a connection is
+    *created*: the newest write is supposed to win. It silently breaks the
+    moment one is *deleted* or *disabled*, because nothing ever un-configured
+    the registry — a deleted connection's credentials kept answering every
+    Jira/Confluence lookup until the process happened to restart, since only
+    startup (`sync_all_knowledge_connections_to_tools`) ever rebuilt the
+    registry from a fresh read of the table.
+
+    Call this after create/update/delete instead of pushing that one
+    connection's config directly: it re-reads every enabled connection for
+    `source_type`, activates the most recently updated one that actually
+    translates to a complete tool config, and — critically — un-configures
+    the tool when none remain, so a deleted or disabled connection can never
+    keep being served.
+    """
+    from sqlalchemy import select
+
+    from app.core.crypto import decrypt_secret
+    from app.knowledge.registry import get_source
+    from app.models.knowledge_connection import KnowledgeConnection
+
+    rows = (
+        (
+            await db.execute(
+                select(KnowledgeConnection)
+                .where(
+                    KnowledgeConnection.source_type == source_type,
+                    KnowledgeConnection.enabled.is_(True),
+                )
+                .order_by(KnowledgeConnection.updated_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+    for row in rows:
+        credentials: dict[str, Any] = {}
+        if row.encrypted_credentials:
+            try:
+                credentials = json.loads(decrypt_secret(row.encrypted_credentials))
+            except Exception:
+                logger.warning(
+                    "tool_resync_decrypt_failed connection_id=%s source_type=%s",
+                    row.id,
+                    source_type,
+                )
+                continue
+        built = _build_tool_config(row.source_type, row.transport, row.config or {}, credentials)
+        if built is None:
+            # This connection's own config is incomplete — not a reason to
+            # give up on the whole source, since an older, complete
+            # connection may still be enabled. Try the next one.
+            continue
+        tool_id, tool_config = built
+        get_tool_registry().configure(tool_id, enabled=True, config=tool_config)
+        logger.info(
+            "tool_resync_configured tool=%s source_type=%s connection_id=%s",
+            tool_id,
+            source_type,
+            row.id,
+        )
+        return
+
+    # No usable, enabled connection remains for this source — un-configure
+    # whichever tool it maps to, so a stale in-memory instance from a
+    # deleted or disabled connection stops being served.
+    source_spec = get_source(source_type)
+    if source_spec is None:
+        return
+    tool_id = next((t.tool_id for t in source_spec.transports if t.tool_id), None)
+    if tool_id is not None:
+        get_tool_registry().configure(tool_id, enabled=False, config={})
+        logger.info("tool_resync_unconfigured tool=%s source_type=%s", tool_id, source_type)
