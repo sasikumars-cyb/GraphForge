@@ -13,13 +13,14 @@ concurrent relink for the same account is a no-op rather than a race.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.database.session import engine
 from app.graph.interfaces import IGraphRepository
@@ -367,12 +368,17 @@ async def test_relink_account_fetches_each_repositorys_nodes_at_most_once(
             await graph_repository.replace_repository_graph(repo_id, GraphPayload())
 
 
-async def test_relink_account_is_a_no_op_when_another_relink_holds_the_lock(
+async def test_relink_account_blocks_until_a_concurrent_relink_releases_the_lock(
     db_session: AsyncSession, graph_repository: Neo4jGraphRepository
 ) -> None:
-    """The single-flight guard: a concurrent relink for the same account
-    (simulated here by holding the advisory lock on an independent
-    connection) must make this call skip entirely rather than race it."""
+    """A concurrent relink for the same account (simulated here by holding
+    the advisory lock on an independent connection) must make this call
+    *wait* for the lock rather than skip. Skipping was the root cause of a
+    real production bug (see
+    tests/integration/test_finding3_concurrent_relink_repro.py): a
+    concurrently-indexing repository's cross-repository edges could be
+    silently and permanently dropped. Blocking instead guarantees this call
+    still computes the correct, complete edge set once the holder releases."""
     user = await _make_user(db_session)
     repo_a = await _make_repository(db_session, user, "repo-a")
     repo_b = await _make_repository(db_session, user, "repo-b")
@@ -387,19 +393,24 @@ async def test_relink_account_is_a_no_op_when_another_relink_holds_the_lock(
     try:
         async with engine.connect() as holder_conn:
             await holder_conn.execute(select(func.pg_advisory_lock(func.hashtext(str(user.id)))))
-            try:
-                await relink_account(
-                    graph_repository=graph_repository, db=db_session, user_id=user.id
-                )
-                edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
-                assert edges == [], (
-                    "relink_account must skip entirely while another relink for the same "
-                    "account holds the lock, not partially write"
-                )
-            finally:
-                await holder_conn.execute(
-                    select(func.pg_advisory_unlock(func.hashtext(str(user.id))))
-                )
+            task = asyncio.create_task(
+                relink_account(graph_repository=graph_repository, db=db_session, user_id=user.id)
+            )
+            await asyncio.sleep(0.2)
+            assert not task.done(), (
+                "expected relink_account to still be blocked while another relink for "
+                "the same account holds the lock"
+            )
+            await holder_conn.execute(
+                select(func.pg_advisory_unlock(func.hashtext(str(user.id))))
+            )
+            await asyncio.wait_for(task, timeout=5)
+
+        edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
+        assert edges, (
+            "relink_account must proceed and compute the correct edges once the lock "
+            "is released, not skip and lose them"
+        )
     finally:
         await graph_repository.replace_repository_graph(a_id, GraphPayload())
         await graph_repository.replace_repository_graph(b_id, GraphPayload())
@@ -520,3 +531,138 @@ async def test_relink_failure_does_not_fail_the_triggering_indexing_job(
     # The repository's own indexing summary is returned normally — the
     # relink failure was logged and swallowed, not propagated.
     assert summary == {"controllers": 0}
+
+
+async def test_three_concurrent_relinks_all_converge_on_the_full_edge_set(
+    graph_repository: Neo4jGraphRepository,
+) -> None:
+    """Three repositories, indexed with overlapping relink attempts (A's
+    relink runs and holds the lock while B and C are still being indexed;
+    B and C's relinks both queue behind it), must still converge on the
+    complete edge set (A->B via Feign, B->C via a shared Kafka topic) —
+    the scenario the old skip-on-contention design could drop (Finding #3).
+
+    Deliberately does not use the `db_session` fixture: its transaction is
+    never really committed (only rolled back at teardown -- see its
+    docstring), so a genuinely independent connection, exactly like
+    `session_a`/`session_b`/`session_c` below, would never see rows
+    `db_session` only flushed. User/repositories are created here with a
+    real, committed session instead, matching
+    `tests/integration/test_finding3_concurrent_relink_repro.py`."""
+    real_session = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
+    setup = real_session()
+    user = User(
+        id=uuid.uuid4(),
+        email=f"{uuid.uuid4()}@example.com",
+        full_name="Test User",
+        auth_provider="local",
+    )
+    setup.add(user)
+    await setup.flush()
+    repo_a, repo_b, repo_c = (
+        Repository(
+            id=uuid.uuid4(),
+            user_id=user.id,
+            github_repo_id=str(uuid.uuid4().int)[:10],
+            owner="acme",
+            name=name,
+            full_name=f"acme/{name}",
+            private=False,
+            default_branch="main",
+            html_url=f"https://github.com/acme/{name}",
+        )
+        for name in ("repo-a", "repo-b", "repo-c")
+    )
+    setup.add_all([repo_a, repo_b, repo_c])
+    await setup.commit()
+    await setup.close()
+    a_id, b_id, c_id = str(repo_a.id), str(repo_b.id), str(repo_c.id)
+
+    try:
+        # Only A is indexed when its relink starts and grabs the lock.
+        await graph_repository.replace_repository_graph(
+            a_id, _repository_payload(a_id, feign_target="repo-b")
+        )
+        session_a = real_session()
+        await relink_account(graph_repository=graph_repository, db=session_a, user_id=user.id)
+
+        # B and C finish indexing while A's session (and lock) is still open.
+        await graph_repository.replace_repository_graph(
+            b_id, _repository_payload(b_id, produces_topic="orders-created")
+        )
+        await graph_repository.replace_repository_graph(
+            c_id, _repository_payload(c_id, consumes_topic="orders-created")
+        )
+
+        session_b = real_session()
+        session_c = real_session()
+
+        # Each task commits its own session as soon as its own relink
+        # returns -- exactly like production, where `run_indexing_job`
+        # commits once *that* job's own work (relink included) is done,
+        # never waiting on a sibling job. Committing outside the task
+        # (after gathering both) would deadlock: whichever of B/C acquires
+        # the lock first finishes relink_account but never releases it
+        # until its *own* commit runs, so the other could never acquire it.
+        async def _run_and_commit(session: AsyncSession) -> None:
+            await relink_account(graph_repository=graph_repository, db=session, user_id=user.id)
+            await session.commit()
+
+        task_b = asyncio.create_task(_run_and_commit(session_b))
+        task_c = asyncio.create_task(_run_and_commit(session_c))
+        await asyncio.sleep(0.2)
+        assert not task_b.done()
+        assert not task_c.done()
+
+        # B and C both queue behind the same lock -- whichever acquires it
+        # first must fully finish (several Neo4j round-trips) before the
+        # other can even start, so this needs more headroom than a single
+        # two-way handoff.
+        await session_a.commit()
+        await asyncio.wait_for(asyncio.gather(task_b, task_c), timeout=15)
+        await session_a.close()
+        await session_b.close()
+        await session_c.close()
+
+        a_edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
+        b_edges = await graph_repository.get_outgoing_cross_repository_edges(b_id)
+        assert any(e.type == "CALLS_SERVICE" for e in a_edges), (
+            f"A->B Feign edge missing after concurrent relinks: {a_edges}"
+        )
+        assert any(e.type == "SHARES_TOPIC" for e in b_edges), (
+            f"B->C Kafka edge missing after concurrent relinks: {b_edges}"
+        )
+    finally:
+        for repo_id in (a_id, b_id, c_id):
+            await graph_repository.replace_repository_graph(repo_id, GraphPayload())
+
+
+async def test_repeated_relinks_do_not_duplicate_edges(
+    db_session: AsyncSession, graph_repository: Neo4jGraphRepository
+) -> None:
+    """Running `relink_account` more than once for the same account (as now
+    happens whenever a queued, previously-blocked call finally proceeds)
+    must not accumulate duplicate edges — `replace_cross_repository_edges`
+    is delete-then-rewrite, so repeated relinks are idempotent no-ops on an
+    already-correct graph."""
+    user = await _make_user(db_session)
+    repo_a = await _make_repository(db_session, user, "repo-a")
+    repo_b = await _make_repository(db_session, user, "repo-b")
+    await db_session.flush()
+    a_id, b_id = str(repo_a.id), str(repo_b.id)
+
+    try:
+        await graph_repository.replace_repository_graph(
+            a_id, _repository_payload(a_id, feign_target="repo-b")
+        )
+        await graph_repository.replace_repository_graph(b_id, _repository_payload(b_id))
+
+        for _ in range(3):
+            await relink_account(graph_repository=graph_repository, db=db_session, user_id=user.id)
+
+        edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
+        calls_service = [e for e in edges if e.type == "CALLS_SERVICE"]
+        assert len(calls_service) == 1, f"expected exactly one edge, got {calls_service}"
+    finally:
+        await graph_repository.replace_repository_graph(a_id, GraphPayload())
+        await graph_repository.replace_repository_graph(b_id, GraphPayload())

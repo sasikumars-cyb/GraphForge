@@ -30,8 +30,9 @@ network round-trip). `relink_account` is the *only* entry point anything
 outside this module should call (ADR 0010, invariant I7 and §6) — it is
 also the sole place cross-repository linking is guarded against two
 concurrent indexing runs for the same account racing each other
-(`pg_try_advisory_xact_lock`, mirroring the `IndexingJob` 409-conflict guard
-ADR 0007 already established for per-repository indexing).
+(`pg_advisory_xact_lock` — blocking, not "try and skip": every relink for
+an account eventually runs to completion, none are silently dropped under
+contention).
 """
 
 from __future__ import annotations
@@ -344,22 +345,22 @@ async def relink_account(
     different users' repositories.
 
     Guarded by a transaction-scoped Postgres advisory lock keyed on
-    `user_id` (`pg_try_advisory_xact_lock` — auto-released at the enclosing
+    `user_id` (`pg_advisory_xact_lock` — auto-released at the enclosing
     transaction's commit/rollback, safe under SQLAlchemy's pooled
-    connections, the same "try, don't block" shape `IndexingJob`'s existing
-    409-conflict guard already uses for per-repository indexing). If another
-    relink for this account is already in progress, this call is a no-op:
-    the in-progress relink will itself see every repository committed by
-    the time *it* reads the account's repository list, so nothing is lost,
-    only deferred to whichever relink pass is already running.
+    connections). Deliberately *blocking*, not "try and skip": every caller
+    commits its own repository's graph to Neo4j before ever reaching this
+    call (see `run_indexing`), so whichever concurrent caller acquires the
+    lock *last* is guaranteed to observe every repository committed by any
+    other caller already waiting on (or holding) the same lock — the
+    account's cross-repository edges always converge to a complete, correct
+    state from the existing commit-then-lock ordering alone, with no retry,
+    queue, or scheduler needed. A "try, don't block" guard was used here
+    originally but could drop a concurrent caller's repository entirely
+    when the lock was contended (see the regression test in
+    `tests/integration/test_finding3_concurrent_relink_repro.py`).
     """
     lock_key = str(user_id)
-    acquired = (
-        await db.execute(select(func.pg_try_advisory_xact_lock(func.hashtext(lock_key))))
-    ).scalar_one()
-    if not acquired:
-        logger.info("cross_repo_relink_skipped_concurrent user_id=%s", user_id)
-        return
+    await db.execute(select(func.pg_advisory_xact_lock(func.hashtext(lock_key))))
 
     result = await db.execute(select(Repository).where(Repository.user_id == user_id))
     all_repos = list(result.scalars().all())

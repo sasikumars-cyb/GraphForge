@@ -96,9 +96,11 @@ async def run_indexing(db: AsyncSession, repository: Repository) -> IndexingSumm
     topic) and had nothing to link against until now. `relink_account` is
     the single entry point for this (ADR 0010, invariant I7); it batch-
     fetches every repository's relationship-relevant nodes once (`O(N)`
-    Neo4j round-trips, not `O(N)` per repository) and guards itself against
-    two indexing runs for the same account racing each other. A relink
-    failure is logged and swallowed rather than failing the indexing job —
+    Neo4j round-trips, not `O(N)` per repository) and serializes concurrent
+    relinks for the same account with a blocking advisory lock (waits
+    rather than skipping, so a concurrently-indexing repository is never
+    dropped from the account's cross-repository graph). A relink failure is
+    logged and swallowed rather than failing the indexing job —
     the repository's own graph is already committed and usable on its own.
     """
     access_token = await _get_access_token(db, repository.user_id)
