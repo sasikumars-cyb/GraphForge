@@ -92,6 +92,12 @@ class EvidenceResponse(BaseModel):
     kind: str
     reference: str
     summary: str
+    # What actually happened, distinct from `kind` (see Evidence.status on the
+    # agent contract): success / not_found / unavailable / failed. Was omitted
+    # here, so a UI could only tell a failed call from a successful one by
+    # sniffing the "FAILED: " summary prefix. None for older evidence written
+    # before the field existed.
+    status: str | None = None
 
 
 class ConfidenceResponse(BaseModel):
@@ -112,6 +118,16 @@ class StepResponse(BaseModel):
     latency_ms: int | None
     created_at: str | None
     completed_at: str | None
+    # A human's correction to this step's result, if any — the partial dict
+    # `get_stage_result()` merges over `result` for downstream stages.
+    #
+    # `result` above stays the AI's own unedited output (that is what confidence
+    # calibration checks against), so without surfacing this the UI showed the
+    # original text back after a save and the correction looked silently lost.
+    # Exposing both lets the UI show the corrected value *and* label it as a
+    # human edit rather than as something the agent concluded.
+    human_override: dict[str, object] | None = None
+    overridden_at: str | None = None
 
 
 class RunDetailResponse(BaseModel):
@@ -329,6 +345,7 @@ def _step_response(step: AgentStep) -> StepResponse:
             kind=e.get("kind", ""),
             reference=e.get("reference", ""),
             summary=e.get("summary", ""),
+            status=e.get("status"),
         )
         for e in (step.evidence or [])
     ]
@@ -348,6 +365,8 @@ def _step_response(step: AgentStep) -> StepResponse:
         latency_ms=step.latency_ms,
         created_at=_iso(step.created_at),
         completed_at=_iso(step.completed_at),
+        human_override=getattr(step, "human_override", None),
+        overridden_at=_iso(getattr(step, "overridden_at", None)),
     )
 
 

@@ -29,12 +29,14 @@ from __future__ import annotations
 import asyncio
 import uuid
 from collections.abc import AsyncGenerator
+from unittest.mock import AsyncMock, patch
 
 import pytest
 from httpx import AsyncClient
 
 from app.agents._contract import AgentContext, AgentOutput, Confidence, Evidence
 from app.orchestrator.registry import global_registry
+from app.tools.interfaces import ToolResult
 
 pytestmark = pytest.mark.asyncio
 
@@ -185,6 +187,29 @@ async def test_cancel_completed_run_is_a_no_op(client: AsyncClient) -> None:
     assert resp.status_code == 404
 
 
+def _populated_graph() -> ToolResult:
+    """A knowledge graph with one indexed repository and its architecture, so
+    the real Context Discovery stage reaches READY (see the call site)."""
+    return ToolResult(
+        tool_id="neo4j_graph",
+        tool_name="Neo4j Graph",
+        success=True,
+        data={
+            "indexed_repositories": [{"name": "payment-service", "id": "repo-1"}],
+            "components": [
+                {"name": "RateLimiter", "repository": "payment-service", "type": "service"}
+            ],
+            "kafka_topics": [],
+            "context_text": "payment-service: RateLimiter",
+            "_repos_succeeded": True,
+            "_traverse_succeeded": True,
+            "_repos_summary": "1 indexed repository",
+            "_traverse_summary": "1 component",
+        },
+        summary="Queried the architecture graph.",
+    )
+
+
 async def test_continue_workflow_returns_before_stage_completes(
     client: AsyncClient,
     slow_planning_agent: _SlowFakeAgent,
@@ -202,28 +227,34 @@ async def test_continue_workflow_returns_before_stage_completes(
     token = await _register_and_get_token(client)
     headers = {"Authorization": f"Bearer {token}"}
 
-    create_resp = await client.post(
-        "/api/v1/workflows",
-        headers=headers,
-        json={"title": "Add a rate limiter to the payment API", "workflow_type": "planning"},
-    )
-    assert create_resp.status_code == 202
-    body = create_resp.json()
-    assert body["status"] == "queued"
-    workflow_id = body["workflow_id"]
+    # context_discovery is real (not swapped for a fake) and runs first. Its
+    # readiness is evidence-based, so it needs a graph with something in it to
+    # reach READY — against an empty graph it correctly reports BLOCKED and the
+    # readiness gate would refuse the planning stage this test is about.
+    with patch(
+        "app.context_pipeline.reasoning.investigators.GraphProvider.retrieve",
+        new=AsyncMock(return_value=_populated_graph()),
+    ):
+        create_resp = await client.post(
+            "/api/v1/workflows",
+            headers=headers,
+            json={"title": "Add a rate limiter to the payment API", "workflow_type": "planning"},
+        )
+        assert create_resp.status_code == 202
+        body = create_resp.json()
+        assert body["status"] == "queued"
+        workflow_id = body["workflow_id"]
 
-    # context_discovery is real (not swapped for a fake) and runs first —
-    # let it finish before continuing into the stage under test (planning).
-    await _poll_until(
-        client,
-        f"/api/v1/workflows/{workflow_id}",
-        headers,
-        lambda b: b["stages"][0]["status"] == "completed",
-    )
+        await _poll_until(
+            client,
+            f"/api/v1/workflows/{workflow_id}",
+            headers,
+            lambda b: b["stages"][0]["status"] == "completed",
+        )
 
     continue_resp = await client.post(
         f"/api/v1/workflows/{workflow_id}/continue",
-        json={"acknowledge_partial": True},
+        json={},
         headers=headers,
     )
     assert continue_resp.status_code == 202

@@ -12,7 +12,11 @@ export interface Subject {
 }
 
 export interface Evidence {
-  kind: "graph_traversal" | "tool_call" | "graph_fact" | "llm_reasoning";
+  /** "human_input" records something a person told the agent — deliberately
+   * its own kind rather than being filed under tool_call/graph_fact, since the
+   * evidence trail's whole job is saying where a claim came from. It never
+   * counts as grounding. */
+  kind: "graph_traversal" | "tool_call" | "graph_fact" | "llm_reasoning" | "human_input";
   reference: string;
   summary: string;
   /** What actually happened, distinct from `kind` — lets a UI distinguish
@@ -30,12 +34,7 @@ export interface Confidence {
 // --- Run DTOs ---
 
 export type RunStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "partial"
-  | "failed"
-  | "awaiting_input";
+  "queued" | "running" | "completed" | "partial" | "failed" | "awaiting_input";
 
 export interface AgentStep {
   step_id: string;
@@ -50,6 +49,11 @@ export interface AgentStep {
   latency_ms: number | null;
   created_at: string | null;
   completed_at: string | null;
+  /** A human's correction, merged over `result` for downstream stages. `result`
+   * itself stays the AI's unedited output, so the UI must read this to show the
+   * corrected value — otherwise a saved correction appears to have been lost. */
+  human_override?: Record<string, unknown> | null;
+  overridden_at?: string | null;
 }
 
 export interface RunDetail {
@@ -436,36 +440,46 @@ export interface AdditionalContextRecommendationResult {
 }
 
 export interface ContextDiscoveryResult {
+  // --- What Planning reads (derived views over the fact ledger) ---
   original_request: string;
   enriched_text: string;
   resolved_references: ResolvedReferenceResult[];
   indexed_repositories: Record<string, unknown>[];
   graph_components: Record<string, unknown>[];
   graph_topics: Record<string, unknown>[];
+  /** Repository candidates, best first. More than one entry means discovery
+   * genuinely could not separate them. */
+  /** Every indexed repository in relevance order, best first — a ranking, not
+   * a claim of ownership. */
   ranked_repository_names: string[];
+  /** Discovery's own judgement of where the work belongs. More than one entry
+   * means the ambiguity is genuine and unresolved. */
+  implementation_candidates: string[];
   graph_context_text: string;
   graph_available: boolean;
   graph_has_data: boolean;
-  additional_context_recommendation: AdditionalContextRecommendationResult | null;
   planning_metadata: Record<string, unknown>;
   prompt_version: string;
-  // --- WorkingContext fields (reasoning-driven discovery) ---
+
+  // --- Readiness verdict ---
   goal: string;
-  assumptions: string[];
-  unresolved_questions: ClarificationQuestionResult[];
-  user_answers: Record<string, string>;
-  confidence: number;
   readiness: ContextReadiness;
+  /** Necessity-weighted mean of the per-capability scores, excluding
+   * capabilities that don't apply to this request. Entirely evidence-derived —
+   * no LLM self-report contributes to it. */
+  confidence: number;
+  capability_confidence: Record<string, number>;
+  clarification_rounds: number;
   blocking_reasons: string[];
   remediation_steps: string[];
-  clarification_rounds: number;
-  // --- Structured refinements: capability-specific confidence, generic
-  // BlockingIssue, and a human-facing Discovery Summary — all derived from
-  // the same WorkingContext the fields above are, not a second source of
-  // truth. See app.context_pipeline.working_context on the backend.
-  capability_confidence: CapabilityConfidence;
-  blocking_issues: BlockingIssueResult[];
-  discovery_summary: DiscoverySummary;
+  assumptions: string[];
+  user_answers: Record<string, string>;
+  /** At most one entry: the single question discovery is waiting on. */
+  unresolved_questions: ClarificationQuestionResult[];
+
+  // --- The human-facing report + resumable engine state ---
+  discovery_report: DiscoveryReport;
+  working_memory: Record<string, unknown>;
 }
 
 export type ContextReadiness = "READY" | "PARTIAL" | "BLOCKED";
@@ -474,39 +488,102 @@ export interface ClarificationQuestionResult {
   question_id: string;
   question: string;
   why: string;
+  /** Real candidate values only — never UI instructions. */
   options: string[];
+  /** What discovery already tried before resorting to asking. */
+  investigated: string[];
   blocking: boolean;
 }
 
-export interface CapabilityConfidence {
-  work_item: number;
-  repository: number;
-  architecture: number;
-  implementation_candidates: number;
-  documentation: number;
+/** One line of the investigation as the user reads it. The engine states
+ * intent before acting and reports what it observed after, so the reasoning
+ * process is visible rather than only its final state. */
+export interface TranscriptEntry {
+  kind: "intent" | "observation" | "question" | "answer" | "conclusion";
+  text: string;
+  iteration: number;
+  evidence_ids: string[];
 }
 
-export interface BlockingIssueResult {
-  issue_id: string;
-  type: string;
-  severity: "blocking" | "warning";
-  message: string;
-  reason: string;
-  recommended_action: string[];
-  clarification_question: ClarificationQuestionResult | null;
-  resolved: boolean;
-}
-
-export interface DiscoverySummaryItem {
+/** One decomposable reason a capability's confidence is what it is. */
+export interface ConfidenceSignal {
   label: string;
-  status: "ok" | "warning" | "error";
+  satisfied: boolean;
+  /** Populated when unsatisfied: what specifically is missing. */
   detail: string;
+  /** Provenance — which investigations back this signal. */
+  evidence_ids: string[];
 }
 
-export interface DiscoverySummary {
-  items: DiscoverySummaryItem[];
+export interface CapabilityBreakdown {
+  capability: string;
+  label: string;
+  necessity: "required" | "recommended" | "not_applicable";
+  score: number;
+  satisfied: boolean;
+  explanation: string;
+  signals: ConfidenceSignal[];
+}
+
+export interface FindingItem {
+  fact_id: string;
+  subject: string;
+  provider: string;
+  /** False for a human answer that hasn't been corroborated yet. */
+  verified: boolean;
+  evidence: { evidence_id: string; summary: string; outcome: string } | null;
+}
+
+export interface FindingGroup {
+  kind: string;
+  items: FindingItem[];
+  /** True count of facts of this kind. `items` is capped for readability, so
+   * this is what the UI must show when reporting how much was found. */
+  total: number;
+}
+
+export interface DiscoveryGap {
+  gap_id: string;
+  capability: string;
+  summary: string;
+  why: string;
+  severity: "blocking" | "advisory";
+  status: "open" | "claimed" | "verified" | "refuted" | "unresolvable";
+  missing: string[];
+  recommended_action: string[];
+  resolution_note: string;
+  user_claim: string | null;
+}
+
+export interface InvestigationStep {
+  evidence_id: string;
+  provider: string;
+  action: string;
+  outcome: "success" | "not_found" | "unavailable" | "failed";
+  summary: string;
+  intent: string;
+  iteration: number;
+}
+
+export interface Interpretation {
+  statement: string;
+  kind: string;
+  supporting_fact_ids: string[];
+  withdrawn: boolean;
+}
+
+/** The human-facing report generated from the engine's working memory (see
+ * reasoning/projection.build_discovery_report on the backend). */
+export interface DiscoveryReport {
   readiness: ContextReadiness;
+  confidence: number;
   headline: string;
+  transcript: TranscriptEntry[];
+  confidence_breakdown: CapabilityBreakdown[];
+  findings: FindingGroup[];
+  interpretations: Interpretation[];
+  gaps: DiscoveryGap[];
+  investigation: InvestigationStep[];
 }
 
 // --- Workflow Types ---
@@ -531,7 +608,12 @@ export interface PendingClarification {
   question_id: string;
   question: string;
   why: string;
+  /** Real candidate values only (repository names the graph actually
+   * contains). Remediation verbs are never options. */
   options: string[];
+  /** What discovery already tried before resorting to asking, so the question
+   * reads as a last resort rather than a first move. */
+  investigated: string[];
 }
 
 export interface WorkflowStageInfo {

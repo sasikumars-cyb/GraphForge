@@ -106,6 +106,19 @@ export function WorkflowPage() {
     };
   }, [workflow?.status, loadWorkflow]);
 
+  // Backend codes that all mean the same thing to a user: this tab was showing
+  // state the workflow has already moved past — most often because another tab
+  // (or another person) acted first. The technical distinctions matter to the
+  // API, not to the person reading the screen.
+  const isStaleViewError = (err: unknown) =>
+    err instanceof ApiError &&
+    [
+      "not_awaiting_clarification",
+      "stale_question",
+      "workflow_terminal",
+      "stage_already_run",
+    ].includes(err.code ?? "");
+
   const handleApprove = async (acknowledgePartial = false) => {
     if (!token || !workflowId) return;
     setIsSubmitting(true);
@@ -130,6 +143,11 @@ export function WorkflowPage() {
         setIsSubmitting(false);
         return;
       }
+      if (isStaleViewError(err)) {
+        setError("This workflow has already moved on — showing its latest state.");
+        await loadWorkflow(false);
+        return;
+      }
       setError(err instanceof Error ? err.message : "Failed to continue workflow.");
       // The backend already persisted a failed Run and left current_stage
       // pointed at it before this request threw — without this, the header/
@@ -150,7 +168,20 @@ export function WorkflowPage() {
       await clarifyWorkflow(token, workflowId, questionId, answer);
       await loadWorkflow(false);
     } catch (err) {
+      // A stale tab must self-heal. Previously the raw message ("Workflow is not
+      // awaiting clarification (status: in_progress)") was shown *and* the
+      // obsolete question stayed on screen, so the only thing the user could do
+      // was click it again and get the same error. Refresh so the view catches
+      // up, and say what happened in plain language.
+      if (isStaleViewError(err)) {
+        setError(
+          "This question was already answered elsewhere — showing the latest state of the workflow.",
+        );
+        await loadWorkflow(false);
+        return;
+      }
       setError(err instanceof Error ? err.message : "Failed to submit answer.");
+      await loadWorkflow(false);
     } finally {
       setIsSubmitting(false);
     }
@@ -214,6 +245,27 @@ export function WorkflowPage() {
   const completedSteps = [...stepsByRunId.values()].filter((s) => s.status === "completed");
   const { phase, lastCompletedStage, currentStageInfo } = deriveWorkflowState(workflow);
   const canContinue = phase === "awaiting_approval";
+
+  // Context Discovery's own verdict on whether Planning can run at all. When it
+  // is BLOCKED the backend refuses /continue outright, so offering an enabled
+  // "Approve & Continue" invites the user into a guaranteed error — the panel
+  // above it literally says "Planning would be guessing, so I've stopped here".
+  // While paused for clarification the context_discovery run is not "completed",
+  // so it is not `lastCompletedStage` — but its step already holds the partial
+  // findings. Showing them at the moment of decision is the point: choosing
+  // between two repositories is much easier when you can see what each one
+  // contains and what has already been ruled out.
+  const pausedDiscoveryRun =
+    phase === "awaiting_clarification"
+      ? workflow.runs.find((r) => r.workflow_stage === "context_discovery")
+      : undefined;
+  const discoveryStep =
+    (lastCompletedStage?.stage === "context_discovery" && lastCompletedStage.run_id
+      ? runsById.get(lastCompletedStage.run_id)?.steps[0]
+      : undefined) ??
+    (pausedDiscoveryRun ? runsById.get(pausedDiscoveryRun.run_id)?.steps[0] : undefined);
+  const discoveryResult = discoveryStep?.result as unknown as ContextDiscoveryResult | undefined;
+  const discoveryBlocksPlanning = discoveryResult?.readiness === "BLOCKED";
   const failedRun = currentStageInfo?.run_id ? runsById.get(currentStageInfo.run_id) : undefined;
 
   // Collapse retried runs into one tab per stage — a failed attempt gets a
@@ -309,7 +361,12 @@ export function WorkflowPage() {
 
       {partialConfirm && (
         <div className="flex flex-col gap-3 rounded-xl border border-warning-line/40 bg-warning-bg px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-warning-fg">{partialConfirm}</p>
+          <div className="flex flex-col gap-1">
+            <p className="text-sm font-semibold text-warning-fg">
+              Continue with incomplete context?
+            </p>
+            <p className="text-xs text-warning-fg/80">{partialConfirm}</p>
+          </div>
           <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
@@ -331,22 +388,28 @@ export function WorkflowPage() {
         </div>
       )}
 
-      {canContinue &&
-        lastCompletedStage &&
-        lastCompletedStage.stage === "context_discovery" &&
-        lastCompletedStage.run_id &&
-        runsById.get(lastCompletedStage.run_id)?.steps[0] && (
-          <ContextExplorerPanel
-            workflowId={workflow.workflow_id}
-            result={
-              runsById.get(lastCompletedStage.run_id)!.steps[0]
-                .result as unknown as ContextDiscoveryResult
-            }
-            onOverridden={() => loadWorkflow(false)}
-          />
-        )}
+      {(canContinue || phase === "awaiting_clarification") && discoveryResult && (
+        <ContextExplorerPanel
+          workflowId={workflow.workflow_id}
+          result={discoveryResult}
+          humanOverride={discoveryStep?.human_override ?? null}
+          onOverridden={() => loadWorkflow(false)}
+        />
+      )}
 
-      {canContinue && lastCompletedStage && (
+      {canContinue && discoveryBlocksPlanning && (
+        <div className="flex flex-col gap-1.5 rounded-xl border border-danger-line/40 bg-danger-bg px-5 py-4">
+          <p className="text-sm font-semibold text-danger-fg">
+            Planning can&apos;t start — Context Discovery couldn&apos;t establish enough context.
+          </p>
+          <p className="text-xs text-danger-fg/80">
+            Nothing to approve yet. Fix what&apos;s listed under &ldquo;What&apos;s still
+            missing&rdquo; above, then run Context Discovery again.
+          </p>
+        </div>
+      )}
+
+      {canContinue && lastCompletedStage && !discoveryBlocksPlanning && (
         <ApprovalGateBanner
           completedStage={lastCompletedStage.stage}
           nextStage={workflow.current_stage}
@@ -627,8 +690,12 @@ export function NewWorkflowPage() {
 
           {parentId && (
             <div>
-              <label htmlFor="refinement-note" className="block text-sm font-medium text-fg-secondary">
-                What should change in this version? <span className="text-fg-muted">(optional)</span>
+              <label
+                htmlFor="refinement-note"
+                className="block text-sm font-medium text-fg-secondary"
+              >
+                What should change in this version?{" "}
+                <span className="text-fg-muted">(optional)</span>
               </label>
               <textarea
                 id="refinement-note"

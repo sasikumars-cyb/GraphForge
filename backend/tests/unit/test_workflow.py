@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -375,6 +375,73 @@ async def test_advance_workflow_to_development() -> None:
 
     assert workflow.current_stage == "development"
     assert workflow.status == "in_progress"
+
+
+@pytest.mark.asyncio
+async def test_advance_workflow_clears_a_clarification_pause() -> None:
+    """Regression: a successfully answered clarification used to brick the
+    workflow. `current_stage` advanced but `status` stayed
+    "awaiting_clarification", so `/continue` kept refusing with "answer the
+    pending clarification question first" for a question that no longer
+    existed, and the UI showed "Needs Your Input" with no banner to act on.
+    Found by driving the real UI; nothing covered this path."""
+    from app.services.workflow_service import advance_workflow
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Test",
+        current_stage="context_discovery",
+        status="awaiting_clarification",
+        workflow_type="planning",
+    )
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:test",
+        subject_type="freetext",
+        display_name="Test",
+        goal="discover_context",
+        status="completed",
+        workflow_stage="context_discovery",
+    )
+
+    await advance_workflow(mock_db, workflow, run)
+
+    assert workflow.current_stage == "planning"
+    assert workflow.status == "in_progress", "the pause is over — the workflow must be runnable"
+
+
+@pytest.mark.asyncio
+async def test_advance_workflow_leaves_a_terminal_status_alone() -> None:
+    """The pause-clearing above must not overwrite a real terminal status: a
+    workflow whose last stage just finished gates on human approval."""
+    from app.services.workflow_service import advance_workflow
+
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+
+    workflow = Workflow(
+        id=uuid.uuid4(),
+        title="Test",
+        current_stage="engineering_review",
+        status="in_progress",
+        workflow_type="planning",
+    )
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:test",
+        subject_type="freetext",
+        display_name="Test",
+        goal="review_readiness",
+        status="completed",
+        workflow_stage="engineering_review",
+    )
+
+    await advance_workflow(mock_db, workflow, run)
+
+    assert workflow.status == "awaiting_approval"
 
 
 @pytest.mark.asyncio

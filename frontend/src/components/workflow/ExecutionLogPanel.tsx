@@ -16,6 +16,7 @@ const KIND_STYLE: Record<string, string> = {
   graph_traversal: "text-cat-7-fg",
   graph_fact: "text-success-fg",
   llm_reasoning: "text-warning-fg",
+  human_input: "text-accent-fg",
 };
 
 /** Feature 7 — a scrolling, timestamped log for a stage. Anchor
@@ -60,7 +61,8 @@ export function ExecutionLogPanel({ step, agentLabel, llmTrace }: ExecutionLogPa
                 {llmTrace.provider ? `${llmTrace.provider} · ` : ""}
                 {llmTrace.model}
                 {llmTrace.latency_ms != null && ` · ${(llmTrace.latency_ms / 1000).toFixed(1)}s`}
-                {llmTrace.total_tokens != null && ` · ${llmTrace.total_tokens.toLocaleString()} tokens`}
+                {llmTrace.total_tokens != null &&
+                  ` · ${llmTrace.total_tokens.toLocaleString()} tokens`}
                 {llmTrace.estimated_cost_usd != null &&
                   ` · ~$${llmTrace.estimated_cost_usd.toFixed(4)}`}
               </span>
@@ -78,7 +80,9 @@ export function ExecutionLogPanel({ step, agentLabel, llmTrace }: ExecutionLogPa
                   <span>Completion: {llmTrace.completion_tokens.toLocaleString()} tokens</span>
                 )}
                 {llmTrace.estimated_cost_usd != null && (
-                  <span>Estimated cost: ${llmTrace.estimated_cost_usd.toFixed(4)} (not a billing figure)</span>
+                  <span>
+                    Estimated cost: ${llmTrace.estimated_cost_usd.toFixed(4)} (not a billing figure)
+                  </span>
                 )}
               </div>
             )}

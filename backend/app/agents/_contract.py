@@ -47,7 +47,12 @@ class Evidence(BaseModel):
     the Planning Agent's Definition of Done.
     """
 
-    kind: Literal["graph_traversal", "tool_call", "graph_fact", "llm_reasoning"]
+    # "human_input" records something a person told the agent. It is
+    # deliberately its own kind: a human answer is not a tool call, not a graph
+    # fact, and not the model's own reasoning, and filing it under any of those
+    # would misrepresent where the claim came from in the one place the product
+    # promises provenance. It never satisfies the tool/graph requirement below.
+    kind: Literal["graph_traversal", "tool_call", "graph_fact", "llm_reasoning", "human_input"]
     reference: str  # graph node id, tool name, or fact id
     summary: str
     # Optional, additive: what actually happened, distinct from `kind` (which

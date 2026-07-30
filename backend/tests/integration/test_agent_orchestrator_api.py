@@ -31,12 +31,14 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from httpx import AsyncClient
 
 from app.agents.planning.agent import PlanningLLMError
+from app.tools.interfaces import ToolResult
 
 pytestmark = pytest.mark.asyncio
 
@@ -54,6 +56,47 @@ _DEVELOPMENT_LLM_RESPONSE = (
     '"dependencies": [], "reusable_implementations": [], "implementation_phases": [], '
     '"risks": [], "graph_context_used": false}'
 )
+
+
+def _populated_graph() -> ToolResult:
+    """A knowledge graph with one indexed repository and its architecture.
+
+    Needed because Context Discovery's readiness is genuinely evidence-based:
+    against an empty graph it reports BLOCKED (it cannot tell which service a
+    request belongs to, and there is no architecture to reason over), and the
+    readiness gate then refuses Planning — correctly. A workflow-orchestration
+    test wants a discovery stage that actually succeeds, so it has to supply a
+    graph that actually contains something.
+    """
+    return ToolResult(
+        tool_id="neo4j_graph",
+        tool_name="Neo4j Graph",
+        success=True,
+        data={
+            "indexed_repositories": [{"name": "auth-service", "id": "repo-1"}],
+            "components": [
+                {"name": "JwtTokenService", "repository": "auth-service", "type": "service"}
+            ],
+            "kafka_topics": [],
+            "context_text": "auth-service: JwtTokenService",
+            "_repos_succeeded": True,
+            "_traverse_succeeded": True,
+            "_repos_summary": "1 indexed repository",
+            "_traverse_summary": "1 component",
+        },
+        summary="Queried the architecture graph.",
+    )
+
+
+def _discovery_graph_patch():
+    """Patch the graph investigator's retrieval so Context Discovery sees a
+    real repository. Patches the provider method rather than the Neo4j driver
+    because `GetIndexedRepositoriesTool` reads per-user repository rows from
+    Postgres — stubbing the driver alone still yields an empty graph."""
+    return patch(
+        "app.context_pipeline.reasoning.investigators.GraphProvider.retrieve",
+        new=AsyncMock(return_value=_populated_graph()),
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -117,6 +160,28 @@ async def _poll_run_until_terminal(
             return detail
         if asyncio.get_event_loop().time() > deadline:
             raise AssertionError(f"Run {run_id} did not reach a terminal status in time")
+        await asyncio.sleep(0.05)
+
+
+async def _poll_workflow_until(
+    client: AsyncClient,
+    workflow_id: str,
+    headers: dict,
+    predicate: Callable[[dict], bool],
+    timeout_s: float = 5.0,
+) -> dict:
+    """Poll GET /workflows/{id} until `predicate` holds.
+
+    Needed for the clarify path: the stage is already terminal from the pause,
+    so waiting on stage status returns immediately and races the resumed run.
+    """
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while True:
+        detail = (await client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)).json()
+        if predicate(detail):
+            return detail
+        if asyncio.get_event_loop().time() > deadline:
+            raise AssertionError(f"Workflow {workflow_id} never satisfied the predicate: {detail}")
         await asyncio.sleep(0.05)
 
 
@@ -425,6 +490,7 @@ async def test_continue_workflow_happy_path(client: AsyncClient) -> None:
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
         ),
+        _discovery_graph_patch(),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
@@ -440,7 +506,7 @@ async def test_continue_workflow_happy_path(client: AsyncClient) -> None:
         new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
     ):
         continue_response = await client.post(
-            f"/api/v1/workflows/{workflow_id}/continue", json={"acknowledge_partial": True}, headers=headers
+            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
         )
         assert continue_response.status_code == 202
         assert continue_response.json()["stage"] == "planning"
@@ -490,6 +556,7 @@ async def test_continue_workflow_failed_stage_is_linked_to_workflow(client: Asyn
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
         ),
+        _discovery_graph_patch(),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
@@ -502,7 +569,7 @@ async def test_continue_workflow_failed_stage_is_linked_to_workflow(client: Asyn
         new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
     ):
         continue_response = await client.post(
-            f"/api/v1/workflows/{workflow_id}/continue", json={"acknowledge_partial": True}, headers=headers
+            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
         )
         assert continue_response.status_code == 202
         await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
@@ -566,6 +633,7 @@ async def test_create_workflow_planning_failure_is_linked_and_error_preserved(
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
         ),
+        _discovery_graph_patch(),
     ):
         response = await client.post(
             "/api/v1/workflows",
@@ -582,7 +650,7 @@ async def test_create_workflow_planning_failure_is_linked_and_error_preserved(
         new=AsyncMock(side_effect=PlanningLLMError(rate_limit_message)),
     ):
         continue_response = await client.post(
-            f"/api/v1/workflows/{workflow_id}/continue", json={"acknowledge_partial": True}, headers=headers
+            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
         )
         assert continue_response.status_code == 202
 
@@ -630,6 +698,7 @@ async def test_workflow_not_visible_or_mutable_by_a_different_user(client: Async
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
         ),
+        _discovery_graph_patch(),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Owner-only workflow"}, headers=owner_headers
@@ -723,6 +792,7 @@ async def test_override_context_discovery_result_is_consumed_by_planning(
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
         ),
+        _discovery_graph_patch(),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
@@ -730,16 +800,10 @@ async def test_override_context_discovery_result_is_consumed_by_planning(
         workflow_id = create_response.json()["workflow_id"]
         await _poll_workflow_stage_until_terminal(client, workflow_id, "context_discovery", headers)
 
-    override = {
-        "indexed_repositories": [
-            {"id": "corrected-id", "name": "corrected-service", "owner": "acme"}
-        ],
-        # Planning's prompt is built from graph_context_text directly (not
-        # re-derived from indexed_repositories), so a correction that should
-        # actually reach the prompt must include it too — the override is a
-        # partial merge, not a re-derivation.
-        "graph_context_text": "Indexed repositories: corrected-service (acme).",
-    }
+    # `graph_context_text` is the text Planning's prompt is rendered from, and is
+    # one of the few fields a human may correct — the machine's verdict and its
+    # evidence are not overridable (see workflow_service._OVERRIDABLE_FIELDS).
+    override = {"graph_context_text": "Indexed repositories: corrected-service (acme)."}
     override_response = await client.patch(
         f"/api/v1/workflows/{workflow_id}/stages/context_discovery/override",
         json={"override": override},
@@ -756,7 +820,7 @@ async def test_override_context_discovery_result_is_consumed_by_planning(
 
     with patch("app.agents.planning.agent._call_llm", new=_capture_prompt):
         continue_response = await client.post(
-            f"/api/v1/workflows/{workflow_id}/continue", json={"acknowledge_partial": True}, headers=headers
+            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
         )
         assert continue_response.status_code == 202
         await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
@@ -778,6 +842,7 @@ async def test_override_stage_result_404s_for_a_stage_that_never_completed(
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
         ),
+        _discovery_graph_patch(),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
@@ -807,6 +872,7 @@ async def test_override_stage_result_not_visible_or_mutable_by_a_different_user(
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
         ),
+        _discovery_graph_patch(),
     ):
         create_response = await client.post(
             "/api/v1/workflows", json={"title": "Owner-only workflow"}, headers=owner_headers
@@ -822,3 +888,279 @@ async def test_override_stage_result_not_visible_or_mutable_by_a_different_user(
         headers=other_headers,
     )
     assert response.status_code == 404
+
+
+async def test_planning_is_refused_when_context_discovery_is_blocked(
+    client: AsyncClient,
+) -> None:
+    """The safety property the whole readiness model exists for: Planning must
+    never start when Context Discovery could not establish enough context.
+
+    Run against an empty graph — no indexed repositories, no architecture —
+    which is exactly the state where a plan would be guesswork. The refusal
+    must also say *what* is missing and what to do about it: a 400 that only
+    says "blocked" leaves the user with no way forward.
+    """
+    token = await _register_unique_and_get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+    ):
+        create_response = await client.post(
+            "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
+        )
+        workflow_id = create_response.json()["workflow_id"]
+        detail = await _poll_workflow_stage_until_terminal(
+            client, workflow_id, "context_discovery", headers
+        )
+
+    stages_by_name = {s["stage"]: s for s in detail["stages"]}
+    assert stages_by_name["context_discovery"]["status"] == "completed"
+
+    response = await client.post(
+        f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+    )
+    assert response.status_code == 400
+    body = response.json()
+    assert body["error"]["code"] == "context_discovery_blocked"
+    message = body["error"]["message"]
+    # Names the specific missing capability, the specific unsatisfied signal,
+    # and the remediation — not a generic "unspecified".
+    assert "repository" in message.lower()
+    assert "no repositories are indexed" in message.lower()
+    assert "Index the repository" in message
+
+    # And BLOCKED is not merely discouraged: acknowledging it must not work.
+    forced = await client.post(
+        f"/api/v1/workflows/{workflow_id}/continue",
+        json={"acknowledge_partial": True},
+        headers=headers,
+    )
+    assert forced.status_code == 400
+    assert forced.json()["error"]["code"] == "context_discovery_blocked"
+
+    detail = (await client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)).json()
+    stages_by_name = {s["stage"]: s for s in detail["stages"]}
+    assert stages_by_name["planning"]["run_id"] is None, "Planning must never have started"
+    assert detail["current_stage"] == "planning"
+
+
+def _ambiguous_graph() -> ToolResult:
+    """Two repositories, each owning an identically-named component, so
+    relevance ranking genuinely cannot separate them and Context Discovery has
+    to ask which one to use."""
+    return ToolResult(
+        tool_id="neo4j_graph",
+        tool_name="Neo4j Graph",
+        success=True,
+        data={
+            "indexed_repositories": [
+                {"name": "payment-service", "id": "repo-1"},
+                {"name": "billing-service", "id": "repo-2"},
+            ],
+            "components": [
+                {"name": "RetryHandler", "repository": "payment-service", "type": "service"},
+                {"name": "RetryHandler", "repository": "billing-service", "type": "service"},
+            ],
+            "kafka_topics": [],
+            "context_text": "two candidates",
+            "_repos_succeeded": True,
+            "_traverse_succeeded": True,
+            "_repos_summary": "2 indexed repositories",
+            "_traverse_summary": "2 components",
+        },
+        summary="Queried the architecture graph.",
+    )
+
+
+async def test_clarification_round_trip_unblocks_the_workflow(client: AsyncClient) -> None:
+    """The full pause -> answer -> verify -> continue path, end to end.
+
+    Regression test for a bug that made the whole clarification feature a dead
+    end: answering successfully advanced `current_stage` but left
+    `workflow.status` at "awaiting_clarification", so `/continue` refused
+    forever with "answer the pending clarification question first" for a
+    question that no longer existed. Nothing covered this path — it was only
+    found by driving the real UI.
+    """
+    token = await _register_unique_and_get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.context_pipeline.reasoning.investigators.GraphProvider.retrieve",
+            new=AsyncMock(return_value=_ambiguous_graph()),
+        ),
+    ):
+        create_response = await client.post(
+            "/api/v1/workflows",
+            json={"title": "Add exponential backoff to the retry handler"},
+            headers=headers,
+        )
+        workflow_id = create_response.json()["workflow_id"]
+
+        # Discovery must pause rather than guess between the two repositories.
+        detail = await _poll_workflow_stage_until_terminal(
+            client, workflow_id, "context_discovery", headers
+        )
+        assert detail["status"] == "awaiting_clarification"
+        question = detail["pending_clarification"]
+        assert question is not None
+        assert question["question_id"] == "gap_repository"
+        # Real candidate values only — never a UI instruction.
+        assert set(question["options"]) == {"payment-service", "billing-service"}
+        assert question["investigated"], "the question must show what was tried first"
+
+        # Planning must stay gated while the question is open.
+        blocked = await client.post(
+            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+        )
+        assert blocked.status_code == 400
+        assert blocked.json()["error"]["code"] == "workflow_terminal"
+
+        answer = await client.post(
+            f"/api/v1/workflows/{workflow_id}/clarify",
+            json={"question_id": "gap_repository", "answer": "billing-service"},
+            headers=headers,
+        )
+        assert answer.status_code == 202, answer.text
+
+        # Wait for the resumed run to actually finish, not merely for the
+        # transient "resumed" status the clarify endpoint sets.
+        detail = await _poll_workflow_until(
+            client,
+            workflow_id,
+            headers,
+            lambda d: d["current_stage"] == "planning",
+        )
+
+    # The answer was verified against the graph, so discovery is now READY and
+    # the workflow is runnable again — not stuck claiming it needs input.
+    assert detail["status"] != "awaiting_clarification"
+    assert detail["pending_clarification"] is None
+    assert detail["current_stage"] == "planning"
+
+    with patch(
+        "app.agents.planning.agent._call_llm",
+        new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+    ):
+        proceed = await client.post(
+            f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+        )
+        assert proceed.status_code == 202, proceed.text
+        assert proceed.json()["stage"] == "planning"
+
+
+async def test_an_unverifiable_answer_re_asks_instead_of_being_accepted(
+    client: AsyncClient,
+) -> None:
+    """An answer naming a repository the graph does not contain must not be
+    accepted. Discovery re-asks, acknowledging the failed answer, and Planning
+    stays gated — the hallucination path a UI instruction label used to take."""
+    token = await _register_unique_and_get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        patch(
+            "app.context_pipeline.reasoning.investigators.GraphProvider.retrieve",
+            new=AsyncMock(return_value=_ambiguous_graph()),
+        ),
+    ):
+        create_response = await client.post(
+            "/api/v1/workflows",
+            json={"title": "Add exponential backoff to the retry handler"},
+            headers=headers,
+        )
+        workflow_id = create_response.json()["workflow_id"]
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "context_discovery", headers)
+
+        answered = await client.post(
+            f"/api/v1/workflows/{workflow_id}/clarify",
+            json={"question_id": "gap_repository", "answer": "Select a repository"},
+            headers=headers,
+        )
+        assert answered.status_code == 202, answered.text
+
+        # Paused again, on a *re-ask* — so wait for the second question rather
+        # than for the status to change (it stays awaiting_clarification).
+        detail = await _poll_workflow_until(
+            client,
+            workflow_id,
+            headers,
+            lambda d: (d.get("pending_clarification") or {})
+            .get("why", "")
+            .startswith("I couldn't find"),
+        )
+
+    # Still paused, re-asking — and the reason names the answer that failed.
+    assert detail["status"] == "awaiting_clarification"
+    question = detail["pending_clarification"]
+    assert question is not None
+    assert "Select a repository" in question["why"]
+    assert set(question["options"]) == {"payment-service", "billing-service"}
+
+
+async def test_override_cannot_forge_the_readiness_verdict_over_http(
+    client: AsyncClient,
+) -> None:
+    """The override endpoint merges its payload over the stage result, so an
+    unrestricted one let a client set `readiness: "READY"` and walk straight past
+    the BLOCKED gate. Exercised over real HTTP because that is how it was
+    reachable."""
+    token = await _register_unique_and_get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Empty graph -> BLOCKED.
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+    ):
+        create_response = await client.post(
+            "/api/v1/workflows", json={"title": "Implement JWT auth"}, headers=headers
+        )
+        workflow_id = create_response.json()["workflow_id"]
+        await _poll_workflow_stage_until_terminal(client, workflow_id, "context_discovery", headers)
+
+    forged = await client.patch(
+        f"/api/v1/workflows/{workflow_id}/stages/context_discovery/override",
+        json={"override": {"readiness": "READY", "confidence": 1.0}},
+        headers=headers,
+    )
+    assert forged.status_code == 400
+    assert forged.json()["error"]["code"] == "field_not_overridable"
+
+    facts = await client.patch(
+        f"/api/v1/workflows/{workflow_id}/stages/context_discovery/override",
+        json={"override": {"graph_components": [{"name": "TotallyFakeComponent"}]}},
+        headers=headers,
+    )
+    assert facts.status_code == 400
+
+    # A legitimate prose correction is still accepted...
+    allowed = await client.patch(
+        f"/api/v1/workflows/{workflow_id}/stages/context_discovery/override",
+        json={"override": {"graph_context_text": "a human's correction"}},
+        headers=headers,
+    )
+    assert allowed.status_code == 200
+
+    # ...and the gate still refuses, because the verdict was never editable.
+    blocked = await client.post(
+        f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+    )
+    assert blocked.status_code == 400
+    assert blocked.json()["error"]["code"] == "context_discovery_blocked"

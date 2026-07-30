@@ -23,7 +23,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from app.agents.git_ops._artifact_reader import get_stage_result
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import AppError, NotFoundError
 from app.models.agent_step import AgentStep
 from app.models.run import Run
 from app.models.workflow import Workflow
@@ -146,8 +146,13 @@ def test_get_stage_result_picks_most_recent_completed_run_for_repeated_stage() -
         created_at=datetime(2026, 1, 1, tzinfo=UTC),
     )
     older_run.steps = [
-        AgentStep(id=uuid.uuid4(), run_id=older_run.id, agent_id="context_discovery",
-                  status="completed", result={"version": "old"})
+        AgentStep(
+            id=uuid.uuid4(),
+            run_id=older_run.id,
+            agent_id="context_discovery",
+            status="completed",
+            result={"version": "old"},
+        )
     ]
 
     newer_run = Run(
@@ -161,8 +166,13 @@ def test_get_stage_result_picks_most_recent_completed_run_for_repeated_stage() -
         created_at=datetime(2026, 1, 2, tzinfo=UTC),
     )
     newer_run.steps = [
-        AgentStep(id=uuid.uuid4(), run_id=newer_run.id, agent_id="context_discovery",
-                  status="completed", result={"version": "new"})
+        AgentStep(
+            id=uuid.uuid4(),
+            run_id=newer_run.id,
+            agent_id="context_discovery",
+            status="completed",
+            result={"version": "new"},
+        )
     ]
 
     workflow.runs = [older_run, newer_run]
@@ -178,11 +188,11 @@ def test_get_stage_result_picks_most_recent_completed_run_for_repeated_stage() -
 @pytest.mark.asyncio
 async def test_override_stage_result_sets_override_fields() -> None:
     workflow = _make_workflow_with_completed_stage(
-        "context_discovery", {"indexed_repositories": [{"name": "order-service"}]}
+        "context_discovery", {"graph_context_text": "original context"}
     )
     mock_db = AsyncMock()
     user_id = uuid.uuid4()
-    override = {"indexed_repositories": [{"name": "corrected-service"}]}
+    override = {"graph_context_text": "corrected context"}
 
     await override_stage_result(mock_db, workflow, "context_discovery", override, user_id)
 
@@ -198,14 +208,12 @@ async def test_override_stage_result_effective_via_get_stage_result_afterwards()
     """The override must be immediately visible through get_stage_result —
     the same function Planning uses to consume this stage."""
     workflow = _make_workflow_with_completed_stage(
-        "context_discovery", {"indexed_repositories": [{"name": "order-service"}]}
+        "context_discovery", {"graph_context_text": "original context"}
     )
     mock_db = AsyncMock()
-    override = {"indexed_repositories": [{"name": "corrected-service"}]}
+    override = {"graph_context_text": "corrected context"}
 
-    await override_stage_result(
-        mock_db, workflow, "context_discovery", override, uuid.uuid4()
-    )
+    await override_stage_result(mock_db, workflow, "context_discovery", override, uuid.uuid4())
 
     assert get_stage_result(workflow, "context_discovery") == override
 
@@ -218,7 +226,7 @@ async def test_override_stage_result_raises_not_found_when_stage_never_completed
 
     with pytest.raises(NotFoundError):
         await override_stage_result(
-            mock_db, workflow, "context_discovery", {"foo": "bar"}, uuid.uuid4()
+            mock_db, workflow, "context_discovery", {"graph_context_text": "x"}, uuid.uuid4()
         )
 
 
@@ -229,5 +237,91 @@ async def test_override_stage_result_raises_not_found_for_wrong_stage() -> None:
 
     with pytest.raises(NotFoundError):
         await override_stage_result(
-            mock_db, workflow, "context_discovery", {"foo": "bar"}, uuid.uuid4()
+            mock_db, workflow, "context_discovery", {"graph_context_text": "x"}, uuid.uuid4()
         )
+
+
+# ---------------------------------------------------------------------------
+# The override allowlist — a human may correct prose, never the verdict
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_override_cannot_forge_the_readiness_verdict() -> None:
+    """The hole this allowlist closes: because `get_stage_result` merges the
+    override over the stage result, `{"readiness": "READY"}` walked straight past
+    the BLOCKED gate that the whole readiness model exists to enforce."""
+    workflow = _make_workflow_with_completed_stage(
+        "context_discovery", {"readiness": "BLOCKED", "confidence": 0.11}
+    )
+    mock_db = AsyncMock()
+
+    with pytest.raises(AppError) as excinfo:
+        await override_stage_result(
+            mock_db,
+            workflow,
+            "context_discovery",
+            {"readiness": "READY", "confidence": 1.0},
+            uuid.uuid4(),
+        )
+
+    assert excinfo.value.error_code == "field_not_overridable"
+    assert "readiness" in str(excinfo.value)
+    # The real verdict is untouched, so the gate still sees BLOCKED.
+    assert get_stage_result(workflow, "context_discovery")["readiness"] == "BLOCKED"
+
+
+@pytest.mark.asyncio
+async def test_override_cannot_inject_unevidenced_facts() -> None:
+    """Forging `graph_components` put fabricated components into Planning's
+    prompt with no provenance, while the Context Explorer kept showing the real
+    evidence — the exact hallucination surface this architecture removes."""
+    workflow = _make_workflow_with_completed_stage("context_discovery", {"graph_components": []})
+    mock_db = AsyncMock()
+
+    with pytest.raises(AppError) as excinfo:
+        await override_stage_result(
+            mock_db,
+            workflow,
+            "context_discovery",
+            {"graph_components": [{"name": "TotallyFakeComponent"}]},
+            uuid.uuid4(),
+        )
+
+    assert excinfo.value.error_code == "field_not_overridable"
+    assert get_stage_result(workflow, "context_discovery")["graph_components"] == []
+
+
+@pytest.mark.asyncio
+async def test_override_cannot_rewrite_the_reasoning_record() -> None:
+    workflow = _make_workflow_with_completed_stage(
+        "context_discovery", {"discovery_report": {"readiness": "BLOCKED"}}
+    )
+    mock_db = AsyncMock()
+
+    for forged in ({"discovery_report": {}}, {"working_memory": {}}, {"capability_confidence": {}}):
+        with pytest.raises(AppError) as excinfo:
+            await override_stage_result(
+                mock_db, workflow, "context_discovery", forged, uuid.uuid4()
+            )
+        assert excinfo.value.error_code == "field_not_overridable"
+
+
+@pytest.mark.asyncio
+async def test_override_rejects_an_empty_correction() -> None:
+    workflow = _make_workflow_with_completed_stage("context_discovery", {"graph_context_text": "x"})
+    with pytest.raises(AppError) as excinfo:
+        await override_stage_result(AsyncMock(), workflow, "context_discovery", {}, uuid.uuid4())
+    assert excinfo.value.error_code == "empty_override"
+
+
+@pytest.mark.asyncio
+async def test_a_stage_with_no_declared_correctable_fields_accepts_nothing() -> None:
+    """Fails closed: a stage nobody has thought about is not silently editable."""
+    workflow = _make_workflow_with_completed_stage("planning", {"executive_summary": "A plan."})
+    with pytest.raises(AppError) as excinfo:
+        await override_stage_result(
+            AsyncMock(), workflow, "planning", {"executive_summary": "forged"}, uuid.uuid4()
+        )
+    assert excinfo.value.error_code == "field_not_overridable"
+    assert "no human-correctable fields" in str(excinfo.value)

@@ -21,6 +21,7 @@ const KIND_STYLE: Record<string, string> = {
   graph_traversal: "text-cat-7-fg",
   graph_fact: "text-success-fg",
   llm_reasoning: "text-warning-fg",
+  human_input: "text-accent-fg",
 };
 
 /** "Hackathon wow factor" feature — Workflow Replay. Every event here is

@@ -5,10 +5,9 @@ Implements the IAgent protocol for goal=plan_freeform. Every run:
    that means reading the context_discovery stage's already-persisted
    result via `get_stage_result()`, exactly like Development, Testing,
    Documentation Planning, and Engineering Review already read Planning's
-   own result. A standalone run (no workflow) still calls
-   `ContextResolutionPipeline.resolve()` directly, unchanged from before
-   the Context Discovery stage existed — see the Context Discovery /
-   Context Explorer architecture review for why the split is drawn there.
+   own result. A standalone run (no workflow) runs the *same* Context
+   Discovery reasoning engine inline, so both paths acquire context through
+   one architecture — see `_resolve_context`.
 2. Runs deterministic verification of the resolved graph data against
    whatever the LLM later claims (owned by this agent — it's part of
    judging the *plan*, not part of resolving context).
@@ -16,8 +15,9 @@ Implements the IAgent protocol for goal=plan_freeform. Every run:
    graph context (llm_reasoning evidence).
 
 This agent has no reference-detection, provider-selection, or tool-
-dispatch code of its own (see `app.context_pipeline`, now driven by the
-context_discovery stage rather than called from here directly) — its own
+dispatch code of its own (that belongs to
+`app.context_pipeline.reasoning`, driven by the context_discovery stage or
+invoked inline for a standalone run) — its own
 Plan -> Select Tool -> Execute -> Observe -> Decide loop is scoped
 entirely to reasoning over an already-resolved request: understanding
 it, evaluating the discovered context, and producing a blueprint. It does
@@ -75,7 +75,9 @@ from app.agents.planning.tools import stars_for_rank
 from app.agents.prompt_utils import parse_json_response, render_prompt_template
 from app.agents.reflection import run_with_reflection
 from app.ai.providers.pricing import estimate_cost_usd
-from app.context_pipeline import ContextResolutionPipeline
+from app.context_pipeline.reasoning.engine import discover
+from app.context_pipeline.reasoning.investigation import SessionContext
+from app.context_pipeline.reasoning.projection import build_result, to_contract_evidence
 from app.core.exceptions import AppError
 from app.core.redact import redact_secrets
 
@@ -434,31 +436,58 @@ async def _resolve_context(context: AgentContext, db: AsyncSession) -> _Resolved
         )
 
     # Standalone path — no workflow, or a workflow whose context_discovery
-    # stage hasn't run (shouldn't happen for a "planning"-type workflow,
-    # since it's always the first stage, but fails open rather than
-    # crashing if it somehow does). Unchanged from before this stage
-    # existed: run discovery directly.
-    enriched_request = await ContextResolutionPipeline().resolve(
-        raw_request=raw_request,
-        db=db,
-        graph_repo_override=context.extras.get("graph_repository"),
-        user_id=context.extras.get("user_id"),
-        model=context.model,
-        extras=context.extras,
+    # stage hasn't run (shouldn't happen for a "planning"-type workflow, since
+    # it's always the first stage, but fails open rather than crashing if it
+    # somehow does).
+    #
+    # This runs the same reasoning engine the context_discovery stage runs, so
+    # there is exactly one context-acquisition architecture in the product. It
+    # previously ran a separate fixed provider sequence
+    # (`ContextResolutionPipeline`), which meant a standalone planning run got
+    # none of the reasoning-first behavior — no evidence-derived confidence, no
+    # readiness verdict, no investigation trail — and two code paths had to be
+    # kept in step. That pipeline is gone.
+    #
+    # Clarification is deliberately *not* offered here: a standalone run has no
+    # workflow to pause and no UI to answer through, so `discover` is allowed to
+    # finish BLOCKED and Planning proceeds with whatever was established. The
+    # engine's own gap reporting rides along in the evidence below, so a thin
+    # plan is explained rather than silently thin.
+    state = await discover(
+        request=raw_request,
+        session=SessionContext(
+            db=db,
+            user_id=context.extras.get("user_id"),
+            graph_repo_override=context.extras.get("graph_repository"),
+            model=context.model,
+            stage=stage_for(context.extras, STAGE_PLANNING),
+        ),
     )
+    discovered = build_result(state)
+    logger.info(
+        "planning_agent_context_discovered_inline readiness=%s confidence=%.2f "
+        "indexed_repo_count=%d component_count=%d",
+        discovered["readiness"],
+        discovered["confidence"],
+        len(discovered["indexed_repositories"]),
+        len(discovered["graph_components"]),
+    )
+    enriched_text = discovered["enriched_text"]
     return _ResolvedContext(
-        task_description=enriched_request.enriched_text,
-        profile=enriched_request.profile,
-        indexed_repos=enriched_request.indexed_repositories,
-        graph_components=enriched_request.graph_components,
-        graph_topics=enriched_request.graph_topics,
-        ranked_repo_names=enriched_request.ranked_repository_names,
-        graph_context_text=enriched_request.graph_context_text,
-        graph_available=enriched_request.graph_available,
-        graph_has_data=enriched_request.graph_has_data,
-        # Own copy: the agent appends its own reasoning/verification
-        # evidence below without mutating the pipeline's returned list.
-        evidence=list(enriched_request.evidence),
+        task_description=enriched_text,
+        # A pure, cheap, deterministic function of the enriched text — derived
+        # the same way the workflow path derives it, so both paths agree.
+        profile=analyse(enriched_text),
+        indexed_repos=discovered["indexed_repositories"],
+        graph_components=discovered["graph_components"],
+        graph_topics=discovered["graph_topics"],
+        ranked_repo_names=discovered["ranked_repository_names"],
+        graph_context_text=discovered["graph_context_text"],
+        graph_available=discovered["graph_available"],
+        graph_has_data=discovered["graph_has_data"],
+        # Own copy: the agent appends its own reasoning/verification evidence
+        # below without mutating the projected list.
+        evidence=list(to_contract_evidence(state)),
     )
 
 
@@ -687,8 +716,7 @@ class PlanningAgent:
                     kind="llm_reasoning",
                     reference="llm_reflection",
                     summary=(
-                        "Reflection pass fixed gaps in the first draft: "
-                        + "; ".join(quality_gaps)
+                        "Reflection pass fixed gaps in the first draft: " + "; ".join(quality_gaps)
                     ),
                 )
             )

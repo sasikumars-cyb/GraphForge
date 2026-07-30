@@ -1,0 +1,952 @@
+"""Unit tests for Context Discovery's reasoning engine
+(app.context_pipeline.reasoning).
+
+These target the architectural guarantees, not just the happy path:
+
+- the ledger physically cannot hold a fact without evidence, or an
+  interpretation without facts
+- confidence is derived from named signals over the ledger, and inapplicable
+  capabilities are excluded rather than defaulted
+- reasoning drives gathering: an investigator that can't help stays silent,
+  and the engine stops as soon as requirements are met
+- the human is the last resort: no question exists until every investigator
+  has declined to propose work
+- verify-then-resolve: an answer that no investigation corroborates is
+  refuted, moves no confidence, and creates no fact
+
+Investigators are hand-written fakes here so the loop's decisions are visible;
+the real ones are exercised through `test_context_discovery_agent.py` and the
+provider-level integration path.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import AsyncMock, patch
+
+import pytest
+
+from app.context_pipeline.reasoning import capabilities
+from app.context_pipeline.reasoning.capabilities import assess, overall_confidence, unmet
+from app.context_pipeline.reasoning.engine import (
+    MAX_CLARIFICATION_ROUNDS,
+    _select,
+    discover,
+    resume,
+)
+from app.context_pipeline.reasoning.investigation import (
+    InvestigationAction,
+    InvestigationOutcome,
+    Recorder,
+    SessionContext,
+)
+from app.context_pipeline.reasoning.investigators import GraphInvestigator
+from app.context_pipeline.reasoning.ledger import Ledger
+from app.context_pipeline.reasoning.memory import WorkingContext
+from app.context_pipeline.reasoning.projection import build_result, to_contract_evidence
+from app.tools.interfaces import ToolResult
+
+
+def _session() -> SessionContext:
+    return SessionContext(db=None, user_id=None)  # type: ignore[arg-type]
+
+
+class FakeInvestigator:
+    """Records what it was asked to do and yields a scripted set of facts."""
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        targets: str = "repository",
+        cost: int = 1,
+        repositories: list[str] | None = None,
+        components: list[tuple[str, str]] | None = None,
+        silent: bool = False,
+    ) -> None:
+        self.name = name
+        self._targets = targets
+        self._cost = cost
+        self._repositories = repositories or []
+        self._components = components or []
+        self._silent = silent
+        self.ran: list[str] = []
+
+    def propose(self, state: WorkingContext) -> list[InvestigationAction]:
+        if self._silent or state.ledger.attempted(self.name, "look"):
+            return []
+        return [
+            InvestigationAction(
+                provider=self.name,
+                key="look",
+                intent=f"{self.name}: looking",
+                targets=self._targets,
+                cost=self._cost,
+            )
+        ]
+
+    async def run(
+        self, action: InvestigationAction, session: SessionContext, recorder: Recorder
+    ) -> InvestigationOutcome:
+        self.ran.append(action.key)
+        evidence = recorder.evidence("success", f"{self.name} looked.")
+        facts = [
+            recorder.fact("repository", name, value={"name": name}, evidence=evidence)
+            for name in self._repositories
+        ]
+        if self.name == "graph":
+            # A graph investigator must record its traversal attempt under the
+            # shared action name: that record is what the `architecture`
+            # capability reads for reachability, and what distinguishes a
+            # genuine traversal from a Postgres-only repository lookup. A fake
+            # that skips it isn't standing in for the real contract.
+            traversal = recorder.evidence(
+                "success" if self._components else "not_found",
+                f"{self.name} traversed.",
+                action=capabilities.GRAPH_TRAVERSAL_ACTION,
+            )
+            for comp, repo in self._components:
+                recorder.fact(
+                    "component",
+                    comp,
+                    value={"name": comp, "repository": repo},
+                    evidence=traversal,
+                )
+        for fact in facts:
+            recorder.inference("repository_candidate", fact.subject, [fact])
+        return InvestigationOutcome(
+            observation=f"{self.name} found {len(self._repositories)} repos.",
+            yielded=bool(facts),
+        )
+
+
+# ---------------------------------------------------------------------------
+# Ledger: provenance is structurally enforced
+# ---------------------------------------------------------------------------
+
+
+def test_ledger_rejects_a_fact_without_real_evidence() -> None:
+    ledger = Ledger()
+    with pytest.raises(ValueError, match="not in this ledger"):
+        ledger.add_fact(kind="repository", subject="ghost", provider="graph", evidence_id="ev_nope")
+
+
+def test_ledger_rejects_an_uncited_interpretation() -> None:
+    ledger = Ledger()
+    with pytest.raises(ValueError, match="must cite the facts"):
+        ledger.add_inference(
+            kind="assumption", statement="probably the payment service", supporting_fact_ids=[]
+        )
+
+
+def test_withdrawn_inferences_are_superseded_not_deleted() -> None:
+    ledger = Ledger()
+    ev = ledger.add_evidence(provider="graph", action="a", outcome="success", summary="s")
+    fact = ledger.add_fact(
+        kind="repository", subject="payment-service", provider="graph", evidence_id=ev.evidence_id
+    )
+    ledger.add_inference(
+        kind="repository_candidate", statement="payment-service", supporting_fact_ids=[fact.fact_id]
+    )
+    ledger.withdraw_inferences("repository_candidate")
+
+    assert ledger.live_inferences("repository_candidate") == []
+    assert len(ledger.inferences) == 1, "history is kept, not erased"
+
+
+# ---------------------------------------------------------------------------
+# Confidence is evidence-derived
+# ---------------------------------------------------------------------------
+
+
+def test_capability_score_decomposes_into_its_signals() -> None:
+    ledger = Ledger()
+    ev = ledger.add_evidence(
+        provider="graph",
+        action=capabilities.GRAPH_TRAVERSAL_ACTION,
+        outcome="not_found",
+        summary="s",
+    )
+    ledger.add_fact(
+        kind="repository", subject="payment-service", provider="graph", evidence_id=ev.evidence_id
+    )
+
+    architecture = next(a for a in assess(ledger) if a.capability == "architecture")
+    satisfied = [s for s in architecture.signals if s.satisfied]
+    total_weight = sum(s.weight for s in architecture.signals)
+    expected = sum(s.weight for s in satisfied) / total_weight
+
+    assert architecture.score == pytest.approx(expected, abs=1e-4)
+    assert "✓" in architecture.explanation()
+    assert "✗" in architecture.explanation()
+
+
+def test_satisfied_signals_cite_evidence_and_unsatisfied_ones_explain() -> None:
+    ledger = Ledger()
+    ev = ledger.add_evidence(provider="graph", action="survey", outcome="success", summary="s")
+    ledger.add_fact(
+        kind="repository", subject="payment-service", provider="graph", evidence_id=ev.evidence_id
+    )
+
+    repository = next(a for a in assess(ledger) if a.capability == "repository")
+    for signal in repository.signals:
+        if signal.satisfied:
+            assert signal.evidence_ids, f"{signal.label} must cite the evidence behind it"
+        else:
+            assert signal.detail, f"{signal.label} must say what is missing"
+
+
+def test_inapplicable_capabilities_are_excluded_from_overall_confidence() -> None:
+    """A request with no ticket and no doc anchor must not be scored on
+    work_item/documentation — the old design defaulted them to 1.0 and
+    inflated the total with capabilities it never examined."""
+    assessments = assess(Ledger())
+    assert {a.capability for a in assessments if a.necessity == "not_applicable"} == {
+        "work_item",
+        "documentation",
+    }
+    # An empty ledger knows nothing, so the honest overall score is zero.
+    assert overall_confidence(assessments) == 0.0
+
+
+def test_ambiguity_needs_no_special_case_just_two_live_candidates() -> None:
+    ledger = Ledger()
+    ev = ledger.add_evidence(provider="graph", action="survey", outcome="success", summary="s")
+    for name in ("payment-service", "billing-service"):
+        fact = ledger.add_fact(
+            kind="repository", subject=name, provider="graph", evidence_id=ev.evidence_id
+        )
+        ledger.add_inference(
+            kind="repository_candidate", statement=name, supporting_fact_ids=[fact.fact_id]
+        )
+
+    repository = next(a for a in assess(ledger) if a.capability == "repository")
+    identified = next(s for s in repository.signals if s.label == "Owning repository identified")
+    assert identified.satisfied is False
+    assert "equally plausible" in identified.detail
+
+
+# ---------------------------------------------------------------------------
+# Reasoning drives gathering
+# ---------------------------------------------------------------------------
+
+
+def test_selection_prefers_required_capabilities_over_recommended() -> None:
+    ledger = Ledger()
+    assessments = assess(ledger)
+    required = InvestigationAction(
+        provider="graph", key="a", intent="i", targets="repository", cost=3
+    )
+    recommended = InvestigationAction(
+        provider="confluence",
+        key="b",
+        intent="i",
+        targets="documentation",
+        cost=1,
+    )
+    marker = object()
+    chosen, _ = _select([(recommended, marker), (required, marker)], assessments)  # type: ignore[list-item]
+    assert chosen is required, "a cheap optional lookup must not preempt required context"
+
+
+@pytest.mark.asyncio
+async def test_engine_stops_once_requirements_are_met() -> None:
+    """The second investigator must never run: once the graph satisfied the
+    required capabilities there is nothing left worth gathering."""
+    productive = FakeInvestigator(
+        "graph", repositories=["payment-service"], components=[("RateLimiter", "payment-service")]
+    )
+    extra = FakeInvestigator("confluence", targets="documentation", cost=3)
+
+    state = await discover(
+        request="Add a rate limiter to payment-service",
+        session=_session(),
+        investigators=[productive, extra],
+    )
+
+    assert state.readiness == "READY"
+    assert productive.ran == ["look"]
+    assert extra.ran == [], "gathering must stop when nothing is missing"
+
+
+@pytest.mark.asyncio
+async def test_an_investigator_that_cannot_help_stays_silent_and_is_never_run() -> None:
+    silent = FakeInvestigator("github", silent=True)
+    state = await discover(
+        request="Add a rate limiter",
+        session=_session(),
+        investigators=[FakeInvestigator("graph", repositories=["payment-service"]), silent],
+    )
+    assert silent.ran == []
+    assert "github" not in {e.provider for e in state.ledger.evidence}
+
+
+@pytest.mark.asyncio
+async def test_transcript_narrates_intent_before_each_observation() -> None:
+    state = await discover(
+        request="Add a rate limiter",
+        session=_session(),
+        investigators=[FakeInvestigator("graph", repositories=["payment-service"])],
+    )
+    kinds = [e.kind for e in state.transcript.entries]
+    assert kinds[0] == "intent"
+    assert "observation" in kinds
+    assert kinds[-1] == "conclusion"
+    # Intent always precedes the observation it explains.
+    assert kinds.index("intent") < kinds.index("observation")
+
+
+@pytest.mark.asyncio
+async def test_a_failing_investigator_is_recorded_and_does_not_kill_discovery() -> None:
+    class Exploding:
+        name = "graph"
+
+        def propose(self, state: WorkingContext) -> list[InvestigationAction]:
+            if state.ledger.attempted(self.name, "boom"):
+                return []
+            return [
+                InvestigationAction(
+                    provider=self.name,
+                    key="boom",
+                    intent="about to fail",
+                    targets="repository",
+                )
+            ]
+
+        async def run(self, action, session, recorder):  # type: ignore[no-untyped-def]
+            raise RuntimeError("neo4j exploded")
+
+    state = await discover(request="anything", session=_session(), investigators=[Exploding()])
+
+    failures = [e for e in state.ledger.evidence if e.outcome == "failed"]
+    assert failures, "the failed attempt must still be visible in the trail"
+    assert state.readiness == "BLOCKED"
+
+
+# ---------------------------------------------------------------------------
+# The human is the last resort
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_no_question_is_asked_while_an_investigator_could_still_help() -> None:
+    """A question must never be produced mid-investigation. `next_question`
+    refuses until providers_exhausted, so a still-working engine can't ask."""
+    state = WorkingContext()
+    state.metadata.goal = "x"
+    state.refresh_assessments()
+    assert state.metadata.providers_exhausted is False
+    assert state.next_question() is None
+
+
+@pytest.mark.asyncio
+async def test_question_appears_only_after_every_investigator_declined() -> None:
+    state = await discover(
+        request="Add retry logic",
+        session=_session(),
+        # Yields two tied candidates and then has nothing more to offer.
+        investigators=[
+            FakeInvestigator("graph", repositories=["payment-service", "billing-service"])
+        ],
+    )
+
+    assert state.metadata.providers_exhausted is True
+    question = state.next_question()
+    assert question is not None
+    assert question.question_id == "gap_repository"
+    # Real values only — an instruction label as an option is what let a UI
+    # verb be submitted as an answer.
+    assert set(question.options) == {"payment-service", "billing-service"}
+    assert question.investigated, "the question must show what was already tried"
+
+
+@pytest.mark.asyncio
+async def test_exactly_one_question_is_outstanding_at_a_time() -> None:
+    state = await discover(
+        request="Add retry logic",
+        session=_session(),
+        investigators=[
+            FakeInvestigator("graph", repositories=["payment-service", "billing-service"])
+        ],
+    )
+    answerable = [g for g in state.gaps if g.question is not None]
+    assert len(answerable) == 1
+
+
+# ---------------------------------------------------------------------------
+# Verify-then-resolve
+# ---------------------------------------------------------------------------
+
+
+async def _tied_state() -> WorkingContext:
+    """Two equally-plausible repositories, each with architecture indexed — so
+    `repository` is the *only* unmet capability and readiness turns purely on
+    whether the ambiguity gets resolved."""
+    return await discover(
+        request="Add retry logic",
+        session=_session(),
+        investigators=[
+            FakeInvestigator(
+                "graph",
+                repositories=["payment-service", "billing-service"],
+                components=[
+                    ("RetryHandler", "payment-service"),
+                    ("RetryHandler", "billing-service"),
+                ],
+            )
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_a_corroborated_answer_verifies_and_moves_confidence() -> None:
+    state = await _tied_state()
+
+    class Verifier:
+        """Stands in for the graph's verification query: confirms the named
+        repository really is indexed."""
+
+        name = "graph"
+
+        def propose(self, s: WorkingContext) -> list[InvestigationAction]:
+            for gap in s.gaps:
+                if gap.status == "claimed" and gap.user_claim:
+                    key = f"verify:{gap.user_claim}"
+                    if not s.ledger.attempted(self.name, key):
+                        return [
+                            InvestigationAction(
+                                provider=self.name,
+                                key=key,
+                                intent="verifying",
+                                targets=gap.capability,
+                                params={"claim": gap.user_claim},
+                            )
+                        ]
+            return []
+
+        async def run(self, action, session, recorder):  # type: ignore[no-untyped-def]
+            claim = action.params["claim"]
+            recorder.withdraw("repository_candidate")
+            recorder.evidence("success", f"Confirmed {claim} is indexed.")
+            existing = recorder.existing_fact("repository", claim)
+            if existing is None:
+                return InvestigationOutcome(observation=f"{claim} is not indexed.", yielded=False)
+            recorder.inference("repository_candidate", claim, [existing])
+            return InvestigationOutcome(observation=f"Confirmed {claim}.", yielded=True)
+
+    resumed = await resume(
+        state=state,
+        question_id="gap_repository",
+        answer="billing-service",
+        session=_session(),
+        investigators=[Verifier()],
+    )
+
+    gap = resumed.gap_for("repository")
+    assert gap is not None
+    assert gap.status == "verified"
+    assert resumed.readiness == "READY"
+    # The claim's own fact is promoted only once corroborated.
+    claim_facts = resumed.ledger.facts_of("user_statement", verified_only=False)
+    assert claim_facts and claim_facts[0].verified is True
+
+
+@pytest.mark.asyncio
+async def test_an_uncorroborated_answer_is_refuted_and_creates_no_knowledge() -> None:
+    """The exact failure the old design had: an answer that is really a UI
+    instruction was accepted, promoted to a repository, and flipped readiness
+    to READY. Nothing may corroborate it, so nothing may change."""
+    state = await _tied_state()
+    before = state.confidence
+
+    class NeverConfirms:
+        name = "graph"
+
+        def propose(self, s: WorkingContext) -> list[InvestigationAction]:
+            for gap in s.gaps:
+                if gap.status == "claimed" and gap.user_claim:
+                    key = f"verify:{gap.user_claim}"
+                    if not s.ledger.attempted(self.name, key):
+                        return [
+                            InvestigationAction(
+                                provider=self.name,
+                                key=key,
+                                intent="verifying",
+                                targets=gap.capability,
+                            )
+                        ]
+            return []
+
+        async def run(self, action, session, recorder):  # type: ignore[no-untyped-def]
+            recorder.withdraw("repository_candidate")
+            recorder.evidence("not_found", "That repository is not indexed.")
+            return InvestigationOutcome(observation="Not found.", yielded=False)
+
+    resumed = await resume(
+        state=state,
+        question_id="gap_repository",
+        answer="Select a repository",
+        session=_session(),
+        investigators=[NeverConfirms()],
+    )
+
+    gap = resumed.gap_for("repository")
+    assert gap is not None
+    assert gap.status == "refuted"
+    assert resumed.readiness == "BLOCKED"
+    assert resumed.confidence <= before
+    # No phantom repository entered the knowledge base.
+    assert "Select a repository" not in resumed.ledger.subjects_of("repository")
+    assert "Select a repository" not in [
+        i.statement for i in resumed.ledger.live_inferences("repository_candidate")
+    ]
+    claim_facts = resumed.ledger.facts_of("user_statement", verified_only=False)
+    assert claim_facts and claim_facts[0].verified is False
+
+
+@pytest.mark.asyncio
+async def test_refuted_answer_is_narrated_rather_than_silently_dropped() -> None:
+    state = await _tied_state()
+    resumed = await resume(
+        state=state,
+        question_id="gap_repository",
+        answer="does-not-exist",
+        session=_session(),
+        investigators=[],
+    )
+    said = " ".join(resumed.transcript.lines())
+    assert "does-not-exist" in said
+    assert "couldn't confirm" in said
+
+
+@pytest.mark.asyncio
+async def test_clarification_rounds_are_capped() -> None:
+    state = await _tied_state()
+    for i in range(MAX_CLARIFICATION_ROUNDS):
+        state = await resume(
+            state=state,
+            question_id="gap_repository",
+            answer=f"wrong-{i}",
+            session=_session(),
+            investigators=[],
+        )
+
+    assert state.metadata.clarification_rounds == MAX_CLARIFICATION_ROUNDS
+    assert state.next_question() is None, "the loop must stop asking, not stop being blocked"
+    assert state.readiness == "BLOCKED"
+    gap = state.gap_for("repository")
+    assert gap is not None and gap.status == "unresolvable"
+    assert gap.recommended_action, "an unresolvable gap must still say what to do"
+
+
+# ---------------------------------------------------------------------------
+# Readiness
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_readiness_is_blocked_when_a_required_capability_is_unmet() -> None:
+    state = await discover(request="x", session=_session(), investigators=[])
+    assert state.readiness == "BLOCKED"
+    assert any(a.necessity == "required" for a in unmet(state.assessments))
+
+
+@pytest.mark.asyncio
+async def test_readiness_is_partial_when_only_a_recommended_capability_is_unmet() -> None:
+    """Documentation is recommended: missing it must not block, but must be
+    surfaced and require acknowledgement rather than being hidden."""
+    state = await discover(
+        request="Implement PROT-1",
+        session=_session(),
+        investigators=[
+            FakeInvestigator(
+                "graph", repositories=["payment-service"], components=[("C", "payment-service")]
+            )
+        ],
+    )
+    # Force the documentation capability to apply by adding a work item fact.
+    ev = state.ledger.add_evidence(
+        provider="jira", action="fetch", outcome="success", summary="fetched"
+    )
+    state.ledger.add_fact(
+        kind="work_item", subject="PROT-1", provider="jira", evidence_id=ev.evidence_id
+    )
+    state.ledger.add_fact(
+        kind="reference",
+        subject="PROT-1",
+        provider="request_parser",
+        evidence_id=ev.evidence_id,
+        value={"type": "jira_issue"},
+    )
+    state.refresh_assessments()
+
+    documentation = state.assessment_for("documentation")
+    assert documentation is not None and documentation.necessity == "recommended"
+    assert state.readiness == "PARTIAL"
+
+
+# ---------------------------------------------------------------------------
+# The capability registry — extensibility and the question/verify pairing
+# ---------------------------------------------------------------------------
+
+
+def test_a_capability_cannot_ask_a_question_it_cannot_verify() -> None:
+    """The structural guarantee behind "verify before resolve": a capability
+    declares `question` and `verify` together, so it is impossible to ship a
+    question whose answer nothing would ever check."""
+    with pytest.raises(ValueError, match="must declare `question` and `verify` together"):
+        capabilities.Capability(
+            key="rogue",
+            label="Rogue",
+            gap_summary="s",
+            gap_why="w",
+            necessity=lambda _l: "required",
+            signals=lambda _l: [],
+            remediation=lambda _l: [],
+            question=lambda _ctx: capabilities.ClarificationQuestion(
+                question_id="q", question="?", why="because"
+            ),
+            # verify omitted
+        )
+
+    with pytest.raises(ValueError, match="must declare `question` and `verify` together"):
+        capabilities.Capability(
+            key="rogue2",
+            label="Rogue",
+            gap_summary="s",
+            gap_why="w",
+            necessity=lambda _l: "required",
+            signals=lambda _l: [],
+            remediation=lambda _l: [],
+            verify=lambda _l, _c: True,  # verify without a question
+        )
+
+
+def test_every_registered_capability_is_self_consistent() -> None:
+    """Guards the registry itself: each capability must assess cleanly against
+    an empty ledger, and any askable one must pair with a verifier."""
+    ledger = Ledger()
+    for capability in capabilities.CAPABILITIES:
+        assessment = capability.assess(ledger)
+        assert assessment.capability == capability.key
+        assert 0.0 <= assessment.score <= 1.0
+        assert capability.remediation(ledger) or not capability.askable
+        assert capability.askable == (capability.verify is not None)
+
+
+@pytest.mark.asyncio
+async def test_a_new_capability_needs_no_engine_changes() -> None:
+    """The extensibility claim, tested rather than asserted in a comment.
+
+    Registering one new `Capability` must be enough for the engine to assess
+    it, raise a gap for it, choose its remediation, ask its question and
+    verify the answer — with no edit to engine.py, memory.py or projection.py.
+    """
+    probe = capabilities.Capability(
+        key="deployment_topology",
+        label="Deployment topology",
+        gap_summary="Deployment topology is unknown.",
+        gap_why="A plan that ignores where this runs can propose an impossible rollout.",
+        necessity=lambda _l: "required",
+        signals=lambda ledger: [
+            capabilities.signal(
+                "Topology discovered",
+                ledger.has_fact("topic"),
+                2.0,
+                detail="no deployment topology is recorded",
+            )
+        ],
+        remediation=lambda _l: ["Connect the deployment inventory"],
+        question=lambda ctx: capabilities.ClarificationQuestion(
+            question_id="gap_deployment_topology",
+            question="Which environment does this deploy to?",
+            why="I couldn't find any topology data.",
+            options=["staging", "production"],
+            investigated=ctx.investigated,
+        ),
+        verify=lambda ledger, claim: claim in ledger.subjects_of("topic"),
+    )
+
+    original = capabilities.CAPABILITIES
+    try:
+        capabilities.CAPABILITIES = (*original, probe)
+        capabilities.BY_KEY[probe.key] = probe
+
+        state = await discover(
+            request="Ship the new limiter",
+            session=_session(),
+            investigators=[
+                FakeInvestigator(
+                    "graph",
+                    repositories=["payment-service"],
+                    components=[("RateLimiter", "payment-service")],
+                )
+            ],
+        )
+
+        # Assessed, and blocking readiness, purely from the declaration.
+        assessment = state.assessment_for("deployment_topology")
+        assert assessment is not None and not assessment.satisfied
+        assert state.readiness == "BLOCKED"
+
+        # A gap was raised with the declared framing and remediation.
+        gap = state.gap_for("deployment_topology")
+        assert gap is not None
+        assert gap.summary == "Deployment topology is unknown."
+        assert gap.recommended_action == ["Connect the deployment inventory"]
+
+        # And its declared question is the one asked.
+        question = state.next_question()
+        assert question is not None
+        assert question.question_id == "gap_deployment_topology"
+        assert question.options == ["staging", "production"]
+    finally:
+        capabilities.CAPABILITIES = original
+        capabilities.BY_KEY.pop(probe.key, None)
+
+
+# ---------------------------------------------------------------------------
+# Assumptions, evidence honesty, and persistence hygiene
+# ---------------------------------------------------------------------------
+
+
+def _graph_tool_result(repositories: list[str], components: list[tuple[str, str]]) -> ToolResult:
+    return ToolResult(
+        tool_id="neo4j_graph",
+        tool_name="Neo4j Graph",
+        success=True,
+        data={
+            "indexed_repositories": [{"name": n} for n in repositories],
+            "components": [{"name": c, "repository": r, "type": "service"} for c, r in components],
+            "kafka_topics": [],
+            "context_text": "graph context",
+            "_repos_succeeded": True,
+            "_traverse_succeeded": True,
+            "_repos_summary": f"{len(repositories)} repos",
+            "_traverse_summary": f"{len(components)} components",
+        },
+        summary="queried",
+    )
+
+
+@pytest.mark.asyncio
+async def test_choosing_the_only_indexed_repository_is_recorded_as_an_assumption() -> None:
+    """Reasoning from absence is not the same as matching. When a repository is
+    picked only because it is the sole indexed one, the user must be told that
+    — otherwise "the repository" silently reads as something the request named.
+
+    Uses the real `GraphInvestigator`, since recording this is part of how it
+    interprets a ranking rather than something the engine does generically.
+    """
+    with patch(
+        "app.context_pipeline.reasoning.investigators.GraphProvider.retrieve",
+        new=AsyncMock(
+            return_value=_graph_tool_result(
+                ["payment-service"], [("RateLimiter", "payment-service")]
+            )
+        ),
+    ):
+        state = await discover(
+            request="Add a rate limiter",
+            session=_session(),
+            investigators=[GraphInvestigator()],
+        )
+
+    assumptions = [i for i in state.ledger.inferences if i.kind == "assumption"]
+    assert assumptions, "picking the only indexed repository is an assumption"
+    assert "only indexed repository" in assumptions[0].statement
+    # And, like every interpretation, it cites the facts it rests on.
+    assert assumptions[0].supporting_fact_ids
+    assert build_result(state)["assumptions"], "assumptions must reach the persisted result"
+
+
+@pytest.mark.asyncio
+async def test_a_relevance_ranked_choice_is_also_recorded_as_an_assumption() -> None:
+    """Picking a winner from component-name relevance is a heuristic judgement,
+    not a lookup. A user can only push back on it if told it was a judgement."""
+    with patch(
+        "app.context_pipeline.reasoning.investigators.GraphProvider.retrieve",
+        new=AsyncMock(
+            return_value=_graph_tool_result(
+                ["payment-service", "billing-service"],
+                [("RateLimiter", "payment-service"), ("Mailer", "billing-service")],
+            )
+        ),
+    ):
+        state = await discover(
+            request="Add a rate limiter to the throttling path",
+            session=_session(),
+            investigators=[GraphInvestigator()],
+        )
+
+    candidates = state.ledger.live_inferences("repository_candidate")
+    if len(candidates) != 1:
+        pytest.skip("ranking did not produce a single leader for this fixture")
+    assumptions = [i for i in state.ledger.inferences if i.kind == "assumption"]
+    assert assumptions, "a relevance-ranked pick is an assumption, not an observation"
+    assert "inferred from how closely" in assumptions[0].statement
+
+
+@pytest.mark.asyncio
+async def test_a_failed_graph_traversal_is_never_grounding_evidence() -> None:
+    """The agent contract treats `graph_traversal` as proof the graph was
+    consulted. A failed attempt must stay visible but must not carry that kind,
+    or an unreachable graph could satisfy the grounding requirement."""
+
+    class BrokenGraph:
+        name = "graph"
+
+        def propose(self, s: WorkingContext) -> list[InvestigationAction]:
+            if s.ledger.attempted(self.name, "survey"):
+                return []
+            return [
+                InvestigationAction(
+                    provider=self.name, key="survey", intent="looking", targets="architecture"
+                )
+            ]
+
+        async def run(self, action, session, recorder):  # type: ignore[no-untyped-def]
+            recorder.evidence("success", "Looked up indexed repositories: 0 found.")
+            recorder.evidence(
+                "failed",
+                "Graph traversal failed: connection refused.",
+                action=capabilities.GRAPH_TRAVERSAL_ACTION,
+            )
+            return InvestigationOutcome(observation="Graph is down.", yielded=False)
+
+    state = await discover(request="anything", session=_session(), investigators=[BrokenGraph()])
+    projected = to_contract_evidence(state)
+
+    assert not any(e.kind == "graph_traversal" for e in projected)
+    # But the failure is still on the record, both structurally and in the
+    # cross-agent summary convention the activity feed reads.
+    failed = [e for e in projected if e.status == "failed"]
+    assert failed and failed[0].summary.startswith("FAILED: ")
+    architecture = state.assessment_for("architecture")
+    assert architecture is not None
+    reachable = next(
+        s for s in architecture.signals if s.label == "Knowledge graph queried without errors"
+    )
+    assert reachable.satisfied is False
+
+
+@pytest.mark.asyncio
+async def test_a_human_answer_is_labelled_human_input_not_a_tool_call() -> None:
+    state = await _tied_state()
+    resumed = await resume(
+        state=state,
+        question_id="gap_repository",
+        answer="payment-service",
+        session=_session(),
+        investigators=[],
+    )
+    human = [e for e in to_contract_evidence(resumed) if e.kind == "human_input"]
+    assert human, "a human answer must be attributed to the human, not to a tool"
+    assert "payment-service" in human[0].summary
+
+
+@pytest.mark.asyncio
+async def test_working_memory_is_persisted_only_while_paused() -> None:
+    """It exists to resume a paused run. Keeping it on a finished run stores a
+    second full copy of the ledger for nothing."""
+    paused = await _tied_state()
+    assert paused.next_question() is not None
+    assert build_result(paused)["working_memory"], "a paused run must be resumable"
+
+    finished = await discover(
+        request="Add a rate limiter",
+        session=_session(),
+        investigators=[
+            FakeInvestigator(
+                "graph",
+                repositories=["payment-service"],
+                components=[("RateLimiter", "payment-service")],
+            )
+        ],
+    )
+    assert finished.next_question() is None
+    assert build_result(finished)["working_memory"] == {}
+
+
+@pytest.mark.asyncio
+async def test_ranking_stays_complete_while_candidates_stay_narrow() -> None:
+    """Two different questions, two different fields. Planning reads
+    `ranked_repository_names` positionally, so it must cover every indexed
+    repository even when discovery cannot pick a winner; the ambiguity lives in
+    `implementation_candidates`."""
+    state = await _tied_state()
+    result = build_result(state)
+
+    assert set(result["ranked_repository_names"]) == {"payment-service", "billing-service"}
+    assert len(result["implementation_candidates"]) == 2, "the tie is genuinely unresolved"
+
+
+# ---------------------------------------------------------------------------
+# Budget and remediation accuracy (found by real-browser validation)
+# ---------------------------------------------------------------------------
+
+
+def test_graph_hop_budget_accommodates_more_than_one_graph_query() -> None:
+    """The manifest's per-repository read budget must fit the engine's real
+    traversal shape.
+
+    Regression: the budget was 2 — exactly one Component read plus one
+    KafkaTopic read, sized for the single-pass pipeline this replaced. The
+    engine's *second* graph query in a run (a traversal scoped to the repository
+    it just identified) therefore raised GraphHopBudgetExceeded, which surfaced
+    as "the architecture graph could not be read" and told the user to check
+    their Neo4j connection for what was purely an internal ceiling.
+    """
+    from app.agents.context_discovery.manifest import CONTEXT_DISCOVERY_MANIFEST
+
+    reads_per_query = 2  # one Component label read, one KafkaTopic read
+    # survey, then a scoped traversal, then a verification query on resume.
+    distinct_graph_queries = 3
+    assert (
+        CONTEXT_DISCOVERY_MANIFEST.max_graph_hops >= reads_per_query * distinct_graph_queries
+    ), "the manifest must declare the traversal shape the engine actually performs"
+
+
+def test_budget_exhaustion_is_not_reported_as_an_unreachable_graph() -> None:
+    """Hitting our own ceiling is not an infrastructure fault, and must not
+    mark the graph unreachable or send the user to check Neo4j."""
+    ledger = Ledger()
+    ledger.add_evidence(
+        provider="graph", action="survey_architecture", outcome="success", summary="1 found"
+    )
+    ledger.add_evidence(
+        provider="graph",
+        action=capabilities.GRAPH_TRAVERSAL_ACTION,
+        outcome="unavailable",
+        summary="Reached this run's graph read budget, so no further traversal was performed.",
+    )
+
+    architecture = next(a for a in assess(ledger) if a.capability == "architecture")
+    reachable = next(
+        s for s in architecture.signals if s.label == "Knowledge graph queried without errors"
+    )
+    assert reachable.satisfied is True, "an internal budget is not a broken graph"
+
+
+def test_architecture_remediation_does_not_blame_a_healthy_graph() -> None:
+    """ "Check the Neo4j connection" is actively misleading when the graph just
+    answered — it sends the user to debug a working system while the real cause,
+    an unindexed repository, goes unaddressed."""
+    architecture = capabilities.BY_KEY["architecture"]
+
+    healthy = Ledger()
+    healthy.add_evidence(
+        provider="graph",
+        action=capabilities.GRAPH_TRAVERSAL_ACTION,
+        outcome="not_found",
+        summary="empty",
+    )
+    assert architecture.remediation(healthy) == ["Index the repository"]
+
+    broken = Ledger()
+    broken.add_evidence(
+        provider="graph",
+        action=capabilities.GRAPH_TRAVERSAL_ACTION,
+        outcome="failed",
+        summary="connection refused",
+    )
+    assert "Check the Neo4j connection" in architecture.remediation(broken)

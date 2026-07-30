@@ -14,6 +14,23 @@ CONTEXT_DISCOVERY_MANIFEST = AgentManifest(
     goals=frozenset({"discover_context"}),
     accepted_subject_types=frozenset({"freetext"}),
     cost_class="standard",
-    max_graph_hops=2,
+    # Per-repository call budget (see app.graph.hop_budget: it counts
+    # IGraphRepository reads per repository, not hops). Each graph query this
+    # agent makes costs 2 reads per repository — one Component label read, one
+    # KafkaTopic read.
+    #
+    # Unlike the fixed pipeline this replaced, the reasoning engine may query
+    # the graph more than once in a single run: a broad survey to find which
+    # repositories exist, then a traversal scoped to the one it identified, and
+    # — on a resumed run — a query verifying a repository the human named. At
+    # the old budget of 2 the *second* query tripped the limit and surfaced as
+    # "the architecture graph could not be read", which then told the user to
+    # check their Neo4j connection for what was really the agent hitting its own
+    # ceiling.
+    #
+    # 6 covers three queries per repository, which is the engine's real ceiling:
+    # `attempted()` dedupe means each distinct action runs at most once, and
+    # there are three graph action kinds (survey / scope / verify).
+    max_graph_hops=6,
     output_schema_name="ContextDiscoveryResult",
 )

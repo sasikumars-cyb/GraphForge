@@ -96,7 +96,13 @@ class PendingClarificationResponse(BaseModel):
     question_id: str
     question: str
     why: str
+    # Real candidate values only (repository names the graph actually
+    # contains). Remediation verbs are never options — see
+    # reasoning.memory.ClarificationQuestion.
     options: list[str] = Field(default_factory=list)
+    # What discovery already tried before resorting to asking, so the question
+    # reads as a last resort rather than a first move.
+    investigated: list[str] = Field(default_factory=list)
 
 
 class OverrideStageResultRequest(BaseModel):
@@ -246,18 +252,55 @@ def _pending_clarification(workflow: Workflow) -> PendingClarificationResponse |
     if found is None:
         return None
     _run, step = found
+    # `unresolved_questions` is populated only when the reasoning engine is
+    # actually waiting on an answer (see reasoning.projection.build_result, which
+    # writes it from `next_question()`), so its presence is authoritative and
+    # needs no second-guessing here.
+    #
+    # In particular: do NOT skip a question whose id appears in `user_answers`.
+    # A gap's question id is stable across rounds by design, so a question that
+    # was answered, investigated, and *refuted* comes back with the same id and
+    # a reason that acknowledges the failed answer. Filtering on "already answered"
+    # made exactly that case disappear from the UI while the run sat paused
+    # forever waiting for it.
     questions = (step.result or {}).get("unresolved_questions") or []
     for q in questions:
-        if q.get("blocking") and q.get("question_id") not in (step.result or {}).get(
-            "user_answers", {}
-        ):
+        if q.get("blocking"):
             return PendingClarificationResponse(
                 question_id=q["question_id"],
                 question=q["question"],
                 why=q.get("why", ""),
                 options=q.get("options") or [],
+                investigated=q.get("investigated") or [],
             )
     return None
+
+
+def _gap_explanation(cd_result: dict[str, Any] | None, severity: str) -> str:
+    """Render the specific missing context, and its remediation, from
+    Context Discovery's own gap list.
+
+    Blocking a user without telling them *which* piece of context is missing
+    is the difference between a useful stop and a wall. Discovery already
+    knows: each gap carries a summary, the individual unsatisfied signals, and
+    the remediation steps that would close it.
+    """
+    gaps = ((cd_result or {}).get("discovery_report") or {}).get("gaps") or []
+    relevant = [g for g in gaps if g.get("severity") == severity and g.get("status") != "verified"]
+    if not relevant:
+        return "No specific cause was recorded."
+
+    lines: list[str] = []
+    for gap in relevant:
+        detail = "; ".join(gap.get("missing") or [])
+        remediation = ", ".join(gap.get("recommended_action") or [])
+        line = gap.get("summary", "")
+        if detail:
+            line += f" ({detail})"
+        if remediation:
+            line += f" → {remediation}"
+        lines.append(line)
+    return " ".join(lines)
 
 
 async def _resolve_approver_names(
@@ -780,26 +823,34 @@ async def continue_workflow(
 
     # Readiness gate: Planning may only start once Context Discovery is
     # READY, or the human has explicitly acknowledged a PARTIAL result.
-    # BLOCKED can never be pushed past — see the Context Discovery /
-    # Context Explorer architecture review's readiness design.
+    # BLOCKED can never be pushed past.
+    #
+    # Both messages are built from the discovery report's own gap list rather
+    # than from a generic fallback string: a user being stopped needs to know
+    # which specific piece of context is missing and what to do about it, and
+    # discovery already computed exactly that (see
+    # reasoning.projection.build_discovery_report).
     if target_stage == "planning":
         cd_result = get_stage_result(workflow, "context_discovery")
         readiness = (cd_result or {}).get("readiness", "READY")
         if readiness == "BLOCKED":
-            reasons = "; ".join((cd_result or {}).get("blocking_reasons", [])) or "unspecified"
-            remediation = "; ".join((cd_result or {}).get("remediation_steps", []))
             raise AppError(
-                "Context Discovery could not establish enough context to plan "
-                f"(blocking: {reasons}). Remediation: {remediation or 'retry discovery'}.",
+                "Context Discovery could not establish enough context to plan. "
+                + _gap_explanation(cd_result, "blocking"),
                 status_code=400,
                 error_code="context_discovery_blocked",
             )
         if readiness == "PARTIAL" and not body.acknowledge_partial:
-            reasons = "; ".join((cd_result or {}).get("blocking_reasons", [])) or "low confidence"
             confidence = (cd_result or {}).get("confidence", 0.0)
+            # No "resend with acknowledge_partial=true" here: this message is
+            # rendered verbatim to the user, who is looking at a "Continue
+            # anyway" button — telling them to resend an HTTP field is
+            # developer-facing noise. The machine-readable contract is the
+            # `error_code` plus the documented `acknowledge_partial` field on
+            # ContinueWorkflowRequest.
             raise AppError(
-                f"Context Discovery only reached partial confidence ({confidence:.0%}, "
-                f"{reasons}). Resend with acknowledge_partial=true to continue anyway.",
+                f"Context Discovery reached {confidence:.0%} confidence, but some optional "
+                "context is missing. " + _gap_explanation(cd_result, "advisory"),
                 status_code=409,
                 error_code="context_discovery_partial",
             )
@@ -917,8 +968,13 @@ async def clarify_workflow(
     workflow = await workflow_service.get_workflow_for_update(db, wid, user_id=user.id)
 
     if workflow.status != "awaiting_clarification":
+        # Reached when the question was already answered — commonly a second
+        # browser tab, or a double-submit. The message is written for a person:
+        # leaking the internal status token ("status: in_progress") told the user
+        # nothing they could act on.
         raise AppError(
-            f"Workflow is not awaiting clarification (status: {workflow.status}).",
+            "This workflow is not waiting on an answer — the question may already "
+            "have been answered.",
             status_code=409,
             error_code="not_awaiting_clarification",
         )
@@ -935,11 +991,7 @@ async def clarify_workflow(
     result = step.result or {}
     questions = result.get("unresolved_questions") or []
     current = next(
-        (
-            q
-            for q in questions
-            if q.get("question_id") == body.question_id and q.get("blocking")
-        ),
+        (q for q in questions if q.get("question_id") == body.question_id and q.get("blocking")),
         None,
     )
     if current is None:
@@ -965,6 +1017,12 @@ async def clarify_workflow(
 
     step.status = "running"
     run.status = "running"
+    # The pause is over the moment the answer is accepted. Leaving the workflow
+    # at "awaiting_clarification" while the resumed run executes made the header
+    # badge read "Needs Your Input" with no banner to act on — the answer looked
+    # like it had been dropped. The finalizer will set the real terminal status
+    # (advance, pause again for a follow-up question, or fail).
+    workflow.status = "in_progress"
     await db.commit()
 
     set_workflow_context(workflow_id=str(workflow.id), workflow_run_id=str(run.id))

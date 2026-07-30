@@ -1,9 +1,17 @@
-"""Tests for the Context Resolution Pipeline (app.context_pipeline).
+"""Tests for the context-acquisition boundary (app.context_pipeline).
 
-Covers: deterministic reference detection, provider capability
-resolution, context normalization, enriched planning request creation,
-and — in test_planning_agent_operates_solely_on_enriched_input — that
-the Planning Agent no longer does any of this itself.
+Covers the passive parts the reasoning engine drives: deterministic reference
+detection, and each provider adapter's normalization of a retrieval into a
+`ResolvedArtifact` (including the unavailable/not-found distinction the
+confidence signals depend on).
+
+Also covers — in `test_planning_agent_operates_solely_on_discovered_context` —
+that the Planning Agent does none of this itself and acquires context through
+exactly one call into the reasoning engine.
+
+The reasoning engine's own behavior lives in test_context_reasoning_engine.py.
+There is no pipeline object left to test: `ContextResolutionPipeline`'s fixed
+provider sequence was removed when reasoning took over orchestration.
 """
 
 from __future__ import annotations
@@ -14,21 +22,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from app.agents._contract import AgentContext, Subject
-from app.agents.planning.classifier import analyse
-from app.context_pipeline.discovery import recommend_additional_context
-from app.context_pipeline.models import (
-    EnrichedPlanningRequest,
-    ProviderCapability,
-    Reference,
-    ReferenceType,
-)
-from app.context_pipeline.pipeline import ContextResolutionPipeline
+from app.context_pipeline.models import ProviderCapability, Reference, ReferenceType
 from app.context_pipeline.providers import (
     ConfluenceProvider,
     GitHubProvider,
     GraphProvider,
     JiraProvider,
 )
+from app.context_pipeline.reasoning.capabilities import GRAPH_TRAVERSAL_ACTION
 from app.context_pipeline.reference_detection import detect_references
 from app.tools.interfaces import ToolResult
 
@@ -318,228 +319,6 @@ def test_graph_provider_derives_observations_preserving_evidence_kinds() -> None
 
 
 # ---------------------------------------------------------------------------
-# Phase 6 — LLM-assisted discovery (decision only, no retrieval)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.asyncio
-async def test_discovery_recommends_a_capability_when_the_llm_says_so() -> None:
-    raw = json.dumps(
-        {
-            "should_search": True,
-            "capability": "issue_tracker",
-            "reasoning": "No ticket or repository was named.",
-        }
-    )
-    with patch("app.context_pipeline.discovery.invoke_llm_json", new=AsyncMock(return_value=raw)):
-        recommendation = await recommend_additional_context(
-            "Fix the login issue from yesterday", model=None, stage="planning"
-        )
-
-    assert recommendation is not None
-    assert recommendation.should_search is True
-    assert recommendation.capability == ProviderCapability.ISSUE_TRACKER
-
-
-@pytest.mark.asyncio
-async def test_discovery_never_calls_a_provider_itself() -> None:
-    """Phase 6 must only recommend — it has no provider/executor reference
-    at all, so it is structurally incapable of retrieving anything."""
-    import inspect
-
-    from app.context_pipeline import discovery
-
-    source = inspect.getsource(discovery)
-    assert "ToolExecutor" not in source
-    assert ".execute(" not in source
-
-
-# ---------------------------------------------------------------------------
-# Phase 7 — enriched planning request creation (pipeline end to end)
-# ---------------------------------------------------------------------------
-
-
-def _graph_tool_result(indexed: bool = True) -> ToolResult:
-    indexed_repos = [{"id": "1", "name": "svc-a", "owner": "acme"}] if indexed else []
-    components = (
-        [{"name": "OrderController", "type": "Component", "repository": "svc-a", "file_path": ""}]
-        if indexed
-        else []
-    )
-    return ToolResult(
-        tool_id="neo4j_graph",
-        tool_name="Knowledge Graph (Neo4j)",
-        success=True,
-        data={
-            "context_text": "**Relevant repositories**: svc-a",
-            "indexed_repositories": indexed_repos,
-            "ranked_repositories": [r["name"] for r in indexed_repos],
-            "components": components,
-            "kafka_topics": [],
-            "_repos_succeeded": True,
-            "_traverse_succeeded": True,
-            "_repos_summary": f"Found {len(indexed_repos)} indexed repositories.",
-            "_traverse_summary": f"Graph traversal found {len(components)} components.",
-        },
-        summary="Knowledge Graph summary",
-        token_estimate=10,
-    )
-
-
-@pytest.mark.asyncio
-async def test_pipeline_resolves_a_jira_reference_into_the_enriched_request() -> None:
-    async def fake_execute_all(calls):
-        return [_graph_tool_result()]
-
-    with (
-        patch("app.context_pipeline.pipeline.get_tool_registry", return_value=MagicMock()),
-        patch(
-            "app.context_pipeline.pipeline.ToolExecutor.execute",
-            new=AsyncMock(
-                return_value=ToolResult(
-                    tool_id="jira",
-                    tool_name="Jira",
-                    success=True,
-                    data={"context_text": "Real ticket body"},
-                    summary="Fetched NPT-6",
-                )
-            ),
-        ),
-        patch(
-            "app.context_pipeline.pipeline.ToolExecutor.execute_all",
-            new=AsyncMock(side_effect=fake_execute_all),
-        ),
-        patch(
-            "app.context_pipeline.providers.get_confluence_mcp_config",
-            new=AsyncMock(return_value=None),
-        ),
-    ):
-        request = await ContextResolutionPipeline().resolve(
-            raw_request="Please plan NPT-6",
-            db=AsyncMock(),
-            graph_repo_override=None,
-            user_id="user-1",
-            model=None,
-            extras={"user_id": "user-1"},
-        )
-
-    assert isinstance(request, EnrichedPlanningRequest)
-    assert request.original_request == "Please plan NPT-6"
-    assert "Real ticket body" in request.enriched_text
-    assert any(r.type == ReferenceType.JIRA_ISSUE for r in request.resolved_references)
-    assert request.indexed_repositories[0]["name"] == "svc-a"
-    assert request.graph_has_data is True
-    # tool_call (repo lookup) + graph_traversal (component traversal) +
-    # tool_call (jira fetch) at minimum — the contract's evidence
-    # requirement is satisfied by the pipeline alone.
-    assert any(e.kind == "graph_traversal" for e in request.evidence)
-    assert any(e.kind == "tool_call" for e in request.evidence)
-
-
-@pytest.mark.asyncio
-async def test_pipeline_detects_a_local_repository_mentioned_by_name() -> None:
-    """LOCAL_REPOSITORY detection needs the indexed repository names,
-    which are only known after graph retrieval — the pipeline re-checks
-    for it once those names are available rather than skipping it
-    entirely (previously `known_repo_names` was never supplied at all)."""
-
-    async def fake_execute_all(calls):
-        return [_graph_tool_result()]  # indexed_repositories includes "svc-a"
-
-    with (
-        patch("app.context_pipeline.pipeline.get_tool_registry", return_value=MagicMock()),
-        patch(
-            "app.context_pipeline.pipeline.ToolExecutor.execute_all",
-            new=AsyncMock(side_effect=fake_execute_all),
-        ),
-    ):
-        request = await ContextResolutionPipeline().resolve(
-            raw_request="Fix the ingestion bug in svc-a",
-            db=AsyncMock(),
-            graph_repo_override=None,
-            user_id="user-1",
-            model=None,
-            extras={},
-        )
-
-    local_refs = [
-        r for r in request.resolved_references if r.type == ReferenceType.LOCAL_REPOSITORY
-    ]
-    assert local_refs and local_refs[0].normalized_value == "svc-a"
-    assert "local_repository" in request.planning_metadata["detected_reference_types"]
-
-
-@pytest.mark.asyncio
-async def test_pipeline_skips_discovery_by_default_even_with_no_references() -> None:
-    async def fake_execute_all(calls):
-        return [_graph_tool_result(indexed=False)]
-
-    with (
-        patch("app.context_pipeline.pipeline.get_tool_registry", return_value=MagicMock()),
-        patch(
-            "app.context_pipeline.pipeline.ToolExecutor.execute_all",
-            new=AsyncMock(side_effect=fake_execute_all),
-        ),
-        patch(
-            "app.context_pipeline.pipeline.recommend_additional_context", new=AsyncMock()
-        ) as mock_discover,
-    ):
-        request = await ContextResolutionPipeline().resolve(
-            raw_request="Fix the login issue from yesterday",
-            db=AsyncMock(),
-            graph_repo_override=None,
-            user_id="user-1",
-            model=None,
-            extras={},
-        )
-
-    mock_discover.assert_not_called()
-    assert request.additional_context_recommendation is None
-
-
-@pytest.mark.asyncio
-async def test_pipeline_runs_discovery_when_enabled_and_no_references_found() -> None:
-    from app.context_pipeline.models import AdditionalContextRecommendation
-
-    async def fake_execute_all(calls):
-        return [_graph_tool_result(indexed=False)]
-
-    fake_settings = MagicMock(enable_context_discovery=True, github_mcp_default_server_url="x")
-
-    with (
-        patch("app.context_pipeline.pipeline.get_tool_registry", return_value=MagicMock()),
-        patch(
-            "app.context_pipeline.pipeline.ToolExecutor.execute_all",
-            new=AsyncMock(side_effect=fake_execute_all),
-        ),
-        patch("app.context_pipeline.pipeline.get_settings", return_value=fake_settings),
-        patch(
-            "app.context_pipeline.pipeline.recommend_additional_context",
-            new=AsyncMock(
-                return_value=AdditionalContextRecommendation(
-                    should_search=True,
-                    capability=ProviderCapability.ISSUE_TRACKER,
-                    reasoning="No ticket named.",
-                )
-            ),
-        ) as mock_discover,
-    ):
-        request = await ContextResolutionPipeline().resolve(
-            raw_request="Fix the login issue from yesterday",
-            db=AsyncMock(),
-            graph_repo_override=None,
-            user_id="user-1",
-            model=None,
-            extras={},
-        )
-
-    mock_discover.assert_called_once()
-    assert request.additional_context_recommendation is not None
-    assert request.additional_context_recommendation.should_search is True
-    assert any(e.reference == "context_discovery" for e in request.evidence)
-
-
-# ---------------------------------------------------------------------------
 # Phase 8 — Planning Agent operates solely on the enriched request
 # ---------------------------------------------------------------------------
 
@@ -566,50 +345,70 @@ def _make_llm_response(steps: int = 2) -> str:
 
 
 @pytest.mark.asyncio
-async def test_planning_agent_operates_solely_on_enriched_input() -> None:
-    """The agent must consume the pipeline's output as-is — no direct
-    Jira/GitHub/graph tool dispatch of its own. Patches
-    `ContextResolutionPipeline` itself (not any tool/executor seam) to
-    prove the agent's entire context-gathering surface is that one call.
-    """
-    from app.agents._contract import Evidence
-    from app.agents.planning.agent import PlanningAgent
+async def test_planning_agent_operates_solely_on_discovered_context() -> None:
+    """The agent must consume the reasoning engine's output as-is — no direct
+    Jira/GitHub/graph tool dispatch of its own.
 
-    profile = analyse("Fix the login issue")
-    fake_request = EnrichedPlanningRequest(
-        original_request="Fix the login issue",
-        enriched_text="Fix the login issue [[jira: NPT-6 real ticket body]]",
-        resolved_references=[
-            Reference(
-                type=ReferenceType.JIRA_ISSUE,
-                provider="jira",
-                confidence=1.0,
-                raw_value="NPT-6",
-                normalized_value="NPT-6",
-            )
-        ],
-        artifacts=[],
-        profile=profile,
-        indexed_repositories=[{"id": "1", "name": "svc-a", "owner": "acme"}],
-        graph_components=[
-            {"name": "LoginController", "type": "Component", "repository": "svc-a", "file_path": ""}
-        ],
-        graph_topics=[],
-        ranked_repository_names=["svc-a"],
-        graph_context_text="**Relevant repositories**: svc-a",
-        graph_available=True,
-        graph_has_data=True,
-        additional_context_recommendation=None,
-        evidence=[
-            Evidence(kind="tool_call", reference="fetch_jira_issue", summary="Fetched NPT-6"),
-            Evidence(
-                kind="graph_traversal",
-                reference="traverse_architecture_graph",
-                summary="1 component",
-            ),
-        ],
-        planning_metadata={},
+    Patches `reasoning.engine.discover` (not any tool/executor seam) to prove
+    the agent's entire context-gathering surface is that one call. This is also
+    the regression guard for the architecture unification: a standalone
+    planning run used to acquire context through a separate fixed provider
+    pipeline, so it silently got none of the reasoning-first behavior.
+    """
+    from app.agents.planning.agent import PlanningAgent
+    from app.context_pipeline.reasoning.memory import WorkingContext
+
+    state = WorkingContext()
+    state.metadata.goal = "Fix the login issue"
+    state.derived["original_request"] = "Fix the login issue"
+    state.derived["enriched_text"] = "Fix the login issue [[jira: NPT-6 real ticket body]]"
+    state.derived["graph_context_text"] = "**Relevant repositories**: svc-a"
+
+    jira_ev = state.ledger.add_evidence(
+        provider="jira", action="fetch_work_item:NPT-6", outcome="success", summary="Fetched NPT-6"
     )
+    state.ledger.add_fact(
+        kind="work_item", subject="NPT-6", provider="jira", evidence_id=jira_ev.evidence_id
+    )
+    state.ledger.add_evidence(
+        provider="graph",
+        action="survey_architecture",
+        outcome="success",
+        summary="Looked up indexed repositories: 1 found.",
+    )
+    # The traversal record is what earns `kind="graph_traversal"` in the
+    # contract projection, and what the `architecture` capability reads for
+    # reachability. The repository lookup above reads Postgres and must not
+    # count as either.
+    graph_ev = state.ledger.add_evidence(
+        provider="graph",
+        action=GRAPH_TRAVERSAL_ACTION,
+        outcome="success",
+        summary="Traversed the architecture graph: 1 component(s).",
+    )
+    repo = state.ledger.add_fact(
+        kind="repository",
+        subject="svc-a",
+        provider="graph",
+        evidence_id=graph_ev.evidence_id,
+        value={"id": "1", "name": "svc-a", "owner": "acme"},
+    )
+    state.ledger.add_fact(
+        kind="component",
+        subject="LoginController",
+        provider="graph",
+        evidence_id=graph_ev.evidence_id,
+        value={
+            "name": "LoginController",
+            "type": "Component",
+            "repository": "svc-a",
+            "file_path": "",
+        },
+    )
+    state.ledger.add_inference(
+        kind="repository_candidate", statement="svc-a", supporting_fact_ids=[repo.fact_id]
+    )
+    state.refresh_assessments()
 
     subject = Subject(subject_id="s1", subject_type="freetext", display_name="Fix the login issue")
     context = AgentContext(
@@ -621,16 +420,15 @@ async def test_planning_agent_operates_solely_on_enriched_input() -> None:
 
     with (
         patch(
-            "app.agents.planning.agent.ContextResolutionPipeline.resolve",
-            new=AsyncMock(return_value=fake_request),
-        ) as mock_resolve,
+            "app.agents.planning.agent.discover", new=AsyncMock(return_value=state)
+        ) as mock_discover,
         patch(
             "app.agents.planning.agent._call_llm", new=AsyncMock(return_value=_make_llm_response())
         ),
     ):
         output = await PlanningAgent().run(context)
 
-    mock_resolve.assert_called_once()
+    mock_discover.assert_awaited_once()
     # original_request passed through untouched — the UI's Task Description
     # field must show the literal user input, not the enriched text.
     assert output.result["task_description"] == "Fix the login issue"

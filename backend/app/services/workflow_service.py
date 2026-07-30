@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.agents.title_generation import fallback_title
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import AppError, NotFoundError
 from app.models.run import Run
 from app.models.workflow import Workflow
 
@@ -475,6 +475,15 @@ async def advance_workflow(
             workflow.current_stage = "completed"
     else:
         workflow.current_stage = nxt
+        if workflow.status == "awaiting_clarification":
+            # The stage that had paused has now finished, so the pause is over.
+            # Without this the status stayed "awaiting_clarification" forever:
+            # `current_stage` advanced but `/continue` kept refusing with
+            # "answer the pending clarification question first" for a question
+            # that no longer existed, and the header badge kept reading "Needs
+            # Your Input" with no banner to act on. A successfully answered
+            # clarification bricked the workflow outright.
+            workflow.status = "in_progress"
 
     workflow.updated_at = datetime.now(UTC)
     await db.flush()
@@ -589,6 +598,29 @@ async def reject_workflow(db: AsyncSession, workflow: Workflow) -> None:
     logger.info("workflow_rejected id=%s", str(workflow.id))
 
 
+# Which fields a human may correct on a completed stage's result, per stage.
+#
+# Deliberately an allowlist, not a blocklist. `override` is merged over the
+# stage result by `get_stage_result()`, so accepting arbitrary keys let a client
+# forge the machine's own conclusions: `{"readiness": "READY"}` walked straight
+# past the BLOCKED gate that the entire readiness model exists to enforce, and
+# `{"graph_components": [...]}` injected fabricated, unevidenced facts into
+# Planning's prompt while the Context Explorer kept displaying the real,
+# evidence-backed report. That is precisely the hallucination surface this
+# architecture is built to remove, reached through a documented endpoint.
+#
+# The rule: a human may correct the *prose handed to the next stage*, never the
+# machine's verdict (`readiness`, `confidence`, `capability_confidence`), never
+# its evidence or facts (`graph_components`, `indexed_repositories`,
+# `resolved_references`), and never its reasoning record (`discovery_report`,
+# `working_memory`). If a human disagrees with the verdict, the honest paths are
+# to fix the underlying gap and re-run, or to acknowledge a PARTIAL result
+# explicitly — both of which stay on the record.
+_OVERRIDABLE_FIELDS: dict[str, frozenset[str]] = {
+    "context_discovery": frozenset({"graph_context_text", "enriched_text"}),
+}
+
+
 async def override_stage_result(
     db: AsyncSession,
     workflow: Workflow,
@@ -607,9 +639,14 @@ async def override_stage_result(
     calibration (app.models.confidence_calibration) checking a real,
     unedited AI output against the human's later approve/reject decision.
 
+    Only fields in `_OVERRIDABLE_FIELDS[stage]` are accepted; anything else is
+    rejected with 400. See that constant for why this is an allowlist.
+
     Raises NotFoundError if no completed run exists for `stage` — there is
     nothing to override yet.
     """
+    # Existence first: you cannot correct a stage that hasn't produced a result,
+    # regardless of which fields were sent.
     step = None
     for run in sorted(workflow.runs, key=lambda r: r.created_at, reverse=True):
         if run.workflow_stage == stage and run.status == "completed":
@@ -619,6 +656,28 @@ async def override_stage_result(
     if step is None:
         raise NotFoundError(
             f"No completed '{stage}' stage result exists on this workflow to override."
+        )
+
+    if not override:
+        raise AppError(
+            "No correctable fields were supplied.",
+            status_code=400,
+            error_code="empty_override",
+        )
+
+    allowed = _OVERRIDABLE_FIELDS.get(stage, frozenset())
+    rejected = sorted(set(override) - allowed)
+    if rejected:
+        raise AppError(
+            f"These fields cannot be overridden on the '{stage}' stage: "
+            f"{', '.join(rejected)}. "
+            + (
+                f"Correctable fields: {', '.join(sorted(allowed))}."
+                if allowed
+                else "This stage has no human-correctable fields."
+            ),
+            status_code=400,
+            error_code="field_not_overridable",
         )
 
     step.human_override = override

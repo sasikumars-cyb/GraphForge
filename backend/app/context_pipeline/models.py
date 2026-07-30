@@ -1,10 +1,14 @@
-"""Data model for the Context Resolution Pipeline.
+"""The shapes provider adapters exchange.
 
-`Reference` and `ResolvedArtifact` are what a provider produces;
-`EnrichedPlanningRequest` is what the Planning Agent consumes. The
-Planning Agent only ever sees `EnrichedPlanningRequest` — it has no way
-to tell whether an artifact came from Jira, Confluence, GitHub, the
-Knowledge Graph, or a provider that doesn't exist yet.
+`Reference` is a deterministically-recognized pointer at something external;
+`ResolvedArtifact` is what a provider returns after resolving one. Both are
+provider-agnostic on purpose — nothing consuming them can tell whether the
+content came from Jira, Confluence, GitHub, the knowledge graph, or a provider
+that doesn't exist yet.
+
+The reasoning engine converts these into `Fact`s and `EvidenceRecord`s the
+moment it receives them (see `reasoning.investigators`), so these types exist
+only at the transport boundary.
 """
 
 from __future__ import annotations
@@ -14,7 +18,6 @@ from enum import StrEnum
 from typing import Any
 
 from app.agents._contract import Evidence
-from app.agents.planning.classifier import PlanningProfile
 
 
 class ReferenceType(StrEnum):
@@ -72,64 +75,3 @@ class ResolvedArtifact:
     text: str
     evidence: Evidence
     raw: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class AdditionalContextRecommendation:
-    """Phase 6 (LLM-assisted discovery) output: a decision about whether
-    more context should be sought, and from where — never a retrieval
-    itself. The pipeline is the only thing that ever calls a provider;
-    this is just a recommendation an operator or a future pipeline pass
-    can act on."""
-
-    should_search: bool
-    capability: ProviderCapability | None
-    reasoning: str
-
-
-@dataclass
-class EnrichedPlanningRequest:
-    """The only thing the Planning Agent consumes. Everything the agent
-    used to derive itself by parsing the prompt and dispatching tools —
-    Jira/Confluence/GitHub enrichment, capability classification, graph
-    retrieval — is already resolved and normalized here.
-    """
-
-    # The literal text the user typed/pasted — never modified, so the UI's
-    # "Task Description" field keeps showing exactly that.
-    original_request: str
-
-    # original_request plus every resolved artifact's text, each wrapped as
-    # untrusted content — this is what the planning prompt is rendered from.
-    enriched_text: str
-
-    resolved_references: list[Reference]
-    artifacts: list[ResolvedArtifact]
-
-    # Capability classification of the enriched text — deterministic,
-    # keyword-driven (see app.agents.planning.classifier). Drives both the
-    # prompt template choice and the graph retrieval's relevance ranking,
-    # so it belongs to context resolution, not to reasoning over the result.
-    profile: PlanningProfile
-
-    # Knowledge Graph retrieval — normalized, structured, and already
-    # ranked/filtered by the resolved profile's search terms.
-    indexed_repositories: list[dict[str, Any]]
-    graph_components: list[dict[str, Any]]
-    graph_topics: list[dict[str, Any]]
-    ranked_repository_names: list[str]
-    graph_context_text: str
-    graph_available: bool
-    graph_has_data: bool
-
-    additional_context_recommendation: AdditionalContextRecommendation | None
-
-    # Every retrieval this pipeline performed, contract-shaped — the
-    # Planning Agent appends its own reasoning/verification evidence to
-    # this same list, it never has to reconstruct it.
-    evidence: list[Evidence]
-
-    # Free-form bookkeeping (which references were detected and by which
-    # provider, whether discovery ran, etc.) — for logging/diagnostics,
-    # not consumed by the LLM prompt.
-    planning_metadata: dict[str, Any] = field(default_factory=dict)
