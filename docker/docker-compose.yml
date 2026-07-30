@@ -21,7 +21,12 @@ services:
       POSTGRES_PASSWORD: graphforge
       POSTGRES_DB: graphforge
     ports:
-      - "5432:5432"
+      # Host port bumped to 5433 - 5432 is commonly already taken by another
+      # local Postgres (e.g. a different project's docker-compose stack).
+      # The backend container itself connects via the internal Docker network
+      # (DATABASE_URL uses host "db", not localhost) so this only affects
+      # host-side tools (psql, a GUI client) wanting to reach Postgres directly.
+      - "5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro

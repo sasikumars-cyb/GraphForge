@@ -88,6 +88,12 @@ services:
       context: ../frontend
       dockerfile: Dockerfile
       target: runtime
+      # Relative path - same-origin, proxied to `backend:8000` by
+      # docker/nginx/nginx.conf's /api/ rule below. Without this, Vite bakes
+      # in client.ts's dev-only fallback ("http://localhost:8000/api/v1"),
+      # which silently points every deployed browser at its own localhost.
+      args:
+        VITE_API_BASE_URL: /api/v1
     restart: unless-stopped
     ports:
       - "8080:80"

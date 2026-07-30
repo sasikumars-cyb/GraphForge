@@ -1,0 +1,111 @@
+# Single-box AWS demo stack: Postgres + backend + frontend + Caddy (automatic
+# HTTPS), all on one free-tier-eligible EC2 instance. Neo4j is NOT included
+# here deliberately - point NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD (in docker/.env)
+# at a Neo4j Aura Free instance instead, so the JVM-heavy graph database
+# doesn't compete for RAM with everything else on a t3.micro/t4g.micro (1GB).
+#
+# This is a deliberate simplification of docker-compose.prod.yml for a
+# temporary/demo deployment - no ALB, no RDS, no ECS, no Secrets Manager. See
+# docs/deployment/demo/README.md for the full setup guide and for why this
+# differs from docs/deployment/02_INFRASTRUCTURE.md's production design.
+#
+# Usage: docker compose -f docker/docker-compose.ec2-demo.yml up --build -d
+# (scripts/deploy-ec2-demo.sh does this for you, plus a git pull first.)
+
+name: graphforge-ec2-demo
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: graphforge
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env}
+      POSTGRES_DB: graphforge
+    # No host port - only `backend` needs `db:5432` over the Compose network.
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U graphforge -d graphforge"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+      target: runtime
+    restart: unless-stopped
+    environment:
+      ENVIRONMENT: production
+      DEBUG: "false"
+      DATABASE_URL: postgresql+asyncpg://graphforge:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in docker/.env}@db:5432/graphforge
+      FRONTEND_BASE_URL: https://${DOMAIN:?Set DOMAIN in docker/.env}
+      CORS_ALLOW_ORIGINS: '["https://${DOMAIN:?Set DOMAIN in docker/.env}"]'
+      # Neo4j Aura Free - not a local container. neo4j+s:// is Aura's
+      # TLS-required scheme (see docs/deployment/04_SECURITY.md).
+      NEO4J_URI: ${NEO4J_URI:?Set NEO4J_URI in docker/.env to your Aura connection URI}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:?Set NEO4J_PASSWORD in docker/.env}
+      JWT_SECRET_KEY: "${JWT_SECRET_KEY:?Set JWT_SECRET_KEY in docker/.env - generate with 'openssl rand -base64 48'}"
+      TOKEN_ENCRYPTION_KEY: ${TOKEN_ENCRYPTION_KEY:?Set TOKEN_ENCRYPTION_KEY in docker/.env - generate with Fernet.generate_key()}
+      # Bedrock: no API key - credentials resolve via this EC2 instance's
+      # attached IAM instance profile (same boto3 default-credential-chain
+      # pattern the ECS Task Role uses in the production design - see
+      # docs/deployment/05_IAM.md and app/ai/providers/bedrock_provider.py).
+      # NOTE: config.py's own default ("us.anthropic.claude-sonnet-4-20250514",
+      # no version suffix) was verified DEAD in this account/region - Bedrock
+      # now rejects it as a deprecated "Legacy" model. Defaulting here to a
+      # verified-working, cheaper model instead - see docs/deployment/demo/README.md.
+      AI_PROVIDER: ${AI_PROVIDER:-bedrock}
+      BEDROCK_REGION: ${BEDROCK_REGION:-us-east-1}
+      BEDROCK_MODEL: ${BEDROCK_MODEL:-us.anthropic.claude-haiku-4-5-20251001-v1:0}
+      # Only used if AI_PROVIDER=groq - harmless blank otherwise.
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      # Only used if you also test the merged DeepSeek provider - harmless blank otherwise.
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    # No host port - only `caddy` reaches this over the Compose network,
+    # via the frontend's own /api/ proxy rule (docker/nginx/nginx.conf).
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      target: runtime
+      # Relative path - same-origin, proxied to `backend:8000` by
+      # docker/nginx/nginx.conf's /api/ rule below. Without this, Vite bakes
+      # in client.ts's dev-only fallback ("http://localhost:8000/api/v1"),
+      # which silently points every deployed browser at its own localhost.
+      args:
+        VITE_API_BASE_URL: /api/v1
+    restart: unless-stopped
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - backend
+    # No host port - Caddy is the only public-facing service (below).
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN in docker/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

@@ -1,0 +1,13 @@
+# Caddy automatically obtains and renews a Let's Encrypt certificate for
+# {$DOMAIN} on first request - no manual certbot step, no cert files to
+# manage. Requires DOMAIN to be a real, publicly resolvable hostname
+# pointing at this box's Elastic IP (a Route53 record, or a free
+# sslip.io/nip.io hostname - see docs/deployment/demo/README.md).
+#
+# Caddy is the only container publishing 80/443 to the host - it terminates
+# TLS and reverse-proxies everything to the frontend container, which keeps
+# its own existing /api/ proxy rule (docker/nginx/nginx.conf) unchanged.
+
+{$DOMAIN} {
+	reverse_proxy frontend:80
+}

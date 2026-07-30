@@ -25,6 +25,16 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+
+# Vite bakes import.meta.env.VITE_* values in at build time, not runtime -
+# unset, client.ts's own fallback ("http://localhost:8000/api/v1") ends up
+# hardcoded into the bundle, which is wrong for every deployment except a
+# developer's own machine. Pass a relative path (e.g. "/api/v1") for any
+# same-origin proxy setup (see docker/nginx/nginx.conf's /api/ proxy_pass) -
+# leaving this unset preserves the old (dev-only-correct) default.
+ARG VITE_API_BASE_URL
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+
 RUN npm run build
 
 # --- Runtime stage: serve the static build with Nginx ---
