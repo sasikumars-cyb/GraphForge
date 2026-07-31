@@ -12,6 +12,7 @@ from app.api.v1.routers.health import router as health_router
 from app.api.v1.routers.jira import router as jira_router
 from app.api.v1.routers.knowledge import router as knowledge_router
 from app.api.v1.routers.oauth import router as oauth_router
+from app.api.v1.routers.oauth_apps import router as oauth_apps_router
 from app.api.v1.routers.pull_requests import router as pull_requests_router
 from app.api.v1.routers.repositories import router as repositories_router
 from app.api.v1.routers.system import router as system_router
@@ -24,6 +25,7 @@ api_router.include_router(health_router)
 api_router.include_router(auth_router)
 api_router.include_router(oauth_router)
 api_router.include_router(github_router)
+api_router.include_router(oauth_apps_router)
 api_router.include_router(repositories_router)
 api_router.include_router(pull_requests_router)
 api_router.include_router(ai_analysis_router)

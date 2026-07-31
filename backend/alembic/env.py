@@ -20,6 +20,7 @@ from app.models.ai_provider_config import AIProviderConfig, AISettings  # noqa: 
 from app.models.confidence_calibration import ConfidenceCalibration  # noqa: F401
 from app.models.github_connection import GitHubConnection  # noqa: F401
 from app.models.indexing_job import IndexingJob  # noqa: F401
+from app.models.oauth_app_credential import OAuthAppCredential  # noqa: F401
 from app.models.pull_request import PullRequest  # noqa: F401
 from app.models.pull_request_ai_analysis import PullRequestAIAnalysis  # noqa: F401
 from app.models.pull_request_analysis import PullRequestAnalysis  # noqa: F401
