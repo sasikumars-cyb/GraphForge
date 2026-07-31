@@ -2,8 +2,9 @@
 
 Cypher can't parameterize label names or relationship types, so both are
 interpolated directly into query strings — safe here specifically because
-they only ever come from `_ALLOWED_LABELS`/`_ALLOWED_REL_TYPES` below
-(a fixed, internally-controlled vocabulary), never from request input.
+they only ever come from the shared, internally-controlled allowlist in
+`app.graph.neo4j_common` (also used by `Neo4jTestCaseGraphRepository`),
+never from request input.
 """
 
 from itertools import groupby
@@ -13,66 +14,14 @@ from neo4j import AsyncDriver
 
 from app.graph.interfaces import IGraphRepository
 from app.graph.models import GraphEdge, GraphNode, GraphPayload
-from app.graph.neo4j_common import node_from_value
-
-# Every node/relationship type this codebase ever writes. Extend when the
-# indexer's vocabulary grows (see app.indexer.graph.builder) - anything not
-# listed here is refused, not silently interpolated.
-_ALLOWED_LABELS = frozenset(
-    {
-        "GraphNode",
-        "Repository",
-        "Component",
-        "Controller",
-        "Service",
-        "FeignClient",
-        "Endpoint",
-        "KafkaTopic",
-        "MavenDependency",
-        "Module",
-        "Class",
-        "Function",
-        "PythonDependency",
-        "DataTable",
-    }
+from app.graph.neo4j_common import (
+    _ALLOWED_LABELS,
+    _BASE_LABEL,
+    label_cypher,
+    node_from_value,
+    validate_labels,
+    validate_rel_type,
 )
-_ALLOWED_REL_TYPES = frozenset(
-    {
-        "CONTAINS",
-        "EXPOSES",
-        "CALLS",
-        "PRODUCES_TO",
-        "CONSUMES_FROM",
-        "DEPENDS_ON",
-        "IMPORTS",
-        "INHERITS_FROM",
-        "READS_FROM",
-        "WRITES_TO",
-    }
-)
-
-# Base label every node gets, regardless of its semantic labels - lets a
-# single index cover `id`/`repository_id` lookups for every node type.
-_BASE_LABEL = "GraphNode"
-
-
-def _validate_labels(labels: list[str]) -> tuple[str, ...]:
-    unknown = set(labels) - _ALLOWED_LABELS
-    if unknown:
-        raise ValueError(f"Refusing to write unknown graph label(s): {sorted(unknown)}")
-    ordered = [_BASE_LABEL, *sorted(label for label in labels if label != _BASE_LABEL)]
-    # dict.fromkeys: de-dupe while preserving order (a node may already list _BASE_LABEL).
-    return tuple(dict.fromkeys(ordered))
-
-
-def _validate_rel_type(rel_type: str) -> str:
-    if rel_type not in _ALLOWED_REL_TYPES:
-        raise ValueError(f"Refusing to write unknown relationship type: {rel_type!r}")
-    return rel_type
-
-
-def _label_cypher(labels: tuple[str, ...]) -> str:
-    return "".join(f":`{label}`" for label in labels)
 
 
 class Neo4jGraphRepository(IGraphRepository):
@@ -101,8 +50,8 @@ class Neo4jGraphRepository(IGraphRepository):
             await tx.commit()
 
     async def _write_nodes(self, tx: Any, repository_id: str, nodes: list[GraphNode]) -> None:
-        keyed = sorted(nodes, key=lambda n: _validate_labels(n.labels))
-        for labels, group in groupby(keyed, key=lambda n: _validate_labels(n.labels)):
+        keyed = sorted(nodes, key=lambda n: validate_labels(n.labels))
+        for labels, group in groupby(keyed, key=lambda n: validate_labels(n.labels)):
             payload = [
                 {"id": node.id, "properties": {**node.properties, "repository_id": repository_id}}
                 for node in group
@@ -110,15 +59,15 @@ class Neo4jGraphRepository(IGraphRepository):
             await tx.run(
                 f"""
                 UNWIND $nodes AS node
-                MERGE (n{_label_cypher(labels)} {{id: node.id}})
+                MERGE (n{label_cypher(labels)} {{id: node.id}})
                 SET n += node.properties
                 """,
                 nodes=payload,
             )
 
     async def _write_edges(self, tx: Any, edges: list[GraphEdge]) -> None:
-        keyed = sorted(edges, key=lambda e: _validate_rel_type(e.type))
-        for rel_type, group in groupby(keyed, key=lambda e: _validate_rel_type(e.type)):
+        keyed = sorted(edges, key=lambda e: validate_rel_type(e.type))
+        for rel_type, group in groupby(keyed, key=lambda e: validate_rel_type(e.type)):
             payload = [
                 {
                     "source_id": edge.source_id,

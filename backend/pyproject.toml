@@ -29,6 +29,12 @@ dependencies = [
     # <2.0: 2.0 renamed/reshaped streamablehttp_client's signature (headers/timeout
     # kwargs removed) - app/tools/mcp_support.py is written against the 1.x API.
     "mcp>=1.6,<2.0",
+    # Required by FastAPI/Starlette to parse multipart/form-data (UploadFile) -
+    # app/api/v1/routers/test_case_uploads.py's CSV/Excel upload endpoint.
+    "python-multipart>=0.0.12",
+    # .xlsx parsing for the same upload endpoint - .csv needs no extra
+    # dependency (stdlib `csv`).
+    "openpyxl>=3.1",
 ]
 
 [project.optional-dependencies]
@@ -54,7 +60,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 # FastAPI's dependency injection requires calling Depends()/Query()/Body()
 # in argument defaults - that's the framework's own pattern, not the bug
 # B008 normally warns about.
-extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Body"]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Body", "fastapi.File", "fastapi.Form"]
 
 [tool.black]
 line-length = 100
@@ -71,6 +77,13 @@ plugins = ["pydantic.mypy"]
 # ignore_missing_imports, so a real missing-stub issue elsewhere still fails.
 [[tool.mypy.overrides]]
 module = ["boto3.*", "botocore.*"]
+ignore_missing_imports = true
+
+# openpyxl ships no inline types; types-openpyxl exists but is a separate
+# dependency this one parser (test_case_upload_parser.py) doesn't justify
+# pulling in. Same scoped-override reasoning as boto3/botocore above.
+[[tool.mypy.overrides]]
+module = ["openpyxl.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
