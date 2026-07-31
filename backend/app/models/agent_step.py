@@ -44,6 +44,23 @@ class AgentStep(Base):
     prompt_version: Mapped[str] = mapped_column(String(50), nullable=False, default="1.0")
     output_ref: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    # ADR 0011, OD-1 — orchestrator-produced, pre-execution WARNING-severity
+    # pre-flight results (e.g. "Jira unreachable"), kept deliberately
+    # separate from `evidence` above: `evidence` is the agent's own audit
+    # trail of what *it* observed, while this is produced by RunCoordinator
+    # before the agent ever runs. Each entry is shaped exactly
+    # `{code, dependency, message, checked_at}` (see
+    # app.orchestrator.preflight.PreflightWarning) — never written to
+    # directly; always appended via
+    # app.orchestrator.preflight.record_preflight_warnings, which preserves
+    # execution order and any warnings already present. Non-nullable with an
+    # empty-list default so every existing row (and every row from a run
+    # with no warnings, the overwhelming common case) reads as `[]`, never
+    # `None` — no caller needs an existence check.
+    preflight_warnings: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Evaluation metrics (Phase 1 — latency + retry count captured here;
