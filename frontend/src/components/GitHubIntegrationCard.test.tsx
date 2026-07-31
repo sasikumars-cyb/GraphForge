@@ -6,6 +6,7 @@ import { GitHubIntegrationCard } from "./GitHubIntegrationCard";
 import { AuthProvider } from "../app/AuthContext";
 import * as authApi from "../lib/api/auth";
 import * as githubApi from "../lib/api/github";
+import * as repositoriesApi from "../lib/api/repositories";
 import type { AvailableRepository, GitHubConnectionStatus } from "../types/github";
 
 const FAKE_USER = {
@@ -21,12 +22,16 @@ const NOT_CONNECTED: GitHubConnectionStatus = {
   connected: false,
   github_username: null,
   connected_at: null,
+  auth_method: null,
+  scope_warning: null,
 };
 
 const CONNECTED: GitHubConnectionStatus = {
   connected: true,
   github_username: "ada",
   connected_at: "2026-07-01T00:00:00Z",
+  auth_method: "oauth",
+  scope_warning: null,
 };
 
 const REPOS: AvailableRepository[] = [
@@ -62,6 +67,12 @@ function renderCard(initialEntries: string[] = ["/settings"]) {
   );
 }
 
+async function openAddConnection() {
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "Add Connection" }));
+  return user;
+}
+
 describe("GitHubIntegrationCard", () => {
   beforeEach(() => {
     localStorage.setItem("graphforge.token", "fake-token");
@@ -77,23 +88,23 @@ describe("GitHubIntegrationCard", () => {
     vi.restoreAllMocks();
   });
 
-  it("shows Not connected and a Connect button by default", async () => {
+  it("shows Not connected and an Add Connection button by default", async () => {
     vi.spyOn(githubApi, "getConnectionStatus").mockResolvedValue(NOT_CONNECTED);
     renderCard();
 
     expect(await screen.findByText("Not connected")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Connect" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Connection" })).toBeInTheDocument();
   });
 
-  it("redirects to the authorization URL when Connect is clicked", async () => {
+  it("redirects to the authorization URL when Connect via OAuth is clicked", async () => {
     vi.spyOn(githubApi, "getConnectionStatus").mockResolvedValue(NOT_CONNECTED);
     vi.spyOn(githubApi, "getConnectAuthorizationUrl").mockResolvedValue({
       authorization_url: "https://github.com/login/oauth/authorize?client_id=abc&state=xyz",
     });
-    const user = userEvent.setup();
     renderCard();
+    const user = await openAddConnection();
 
-    await user.click(await screen.findByRole("button", { name: "Connect" }));
+    await user.click(screen.getByRole("button", { name: "Connect via OAuth" }));
 
     await waitFor(() =>
       expect(window.location.href).toBe(
@@ -162,5 +173,70 @@ describe("GitHubIntegrationCard", () => {
     expect(
       await screen.findByText("Connecting to GitHub failed. Please try again."),
     ).toBeInTheDocument();
+  });
+
+  it("connects with a pasted personal access token", async () => {
+    vi.spyOn(githubApi, "getConnectionStatus").mockResolvedValue(NOT_CONNECTED);
+    vi.spyOn(githubApi, "listAvailableRepositories").mockResolvedValue(REPOS);
+    const connectSpy = vi
+      .spyOn(githubApi, "connectWithPersonalAccessToken")
+      .mockResolvedValue({ ...CONNECTED, auth_method: "pat" });
+    renderCard();
+    const user = await openAddConnection();
+
+    await user.type(screen.getByLabelText("Personal access token"), "ghp_faketoken");
+    await user.click(screen.getByRole("button", { name: "Connect with token" }));
+
+    expect(connectSpy).toHaveBeenCalledWith("fake-token", "ghp_faketoken");
+    expect(
+      await screen.findByText("Connected as @ada via personal access token"),
+    ).toBeInTheDocument();
+  });
+
+  it("surfaces a scope warning after a PAT connect that's missing the repo scope", async () => {
+    vi.spyOn(githubApi, "getConnectionStatus").mockResolvedValue(NOT_CONNECTED);
+    vi.spyOn(githubApi, "listAvailableRepositories").mockResolvedValue(REPOS);
+    vi.spyOn(githubApi, "connectWithPersonalAccessToken").mockResolvedValue({
+      ...CONNECTED,
+      auth_method: "pat",
+      scope_warning: "This token doesn't have the 'repo' scope.",
+    });
+    renderCard();
+    const user = await openAddConnection();
+
+    await user.type(screen.getByLabelText("Personal access token"), "ghp_faketoken");
+    await user.click(screen.getByRole("button", { name: "Connect with token" }));
+
+    expect(
+      await screen.findByText(/This token doesn't have the 'repo' scope\./),
+    ).toBeInTheDocument();
+  });
+
+  it("adds a local repository", async () => {
+    vi.spyOn(githubApi, "getConnectionStatus").mockResolvedValue(NOT_CONNECTED);
+    const createSpy = vi.spyOn(repositoriesApi, "createLocalRepository").mockResolvedValue({
+      id: "repo-1",
+      github_repo_id: "local:order-service",
+      source: "local",
+      owner: "local",
+      name: "order-service",
+      full_name: "local/order-service",
+      private: false,
+      default_branch: "main",
+      html_url: "/local-repos/order-service",
+      created_at: "2026-07-30T00:00:00Z",
+    });
+    renderCard();
+    const user = await openAddConnection();
+
+    await user.type(screen.getByLabelText("Local repository name"), "order-service");
+    await user.type(screen.getByLabelText("Local repository path"), "order-service");
+    await user.click(screen.getByRole("button", { name: "Add local repository" }));
+
+    expect(createSpy).toHaveBeenCalledWith("fake-token", {
+      name: "order-service",
+      path: "order-service",
+    });
+    expect(await screen.findByText("Tracking 'order-service' (branch: main).")).toBeInTheDocument();
   });
 });

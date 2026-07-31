@@ -24,6 +24,7 @@ const REPOS: TrackedRepository[] = [
   {
     id: "repo-order",
     github_repo_id: "local-order",
+    source: "local",
     owner: "local",
     name: "order-service",
     full_name: "local/order-service",
@@ -35,6 +36,7 @@ const REPOS: TrackedRepository[] = [
   {
     id: "repo-payment",
     github_repo_id: "local-payment",
+    source: "local",
     owner: "local",
     name: "payment-service",
     full_name: "local/payment-service",

@@ -18,7 +18,14 @@ vi.mock("../lib/api/github", () => ({
 
 function renderWithAuth() {
   const authValue: AuthContextValue = {
-    user: { id: "u1", email: "test@test.com", full_name: "Test User", auth_provider: "local", role: "user", created_at: "2026-01-01T00:00:00Z" },
+    user: {
+      id: "u1",
+      email: "test@test.com",
+      full_name: "Test User",
+      auth_provider: "local",
+      role: "user",
+      created_at: "2026-01-01T00:00:00Z",
+    },
     token: "test-token",
     isLoading: false,
     login: vi.fn(),
@@ -61,6 +68,8 @@ const githubConnected: GitHubConnectionStatus = {
   connected: true,
   github_username: "octocat",
   connected_at: "2026-01-15T10:30:00Z",
+  auth_method: "oauth",
+  scope_warning: null,
 };
 
 describe("ControlCenterPage", () => {
@@ -159,6 +168,8 @@ describe("ControlCenterPage", () => {
       connected: false,
       github_username: null,
       connected_at: null,
+      auth_method: null,
+      scope_warning: null,
     });
 
     renderWithAuth();

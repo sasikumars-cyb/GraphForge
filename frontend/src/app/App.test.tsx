@@ -42,6 +42,7 @@ function renderApp(initialPath = "/") {
 const FAKE_REPO: TrackedRepository = {
   id: "repo-1",
   github_repo_id: "local-1",
+  source: "local",
   owner: "local",
   name: "order-service",
   full_name: "local/order-service",
@@ -94,18 +95,16 @@ describe("App navigation (authenticated)", () => {
       environment: "development",
       version: "0.1.0",
       ai_provider: { name: "openai", configured: true, active: true, model: "gpt-4o" },
-      ai_providers: [
-        { name: "openai", configured: true, active: true, model: "gpt-4o" },
-      ],
-      connections: [
-        { name: "PostgreSQL", status: "connected", detail: null },
-      ],
+      ai_providers: [{ name: "openai", configured: true, active: true, model: "gpt-4o" }],
+      connections: [{ name: "PostgreSQL", status: "connected", detail: null }],
       knowledge_base: { repositories_tracked: 0, repositories_indexed: 0, repositories_pending: 0 },
     });
     vi.spyOn(githubApi, "getConnectionStatus").mockResolvedValue({
       connected: false,
       github_username: null,
       connected_at: null,
+      auth_method: null,
+      scope_warning: null,
     });
   });
 

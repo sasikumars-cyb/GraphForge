@@ -1,6 +1,7 @@
 import { apiFetch } from "./client";
 import type { CrossRepositoryLink, Graph, IndexingJob } from "../../types/graph";
 import type { PullRequest } from "../../types/pullRequest";
+import type { LocalRepositoryCreateRequest, TrackedRepository } from "../../types/github";
 
 export function listPullRequests(token: string, repositoryId: string): Promise<PullRequest[]> {
   return apiFetch<PullRequest[]>(`/repositories/${repositoryId}/pull-requests`, { token });
@@ -45,4 +46,14 @@ export function getRepositoryDependencies(token: string, repositoryId: string): 
  * indexing jobs, and Neo4j graph are all removed with it. */
 export function removeRepository(token: string, repositoryId: string): Promise<void> {
   return apiFetch<void>(`/repositories/${repositoryId}`, { method: "DELETE", token });
+}
+
+/** Registers one local-filesystem folder (resolved against the server's
+ * configured LOCAL_REPOS_ROOT) as a tracked, indexable repository -
+ * additive, unlike the GitHub selection flow which replaces the whole set. */
+export function createLocalRepository(
+  token: string,
+  body: LocalRepositoryCreateRequest,
+): Promise<TrackedRepository> {
+  return apiFetch<TrackedRepository>("/repositories/local", { method: "POST", token, body });
 }

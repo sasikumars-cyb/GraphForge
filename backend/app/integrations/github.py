@@ -84,6 +84,79 @@ async def _github_get(
     return response.json()
 
 
+async def fetch_user_profile(access_token: str) -> OAuthUserProfile:
+    """Fetch the authenticated user's profile from GitHub.
+
+    Module-level (not a `GitHubOAuthProvider` method body) because it needs
+    nothing but a bearer token — no OAuth App `client_id`/`client_secret`.
+    That's what lets `github_service.connect_with_pat` call this directly
+    to validate a pasted token, instead of constructing a `GitHubOAuthProvider`
+    with dummy app credentials it would never use. `GitHubOAuthProvider.
+    fetch_user_profile` below delegates here so the `IOAuthProvider` contract
+    is unchanged for the OAuth flow.
+    """
+    data = await _github_get("/user", access_token)
+    return OAuthUserProfile(
+        provider_user_id=str(data["id"]),
+        email=data.get("email"),
+        # `login` (the @handle) over the optional display `name`: it's
+        # always present, and what "Connect GitHub" needs to show as
+        # "Connected as @login" - unlike a future login-via-GitHub use
+        # case, which would want the display name for User.full_name.
+        name=data.get("login") or data.get("name"),
+    )
+
+
+async def list_repositories(access_token: str) -> list[RepositoryInfo]:
+    """List repositories `access_token`'s owner has access to. Module-level
+    for the same reason as `fetch_user_profile` above — see its docstring."""
+    data = await _github_get(
+        "/user/repos",
+        access_token,
+        params={"per_page": 100, "sort": "updated", "affiliation": "owner,collaborator"},
+    )
+    return [
+        RepositoryInfo(
+            provider_repo_id=str(repo["id"]),
+            owner=repo["owner"]["login"],
+            name=repo["name"],
+            full_name=repo["full_name"],
+            private=repo["private"],
+            default_branch=repo["default_branch"],
+            html_url=repo["html_url"],
+        )
+        for repo in data
+    ]
+
+
+async def fetch_token_scopes(access_token: str) -> list[str] | None:
+    """The OAuth scopes granted to a *classic* personal access token (or a
+    classic OAuth App token), read from GitHub's `X-OAuth-Scopes` response
+    header. Returns `None` for a fine-grained PAT or a GitHub App
+    installation token — neither sends this header — which callers must
+    treat as "unknown", not "no scopes granted"; there is no header-based
+    way to check a fine-grained token's permissions.
+
+    Used only for a non-blocking "this token may be missing `repo` access"
+    warning at connect time (see `github_service.connect_with_pat`) — never
+    to reject a connection outright, since a `None` result is common and
+    legitimate.
+    """
+    headers = dict(_API_HEADERS)
+    headers["Authorization"] = f"Bearer {access_token}"
+    async with httpx.AsyncClient() as client:
+        response = await client.get(f"{_API_BASE}/user", headers=headers)
+    if response.is_error:
+        raise GitHubApiError(
+            f"GitHub API request to /user failed with status {response.status_code}: "
+            f"{response.text}"
+        )
+    scopes_header = response.headers.get("x-oauth-scopes")
+    if scopes_header is None:
+        return None
+    return [s.strip() for s in scopes_header.split(",") if s.strip()]
+
+
 class GitHubOAuthProvider(IOAuthProvider):
     def __init__(self, client_id: str, client_secret: str, redirect_uri: str) -> None:
         self._client_id = client_id
@@ -125,35 +198,10 @@ class GitHubOAuthProvider(IOAuthProvider):
         return str(access_token)
 
     async def fetch_user_profile(self, access_token: str) -> OAuthUserProfile:
-        data = await _github_get("/user", access_token)
-        return OAuthUserProfile(
-            provider_user_id=str(data["id"]),
-            email=data.get("email"),
-            # `login` (the @handle) over the optional display `name`: it's
-            # always present, and what "Connect GitHub" needs to show as
-            # "Connected as @login" - unlike a future login-via-GitHub use
-            # case, which would want the display name for User.full_name.
-            name=data.get("login") or data.get("name"),
-        )
+        return await fetch_user_profile(access_token)
 
     async def list_repositories(self, access_token: str) -> list[RepositoryInfo]:
-        data = await _github_get(
-            "/user/repos",
-            access_token,
-            params={"per_page": 100, "sort": "updated", "affiliation": "owner,collaborator"},
-        )
-        return [
-            RepositoryInfo(
-                provider_repo_id=str(repo["id"]),
-                owner=repo["owner"]["login"],
-                name=repo["name"],
-                full_name=repo["full_name"],
-                private=repo["private"],
-                default_branch=repo["default_branch"],
-                html_url=repo["html_url"],
-            )
-            for repo in data
-        ]
+        return await list_repositories(access_token)
 
 
 class GitHubVersionControlProvider(IVersionControlProvider, IGitWriteProvider):

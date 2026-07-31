@@ -94,6 +94,17 @@ class Settings(BaseSettings):
     vcs_provider: str = Field(default="github")
     demo_repositories_root: str = Field(default="../demo/repositories")
 
+    # --- Local repository indexing (see app.services.local_repository_service) ---
+    # Root a user-submitted repository path is resolved and bound against
+    # (defense against path traversal/symlink escape - see that service's
+    # own validation). None (default) disables the feature entirely rather
+    # than silently no-op-ing on an unset root. Under Docker, this is the
+    # container-side mount point of an operator-chosen host directory (see
+    # docker/docker-compose.local-repos.yml); running natively
+    # (scripts/dev.sh), it can point anywhere on the host directly since
+    # there's no container boundary.
+    local_repos_root: str | None = Field(default=None)
+
     # --- AI Provider ---
     ai_provider: str = Field(default="openai")
     openai_api_key: str | None = Field(default=None)

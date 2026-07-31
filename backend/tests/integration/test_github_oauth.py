@@ -117,7 +117,13 @@ async def test_connection_status_before_and_after_connecting(
     headers = {"Authorization": f"Bearer {token}"}
 
     before = await db_client.get("/api/v1/github/connection", headers=headers)
-    assert before.json() == {"connected": False, "github_username": None, "connected_at": None}
+    assert before.json() == {
+        "connected": False,
+        "github_username": None,
+        "connected_at": None,
+        "auth_method": None,
+        "scope_warning": None,
+    }
 
     connect_response = await db_client.get("/api/v1/github/connect", headers=headers)
     state = connect_response.json()["authorization_url"].split("state=")[1]
@@ -143,6 +149,7 @@ async def test_connection_status_before_and_after_connecting(
     body = after.json()
     assert body["connected"] is True
     assert body["github_username"] == "ada"
+    assert body["auth_method"] == "oauth"
 
 
 async def test_callback_with_invalid_state_redirects_with_error(

@@ -16,8 +16,10 @@ from app.schemas.github import (
     AvailableRepository,
     GitHubConnectAuthorizationUrl,
     GitHubConnectionStatus,
+    GitHubPATConnectRequest,
 )
 from app.services.github_service import (
+    connect_with_pat,
     disconnect,
     get_connect_authorization_url,
     get_connection,
@@ -42,16 +44,41 @@ async def connection_status(
         connected=True,
         github_username=connection.github_username,
         connected_at=connection.created_at,
+        auth_method=connection.auth_method,
     )
 
 
 @router.get("/connect", response_model=GitHubConnectAuthorizationUrl)
-async def connect(current_user: User = Depends(get_current_user)) -> GitHubConnectAuthorizationUrl:
+async def connect(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> GitHubConnectAuthorizationUrl:
     """Returns the GitHub authorize URL — called via a normal (JWT-bearing)
     fetch; the frontend then does a top-level `window.location` navigation
     to it, since the authorize page can't be reached via XHR."""
     return GitHubConnectAuthorizationUrl(
-        authorization_url=get_connect_authorization_url(current_user)
+        authorization_url=await get_connect_authorization_url(db, current_user)
+    )
+
+
+@router.post("/connection/pat", response_model=GitHubConnectionStatus)
+async def connect_with_personal_access_token(
+    body: GitHubPATConnectRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> GitHubConnectionStatus:
+    """PAT alternative to the OAuth /connect + /callback round trip - same
+    resulting GitHubConnection row (see connect_with_pat's docstring), so
+    every other GitHub-backed feature (repo listing, indexing, analysis,
+    agent read/write) works identically regardless of which endpoint a
+    user's connection came from."""
+    connection, scope_warning = await connect_with_pat(db, current_user, body.token)
+    return GitHubConnectionStatus(
+        connected=True,
+        github_username=connection.github_username,
+        connected_at=connection.created_at,
+        auth_method=connection.auth_method,
+        scope_warning=scope_warning,
     )
 
 

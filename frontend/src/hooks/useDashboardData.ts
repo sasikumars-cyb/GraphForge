@@ -33,6 +33,7 @@ export interface DashboardRepositoryRow {
   createdAt: string;
   health: RepositoryHealth;
   openPullRequests: number;
+  source: "github" | "local";
 }
 
 export interface DashboardStats {
@@ -171,6 +172,7 @@ export function useDashboardData(): DashboardData {
             createdAt: repo.created_at,
             health: repoHasHighRisk ? "critical" : repoHasUnresolved ? "attention" : "healthy",
             openPullRequests: openPrs.length,
+            source: repo.source,
           });
         }
 

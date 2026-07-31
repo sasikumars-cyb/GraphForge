@@ -1,0 +1,32 @@
+# Layers on top of docker-compose.yml to make a host directory of local
+# git repositories visible to the backend container, so folders that only
+# exist on disk (no GitHub remote) can be tracked and indexed the same way
+# a GitHub repo is - see app.services.local_repository_service and the
+# "Local Repository" card in Settings -> Integrations.
+#
+# Generalizes docker-compose.local.yml's bind-mount pattern (including its
+# gitconfig fix below) into something anyone can point at their own path,
+# instead of one engineer's hardcoded directory - and does NOT set
+# VCS_PROVIDER=local_git, which belongs to that other, unrelated
+# (synthetic PR-diff demo) overlay.
+#
+# Usage: set LOCAL_REPOS_HOST_PATH in docker/.env (git-ignored) to the host
+# folder you want exposed, then:
+#   docker compose -f docker/docker-compose.yml -f docker/docker-compose.local-repos.yml up --build
+# (scripts/local-repos-up.sh does this for you.)
+#
+# Never used by default - docker-compose.yml alone is unaffected. Requires
+# a stack restart with this overlay applied to take effect; Docker cannot
+# mount a new path into an already-running container.
+
+services:
+  backend:
+    environment:
+      LOCAL_REPOS_ROOT: /local-repos
+    volumes:
+      - ${LOCAL_REPOS_HOST_PATH}:/local-repos:ro
+      # Same "dubious ownership" issue as docker-compose.local.yml: the
+      # bind-mounted repos are owned by a different UID than the
+      # container's user, so git refuses to touch them (clone, rev-parse,
+      # diff) unless explicitly trusted.
+      - ./demo-gitconfig:/root/.gitconfig:ro

@@ -16,6 +16,19 @@ export function getConnectAuthorizationUrl(token: string): Promise<{ authorizati
   return apiFetch<{ authorization_url: string }>("/github/connect", { token });
 }
 
+/** PAT alternative to the OAuth connect flow — same resulting connection,
+ * see backend/app/services/github_service.py's connect_with_pat. */
+export function connectWithPersonalAccessToken(
+  token: string,
+  patToken: string,
+): Promise<GitHubConnectionStatus> {
+  return apiFetch<GitHubConnectionStatus>("/github/connection/pat", {
+    method: "POST",
+    token,
+    body: { token: patToken },
+  });
+}
+
 export function disconnectGitHub(token: string): Promise<undefined> {
   return apiFetch<undefined>("/github/connection", { method: "DELETE", token });
 }

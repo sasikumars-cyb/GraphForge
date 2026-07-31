@@ -21,9 +21,15 @@ from app.models.indexing_job import IndexingJob
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
 from app.models.user import User
-from app.schemas.github import PullRequestResponse, RepositoryResponse, RepositorySelectionRequest
+from app.schemas.github import (
+    LocalRepositoryCreateRequest,
+    PullRequestResponse,
+    RepositoryResponse,
+    RepositorySelectionRequest,
+)
 from app.schemas.indexing import CrossRepositoryLinkResponse, GraphResponse, IndexingJobResponse
 from app.services.github_service import list_tracked_repositories, set_selected_repositories
+from app.services.local_repository_service import create_local_repository
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
 
@@ -135,6 +141,19 @@ async def select_repositories(
 ) -> list[Repository]:
     """Replaces the tracked set with exactly `selection.repositories`."""
     return await set_selected_repositories(db, current_user, selection)
+
+
+@router.post("/local", response_model=RepositoryResponse, status_code=201)
+async def add_local_repository(
+    body: LocalRepositoryCreateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> Repository:
+    """Registers one local-filesystem folder as a tracked repository —
+    additive (insert-one), unlike `select_repositories` above which
+    replaces the entire GitHub-sourced set. See
+    app.services.local_repository_service."""
+    return await create_local_repository(db, current_user, name=body.name, path=body.path)
 
 
 @router.delete("/{repository_id}", status_code=204)

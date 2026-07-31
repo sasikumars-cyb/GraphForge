@@ -29,6 +29,15 @@ class GitHubConnection(Base):
     # in plaintext. See ADR 0006 for the tradeoff.
     encrypted_access_token: Mapped[str] = mapped_column(String(1024), nullable=False)
 
+    # "oauth" (the original, still-default flow) or "pat" (a pasted personal
+    # access token - see github_service.connect_with_pat). Purely
+    # informational: every downstream consumer of this row (indexer, impact
+    # analysis, agents, git-ops writes) reads the same encrypted_access_token
+    # regardless of how it was obtained - this column only drives what the
+    # Settings UI displays ("Connected via OAuth" vs "... via personal
+    # access token").
+    auth_method: Mapped[str] = mapped_column(String(16), nullable=False, server_default="oauth")
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

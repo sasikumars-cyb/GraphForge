@@ -1,5 +1,7 @@
-"""The `repositories` table — GitHub repositories a user has selected to
-track. Only selected repositories are stored; the live GitHub list
+"""The `repositories` table — repositories a user has selected to track,
+either from GitHub (`source="github"`) or a local filesystem path
+(`source="local"` — see app.services.local_repository_service). Only
+selected repositories are stored; the live GitHub list
 (`GET /api/v1/github/repositories`) is never persisted wholesale.
 """
 
@@ -26,7 +28,20 @@ class Repository(Base):
     # if two users both select the same repo, each gets their own row (their
     # own tracking relationship), so this is NOT a global unique constraint -
     # see the (user_id, github_repo_id) unique constraint below instead.
+    #
+    # For source="local" rows there is no real GitHub id - the local
+    # repository service synthesizes "local:<name>" here so this column
+    # (and the uniqueness constraint on it) keeps working unmodified for
+    # both sources rather than needing a separate nullable id column.
     github_repo_id: Mapped[str] = mapped_column(String(50), nullable=False)
+
+    # "github" (default) or "local" - which path created this row. Purely
+    # descriptive: every downstream consumer (indexer, PR analysis, the
+    # UI's Source badge) branches on this only where the two sources
+    # actually differ (e.g. PR ingestion is GitHub-only); indexing itself
+    # doesn't need to check it at all, since html_url already works for
+    # both (see indexer.scanner.repository_cloner).
+    source: Mapped[str] = mapped_column(String(16), nullable=False, server_default="github")
 
     owner: Mapped[str] = mapped_column(String(255), nullable=False)
     name: Mapped[str] = mapped_column(String(255), nullable=False)

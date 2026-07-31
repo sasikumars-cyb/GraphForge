@@ -15,11 +15,17 @@ from app.core.config import get_settings
 from app.core.crypto import decrypt_secret, encrypt_secret
 from app.core.exceptions import AppError, NotFoundError, UnauthorizedError
 from app.core.security import create_access_token, decode_access_token
-from app.integrations.github import GitHubOAuthProvider
+from app.integrations.github import (
+    GitHubApiError,
+    GitHubOAuthProvider,
+    fetch_token_scopes,
+    fetch_user_profile,
+)
 from app.models.github_connection import GitHubConnection
 from app.models.repository import Repository
 from app.models.user import User
 from app.schemas.github import AvailableRepository, RepositorySelectionRequest
+from app.services.oauth_app_config_service import get_credential as get_oauth_app_credential
 
 _STATE_EXPIRY = timedelta(minutes=10)
 _OAUTH_STATE_PURPOSE = "github_oauth_state"
@@ -32,16 +38,42 @@ class GitHubNotConfiguredError(AppError):
     error_code = "github_not_configured"
 
 
-def _build_provider() -> GitHubOAuthProvider:
+class InvalidGitHubTokenError(AppError):
+    """Raised when a pasted personal access token doesn't work - a client
+    error (400), unlike GitHubApiError's 502 for an upstream failure once a
+    connection already exists."""
+
+    status_code = 400
+    error_code = "invalid_github_token"
+
+
+# Classic PATs need `repo` to do anything this app uses a token for (list
+# private repos, clone for indexing, read diffs, write branches/commits/PRs
+# via the git-ops agents) - the same scope the OAuth flow already requests
+# (see `_SCOPE` in app.integrations.github). Checked only as an advisory
+# warning, never a hard gate - see `fetch_token_scopes`'s docstring for why
+# a fine-grained PAT can't be checked this way at all.
+_REQUIRED_PAT_SCOPE = "repo"
+
+
+async def _build_provider(db: AsyncSession) -> GitHubOAuthProvider:
+    """A stored OAuth App credential (set via Settings -> Integrations by an
+    admin, see app.services.oauth_app_config_service) takes precedence over
+    GITHUB_CLIENT_ID/GITHUB_CLIENT_SECRET - the env vars remain the fallback
+    for installs that configure this way instead."""
+    client_id, client_secret = await get_oauth_app_credential(db, "github")
     settings = get_settings()
-    if not settings.github_client_id or not settings.github_client_secret:
+    client_id = client_id or settings.github_client_id
+    client_secret = client_secret or settings.github_client_secret
+    if not client_id or not client_secret:
         raise GitHubNotConfiguredError(
             "GitHub integration is not configured. Set GITHUB_CLIENT_ID and "
-            "GITHUB_CLIENT_SECRET (see docs/setup.md)."
+            "GITHUB_CLIENT_SECRET (see docs/setup.md), or configure it from "
+            "Settings -> Integrations as an admin."
         )
     return GitHubOAuthProvider(
-        client_id=settings.github_client_id,
-        client_secret=settings.github_client_secret,
+        client_id=client_id,
+        client_secret=client_secret,
         redirect_uri=settings.github_oauth_redirect_uri,
     )
 
@@ -64,13 +96,13 @@ async def get_decrypted_access_token(db: AsyncSession, user_id: uuid.UUID) -> st
     return decrypt_secret(connection.encrypted_access_token) if connection else None
 
 
-def get_connect_authorization_url(user: User) -> str:
+async def get_connect_authorization_url(db: AsyncSession, user: User) -> str:
     """Builds the GitHub authorize URL, with a signed, time-limited `state`
     that encodes which user initiated the connect flow — GitHub's redirect
     back to /callback carries no Authorization header, so this is how the
     callback knows whose GitHubConnection to write.
     """
-    provider = _build_provider()
+    provider = await _build_provider(db)
     state = create_access_token(
         subject=str(user.id), expires_delta=_STATE_EXPIRY, purpose=_OAUTH_STATE_PURPOSE
     )
@@ -94,7 +126,7 @@ async def handle_oauth_callback(db: AsyncSession, code: str, state: str) -> User
     if user is None:
         raise NotFoundError("User not found.")
 
-    provider = _build_provider()
+    provider = await _build_provider(db)
     access_token = await provider.exchange_code_for_token(code)
     profile = await provider.fetch_user_profile(access_token)
 
@@ -107,15 +139,94 @@ async def handle_oauth_callback(db: AsyncSession, code: str, state: str) -> User
             github_user_id=profile.provider_user_id,
             github_username=profile.name or profile.provider_user_id,
             encrypted_access_token=encrypted_token,
+            auth_method="oauth",
         )
         db.add(connection)
     else:
         connection.github_user_id = profile.provider_user_id
         connection.github_username = profile.name or profile.provider_user_id
         connection.encrypted_access_token = encrypted_token
+        # Reconnecting via OAuth after a prior PAT connection (or vice
+        # versa in connect_with_pat below) must flip this, not leave it
+        # stuck on whichever flow was used first - it describes the
+        # connection as it exists now, not its history.
+        connection.auth_method = "oauth"
 
     await db.commit()
     return user
+
+
+async def connect_with_pat(
+    db: AsyncSession, user: User, token: str
+) -> tuple[GitHubConnection, str | None]:
+    """The PAT equivalent of `handle_oauth_callback`: no authorize/exchange
+    step (there's no code to exchange - the user handed us the token
+    directly), so this validates it directly against GitHub and upserts the
+    same `GitHubConnection` row `auth_method="pat"` instead of `"oauth"`.
+
+    Every downstream reader of that row (repository listing/selection,
+    the indexer's clone step, deterministic impact analysis, the Planning
+    Agent's/Context Discovery's GitHub enrichment, and the git-ops write
+    agents) already resolves its token via `get_decrypted_access_token`, so
+    none of them need to know or care which flow produced this row.
+
+    Returns `(connection, scope_warning)` - `scope_warning` is a human-readable
+    string when the token is a classic PAT missing the `repo` scope, else
+    `None` (either it has `repo`, or it's a fine-grained PAT/GitHub App
+    token whose scopes can't be checked this way - see
+    `app.integrations.github.fetch_token_scopes`). The connection is made
+    either way; this is advisory, not a gate.
+    """
+    token = token.strip()
+    if not token:
+        raise InvalidGitHubTokenError("A GitHub personal access token is required.")
+
+    try:
+        profile = await fetch_user_profile(token)
+    except GitHubApiError as exc:
+        raise InvalidGitHubTokenError(f"GitHub rejected this token: {exc}") from exc
+
+    scope_warning: str | None = None
+    try:
+        scopes = await fetch_token_scopes(token)
+    except GitHubApiError:
+        # Already proven valid via fetch_user_profile above - a transient
+        # failure on this second, purely advisory call must not block the
+        # connection it would otherwise have completed.
+        scopes = None
+    if scopes is not None and _REQUIRED_PAT_SCOPE not in scopes:
+        scope_warning = (
+            f"This token doesn't have the '{_REQUIRED_PAT_SCOPE}' scope, so private "
+            "repositories, indexing, and write actions (branches, commits, pull "
+            "requests) may fail. Reconnect with a token that includes it."
+        )
+
+    connection = await get_connection(db, user)
+    encrypted_token = encrypt_secret(token)
+
+    if connection is None:
+        connection = GitHubConnection(
+            user_id=user.id,
+            github_user_id=profile.provider_user_id,
+            github_username=profile.name or profile.provider_user_id,
+            encrypted_access_token=encrypted_token,
+            auth_method="pat",
+        )
+        db.add(connection)
+    else:
+        connection.github_user_id = profile.provider_user_id
+        connection.github_username = profile.name or profile.provider_user_id
+        connection.encrypted_access_token = encrypted_token
+        connection.auth_method = "pat"
+
+    await db.commit()
+    # The router needs connection fields (username/created_at/auth_method)
+    # for its response; commit() expires them by default, and — unlike
+    # handle_oauth_callback, whose caller only needs `user` back — a plain
+    # post-commit attribute access here would trigger an implicit lazy
+    # refresh that async SQLAlchemy can't do without an explicit await.
+    await db.refresh(connection)
+    return connection, scope_warning
 
 
 async def disconnect(db: AsyncSession, user: User) -> None:
@@ -132,7 +243,7 @@ async def list_available_repositories(db: AsyncSession, user: User) -> list[Avai
     if connection is None:
         raise UnauthorizedError("GitHub is not connected for this user.")
 
-    provider = _build_provider()
+    provider = await _build_provider(db)
     access_token = decrypt_secret(connection.encrypted_access_token)
     repos = await provider.list_repositories(access_token)
 

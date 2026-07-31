@@ -19,6 +19,7 @@ class ToolCategory(StrEnum):
     COMMUNICATION = "communication"
     MONITORING = "monitoring"
     FILESYSTEM = "filesystem"
+    TESTING = "testing"
     CUSTOM = "custom"
 
 
