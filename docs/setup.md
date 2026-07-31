@@ -152,12 +152,14 @@ GitHub OAuth ("Continue with GitHub" on the login page) is intentionally disable
    - Homepage URL: `http://localhost:5173`
    - Authorization callback URL: `http://localhost:8000/api/v1/github/callback` (must match `GITHUB_OAUTH_REDIRECT_URI` exactly)
 2. Copy the generated Client ID, and generate a Client Secret.
-3. Set them in `backend/.env`:
-   ```bash
-   GITHUB_CLIENT_ID=<your client id>
-   GITHUB_CLIENT_SECRET=<your client secret>
-   ```
-4. Restart the backend. In the app: **Settings → Integrations → Connect**, authorize on GitHub, and you'll land back on Settings with your repositories listed — check the ones you want tracked and **Save selection**.
+3. Set them, either:
+   - **In `backend/.env`** (requires a backend restart — env vars are only read at process startup, not picked up by `--reload`):
+     ```bash
+     GITHUB_CLIENT_ID=<your client id>
+     GITHUB_CLIENT_SECRET=<your client secret>
+     ```
+   - **Or from the UI, no restart needed** — as an admin, in **Settings → Integrations → GitHub → Add Connection**, under "GitHub OAuth App (admin)". Takes effect immediately for every user on this installation; a stored value here takes precedence over the env vars above.
+4. In the app: **Settings → Integrations → Connect**, authorize on GitHub, and you'll land back on Settings with your repositories listed — check the ones you want tracked and **Save selection**.
 
 ### Receiving pull request webhooks
 
@@ -173,6 +175,26 @@ Webhook registration on the GitHub repo itself is a manual step (not automated �
    - Secret: the same value as `GITHUB_WEBHOOK_SECRET`
    - Events: select **"Pull requests"** only (not "Send me everything")
 3. GitHub sends a `ping` event immediately when the webhook is created — a `200 {"status": "pong"}` response there confirms it's wired up correctly. From then on, opening/updating/closing/merging a PR on that repo will show up via `GET /api/v1/repositories/{id}/pull-requests`.
+
+## Connecting Google Drive
+
+"Connect Google Drive" in Settings → Integrations links a Google account (read-only) so a pasted Drive/Docs/Sheets link in a task description gets pulled in as context automatically. It's disabled by default; enabling it needs your own Google Cloud OAuth Client.
+
+**Use a personal Google account and a personal Cloud project — never a company-owned one.** This applies regardless of what you're testing with.
+
+1. On [Google Cloud Console](https://console.cloud.google.com/): create a project (or reuse one), then **APIs & Services → Library** → enable the **Google Drive API**.
+2. **APIs & Services → OAuth consent screen** — set it up in Testing mode and add your own Google account under "Test users" (until the app is verified, only test users can complete the OAuth flow).
+3. **APIs & Services → Credentials → Create Credentials → OAuth client ID**, type **Web application**.
+   - Authorized redirect URI: `http://localhost:8000/api/v1/google-drive/callback` (must match `GOOGLE_OAUTH_REDIRECT_URI` exactly)
+4. Copy the generated Client ID and Client Secret.
+5. Set them, either:
+   - **In `backend/.env`** (requires a backend restart — env vars are only read at process startup, not picked up by `--reload`):
+     ```bash
+     GOOGLE_CLIENT_ID=<your client id>
+     GOOGLE_CLIENT_SECRET=<your client secret>
+     ```
+   - **Or from the UI, no restart needed** — as an admin, in **Settings → Integrations → Google Drive → Add Connection**, under "Google OAuth Client (admin)". Takes effect immediately for every user on this installation; a stored value here takes precedence over the env vars above.
+6. In the app: **Settings → Integrations → Google Drive → Add Connection → Connect via OAuth**, authorize on Google, and you'll land back on Settings showing "Connected as your@email".
 
 ## Indexing a repository's architecture
 

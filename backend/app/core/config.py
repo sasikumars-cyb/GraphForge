@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     github_client_id: str | None = Field(default=None)
     github_client_secret: str | None = Field(default=None)
     github_oauth_redirect_uri: str = Field(default="http://localhost:8000/api/v1/github/callback")
+
+    google_client_id: str | None = Field(default=None)
+    google_client_secret: str | None = Field(default=None)
+    google_oauth_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/google-drive/callback"
+    )
     # Shared secret configured on the GitHub webhook itself; verifies
     # POST /api/v1/webhooks/github deliveries actually came from GitHub.
     github_webhook_secret: str | None = Field(default=None)

@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
 import {
   GitBranch,
   Database,
@@ -14,6 +13,9 @@ import {
 } from "lucide-react";
 import { Card } from "../Card";
 import { StatusBadge, type StatusTone } from "../StatusBadge";
+import { GitHubIntegrationCard } from "../GitHubIntegrationCard";
+import { GoogleDriveIntegrationCard } from "../GoogleDriveIntegrationCard";
+import { TestCaseUploadsCard } from "../TestCaseUploadsCard";
 import { useAuth } from "../../app/auth-context";
 import { ApiError } from "../../lib/api/client";
 import {
@@ -24,7 +26,11 @@ import {
   type KnowledgeSourceInfo,
   type ConnectionInfo,
 } from "../../lib/api/knowledge";
-import { getConnectAuthorizationUrl } from "../../lib/api/github";
+import {
+  listTestRailProjects,
+  syncTestRailProject,
+  type TestRailProject,
+} from "../../lib/api/testrail";
 
 function messageFrom(err: unknown, fallback: string): string {
   return err instanceof ApiError ? err.message : fallback;
@@ -109,6 +115,96 @@ function formatTime(iso: string | null): string {
 // Connection Row
 // ---------------------------------------------------------------------------
 
+/** TestRail's connection has an extra step no other generic source needs:
+ * picking which project(s) to sync into the graph (see
+ * app.services.testrail_service \u2014 no persisted "tracked project" concept,
+ * always a live list from TestRail itself). Rendered inline under the
+ * TestRail ConnectionRow, not a parallel custom card \u2014 the connect step
+ * itself stays fully generic. */
+function TestRailProjectsPanel() {
+  const { token } = useAuth();
+  const [projects, setProjects] = useState<TestRailProject[] | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [syncingId, setSyncingId] = useState<number | null>(null);
+
+  async function load() {
+    if (!token) return;
+    setLoading(true);
+    try {
+      setProjects(await listTestRailProjects(token));
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't load TestRail projects.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  async function handleSync(project: TestRailProject) {
+    if (!token) return;
+    setSyncingId(project.id);
+    try {
+      await syncTestRailProject(token, project.id, project.name);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't start the sync.");
+    } finally {
+      setSyncingId(null);
+    }
+  }
+
+  return (
+    <div className="mt-2 rounded-md border border-line-muted bg-canvas p-3">
+      {loading ? (
+        <p className="text-xs text-fg-muted">Loading TestRail projects\u2026</p>
+      ) : error ? (
+        <p className="text-xs text-danger-fg">{error}</p>
+      ) : !projects || projects.length === 0 ? (
+        <p className="text-xs text-fg-muted">No projects found in this TestRail account.</p>
+      ) : (
+        <ul className="flex flex-col gap-2">
+          {projects.map((project) => {
+            const isSyncing = syncingId === project.id || project.last_sync_status === "running";
+            return (
+              <li
+                key={project.id}
+                className="flex items-center justify-between gap-3 border-b border-line-muted pb-2 last:border-0 last:pb-0"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-xs font-medium text-fg-secondary">{project.name}</p>
+                  <p className="text-[11px] text-fg-muted">
+                    {project.last_sync_status === "completed"
+                      ? `Synced${project.case_count != null ? ` \u00B7 ${project.case_count} cases` : ""}${project.last_synced_at ? ` \u00B7 ${formatTime(project.last_synced_at)}` : ""}`
+                      : project.last_sync_status === "failed"
+                        ? "Last sync failed"
+                        : project.last_sync_status === "running"
+                          ? "Sync in progress\u2026"
+                          : "Not synced yet"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleSync(project)}
+                  disabled={isSyncing}
+                  className="shrink-0 rounded-md border border-line px-2 py-1 text-[11px] font-medium text-fg-secondary hover:bg-surface-raised disabled:opacity-40"
+                >
+                  {isSyncing ? "Syncing\u2026" : "Sync"}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 function ConnectionRow({
   conn,
   onHealthCheck,
@@ -120,46 +216,59 @@ function ConnectionRow({
 }) {
   const [checking, setChecking] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [showProjects, setShowProjects] = useState(false);
 
   return (
-    <div className="flex items-center justify-between gap-3 py-2.5">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-fg-secondary">{conn.name}</span>
-          <StatusBadge label={connStatusLabel(conn.status)} tone={connStatusTone(conn.status)} />
+    <div className="py-2.5">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-fg-secondary">{conn.name}</span>
+            <StatusBadge label={connStatusLabel(conn.status)} tone={connStatusTone(conn.status)} />
+          </div>
+          <p className="mt-0.5 text-xs text-fg-muted">
+            {conn.credentials_configured ? "Credentials configured" : "No credentials"}
+            {conn.last_sync_at && ` \u00B7 Last sync ${formatTime(conn.last_sync_at)}`}
+          </p>
         </div>
-        <p className="mt-0.5 text-xs text-fg-muted">
-          {conn.credentials_configured ? "Credentials configured" : "No credentials"}
-          {conn.last_sync_at && ` \u00B7 Last sync ${formatTime(conn.last_sync_at)}`}
-        </p>
+        <div className="flex items-center gap-2">
+          {conn.source_type === "testrail" && (
+            <button
+              type="button"
+              onClick={() => setShowProjects(!showProjects)}
+              className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
+            >
+              Manage Projects
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={async () => {
+              setChecking(true);
+              await onHealthCheck(conn.id);
+              setChecking(false);
+            }}
+            disabled={checking}
+            className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised disabled:opacity-40"
+          >
+            {checking ? "Testing..." : "Test Connection"}
+          </button>
+          <button
+            type="button"
+            onClick={async () => {
+              setDeleting(true);
+              await onDelete(conn.id);
+              setDeleting(false);
+            }}
+            disabled={deleting}
+            className="text-fg-muted hover:text-danger-fg disabled:opacity-40"
+            title="Remove connection"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
       </div>
-      <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={async () => {
-            setChecking(true);
-            await onHealthCheck(conn.id);
-            setChecking(false);
-          }}
-          disabled={checking}
-          className="rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised disabled:opacity-40"
-        >
-          {checking ? "Testing..." : "Test Connection"}
-        </button>
-        <button
-          type="button"
-          onClick={async () => {
-            setDeleting(true);
-            await onDelete(conn.id);
-            setDeleting(false);
-          }}
-          disabled={deleting}
-          className="text-fg-muted hover:text-danger-fg disabled:opacity-40"
-          title="Remove connection"
-        >
-          <Trash2 className="h-3.5 w-3.5" />
-        </button>
-      </div>
+      {showProjects && <TestRailProjectsPanel />}
     </div>
   );
 }
@@ -225,7 +334,10 @@ function AddConnectionForm({
   }
 
   return (
-    <form onSubmit={(e) => void handleSubmit(e)} className="mt-3 space-y-3 border-t border-line-muted pt-3">
+    <form
+      onSubmit={(e) => void handleSubmit(e)}
+      className="mt-3 space-y-3 border-t border-line-muted pt-3"
+    >
       <label className="flex flex-col gap-1 text-sm">
         <span className="text-fg-muted">Connection Name</span>
         <input
@@ -253,9 +365,7 @@ function AddConnectionForm({
         </label>
       ))}
 
-      {error && (
-        <p className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger-fg">{error}</p>
-      )}
+      {error && <p className="rounded-md bg-danger-bg px-3 py-2 text-sm text-danger-fg">{error}</p>}
 
       <div className="flex gap-2">
         <button
@@ -292,8 +402,6 @@ function IntegrationCard({
 }) {
   const { token } = useAuth();
   const [showAdd, setShowAdd] = useState(false);
-  const [connectingOAuth, setConnectingOAuth] = useState(false);
-  const [oauthError, setOauthError] = useState<string | null>(null);
 
   async function handleHealthCheck(connId: string) {
     if (!token) return;
@@ -307,31 +415,16 @@ function IntegrationCard({
     onRefresh();
   }
 
-  // GitHub's REST transport lists OAuth first with no form fields — it's
-  // handled by a real OAuth redirect, not the generic connection form.
-  const usesOAuthRedirect = source.key === "github";
-
-  async function handleAddClick() {
-    if (!usesOAuthRedirect) {
-      setShowAdd(!showAdd);
-      return;
-    }
-    if (!token) return;
-    setConnectingOAuth(true);
-    setOauthError(null);
-    try {
-      const { authorization_url } = await getConnectAuthorizationUrl(token);
-      window.location.href = authorization_url;
-    } catch (err) {
-      setOauthError(messageFrom(err, "Couldn't start the GitHub connection."));
-      setConnectingOAuth(false);
-    }
+  function handleAddClick() {
+    setShowAdd(!showAdd);
   }
 
   const isComingSoon = !source.available;
 
   return (
-    <div className={`rounded-lg border border-line-muted bg-surface px-4 py-3 ${isComingSoon ? "opacity-60" : ""}`}>
+    <div
+      className={`rounded-lg border border-line-muted bg-surface px-4 py-3 ${isComingSoon ? "opacity-60" : ""}`}
+    >
       {/* Source header */}
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3">
@@ -369,21 +462,14 @@ function IntegrationCard({
         {!isComingSoon && (
           <button
             type="button"
-            onClick={() => void handleAddClick()}
-            disabled={connectingOAuth}
-            className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised disabled:opacity-40"
+            onClick={handleAddClick}
+            className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
           >
             <Plus className="h-3 w-3" />
-            {connectingOAuth ? "Redirecting..." : "Add Connection"}
+            Add Connection
           </button>
         )}
       </div>
-
-      {oauthError && (
-        <p className="mt-2 rounded-md bg-danger-bg px-3 py-2 text-xs text-danger-fg">
-          {oauthError}
-        </p>
-      )}
 
       {/* Connections list */}
       {connections.length > 0 && (
@@ -419,16 +505,18 @@ function IntegrationCard({
 // ---------------------------------------------------------------------------
 
 export function IntegrationsSection() {
-  const { token } = useAuth();
-  const [searchParams, setSearchParams] = useSearchParams();
+  const { token, user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const [sources, setSources] = useState<KnowledgeSourceInfo[]>([]);
   const [connections, setConnections] = useState<ConnectionInfo[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(isAdmin);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
 
+  // Jira/Confluence/Neo4j/etc. connections are install-wide config, gated
+  // admin-only on the backend (GET /knowledge/overview) — only fetch it for
+  // admins so a regular user isn't sent a request that only ever 403s.
   async function load() {
-    if (!token) return;
+    if (!token || !isAdmin) return;
     setLoading(true);
     try {
       const overview = await getKnowledgeOverview(token);
@@ -445,87 +533,71 @@ export function IntegrationsSection() {
   useEffect(() => {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [token]);
-
-  // The backend redirects here with ?github=connected|error after the OAuth
-  // callback (GitHub can't be reached via XHR — see AddConnectAuthorization
-  // flow in the card above). Consume it once, then strip it so a page
-  // refresh doesn't re-show the notice.
-  useEffect(() => {
-    const outcome = searchParams.get("github");
-    if (!outcome) return;
-
-    if (outcome === "connected") {
-      setNotice("GitHub connected.");
-      void load();
-    } else if (outcome === "error") {
-      setError("Connecting to GitHub failed. Please try again.");
-    }
-
-    const next = new URLSearchParams(searchParams);
-    next.delete("github");
-    setSearchParams(next, { replace: true });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  if (loading) {
-    return (
-      <div className="flex items-center gap-2 py-8 text-sm text-fg-muted">
-        <Loader2 className="h-4 w-4 animate-spin" />
-        Loading integrations...
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
-        {error}
-      </div>
-    );
-  }
+  }, [token, isAdmin]);
 
   // Summary
   const totalConnections = connections.length;
   const healthyConnections = connections.filter((c) => c.status === "healthy").length;
+  // GitHub and Google Drive each get their own dedicated card below
+  // (GitHubIntegrationCard, GoogleDriveIntegrationCard), backed by their
+  // own per-user /github/* and /google-drive/* endpoints rather than the
+  // admin-only Knowledge Connections API — every user manages their own
+  // OAuth connections regardless of role, unlike the install-wide sources
+  // here. Any OAuth-authenticated source is inherently per-user (it's one
+  // human's consent, never an install-wide credential), so this list is
+  // every *non-OAuth* source, not a special case for these two by name.
+  const PER_USER_OAUTH_SOURCE_KEYS = new Set(["github", "google_drive"]);
+  const genericFormSources = sources.filter((s) => !PER_USER_OAUTH_SOURCE_KEYS.has(s.key));
 
   return (
     <div className="flex flex-col gap-5">
-      {notice && (
-        <div className="rounded-lg border border-success-line/30 bg-success-bg px-4 py-3 text-sm text-success-fg">
-          {notice}
-        </div>
+      {/* Summary card — first, so the connector counts are the first thing
+          visible on the page. Admin-only, like the data it summarizes. */}
+      {isAdmin && !loading && !error && (
+        <Card>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <p className="text-xs text-fg-muted">Available</p>
+              <p className="mt-0.5 text-lg font-semibold text-fg">
+                {sources.filter((s) => s.available).length}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-fg-muted">Connections</p>
+              <p className="mt-0.5 text-lg font-semibold text-info-fg">{totalConnections}</p>
+            </div>
+            <div>
+              <p className="text-xs text-fg-muted">Healthy</p>
+              <p className="mt-0.5 text-lg font-semibold text-success-fg">{healthyConnections}</p>
+            </div>
+          </div>
+        </Card>
       )}
 
-      {/* Summary card */}
-      <Card>
-        <div className="grid grid-cols-3 gap-4">
-          <div>
-            <p className="text-xs text-fg-muted">Available</p>
-            <p className="mt-0.5 text-lg font-semibold text-fg">
-              {sources.filter((s) => s.available).length}
-            </p>
-          </div>
-          <div>
-            <p className="text-xs text-fg-muted">Connections</p>
-            <p className="mt-0.5 text-lg font-semibold text-info-fg">{totalConnections}</p>
-          </div>
-          <div>
-            <p className="text-xs text-fg-muted">Healthy</p>
-            <p className="mt-0.5 text-lg font-semibold text-success-fg">{healthyConnections}</p>
-          </div>
-        </div>
-      </Card>
+      <GitHubIntegrationCard />
+      <GoogleDriveIntegrationCard />
+      <TestCaseUploadsCard />
 
-      {/* Integration cards */}
-      {sources.map((source) => (
-        <IntegrationCard
-          key={source.key}
-          source={source}
-          connections={connections.filter((c) => c.source_type === source.key)}
-          onRefresh={() => void load()}
-        />
-      ))}
+      {isAdmin &&
+        (loading ? (
+          <div className="flex items-center gap-2 py-8 text-sm text-fg-muted">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Loading integrations...
+          </div>
+        ) : error ? (
+          <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
+            {error}
+          </div>
+        ) : (
+          genericFormSources.map((source) => (
+            <IntegrationCard
+              key={source.key}
+              source={source}
+              connections={connections.filter((c) => c.source_type === source.key)}
+              onRefresh={() => void load()}
+            />
+          ))
+        ))}
     </div>
   );
 }

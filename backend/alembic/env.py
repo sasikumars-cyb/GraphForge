@@ -19,6 +19,7 @@ from app.models.ai_profile import AIProfile, AIProviderUsage  # noqa: F401
 from app.models.ai_provider_config import AIProviderConfig, AISettings  # noqa: F401
 from app.models.confidence_calibration import ConfidenceCalibration  # noqa: F401
 from app.models.github_connection import GitHubConnection  # noqa: F401
+from app.models.google_drive_connection import GoogleDriveConnection  # noqa: F401
 from app.models.indexing_job import IndexingJob  # noqa: F401
 from app.models.oauth_app_credential import OAuthAppCredential  # noqa: F401
 from app.models.pull_request import PullRequest  # noqa: F401

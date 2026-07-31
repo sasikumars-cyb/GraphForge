@@ -28,6 +28,7 @@ from app.core.exceptions import NotFoundError
 from app.database.session import get_db_session
 from app.knowledge.registry import KnowledgeSourceSpec, all_sources, require_source
 from app.models.github_connection import GitHubConnection
+from app.models.google_drive_connection import GoogleDriveConnection
 from app.models.knowledge_connection import KnowledgeConnection
 from app.models.user import User
 from app.schemas.knowledge import (
@@ -84,16 +85,50 @@ def _source_to_info(spec: KnowledgeSourceSpec, connection_count: int) -> Knowled
 
 
 def _github_connection_to_info(row: GitHubConnection) -> ConnectionInfo:
-    """GitHub's real OAuth connection lives in `github_connections` (one row
-    per user, see ADR 0006), not `knowledge_connections` — the generic table
-    only ever holds PAT/other-transport connections for GitHub. Synthesizing
-    a ConnectionInfo here is what lets the Settings UI show GitHub the same
-    way it shows every other source, without merging two differently-scoped
-    tables (global vs per-user) into one."""
+    """GitHub's real connection lives in `github_connections` (one row per
+    user, see ADR 0006 - both the original OAuth flow and the PAT
+    alternative in app.services.github_service.connect_with_pat write here),
+    not `knowledge_connections` — the generic table only ever holds
+    other-transport connections for GitHub (e.g. a plain MCP server URL).
+    Synthesizing a ConnectionInfo here is what lets the Settings UI show
+    GitHub the same way it shows every other source, without merging two
+    differently-scoped tables (global vs per-user) into one."""
     return ConnectionInfo(
         id=row.id,
         source_type="github",
         name=f"@{row.github_username}",
+        transport="rest",
+        auth_method=row.auth_method,
+        config={},
+        scope={},
+        enabled=True,
+        credentials_configured=True,
+        status="healthy",
+        status_detail=(
+            "Connected via personal access token."
+            if row.auth_method == "pat"
+            else "Connected via OAuth."
+        ),
+        last_sync_at=row.updated_at,
+        last_success_at=row.updated_at,
+        latency_ms=None,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _google_drive_connection_to_info(row: GoogleDriveConnection) -> ConnectionInfo:
+    """Google Drive's real connection lives in `google_drive_connections`
+    (one row per user), not `knowledge_connections` — same reasoning as
+    `_github_connection_to_info` above. Synthesized here only so this
+    admin view's aggregate counts (Available/Connections/Healthy) stay
+    accurate; the Settings UI itself never reads a Drive row through this
+    router — GoogleDriveIntegrationCard talks to /google-drive/* directly,
+    same as GitHubIntegrationCard does for its own per-user connection."""
+    return ConnectionInfo(
+        id=row.id,
+        source_type="google_drive",
+        name=row.google_email,
         transport="rest",
         auth_method="oauth",
         config={},
@@ -152,6 +187,14 @@ async def overview(
     ).scalar_one_or_none()
     if github_connection is not None:
         connections.append(_github_connection_to_info(github_connection))
+
+    google_drive_connection = (
+        await db.execute(
+            select(GoogleDriveConnection).where(GoogleDriveConnection.user_id == current_user.id)
+        )
+    ).scalar_one_or_none()
+    if google_drive_connection is not None:
+        connections.append(_google_drive_connection_to_info(google_drive_connection))
 
     # Count connections per source type.
     counts: dict[str, int] = {}

@@ -243,22 +243,60 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
         ),
     ),
     KnowledgeSourceSpec(
-        key="neo4j",
-        label="Neo4j Knowledge Graph",
-        icon="Database",
-        description="Architecture relationships, dependency graphs, cross-repo links",
+        key="google_drive",
+        label="Google Drive",
+        icon="Cloud",
+        description="Design docs, specs, and files linked from Google Drive",
         capabilities=(
-            "Dependency Graph",
-            "Architecture Context",
-            "Repository Graph",
-            "Cross-Repository Links",
+            "Document Retrieval",
+            "Folder Listing",
         ),
         transports=(
             TransportSpec(
-                transport=Transport.DATABASE,
-                label="Bolt Driver",
+                transport=Transport.REST,
+                label="OAuth (Google Drive API v3)",
+                auth_methods=(AuthMethod.OAUTH,),
+                # No form fields — same as GitHub, connecting is a real
+                # OAuth redirect handled by dedicated /google-drive/*
+                # endpoints, not the generic paste-credentials form. No
+                # tool_id/credential_field_map for the same reason: the
+                # per-user GoogleDriveTool is never registered on the
+                # shared Tool Registry (see google_drive_tool.py's
+                # docstring), so there's no install-wide config to sync.
+                auth_fields={"oauth": []},
+            ),
+        ),
+    ),
+    KnowledgeSourceSpec(
+        key="testrail",
+        label="TestRail",
+        icon="FileText",
+        description="Test cases, suites, and sections — synced into the Knowledge Graph",
+        capabilities=(
+            "Test Case Sync",
+            "Test Suite Discovery",
+            "Existing Coverage Lookup",
+        ),
+        transports=(
+            TransportSpec(
+                transport=Transport.REST,
+                label="REST API v2",
+                # TestRail's API is HTTP Basic Auth with the account email as
+                # username and the API key as password - not a bare API key
+                # despite how "connect with an API key" is often described.
+                # Same shape as Jira's REST auth (see that TransportSpec
+                # above), which app.tools.implementations.testrail_tool
+                # mirrors directly.
                 auth_methods=(AuthMethod.BASIC,),
-                auth_fields={"basic": ["uri", "username", "password"]},
+                auth_fields={"basic": ["base_url", "email", "api_token"]},
+                tool_id="testrail",
+                credential_field_map={
+                    "base_url": "testrail_base_url",
+                    "email": "testrail_email",
+                    "api_token": "testrail_api_token",
+                },
+                # No known MCP server for TestRail - no auto_wire_credential
+                # (that only matters when a sibling MCP TransportSpec exists).
             ),
         ),
     ),
