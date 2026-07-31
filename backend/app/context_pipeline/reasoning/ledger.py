@@ -78,6 +78,12 @@ FactKind = Literal[
     # Something the human asserted. A claim, NOT a verified fact — see
     # `Fact.verified` and engine.py's verify-then-resolve flow.
     "user_statement",
+    # A CALLS-typed graph edge between two components, discovered by graph
+    # traversal — the raw material Runtime Execution Discovery orders into
+    # a CallChain (RFC-004 Capability 1). Reserved here in advance of any
+    # producer or consumer: no code constructs or reads a fact of this kind
+    # yet (Phase 1a, Commit 2 — see the RFC-004 Phase 1a Execution Plan).
+    "call_edge",
 ]
 
 InferenceKind = Literal[

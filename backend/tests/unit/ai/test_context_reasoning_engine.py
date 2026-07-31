@@ -21,6 +21,7 @@ provider-level integration path.
 
 from __future__ import annotations
 
+from typing import get_args
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -50,7 +51,7 @@ from app.context_pipeline.reasoning.investigators import (
     GraphInvestigator,
     RequestParseInvestigator,
 )
-from app.context_pipeline.reasoning.ledger import Ledger
+from app.context_pipeline.reasoning.ledger import FactKind, Ledger
 from app.context_pipeline.reasoning.memory import KnowledgeGap, WorkingContext
 from app.context_pipeline.reasoning.projection import build_result, to_contract_evidence
 from app.tools.interfaces import ToolResult
@@ -145,6 +146,25 @@ class FakeInvestigator:
 # ---------------------------------------------------------------------------
 # Ledger: provenance is structurally enforced
 # ---------------------------------------------------------------------------
+
+
+def test_fact_kind_gains_call_edge_without_losing_existing_values() -> None:
+    kinds = set(get_args(FactKind))
+    assert "call_edge" in kinds
+    assert kinds == {
+        "reference",
+        "work_item",
+        "document",
+        "pull_request",
+        "repository",
+        "repository_ranking",
+        "component",
+        "topic",
+        "test_case",
+        "repository_relationship",
+        "user_statement",
+        "call_edge",
+    }
 
 
 def test_ledger_rejects_a_fact_without_real_evidence() -> None:
