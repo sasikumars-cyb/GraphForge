@@ -3,7 +3,6 @@ import {
   Building2,
   Brain,
   Plug,
-  Wrench,
   Bot,
   Target,
   Shield,
@@ -15,7 +14,6 @@ import { useAuth } from "../../app/auth-context";
 import { WorkspaceSection } from "./WorkspaceSection";
 import { AIWorkspaceSection } from "./AIWorkspaceSection";
 import { IntegrationsSection } from "./IntegrationsSection";
-import { ToolRegistrySection } from "./ToolRegistrySection";
 import { AgentRegistrySection } from "./AgentRegistrySection";
 import { CalibrationSection } from "./CalibrationSection";
 import { SecuritySection } from "./SecuritySection";
@@ -50,13 +48,6 @@ const TABS: SettingsTab[] = [
     icon: Plug,
     description: "External systems connected to GraphForge",
     adminOnly: false,
-  },
-  {
-    id: "tools",
-    label: "Tool Registry",
-    icon: Wrench,
-    description: "Capabilities available to agents",
-    adminOnly: true,
   },
   {
     id: "agents",
@@ -96,8 +87,6 @@ function TabContent({ tabId }: { tabId: string }) {
       return <AIWorkspaceSection />;
     case "integrations":
       return <IntegrationsSection />;
-    case "tools":
-      return <ToolRegistrySection />;
     case "agents":
       return <AgentRegistrySection />;
     case "calibration":
@@ -126,8 +115,12 @@ export function SettingsShell() {
   const requestedTab = searchParams.get("tab");
   // The OAuth callback redirects here with ?github=connected|error and no
   // ?tab — land back on Integrations, where that outcome is shown.
-  const defaultTabId = searchParams.has("github") ? "integrations" : (visibleTabs[0]?.id ?? "workspace");
-  const activeTab = visibleTabs.some((t) => t.id === requestedTab) ? (requestedTab as string) : defaultTabId;
+  const defaultTabId = searchParams.has("github")
+    ? "integrations"
+    : (visibleTabs[0]?.id ?? "workspace");
+  const activeTab = visibleTabs.some((t) => t.id === requestedTab)
+    ? (requestedTab as string)
+    : defaultTabId;
   const current = visibleTabs.find((t) => t.id === activeTab) ?? visibleTabs[0];
 
   function setActiveTab(tabId: string) {
@@ -165,7 +158,9 @@ export function SettingsShell() {
             >
               <tab.icon
                 className={`h-4 w-4 shrink-0 ${
-                  activeTab === tab.id ? "text-accent-fg" : "text-fg-muted group-hover:text-fg-secondary"
+                  activeTab === tab.id
+                    ? "text-accent-fg"
+                    : "text-fg-muted group-hover:text-fg-secondary"
                 }`}
                 aria-hidden="true"
               />
