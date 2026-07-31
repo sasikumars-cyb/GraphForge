@@ -1,21 +1,11 @@
 import { useSearchParams } from "react-router-dom";
-import {
-  Building2,
-  Brain,
-  Plug,
-  Bot,
-  Target,
-  Shield,
-  Settings2,
-  type LucideIcon,
-} from "lucide-react";
+import { Building2, Brain, Plug, Bot, Shield, Settings2, type LucideIcon } from "lucide-react";
 
 import { useAuth } from "../../app/auth-context";
 import { WorkspaceSection } from "./WorkspaceSection";
 import { AIWorkspaceSection } from "./AIWorkspaceSection";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { AgentRegistrySection } from "./AgentRegistrySection";
-import { CalibrationSection } from "./CalibrationSection";
 import { SecuritySection } from "./SecuritySection";
 import { AdvancedSection } from "./AdvancedSection";
 
@@ -57,13 +47,6 @@ const TABS: SettingsTab[] = [
     adminOnly: true,
   },
   {
-    id: "calibration",
-    label: "Calibration",
-    icon: Target,
-    description: "Does confidence actually predict approval?",
-    adminOnly: true,
-  },
-  {
     id: "security",
     label: "Security",
     icon: Shield,
@@ -89,8 +72,6 @@ function TabContent({ tabId }: { tabId: string }) {
       return <IntegrationsSection />;
     case "agents":
       return <AgentRegistrySection />;
-    case "calibration":
-      return <CalibrationSection />;
     case "security":
       return <SecuritySection />;
     case "advanced":
