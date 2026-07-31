@@ -1369,7 +1369,8 @@ class TestCoverageInvestigator:
             (
                 f"Found {len(cases)} relevant test case(s) out of {total_synced} synced/uploaded."
                 if cases
-                else f"None of the {total_synced} synced/uploaded test case(s) matched this request."
+                else f"None of the {total_synced} synced/uploaded test case(s) matched this "
+                "request."
             ),
         )
         for case in cases:
