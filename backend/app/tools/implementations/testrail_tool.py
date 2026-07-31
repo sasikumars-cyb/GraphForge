@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import urlencode
 
 import httpx
 
@@ -72,18 +73,23 @@ class TestRailTool:
     async def _get(self, method: str, params: dict[str, Any] | None = None) -> Any:
         # TestRail's API path is embedded literally in the query string
         # ("index.php?/api/v2/get_projects"), not a normal "?key=value"
-        # query param — building it via httpx's `params=` dict would
-        # URL-encode the "/" characters and break the request. Only the
-        # *additional* params (limit/offset/suite_id) go through `params=`;
-        # those correctly get appended with "&" since the URL already has
-        # a "?" (httpx merges them via its own QueryParams handling).
+        # query param. Passing that through httpx's `params=` alongside it
+        # does NOT just append "&limit=250" as it looks like it should —
+        # httpx parses the URL's existing query string into `QueryParams`
+        # first (via `urllib.parse.parse_qsl`, which silently drops any
+        # component with no "=" sign), so "/api/v2/get_projects" vanishes
+        # entirely and TestRail 404s on the bare "?limit=250&offset=0" that
+        # survives. Building the full query string by hand sidesteps that
+        # parse/merge step altogether.
+        query = f"/api/v2/{method}"
+        if params:
+            query += "&" + urlencode(params)
         try:
             async with httpx.AsyncClient(
                 auth=(self._email, self._token), timeout=15.0, follow_redirects=True
             ) as client:
                 response = await client.get(
-                    f"{self._base_url}/index.php?/api/v2/{method}",
-                    params=params or {},
+                    f"{self._base_url}/index.php?{query}",
                     headers={"Accept": "application/json"},
                 )
         except httpx.HTTPError as exc:
