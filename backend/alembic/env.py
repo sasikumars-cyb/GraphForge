@@ -21,6 +21,7 @@ from app.models.confidence_calibration import ConfidenceCalibration  # noqa: F40
 from app.models.github_connection import GitHubConnection  # noqa: F401
 from app.models.google_drive_connection import GoogleDriveConnection  # noqa: F401
 from app.models.indexing_job import IndexingJob  # noqa: F401
+from app.models.llm_invocation import LLMInvocation  # noqa: F401
 from app.models.oauth_app_credential import OAuthAppCredential  # noqa: F401
 from app.models.pull_request import PullRequest  # noqa: F401
 from app.models.pull_request_ai_analysis import PullRequestAIAnalysis  # noqa: F401
@@ -30,7 +31,7 @@ from app.models.run import Run  # noqa: F401
 from app.models.test_case_upload import TestCaseUpload  # noqa: F401
 from app.models.testrail_sync_job import TestRailSyncJob  # noqa: F401
 from app.models.user import User  # noqa: F401
-from app.models.workflow import Workflow  # noqa: F401 - all ten register with Base.metadata
+from app.models.workflow import Workflow  # noqa: F401 - all eleven register with Base.metadata
 
 config = context.config
 if config.config_file_name is not None:

@@ -2,6 +2,7 @@
 startup, exactly like every other agent (see app/agents/setup.py)."""
 
 from app.agents._contract import AgentManifest
+from app.orchestrator.preflight import DEPENDENCY_LLM, DEPENDENCY_NEO4J
 
 CONTEXT_DISCOVERY_MANIFEST = AgentManifest(
     agent_id="context_discovery",
@@ -28,9 +29,19 @@ CONTEXT_DISCOVERY_MANIFEST = AgentManifest(
     # check their Neo4j connection for what was really the agent hitting its own
     # ceiling.
     #
-    # 6 covers three queries per repository, which is the engine's real ceiling:
-    # `attempted()` dedupe means each distinct action runs at most once, and
-    # there are three graph action kinds (survey / scope / verify).
-    max_graph_hops=6,
+    # 7 covers three queries per repository (6, as before — `attempted()`
+    # dedupe means each distinct action runs at most once, and there are
+    # three graph action kinds: survey / scope / verify), plus one more
+    # for `investigators.curate_evidence`'s bounded-neighborhood fetch
+    # (`get_neighborhood`), which runs once after the investigation loop
+    # exits, against whichever single repository was identified as
+    # primary. A "scope"/"verify" action's own `repository_filter` (see
+    # TraverseArchitectureGraphTool/Neo4jGraphTool) already keeps every
+    # OTHER indexed repository from consuming this same repository's
+    # budget, so 7 stays a per-repository ceiling, not a global one.
+    max_graph_hops=7,
     output_schema_name="ContextDiscoveryResult",
+    # ADR 0011, OD-3 — LLM (this agent's own reasoning), Neo4j (max_graph_hops
+    # > 0, above).
+    required_dependencies=frozenset({DEPENDENCY_LLM, DEPENDENCY_NEO4J}),
 )

@@ -54,6 +54,17 @@ export function WorkflowPage() {
         const detail = await getWorkflow(token, workflowId, signal);
         if (signal?.aborted) return;
         setWorkflow(detail);
+        // Self-heal a stale partial-confirm prompt: it's only valid while
+        // the stage it was raised for is still the pending gate. If a poll
+        // reveals that stage now has a run (queued/failed/etc — reached
+        // through this tab's own successful confirm, another tab, or a
+        // direct API call), the prompt no longer describes reality and must
+        // not linger next to whatever state actually replaced it.
+        setPartialConfirm((prev) => {
+          if (!prev) return prev;
+          const stageInfo = detail.stages.find((s) => s.stage === detail.current_stage);
+          return stageInfo && stageInfo.status === "pending" ? prev : null;
+        });
 
         const runDetails = await Promise.all(
           detail.runs.map((r) => getAgentRun(token, r.run_id, signal)),

@@ -9,6 +9,7 @@ import { NewWorkflowPage, WorkflowPage } from "./WorkflowPage";
 import type { AgentStep, RunDetail, WorkflowDetail, WorkflowStageInfo } from "../types/agent";
 import * as workflowsApi from "../lib/api/workflows";
 import * as agentRunsApi from "../lib/api/agentRuns";
+import { ApiError } from "../lib/api/client";
 
 // Mock workflows API
 vi.mock("../lib/api/workflows", () => ({
@@ -26,7 +27,14 @@ vi.mock("../lib/api/agentRuns", () => ({
 
 function renderWithAuth(ui: React.ReactElement, authValue?: Partial<AuthContextValue>) {
   const defaultAuth: AuthContextValue = {
-    user: { id: "u1", email: "test@test.com", full_name: "Test User", auth_provider: "local", role: "user", created_at: "2026-01-01T00:00:00Z" },
+    user: {
+      id: "u1",
+      email: "test@test.com",
+      full_name: "Test User",
+      auth_provider: "local",
+      role: "user",
+      created_at: "2026-01-01T00:00:00Z",
+    },
     token: "test-token",
     isLoading: false,
     login: vi.fn(),
@@ -202,7 +210,14 @@ describe("NewWorkflowPage", () => {
 describe("WorkflowPage", () => {
   function renderWorkflowPage(workflowId = "wf-1") {
     const defaultAuth: AuthContextValue = {
-      user: { id: "u1", email: "test@test.com", full_name: "Test User", auth_provider: "local", role: "user", created_at: "2026-01-01T00:00:00Z" },
+      user: {
+        id: "u1",
+        email: "test@test.com",
+        full_name: "Test User",
+        auth_provider: "local",
+        role: "user",
+        created_at: "2026-01-01T00:00:00Z",
+      },
       token: "test-token",
       isLoading: false,
       login: vi.fn(),
@@ -398,6 +413,123 @@ describe("WorkflowPage", () => {
       expect(workflowsApi.continueWorkflow).toHaveBeenCalledWith("test-token", "wf-1"),
     );
   });
+
+  it("shows a confirm prompt (not a silent no-op) when continueWorkflow rejects with context_discovery_partial", async () => {
+    const user = userEvent.setup();
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(makeWorkflow());
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
+    vi.mocked(workflowsApi.continueWorkflow).mockRejectedValue(
+      new ApiError(409, "context_discovery_partial", "Context Discovery reached 78% confidence."),
+    );
+
+    renderWorkflowPage();
+    await screen.findByRole("button", { name: /Approve & Continue/ });
+    await user.click(screen.getByRole("button", { name: /Approve & Continue/ }));
+
+    expect(await screen.findByText("Continue with incomplete context?")).toBeInTheDocument();
+    expect(screen.getByText(/78% confidence/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue anyway" })).toBeInTheDocument();
+  });
+
+  it("retries with acknowledge_partial=true when Continue anyway is clicked", async () => {
+    const user = userEvent.setup();
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(makeWorkflow());
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
+    vi.mocked(workflowsApi.continueWorkflow).mockRejectedValueOnce(
+      new ApiError(409, "context_discovery_partial", "Context Discovery reached 78% confidence."),
+    );
+    vi.mocked(workflowsApi.continueWorkflow).mockResolvedValueOnce({
+      workflow_id: "wf-1",
+      run_id: "run-2",
+      stage: "development",
+      status: "completed",
+    });
+
+    renderWorkflowPage();
+    await screen.findByRole("button", { name: /Approve & Continue/ });
+    await user.click(screen.getByRole("button", { name: /Approve & Continue/ }));
+    await screen.findByText("Continue with incomplete context?");
+    await user.click(screen.getByRole("button", { name: "Continue anyway" }));
+
+    await waitFor(() =>
+      expect(workflowsApi.continueWorkflow).toHaveBeenLastCalledWith(
+        "test-token",
+        "wf-1",
+        undefined,
+        true,
+      ),
+    );
+    expect(screen.queryByText("Continue with incomplete context?")).not.toBeInTheDocument();
+  });
+
+  it("dismisses the partial-confirm prompt when Cancel is clicked, without calling continueWorkflow again", async () => {
+    const user = userEvent.setup();
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(makeWorkflow());
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
+    vi.mocked(workflowsApi.continueWorkflow).mockRejectedValue(
+      new ApiError(409, "context_discovery_partial", "Context Discovery reached 78% confidence."),
+    );
+
+    renderWorkflowPage();
+    await screen.findByRole("button", { name: /Approve & Continue/ });
+    await user.click(screen.getByRole("button", { name: /Approve & Continue/ }));
+    await screen.findByText("Continue with incomplete context?");
+    const callsBeforeCancel = vi.mocked(workflowsApi.continueWorkflow).mock.calls.length;
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    expect(screen.queryByText("Continue with incomplete context?")).not.toBeInTheDocument();
+    expect(workflowsApi.continueWorkflow).toHaveBeenCalledTimes(callsBeforeCancel);
+  });
+
+  it("shows a visible error banner (not a silent no-op) when continueWorkflow rejects with an unexpected error", async () => {
+    const user = userEvent.setup();
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(makeWorkflow());
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
+    vi.mocked(workflowsApi.continueWorkflow).mockRejectedValue(
+      new ApiError(500, "internal_error", "Something went wrong on the server."),
+    );
+
+    renderWorkflowPage();
+    await screen.findByRole("button", { name: /Approve & Continue/ });
+    await user.click(screen.getByRole("button", { name: /Approve & Continue/ }));
+
+    expect(await screen.findByText("Something went wrong on the server.")).toBeInTheDocument();
+  });
+
+  it("clears a stale partial-confirm prompt once polling shows the stage is no longer pending", async () => {
+    const user = userEvent.setup();
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValueOnce(makeWorkflow());
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
+    vi.mocked(workflowsApi.continueWorkflow).mockRejectedValue(
+      new ApiError(409, "context_discovery_partial", "Context Discovery reached 78% confidence."),
+    );
+
+    renderWorkflowPage();
+    await screen.findByRole("button", { name: /Approve & Continue/ });
+    await user.click(screen.getByRole("button", { name: /Approve & Continue/ }));
+    await screen.findByText("Continue with incomplete context?");
+
+    // Simulate another actor (another tab, or a direct API call) having
+    // already moved the workflow's planning stage off "pending" by the
+    // time this tab's next poll lands (POLL_INTERVAL_MS = 2500) — real
+    // timers, matching every other test in this file; the extended
+    // waitFor timeout is what accommodates the real interval.
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
+      makeWorkflow({
+        current_stage: "planning",
+        stages: [
+          { stage: "planning", label: "Planning", status: "failed", run_id: "run-2" },
+          { stage: "development", label: "Development", status: "pending", run_id: null },
+        ],
+      }),
+    );
+
+    await waitFor(
+      () => expect(screen.queryByText("Continue with incomplete context?")).not.toBeInTheDocument(),
+      { timeout: 4000 },
+    );
+  }, 6000);
 
   it("shows the failure banner (not the approval banner) when the current stage failed", async () => {
     vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(

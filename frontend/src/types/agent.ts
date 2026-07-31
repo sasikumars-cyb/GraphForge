@@ -439,6 +439,37 @@ export interface AdditionalContextRecommendationResult {
   reasoning: string;
 }
 
+/** One repository Context Discovery has identified — either explicitly
+ * named in the request (or a human's claim confirmed), or suggested via a
+ * real cross-repository graph relationship. `reason` is always populated
+ * for a suggested repository; `relationship` names the kind of graph edge
+ * behind it (e.g. "CALLS_SERVICE", "SHARES_TOPIC") when known.
+ *
+ * ADR 0010 §2 — this is the canonical shape. `ContextDiscoveryResult.
+ * repositories` is the only field anything ever writes directly (including
+ * a human override — see `RepositorySelector.tsx`); every other
+ * repository-shaped field below it is a read-only projection derived from
+ * `repositories` on the backend (`reasoning.projection.
+ * project_repositories`) and must never be read by new frontend code —
+ * filter `repositories` itself instead (invariant I6). */
+export interface RepositoryCandidate {
+  name: string;
+  source: "explicit" | "suggested";
+  selected: boolean;
+  reason: string;
+  relationship?: string;
+  /** Position in the relevance ranking, when one exists. */
+  rank?: number | null;
+  /** ADR 0010 §4 — populated only where a real graph_version signal
+   * reached this candidate (a cross-repository relationship's target
+   * version); honestly absent otherwise, never fabricated. */
+  graph_version?: string | null;
+  /** ADR 0010 (Theme E) — "structural" (a literal Feign target or Kafka
+   * topic name) or "heuristic" (a dependency-name match) for a suggested-
+   * via-relationship candidate; empty for every other source. */
+  confidence?: string;
+}
+
 export interface ContextDiscoveryResult {
   // --- What Planning reads (derived views over the fact ledger) ---
   original_request: string;
@@ -447,14 +478,28 @@ export interface ContextDiscoveryResult {
   indexed_repositories: Record<string, unknown>[];
   graph_components: Record<string, unknown>[];
   graph_topics: Record<string, unknown>[];
-  /** Repository candidates, best first. More than one entry means discovery
-   * genuinely could not separate them. */
-  /** Every indexed repository in relevance order, best first — a ranking, not
-   * a claim of ownership. */
+  /** The canonical repository model (ADR 0010 §2) — read/write this field
+   * directly; every field below is a derived, read-only projection of it. */
+  repositories: RepositoryCandidate[];
+  /** @deprecated read-only projection of `repositories`, sorted by rank —
+   * kept for Planning's pre-existing star-rating contract, not for new
+   * frontend code. */
   ranked_repository_names: string[];
-  /** Discovery's own judgement of where the work belongs. More than one entry
-   * means the ambiguity is genuine and unresolved. */
+  /** @deprecated read-only projection of `repositories` (every name,
+   * unfiltered) — kept for backward compatibility, not for new code. */
   implementation_candidates: string[];
+  /** @deprecated read-only projection of `repositories` filtered to
+   * `source === "explicit"` — filter `repositories` directly instead. */
+  explicit_repositories: RepositoryCandidate[];
+  /** @deprecated read-only projection of `repositories` filtered to
+   * `source === "suggested"` — filter `repositories` directly instead. */
+  suggested_repositories: RepositoryCandidate[];
+  /** @deprecated read-only projection of `repositories` filtered to
+   * `selected === true` — filter `repositories` directly instead. Never
+   * reflects a human override (which always targets `repositories`
+   * itself) unless this projection is recomputed, which the backend only
+   * does once, at write time. */
+  selected_repositories: RepositoryCandidate[];
   graph_context_text: string;
   graph_available: boolean;
   graph_has_data: boolean;

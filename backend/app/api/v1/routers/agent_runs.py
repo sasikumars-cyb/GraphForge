@@ -105,6 +105,17 @@ class ConfidenceResponse(BaseModel):
     reasoning: str
 
 
+class PreflightWarningResponse(BaseModel):
+    """ADR 0011, OD-1 — a WARNING-severity pre-flight result, persisted on
+    the step distinct from `evidence` (see StepResponse.human_override's
+    own docstring for the analogous provenance distinction)."""
+
+    code: str
+    dependency: str
+    message: str
+    checked_at: str
+
+
 class StepResponse(BaseModel):
     step_id: str
     agent_id: str
@@ -128,6 +139,7 @@ class StepResponse(BaseModel):
     # human edit rather than as something the agent concluded.
     human_override: dict[str, object] | None = None
     overridden_at: str | None = None
+    preflight_warnings: list[PreflightWarningResponse] = []
 
 
 class RunDetailResponse(BaseModel):
@@ -367,6 +379,15 @@ def _step_response(step: AgentStep) -> StepResponse:
         completed_at=_iso(step.completed_at),
         human_override=getattr(step, "human_override", None),
         overridden_at=_iso(getattr(step, "overridden_at", None)),
+        preflight_warnings=[
+            PreflightWarningResponse(
+                code=w.get("code", ""),
+                dependency=w.get("dependency", ""),
+                message=w.get("message", ""),
+                checked_at=w.get("checked_at", ""),
+            )
+            for w in (step.preflight_warnings or [])
+        ],
     )
 
 

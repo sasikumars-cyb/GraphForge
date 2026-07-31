@@ -1,6 +1,7 @@
 """Development Agent manifest — registered with the Orchestrator at startup."""
 
 from app.agents._contract import AgentManifest
+from app.orchestrator.preflight import DEPENDENCY_LLM, DEPENDENCY_NEO4J
 
 DEVELOPMENT_MANIFEST = AgentManifest(
     agent_id="development",
@@ -15,4 +16,7 @@ DEVELOPMENT_MANIFEST = AgentManifest(
     cost_class="standard",
     max_graph_hops=3,
     output_schema_name="DevelopmentPlan",
+    # ADR 0011, OD-3 — LLM (this agent's own reasoning), Neo4j (max_graph_hops
+    # > 0, above).
+    required_dependencies=frozenset({DEPENDENCY_LLM, DEPENDENCY_NEO4J}),
 )

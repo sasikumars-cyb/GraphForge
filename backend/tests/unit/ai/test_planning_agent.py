@@ -13,6 +13,7 @@ All graph and LLM calls are mocked — no real Neo4j or OpenAI needed.
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -23,6 +24,7 @@ from app.agents.planning.agent import (
     PlanningLLMError,
     _render_prompt,
     _reuse_percent_mismatch,
+    _selected_repo_names,
 )
 from app.agents.planning.classifier import analyse, detect_task_mode, extract_key_terms
 from app.agents.planning.schemas import RepositoryUsage
@@ -842,13 +844,46 @@ async def test_planning_agent_result_includes_real_llm_trace() -> None:
 
     llm_response = _make_llm_response()
 
+    async def _fake_call_llm(
+        user_prompt: str,
+        model: str | None = None,
+        _metadata_out: dict[str, Any] | None = None,
+        stage: str = "planning",
+        context: Any = None,
+        purpose: str = "initial",
+        sequence: int = 0,
+    ) -> str:
+        """Honours the *whole* `_call_llm` contract, not just its return
+        value: the real function fills `_metadata_out` in place (see
+        `app.agents.llm.invoke_llm_json` / `LLM_INVOCATION_METADATA_KEYS`),
+        and `llm_trace` is assembled from exactly those keys. A bare
+        `AsyncMock(return_value=...)` returns the string but silently skips
+        the out-param, so the trace it produced was missing every metric —
+        a gap in the double, not in the agent."""
+        if _metadata_out is not None:
+            _metadata_out.update(
+                {
+                    "provider": "openai",
+                    "model": "gpt-4",
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "total_tokens": 150,
+                    "estimated_cost_usd": 0.01,
+                    "latency_ms": 42,
+                    "retry_count": 0,
+                    "finish_reason": "stop",
+                    "status": "completed",
+                }
+            )
+        return llm_response
+
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
             return_value=mock_graph_repo,
         ),
-        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+        patch("app.agents.planning.agent._call_llm", new=_fake_call_llm),
     ):
         agent = PlanningAgent()
         output = await agent.run(context)
@@ -859,6 +894,11 @@ async def test_planning_agent_result_includes_real_llm_trace() -> None:
     assert context.subject.display_name in trace["prompt"]
     assert trace["latency_ms"] is not None
     assert trace["latency_ms"] >= 0
+    # The trace is now assembled entirely from the shared invocation
+    # metadata — assert the metrics actually flow through, not just latency.
+    assert trace["provider"] == "openai"
+    assert trace["total_tokens"] == 150
+    assert trace["estimated_cost_usd"] == 0.01
 
 
 @pytest.mark.asyncio
@@ -1165,6 +1205,7 @@ async def test_planning_agent_graph_context_used_true_when_graph_has_data() -> N
     mock_graph_repo.get_nodes_by_label = AsyncMock(
         side_effect=lambda repo_id, label: [component_node] if label == "Component" else []
     )
+    mock_graph_repo.get_outgoing_cross_repository_edges = AsyncMock(return_value=[])
 
     mock_db = context.extras["db"]
     mock_repo = MagicMock()
@@ -1338,6 +1379,7 @@ def _make_two_repo_context() -> tuple[AgentContext, MagicMock]:
         return {"repo-target": [target_component], "repo-other": [other_component]}.get(repo_id, [])
 
     mock_graph_repo.get_nodes_by_label = AsyncMock(side_effect=_nodes_for)
+    mock_graph_repo.get_outgoing_cross_repository_edges = AsyncMock(return_value=[])
 
     mock_db = context.extras["db"]
     # `MagicMock(name=...)` is reserved (sets the mock's own debug name, not
@@ -1487,6 +1529,57 @@ async def test_planning_agent_flags_unindexed_sibling_repo_reference() -> None:
         output = await agent.run(context)
 
     warnings = output.result["verification_warnings"]
-    assert any(
-        "MPC" in w and "not itself indexed" in w for w in warnings
-    ), f"expected an unindexed-sibling-repo warning, got: {warnings}"
+    assert any("MPC" in w and "not itself indexed" in w for w in warnings), (
+        f"expected an unindexed-sibling-repo warning, got: {warnings}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# ADR 0010 §7 P2 (Theme D) — `_selected_repo_names` reads the canonical
+# `repositories` field, never the stale `selected_repositories` projection
+# ---------------------------------------------------------------------------
+
+
+def test_selected_repo_names_reads_the_canonical_repositories_field() -> None:
+    result = {
+        "repositories": [
+            {"name": "ingestion-framework", "selected": True},
+            {"name": "etl-core", "selected": True},
+            {"name": "streaming-pipeline", "selected": False},
+        ]
+    }
+    assert set(_selected_repo_names(result, [])) == {"ingestion-framework", "etl-core"}
+
+
+def test_selected_repo_names_ignores_a_stale_selected_repositories_key() -> None:
+    """The exact bug this fix closes: after a human override replaces
+    `repositories`, `get_stage_result()`'s shallow merge never recomputes
+    `selected_repositories` — it's still whatever `build_result` originally
+    stored. `repositories` must win whenever it's present at all (ADR 0010,
+    invariant I6)."""
+    result = {
+        "repositories": [{"name": "billing-service", "selected": True}],
+        # Stale — computed from the *pre-override* repositories, must be
+        # ignored now that `repositories` itself is present.
+        "selected_repositories": [{"name": "payment-service"}],
+    }
+    assert _selected_repo_names(result, []) == ["billing-service"]
+
+
+def test_selected_repo_names_falls_back_to_ranked_repo_names_when_nothing_selected() -> None:
+    result = {"repositories": [{"name": "payment-service", "selected": False}]}
+    assert _selected_repo_names(result, ["payment-service", "billing-service"]) == [
+        "payment-service"
+    ]
+
+
+def test_selected_repo_names_falls_back_through_legacy_shapes_when_repositories_is_absent() -> None:
+    """A result persisted before ADR 0010 (no `repositories` key at all)
+    must still resolve via the pre-existing fallback chain."""
+    assert _selected_repo_names(
+        {"selected_repositories": [{"name": "legacy-service"}]}, []
+    ) == ["legacy-service"]
+    assert _selected_repo_names(
+        {"implementation_candidates": ["older-service"]}, []
+    ) == ["older-service"]
+    assert _selected_repo_names({}, ["oldest-service"]) == ["oldest-service"]

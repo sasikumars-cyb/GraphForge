@@ -617,7 +617,16 @@ async def reject_workflow(db: AsyncSession, workflow: Workflow) -> None:
 # to fix the underlying gap and re-run, or to acknowledge a PARTIAL result
 # explicitly — both of which stay on the record.
 _OVERRIDABLE_FIELDS: dict[str, frozenset[str]] = {
-    "context_discovery": frozenset({"graph_context_text", "enriched_text"}),
+    # `repositories` is the canonical repository model (ADR 0010 §2) — the
+    # only repository-shaped key a human correction may ever target.
+    # `explicit_repositories`/`suggested_repositories`/`selected_
+    # repositories`/`ranked_repository_names`/`implementation_candidates`
+    # are read-only projections derived from `repositories`
+    # (`reasoning.projection.project_repositories`) and are deliberately
+    # NOT in this set (invariant I6) — allowing them here would let an
+    # override silently disagree with the canonical field it's supposed to
+    # be derived from.
+    "context_discovery": frozenset({"graph_context_text", "enriched_text", "repositories"}),
 }
 
 

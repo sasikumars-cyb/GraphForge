@@ -42,7 +42,7 @@ from collections import defaultdict
 
 from app.core.exceptions import AppError
 from app.graph.interfaces import IGraphRepository
-from app.graph.models import GraphNode, GraphPayload
+from app.graph.models import GraphEdge, GraphNode, GraphPayload
 
 logger = logging.getLogger(__name__)
 
@@ -109,11 +109,47 @@ class GraphHopBudgetRepository(IGraphRepository):
         self._consume(repository_id, "get_nodes_by_label")
         return await self._inner.get_nodes_by_label(repository_id, label)
 
+    async def get_kafka_topic_edges(self, repository_id: str) -> list[GraphEdge]:
+        self._consume(repository_id, "get_kafka_topic_edges")
+        return await self._inner.get_kafka_topic_edges(repository_id)
+
     async def has_graph(self, repository_id: str) -> bool:
         # An indexing-status existence check, not a graph traversal — free
         # regardless of budget, same reasoning `verify_repository` already
         # relies on (see app.agents.code_generation.verification).
         return await self._inner.has_graph(repository_id)
+
+    async def replace_cross_repository_edges(
+        self, source_repository_id: str, edges: list[GraphEdge]
+    ) -> None:
+        raise NotImplementedError(
+            "GraphHopBudgetRepository is read-only — cross-repository edges are written "
+            "by the indexer's cross_repo_linker, never by an agent run."
+        )
+
+    async def get_outgoing_cross_repository_edges(self, repository_id: str) -> list[GraphEdge]:
+        self._consume(repository_id, "get_outgoing_cross_repository_edges")
+        return await self._inner.get_outgoing_cross_repository_edges(repository_id)
+
+    async def get_neighborhood(
+        self,
+        repository_id: str,
+        seed_node_ids: list[str],
+        edge_types: list[str],
+        max_hops: int,
+    ) -> GraphPayload:
+        # Counts as a single call regardless of `max_hops` — the whole
+        # point of this primitive (see its own docstring on
+        # IGraphRepository) is that its internal traversal is genuinely
+        # hop-bounded by Neo4j itself, unlike `get_full_graph`, which also
+        # costs exactly one call today despite having no depth bound at
+        # all. This is intentionally the cheaper, more precise option a
+        # caller should prefer over `get_full_graph` wherever a seed set
+        # is available.
+        self._consume(repository_id, "get_neighborhood")
+        return await self._inner.get_neighborhood(
+            repository_id, seed_node_ids, edge_types, max_hops
+        )
 
 
 def build_hop_budgeted_repository(

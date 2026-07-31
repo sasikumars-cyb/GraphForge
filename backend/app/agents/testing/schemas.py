@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from app.agents._contract import ComponentWarning
+
 
 class TestScope(BaseModel):
     """Overall boundaries of what should be tested."""
@@ -123,3 +125,8 @@ class TestPlan(BaseModel):
     # app.agents.verification. Always includes a note that this is a test
     # PLAN, not executed test results — nothing here was actually run.
     verification_warnings: list[str] = Field(default_factory=list)
+
+    # Structured counterpart, populated by this agent's OWN independent
+    # call to app.agents.component_grounding.check_test_used_as_production.
+    # See PlanningResult.component_warnings for the field's shape/intent.
+    component_warnings: list[ComponentWarning] = Field(default_factory=list)

@@ -80,7 +80,25 @@ async def record_outcome(
     latency_ms: int,
     error: Exception | None = None,
 ) -> None:
-    """Record one provider request outcome and refresh its health status."""
+    """Record one provider request outcome and refresh its health status.
+
+    Flushes, does not commit: `db` is a caller-owned session that may
+    already hold other pending, uncommitted changes (ADR 0012 —
+    `app.agents.llm.persist_llm_invocation` calls this from inside the
+    same shared transaction `RunCoordinator` will commit once, atomically,
+    with the rest of that run's own persistence). Committing here would
+    end that transaction early and out from under the caller. Never had a
+    caller before ADR 0012's implementation, so this is a genuine fix, not
+    a behavior change relied on elsewhere (confirmed via a repo-wide search
+    for other call sites before making this change).
+
+    Also does not roll back on its own failure, for the identical reason:
+    a rollback here would discard every other pending change in the
+    caller's shared transaction, not just this function's own. Telemetry
+    must never take down the request it is describing (see the original
+    docstring below) — that now means "swallow and log," never "roll back
+    someone else's uncommitted work."
+    """
     try:
         now = datetime.now(UTC)
         row = await _row_for(db, provider_key)
@@ -118,11 +136,10 @@ async def record_outcome(
                 config.last_success_at = now
                 config.latency_ms = latency_ms
 
-        await db.commit()
+        await db.flush()
     except Exception:
         # Telemetry must never take down the request it is describing.
         logger.warning("ai_usage_record_failed provider=%s", provider_key, exc_info=True)
-        await db.rollback()
 
 
 async def usage_for(db: AsyncSession, provider_key: str) -> AIProviderUsage | None:

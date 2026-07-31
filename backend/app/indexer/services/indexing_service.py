@@ -3,6 +3,8 @@ parse -> build graph -> persist -> (temp clone directory is always cleaned
 up by `clone_repository`, success or failure).
 """
 
+import logging
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,12 +13,15 @@ from app.core.exceptions import AppError
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
 from app.indexer.graph.builder import build_graph
+from app.indexer.graph.cross_repo_linker import relink_account
 from app.indexer.models.architecture import ArchitectureModel
 from app.indexer.parsers.registry import get_parser
 from app.indexer.scanner.language_detector import DetectedLanguage, detect_language
 from app.indexer.scanner.repository_cloner import clone_repository
 from app.models.github_connection import GitHubConnection
 from app.models.repository import Repository
+
+logger = logging.getLogger(__name__)
 
 IndexingSummary = dict[str, int]
 
@@ -82,11 +87,34 @@ async def index_repository(
 
 async def run_indexing(db: AsyncSession, repository: Repository) -> IndexingSummary:
     """The DB-aware entrypoint: looks up the repository owner's GitHub
-    token (if connected) and runs `index_repository` with it."""
+    token (if connected) and runs `index_repository` with it.
+
+    Also (re)computes the account's entire cross-repository graph edge set
+    (see `app.indexer.graph.cross_repo_linker.relink_account`) — not just
+    edges touching the repository just indexed, because a repository
+    indexed earlier may reference *this* one (a Feign client, a shared
+    topic) and had nothing to link against until now. `relink_account` is
+    the single entry point for this (ADR 0010, invariant I7); it batch-
+    fetches every repository's relationship-relevant nodes once (`O(N)`
+    Neo4j round-trips, not `O(N)` per repository) and serializes concurrent
+    relinks for the same account with a blocking advisory lock (waits
+    rather than skipping, so a concurrently-indexing repository is never
+    dropped from the account's cross-repository graph). A relink failure is
+    logged and swallowed rather than failing the indexing job —
+    the repository's own graph is already committed and usable on its own.
+    """
     access_token = await _get_access_token(db, repository.user_id)
-    return await index_repository(
+    summary = await index_repository(
         repository_id=str(repository.id),
         html_url=repository.html_url,
         ref=repository.default_branch,
         access_token=access_token,
     )
+
+    graph_repository = Neo4jGraphRepository(get_driver())
+    try:
+        await relink_account(graph_repository=graph_repository, db=db, user_id=repository.user_id)
+    except Exception:
+        logger.exception("cross_repo_relink_failed user_id=%s", repository.user_id)
+
+    return summary

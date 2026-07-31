@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,6 +49,7 @@ from app.agents._contract import (
     Evidence,
 )
 from app.agents.blueprint.factory import BlueprintFactory
+from app.agents.component_grounding import check_test_used_as_production, to_contract_warnings
 from app.agents.development.schemas import (
     AffectedComponent,
     AffectedRepository,
@@ -69,6 +71,7 @@ from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.llm import STAGE_DEVELOPMENT, invoke_llm_json, stage_for
 from app.agents.prompt_utils import parse_json_response, render_prompt_template
 from app.agents.stage_context import format_planning_block
+from app.context_pipeline.reasoning.curation import EvidencePackage, render_evidence_package_text
 from app.core.exceptions import AppError
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
@@ -97,7 +100,11 @@ class DevelopmentLLMError(AppError):
 
 
 async def _call_llm(
-    user_prompt: str, model: str | None = None, stage: str = STAGE_DEVELOPMENT
+    user_prompt: str,
+    model: str | None = None,
+    stage: str = STAGE_DEVELOPMENT,
+    _metadata_out: dict[str, Any] | None = None,
+    context: AgentContext | None = None,
 ) -> str:
     """Send a single JSON-mode completion through the configured AI
     provider and return the raw content string. Delegates to the shared
@@ -110,6 +117,8 @@ async def _call_llm(
         stage=stage,
         model=model,
         error_cls=DevelopmentLLMError,
+        metadata_out=_metadata_out,
+        context=context,
     )
 
 
@@ -376,7 +385,19 @@ class DevelopmentAgent:
         # ------------------------------------------------------------------
         # Synthesize: LLM call with full graph context
         # ------------------------------------------------------------------
-        graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs)
+        # Prefer the curated Evidence Package (see reasoning.curation) when
+        # Context Discovery produced one — bounded, tiered, each item with
+        # its own reason, instead of format_graph_context's raw per-
+        # repository component listing. Falls back to the old rendering
+        # for a standalone run (no workflow) or a stored run that predates
+        # curation, where no evidence_package exists to read.
+        evidence_package = (context_discovery_result or {}).get("evidence_package") or {}
+        if evidence_package.get("items"):
+            graph_context_text = render_evidence_package_text(
+                EvidencePackage.model_validate(evidence_package)
+            )
+        else:
+            graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs)
         prompt_task_description = (
             f"{task_description}\n\n{prior_stage_context}"
             if prior_stage_context
@@ -391,10 +412,13 @@ class DevelopmentAgent:
         )
 
         try:
+            llm_metadata: dict[str, Any] = {}
             raw_response = await _call_llm(
                 user_prompt=prompt,
                 model=context.model,
                 stage=stage_for(context.extras, STAGE_DEVELOPMENT),
+                _metadata_out=llm_metadata,
+                context=context,
             )
             plan = _parse_llm_response(raw_response, task_description)
         except DevelopmentLLMError as exc:
@@ -420,6 +444,73 @@ class DevelopmentAgent:
             [t.get("name", "") for t in components_obs.data.get("kafka_topics", [])],
         )
         verification_warnings: list[str] = []
+
+        # ------------------------------------------------------------------
+        # Independent grounding (see app.agents.component_grounding): this
+        # agent's OWN re-check against the same graph_components it just
+        # read above — not a re-read of Planning's verification_warnings.
+        # Runs before the existence check below for the same reason as
+        # Planning: `verify_claims` only asks "does this exist", and a
+        # real test class always answers yes. A real run's Development
+        # stage repeated Planning's `TestSCDType2Merger`/
+        # `TestExactDeduplicator` mistake in its own affected_components
+        # and reusable_implementations, independently of whatever Planning
+        # had already gotten wrong — this is what catches that instead of
+        # trusting the prior stage's naming.
+        # ------------------------------------------------------------------
+        graph_components_list = components_obs.data.get("components", [])
+        component_warnings: list[Any] = []
+
+        def _apply_test_grounding(names: list[str]) -> dict[str, str | None]:
+            """name -> corrected name (None if rejected with no
+            replacement), for every name check_test_used_as_production
+            flagged. Names it didn't flag are simply absent from the dict
+            — callers leave those untouched."""
+            _, warnings = check_test_used_as_production(
+                names, graph_components_list, task_description
+            )
+            component_warnings.extend(warnings)
+            return {w.claim: w.suggested_replacement for w in warnings}
+
+        component_corrections = _apply_test_grounding([c.name for c in plan.components])
+        if component_corrections:
+            corrected_components = []
+            for comp in plan.components:
+                if comp.name in component_corrections:
+                    replacement = component_corrections[comp.name]
+                    if replacement is None:
+                        continue  # rejected — no production sibling found
+                    comp.name = replacement
+                corrected_components.append(comp)
+            plan.components = corrected_components
+
+        reuse_corrections = _apply_test_grounding([r.name for r in plan.reusable_implementations])
+        if reuse_corrections:
+            corrected_reuse = []
+            for reuse in plan.reusable_implementations:
+                if reuse.name in reuse_corrections:
+                    replacement = reuse_corrections[reuse.name]
+                    if replacement is None:
+                        continue
+                    reuse.name = replacement
+                corrected_reuse.append(reuse)
+            plan.reusable_implementations = corrected_reuse
+
+        if component_warnings:
+            verification_warnings.extend(w.message for w in component_warnings)
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="component_grounding",
+                    summary=(
+                        f"{len(component_warnings)} component(s) named a test class "
+                        "instead of the production code it tests — independently "
+                        "re-checked against this run's own indexed graph data: "
+                        + "; ".join(w.message for w in component_warnings)
+                    ),
+                )
+            )
+
         repo_check = verification.verify_claims([r.name for r in plan.repositories], evidence_pool)
         for name in repo_check.unverified:
             verification_warnings.append(
@@ -434,6 +525,7 @@ class DevelopmentAgent:
                     "this run's indexed graph data — unverified."
                 )
         plan.verification_warnings = verification_warnings
+        plan.component_warnings = to_contract_warnings(component_warnings)
         if verification_warnings:
             evidence.append(
                 Evidence(

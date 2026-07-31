@@ -949,6 +949,98 @@ async def test_planning_is_refused_when_context_discovery_is_blocked(
     assert detail["current_stage"] == "planning"
 
 
+async def test_planning_requires_acknowledge_partial_when_context_discovery_is_partial(
+    client: AsyncClient,
+) -> None:
+    """The full PARTIAL contract, end to end: a Jira-linked request resolves
+    a real work item (so "Design documentation retrieved" becomes a
+    recommended-but-unmet signal — Confluence is never connected in this
+    test environment) while everything else Planning strictly needs is
+    present, so Context Discovery finishes at PARTIAL, not READY or BLOCKED.
+
+    Regression test for the exact contract the frontend's "Continue anyway"
+    button depends on: a bare `/continue` must be refused with 409
+    `context_discovery_partial` (never silently ignored, never a 500), and
+    the identical call with `acknowledge_partial: true` must succeed and
+    actually queue Planning.
+    """
+    from app.agents._contract import Evidence
+    from app.context_pipeline.models import ProviderCapability, ResolvedArtifact
+
+    token = await _register_unique_and_get_token(client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    artifact = ResolvedArtifact(
+        provider="jira",
+        capability=ProviderCapability.ISSUE_TRACKER,
+        reference=None,
+        title="Duplicate records in SCD2 merge",
+        text="Duplicate records in SCD2 merge during concurrent writes. Repo: auth-service.",
+        evidence=Evidence(
+            kind="tool_call", reference="jira:fetch_work_item:PROJ-1", summary="Retrieved PROJ-1."
+        ),
+    )
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository", return_value=MagicMock()
+        ),
+        _discovery_graph_patch(),
+        patch(
+            "app.context_pipeline.reasoning.investigators.JiraProvider.resolve",
+            new=AsyncMock(return_value=artifact),
+        ),
+    ):
+        create_response = await client.post(
+            "/api/v1/workflows",
+            json={"title": "Prepare plan for JIRA : PROJ-1"},
+            headers=headers,
+        )
+        workflow_id = create_response.json()["workflow_id"]
+        detail = await _poll_workflow_stage_until_terminal(
+            client, workflow_id, "context_discovery", headers
+        )
+
+    stages_by_name = {s["stage"]: s for s in detail["stages"]}
+    assert stages_by_name["context_discovery"]["status"] == "completed"
+
+    # Bare continue: refused, 409, with the documented machine-readable code
+    # — never silently ignored and never a generic/500 error.
+    refused = await client.post(
+        f"/api/v1/workflows/{workflow_id}/continue", json={}, headers=headers
+    )
+    assert refused.status_code == 409
+    body = refused.json()
+    assert body["error"]["code"] == "context_discovery_partial"
+    assert "confidence" in body["error"]["message"].lower()
+
+    # Nothing was queued by the refused attempt.
+    detail = (await client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)).json()
+    stages_by_name = {s["stage"]: s for s in detail["stages"]}
+    assert stages_by_name["planning"]["run_id"] is None
+    assert detail["current_stage"] == "planning"
+
+    # Acknowledging proceeds — the exact payload the frontend's "Continue
+    # anyway" button sends.
+    with patch(
+        "app.agents.planning.agent._call_llm",
+        new=AsyncMock(return_value=_PLANNING_LLM_RESPONSE),
+    ):
+        acknowledged = await client.post(
+            f"/api/v1/workflows/{workflow_id}/continue",
+            json={"acknowledge_partial": True},
+            headers=headers,
+        )
+        assert acknowledged.status_code == 202, acknowledged.text
+        assert acknowledged.json()["stage"] == "planning"
+
+        detail = await _poll_workflow_stage_until_terminal(client, workflow_id, "planning", headers)
+    stages_by_name = {s["stage"]: s for s in detail["stages"]}
+    assert stages_by_name["planning"]["run_id"] is not None
+    assert stages_by_name["planning"]["status"] == "completed"
+
+
 def _ambiguous_graph() -> ToolResult:
     """Two repositories, each owning an identically-named component, so
     relevance ranking genuinely cannot separate them and Context Discovery has
@@ -1099,9 +1191,9 @@ async def test_an_unverifiable_answer_re_asks_instead_of_being_accepted(
             client,
             workflow_id,
             headers,
-            lambda d: (d.get("pending_clarification") or {})
-            .get("why", "")
-            .startswith("I couldn't find"),
+            lambda d: (
+                (d.get("pending_clarification") or {}).get("why", "").startswith("I couldn't find")
+            ),
         )
 
     # Still paused, re-asking — and the reason names the answer that failed.

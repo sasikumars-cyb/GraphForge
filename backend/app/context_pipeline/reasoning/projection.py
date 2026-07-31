@@ -18,7 +18,9 @@ the ledger or the assessments, never in this file.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
+
+from pydantic import BaseModel
 
 from app.agents._contract import Evidence
 from app.context_pipeline.providers import wrap_artifact_text
@@ -252,6 +254,122 @@ def _headline(state: WorkingContext) -> str:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# The canonical repository model (ADR 0010 §2 / invariant I5)
+# ---------------------------------------------------------------------------
+#
+# `repositories` is the ONLY repository-shaped field anything ever populates
+# directly. `ranked_repository_names`, `implementation_candidates`,
+# `explicit_repositories`, `suggested_repositories`, and
+# `selected_repositories` are read-only compatibility projections, computed
+# exclusively by `project_repositories` below — nothing else in this
+# codebase may independently write any of those five keys (invariant I6).
+# The first two predate this model and are pre-existing production fields
+# (Planning's star-rating and `[0]`-fallback code, in particular, reads
+# `ranked_repository_names` positionally) — their *values* are preserved
+# exactly by this projection, only their provenance changes from
+# independently-computed to derived.
+
+
+class RepositoryCandidate(BaseModel):
+    """One repository Context Discovery has identified. `source` is where it
+    came from; `selected` is whether it's actually in scope for this work —
+    two different questions (a repository can be a live candidate without
+    being selected, but never selected without first being a candidate)."""
+
+    name: str
+    source: Literal["explicit", "suggested"]
+    selected: bool
+    reason: str = ""
+    relationship: str = ""
+    # Position in the relevance ranking, when one exists (see
+    # `ranked_repository_names`) — `None` for a repository the ranking never
+    # scored at all (e.g. explicit-only with no ranking ever computed).
+    rank: int | None = None
+    # ADR 0010 §4 — populated only where the ledger genuinely carries a
+    # graph_version signal today (a `repository_relationship` fact's
+    # `target_graph_version`, for a suggested-via-relationship candidate).
+    # Honestly `None` elsewhere rather than a fabricated value — no fact
+    # currently threads a plain ranked/explicit candidate's own graph
+    # version into the reasoning ledger.
+    graph_version: str | None = None
+    # ADR 0010 (Theme E) — "structural" or "heuristic" for a suggested-via-
+    # relationship candidate (see `cross_repo_linker.py`'s rules); empty for
+    # every other source, since explicit/ranked candidates have no edge
+    # confidence to report.
+    confidence: str = ""
+
+
+def project_repositories(repositories: list[RepositoryCandidate]) -> dict[str, Any]:
+    """The single pure function that derives every legacy/compatibility
+    repository field from the canonical `repositories` list (ADR 0010 §2).
+    Called once by `build_result` to populate the stored `AgentStep.result`,
+    and again by any reader (Planning, `RepositorySelector.tsx`'s
+    TypeScript equivalent) over whatever `repositories` a human override
+    resolves to — never trusting the stored projection keys directly
+    (invariant I6).
+    """
+    ranked = sorted((r for r in repositories if r.rank is not None), key=lambda r: r.rank)
+    return {
+        "ranked_repository_names": [r.name for r in ranked] or [r.name for r in repositories],
+        "implementation_candidates": [r.name for r in repositories],
+        "explicit_repositories": [
+            r.model_dump() for r in repositories if r.source == "explicit"
+        ],
+        "suggested_repositories": [
+            r.model_dump() for r in repositories if r.source == "suggested"
+        ],
+        "selected_repositories": [r.model_dump() for r in repositories if r.selected],
+    }
+
+
+def _build_repositories(state: WorkingContext) -> list[RepositoryCandidate]:
+    """The canonical `repositories` list — every live `repository_candidate`
+    inference, with `rank` from the graph investigator's own relevance
+    ordering and `selected` from the default rule: every explicit
+    repository, plus — only when nothing explicit was found at all — the
+    single surviving suggested candidate (today's pre-multi-repository
+    behavior: one ranked/only-indexed repository, auto-used). Once any
+    explicit repository exists, suggested ones stay opt-in — the whole point
+    of `source: "suggested"` is that a human decides whether to include it,
+    via the Repositories panel's checkboxes.
+    """
+    ledger = state.ledger
+    ranked_names = state.derived.get("ranked_repositories") or []
+    rank_by_name = {name: index for index, name in enumerate(ranked_names)}
+
+    relationship_versions = {
+        f.subject: f.value.get("target_graph_version")
+        for f in ledger.facts_of("repository_relationship")
+    }
+
+    candidates = [
+        RepositoryCandidate(
+            name=i.statement,
+            source=i.value.get("source", "suggested"),
+            selected=False,
+            reason=i.value.get("reason", ""),
+            relationship=i.value.get("relationship", ""),
+            rank=rank_by_name.get(i.statement),
+            graph_version=relationship_versions.get(i.statement),
+            confidence=i.value.get("confidence", ""),
+        )
+        for i in ledger.live_inferences("repository_candidate")
+    ]
+
+    explicit = [c for c in candidates if c.source == "explicit"]
+    suggested = [c for c in candidates if c.source == "suggested"]
+    selected_names: set[str]
+    if explicit:
+        selected_names = {c.name for c in explicit}
+    elif len(suggested) == 1:
+        selected_names = {suggested[0].name}
+    else:
+        selected_names = set()
+
+    return [c.model_copy(update={"selected": c.name in selected_names}) for c in candidates]
+
+
 def build_result(state: WorkingContext) -> dict[str, Any]:
     """Project working memory into the persisted `ContextDiscoveryResult`.
 
@@ -265,31 +383,70 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
     question = state.next_question()
     blocking = [g for g in state.gaps if g.severity == "blocking" and g.status not in ("verified",)]
 
+    # --- the canonical repository model (ADR 0010 §2) --------------------
+    # `repositories` is the only field populated directly; every other
+    # repository-shaped key below comes from `project_repositories` and
+    # nothing else ever writes them (invariant I6). A human override always
+    # targets `repositories` itself (see `_OVERRIDABLE_FIELDS` in
+    # `workflow_service.py`) — `get_stage_result()`'s merge then makes every
+    # projection below automatically consistent with whatever override is
+    # in effect for any reader that re-derives them the same way Planning
+    # does, rather than trusting the stored, potentially-stale projection
+    # keys directly.
+    repositories = _build_repositories(state)
+    projected_repositories = project_repositories(repositories)
+    # `project_repositories` is a pure function of `repositories` alone (ADR
+    # 0010 §2), so its own `ranked_repository_names` only ever covers
+    # repositories that are *candidates* — it cannot know about an indexed
+    # repository the ranking scored but that never became a candidate (e.g.
+    # an unrelated third repository once explicit repositories exist —
+    # see `capabilities.resync_ranked_candidates`'s suppression rule).
+    # `ranked_repository_names` must stay the *complete* ordering regardless
+    # (Planning's star-rating and its `[0]`-fallback verification read every
+    # indexed repository positionally) — this is the one place with access
+    # to both `repositories` and the ledger/derived ranking, so it applies
+    # the same three-tier fallback the pre-Theme-D formula used: the full
+    # relevance ordering when the graph investigator computed one, else the
+    # (possibly narrower) candidate-derived projection, else every indexed
+    # repository's own name.
+    full_ranking = state.derived.get("ranked_repositories")
+    if full_ranking:
+        projected_repositories["ranked_repository_names"] = full_ranking
+    elif not projected_repositories["ranked_repository_names"]:
+        projected_repositories["ranked_repository_names"] = ledger.subjects_of("repository")
+
     return {
         # --- what Planning reads -----------------------------------------
         "original_request": state.derived.get("original_request") or state.metadata.goal,
         "enriched_text": state.derived.get("enriched_text") or state.metadata.goal,
         "resolved_references": [dict(f.value) for f in ledger.facts_of("reference")],
         "indexed_repositories": [dict(f.value) for f in ledger.facts_of("repository")],
-        "graph_components": [dict(f.value) for f in ledger.facts_of("component")],
-        "graph_topics": [dict(f.value) for f in ledger.facts_of("topic")],
-        # The full relevance ordering of every indexed repository, best first.
-        # Planning treats this as a ranking — star ratings by list position and
-        # `[0]` as the target repository for its component-ownership
-        # verification — so it must stay complete. The narrower "which of these
-        # is actually the implementation site" judgement is
-        # `implementation_candidates` below.
-        "ranked_repository_names": (
-            state.derived.get("ranked_repositories")
-            or [i.statement for i in ledger.live_inferences("repository_candidate")]
-            or ledger.subjects_of("repository")
+        # The primary work item's structured fields (see
+        # investigators.JiraInvestigator/`_extract_ticket_sections`) —
+        # status/issue_type/priority/labels plus whatever Problem/
+        # Business Goal/Acceptance Criteria/Constraints/Dependencies
+        # sections the ticket's own description actually contains, by
+        # real heading detection, never LLM summarization. `{}` when no
+        # work item was ever resolved (a freeform request) or the run
+        # predates this field.
+        "ticket_summary": (
+            dict(ledger.facts_of("work_item")[0].value) if ledger.facts_of("work_item") else {}
         ),
-        # Discovery's own interpretation: the repositories it believes this work
-        # could belong to, each citing the repository facts that support it.
-        # More than one entry means the ambiguity is genuine and unresolved.
-        "implementation_candidates": [
-            i.statement for i in ledger.live_inferences("repository_candidate")
-        ],
+        # Complete and uncurated, deliberately — the debugging/JSON-tab
+        # view, kept exactly as before (see this function's own
+        # docstring). No agent's prompt construction should read this
+        # directly anymore; see `evidence_package` below for the
+        # bounded, tiered, ranked replacement every agent now uses.
+        "graph_components": [dict(f.value) for f in ledger.facts_of("component")],
+        # The curated Evidence Package (see reasoning.curation) — computed
+        # once, after the investigation loop exits
+        # (investigators.curate_evidence, called from engine.investigate),
+        # not re-derived here. Empty ({}) only for a run that predates
+        # this field or produced no components at all.
+        "evidence_package": state.derived.get("evidence_package") or {},
+        "graph_topics": [dict(f.value) for f in ledger.facts_of("topic")],
+        "repositories": [r.model_dump() for r in repositories],
+        **projected_repositories,
         "graph_context_text": state.derived.get("graph_context_text", ""),
         # Existing TestRail/uploaded test cases relevant to this request —
         # same derived-view pattern as graph_components/graph_context_text

@@ -159,6 +159,54 @@ def test_manifest_valid() -> None:
 
 
 # ---------------------------------------------------------------------------
+# AgentManifest.required_dependencies (ADR 0011, OD-3)
+# ---------------------------------------------------------------------------
+
+
+def test_manifest_required_dependencies_defaults_to_empty_frozenset() -> None:
+    """Backward compatibility: every manifest built the old way (no
+    required_dependencies kwarg at all) must keep constructing exactly as
+    it did before this field existed — same outcome the identical
+    `evidence: list = default_factory(list)` pattern already guarantees for
+    AgentOutput."""
+    m = AgentManifest(
+        agent_id="test",
+        purpose="Test",
+        goals=frozenset({"test_goal"}),
+        accepted_subject_types=frozenset({"freetext"}),
+        cost_class="cheap",
+    )
+    assert m.required_dependencies == frozenset()
+
+
+def test_manifest_required_dependencies_accepts_explicit_set() -> None:
+    m = AgentManifest(
+        agent_id="test",
+        purpose="Test",
+        goals=frozenset({"test_goal"}),
+        accepted_subject_types=frozenset({"freetext"}),
+        cost_class="cheap",
+        required_dependencies=frozenset({"llm", "neo4j"}),
+    )
+    assert m.required_dependencies == frozenset({"llm", "neo4j"})
+
+
+def test_manifest_is_still_hashable_with_required_dependencies() -> None:
+    """AgentManifest is a frozen dataclass — every field must stay hashable
+    for that to keep working. frozenset (unlike list/dict) is hashable, so
+    this must not regress."""
+    m = AgentManifest(
+        agent_id="test",
+        purpose="Test",
+        goals=frozenset({"test_goal"}),
+        accepted_subject_types=frozenset({"freetext"}),
+        cost_class="cheap",
+        required_dependencies=frozenset({"llm"}),
+    )
+    hash(m)  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # AgentContext
 # ---------------------------------------------------------------------------
 

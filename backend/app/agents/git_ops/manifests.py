@@ -1,6 +1,16 @@
 """Manifests for the git operations agents."""
 
 from app.agents._contract import AgentManifest
+from app.orchestrator.preflight import DEPENDENCY_GITHUB_WRITE
+
+# ADR 0011, OD-3 — every git_ops agent's static dependency is the GitHub
+# write path (`create_git_write_provider()` / a per-user `GitHubConnection`
+# OAuth token — see app.orchestrator.preflight's own docstring, "GitHub —
+# git_ops execution path"), never LLM (deterministic, no LLM call) or Neo4j
+# (max_graph_hops=0 on every manifest below already says so). Declaring it
+# here does not make the existing check BLOCKING — that remains OD-2,
+# explicitly undecided and out of scope for this declaration.
+_GIT_OPS_REQUIRED_DEPENDENCIES = frozenset({DEPENDENCY_GITHUB_WRITE})
 
 CREATE_BRANCH_MANIFEST = AgentManifest(
     agent_id="create_branch",
@@ -13,6 +23,7 @@ CREATE_BRANCH_MANIFEST = AgentManifest(
     cost_class="cheap",
     max_graph_hops=0,
     output_schema_name="BranchInfo",
+    required_dependencies=_GIT_OPS_REQUIRED_DEPENDENCIES,
 )
 
 COMMIT_CHANGES_MANIFEST = AgentManifest(
@@ -26,6 +37,7 @@ COMMIT_CHANGES_MANIFEST = AgentManifest(
     cost_class="cheap",
     max_graph_hops=0,
     output_schema_name="CommitInfo",
+    required_dependencies=_GIT_OPS_REQUIRED_DEPENDENCIES,
 )
 
 RUN_TESTS_MANIFEST = AgentManifest(
@@ -39,6 +51,7 @@ RUN_TESTS_MANIFEST = AgentManifest(
     cost_class="cheap",
     max_graph_hops=0,
     output_schema_name="TestRunInfo",
+    required_dependencies=_GIT_OPS_REQUIRED_DEPENDENCIES,
 )
 
 CREATE_PULL_REQUEST_MANIFEST = AgentManifest(
@@ -52,4 +65,5 @@ CREATE_PULL_REQUEST_MANIFEST = AgentManifest(
     cost_class="cheap",
     max_graph_hops=0,
     output_schema_name="PullRequestInfo",
+    required_dependencies=_GIT_OPS_REQUIRED_DEPENDENCIES,
 )

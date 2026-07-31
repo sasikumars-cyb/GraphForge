@@ -44,6 +44,7 @@ from app.agents._contract import (
 from app.agents.confidence import WeightedEvidence, calculate_weighted_confidence
 from app.agents.engineering_review.schemas import (
     CompletenessFinding,
+    CrossRepositoryImpact,
     DependencyAssessment,
     EngineeringReadinessReport,
     RiskAssessment,
@@ -59,6 +60,9 @@ from app.agents.stage_context import (
 )
 from app.agents.stage_context import (
     format_planning_block as _format_planning_block,
+)
+from app.agents.stage_context import (
+    format_repository_relationships_block as _format_repository_relationships_block,
 )
 from app.agents.stage_context import (
     format_testing_block as _format_testing_block,
@@ -111,6 +115,7 @@ def _readiness_flags(readiness_status: str) -> dict[str, bool]:
     identical to the plain dict lookup this replaces."""
     key = readiness_status if readiness_status in _READINESS_CONFIDENCE else "_unrecognized"
     return {candidate: candidate == key for candidate in _READINESS_CONFIDENCE}
+
 
 # Per-warning confidence penalty on top of the readiness-based base above —
 # capped so a handful of carried-forward warnings can't push confidence
@@ -165,6 +170,7 @@ def _build_blueprint_context(
     testing_result: dict[str, Any] | None,
     documentation_result: dict[str, Any] | None,
     verification_warnings: list[str],
+    context_discovery_result: dict[str, Any] | None = None,
 ) -> str:
     sections = [
         f"## Original Objective\n{original_objective}",
@@ -173,6 +179,8 @@ def _build_blueprint_context(
         _format_testing_block(testing_result),
         _format_documentation_block(documentation_result),
     ]
+    if relationships_block := _format_repository_relationships_block(context_discovery_result):
+        sections.append(relationships_block)
     if verification_warnings:
         sections.append(
             "## Pre-existing Verification Warnings (deterministic, not LLM-generated)\n"
@@ -211,7 +219,11 @@ class EngineeringReviewLLMError(AppError):
 
 
 async def _call_llm(
-    user_prompt: str, model: str | None = None, stage: str = STAGE_ENGINEERING_REVIEW
+    user_prompt: str,
+    model: str | None = None,
+    stage: str = STAGE_ENGINEERING_REVIEW,
+    _metadata_out: dict[str, Any] | None = None,
+    context: AgentContext | None = None,
 ) -> str:
     """Delegates to the shared `app.agents.llm.invoke_llm_json` — kept as a
     module-level function so existing test seams
@@ -222,6 +234,8 @@ async def _call_llm(
         stage=stage,
         model=model,
         error_cls=EngineeringReviewLLMError,
+        metadata_out=_metadata_out,
+        context=context,
     )
 
 
@@ -234,8 +248,31 @@ def _render_prompt(blueprint_context: str) -> str:
     )
 
 
-def _parse_llm_response(raw: str, goal: str) -> EngineeringReadinessReport:
+def _graph_derived_repository_facts(
+    context_discovery_result: dict[str, Any] | None,
+) -> dict[str, dict[str, Any]]:
+    """Repository name -> its graph-derived facts (relationship/confidence/
+    reason), read from Context Discovery's own canonical `repositories`
+    list (ADR 0010 §2's `RepositoryCandidate`, the same structure
+    `RepositorySelector.tsx` renders) — never from anything the Engineering
+    Review LLM itself claims. Empty when Context Discovery's result is
+    absent or predates the canonical `repositories` field (a real prior
+    schema, per `RepositoryCandidate`'s own precedent elsewhere in this
+    codebase for degrading to "nothing known" rather than guessing)."""
+    if not context_discovery_result:
+        return {}
+    return {
+        str(r.get("name", "")): r
+        for r in context_discovery_result.get("repositories") or []
+        if r.get("name")
+    }
+
+
+def _parse_llm_response(
+    raw: str, goal: str, context_discovery_result: dict[str, Any] | None = None
+) -> EngineeringReadinessReport:
     data = parse_json_response(raw, EngineeringReviewLLMError)
+    repo_facts = _graph_derived_repository_facts(context_discovery_result)
 
     completeness_findings = [
         CompletenessFinding(
@@ -264,6 +301,26 @@ def _parse_llm_response(raw: str, goal: str) -> EngineeringReadinessReport:
         for d in data.get("dependency_assessment", [])
     ]
 
+    cross_repository_impact = []
+    for c in data.get("cross_repository_impact", []):
+        repo_name = c.get("repository", "")
+        facts = repo_facts.get(repo_name, {})
+        cross_repository_impact.append(
+            CrossRepositoryImpact(
+                repository=repo_name,
+                depends_on=c.get("depends_on", []),
+                concern=c.get("concern", ""),
+                # Graph-derived, not LLM-assessed — see
+                # _graph_derived_repository_facts. Empty when the LLM named
+                # a repository Context Discovery never suggested (the model
+                # is free to reason about anything in the blueprint text;
+                # only what the graph actually knows gets backfilled).
+                dependency_type=str(facts.get("relationship", "")),
+                confidence=str(facts.get("confidence", "")),
+                evidence=[str(facts["reason"])] if facts.get("reason") else [],
+            )
+        )
+
     return EngineeringReadinessReport(
         goal=goal,
         executive_summary=data.get("executive_summary", ""),
@@ -273,6 +330,7 @@ def _parse_llm_response(raw: str, goal: str) -> EngineeringReadinessReport:
         component_review=data.get("component_review", []),
         risk_assessment=risk_assessment,
         dependency_assessment=dependency_assessment,
+        cross_repository_impact=cross_repository_impact,
         test_strategy_review=data.get("test_strategy_review", []),
         blocking_issues=data.get("blocking_issues", []),
         recommendations=data.get("recommendations", []),
@@ -302,6 +360,14 @@ class EngineeringReviewAgent:
         documentation_result = (
             get_stage_result(workflow, "documentation_planning") if workflow else None
         )
+        # Read-only, same pattern as the four stage reads above — this agent
+        # runs no tools, so a repository-relationships section (when Context
+        # Discovery found more than one repository in scope) is the only way
+        # it ever sees *why* a suggested repository was included, beyond
+        # whatever Planning's own `target_repositories` line already named.
+        context_discovery_result = (
+            get_stage_result(workflow, "context_discovery") if workflow else None
+        )
 
         prior_verification_warnings = _collect_verification_warnings(
             planning_result, development_result, testing_result, documentation_result
@@ -313,6 +379,7 @@ class EngineeringReviewAgent:
             testing_result,
             documentation_result,
             prior_verification_warnings,
+            context_discovery_result,
         )
 
         logger.info(
@@ -365,12 +432,15 @@ class EngineeringReviewAgent:
         prompt = _render_prompt(blueprint_context)
 
         try:
+            llm_metadata: dict[str, Any] = {}
             raw_response = await _call_llm(
                 user_prompt=prompt,
                 model=context.model,
                 stage=stage_for(context.extras, STAGE_ENGINEERING_REVIEW),
+                _metadata_out=llm_metadata,
+                context=context,
             )
-            report = _parse_llm_response(raw_response, context.goal)
+            report = _parse_llm_response(raw_response, context.goal, context_discovery_result)
         except EngineeringReviewLLMError as exc:
             logger.error("engineering_review_agent_llm_failed error=%s", str(exc))
             raise

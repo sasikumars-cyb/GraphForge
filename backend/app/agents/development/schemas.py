@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.agents._contract import ComponentWarning
+
 
 class AffectedRepository(BaseModel):
     """A repository that requires changes."""
@@ -93,3 +95,10 @@ class DevelopmentPlan(BaseModel):
     # above that do not appear in this run's own tool-returned evidence.
     # See app.agents.verification. Empty when nothing was flagged.
     verification_warnings: list[str] = Field(default_factory=list)
+
+    # Structured counterpart, populated by this agent's OWN independent
+    # call to app.agents.component_grounding.check_test_used_as_production
+    # against the same graph_components it already reads from Context
+    # Discovery — not inherited from Planning's own component_warnings.
+    # See PlanningResult.component_warnings for the field's shape/intent.
+    component_warnings: list[ComponentWarning] = Field(default_factory=list)

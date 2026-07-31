@@ -53,6 +53,15 @@ _ALLOWED_REL_TYPES = frozenset(
         "INHERITS_FROM",
         "READS_FROM",
         "WRITES_TO",
+        # Cross-repository relationships — see
+        # app.indexer.graph.cross_repo_linker, the only writer of these.
+        # Unlike every other relationship above, both endpoints of these
+        # three carry *different* `repository_id` values (each repository's
+        # own `Repository` node) - the one deliberate exception to this
+        # module's per-repository isolation.
+        "CALLS_SERVICE",
+        "SHARES_TOPIC",
+        "DEPENDS_ON_REPOSITORY",
     }
 )
 

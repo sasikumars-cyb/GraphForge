@@ -31,6 +31,7 @@ which is the precondition for asking the human anything at all.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from app.agents.planning.classifier import analyse
@@ -42,7 +43,7 @@ from app.context_pipeline.providers import (
     GraphProvider,
     JiraProvider,
 )
-from app.context_pipeline.reasoning.capabilities import GRAPH_TRAVERSAL_ACTION
+from app.context_pipeline.reasoning.capabilities import GRAPH_TRAVERSAL_ACTION, TIE_RATIO
 from app.context_pipeline.reasoning.investigation import (
     InvestigationAction,
     InvestigationOutcome,
@@ -53,16 +54,6 @@ from app.context_pipeline.reasoning.memory import WorkingContext
 from app.context_pipeline.reference_detection import detect_references
 
 logger = logging.getLogger(__name__)
-
-# A runner-up repository within this fraction of the leader's relevance score
-# is treated as equally plausible, so both survive as candidates and the
-# `repository` capability's "Owning repository identified" signal stays
-# unsatisfied. Ambiguity is therefore represented as *two live inferences*,
-# not as a special-cased ambiguity flag — nothing downstream needs to know
-# the concept exists.
-_TIE_RATIO = 0.9
-
-_REPO_REFERENCE_TYPES = ("local_repository", "github_repository")
 
 
 def _reference_from_fact_value(value: dict[str, Any]) -> Reference:
@@ -144,6 +135,15 @@ class RequestParseInvestigator:
                         "text": "\n".join(
                             f.text for f in ledger.facts_of("work_item", "document") if f.text
                         ),
+                        # Same known-repository-name list `match_repository_names`
+                        # uses (empty before any repository facts exist, which is
+                        # a safe no-op — see `run()`). Without this, a ticket body
+                        # naming an indexed repository by its bare name (e.g. "Repo:
+                        # etl-core") could never be recognized here: `match_
+                        # repository_names` already ran once, against the
+                        # pre-fetch request text, and is never re-run once the
+                        # ticket body makes more names visible.
+                        "known_repositories": frozenset(ledger.subjects_of("repository")),
                         "existing": existing,
                     },
                     cost=0,
@@ -172,6 +172,33 @@ class RequestParseInvestigator:
                 )
             )
 
+        # ADR 0010 (Theme E) — a second, independent comparison against every
+        # repository the user *tracks*, not only the ones actually indexed.
+        # A request naming a tracked-but-unindexed repository used to be
+        # invisible: no match against the (indexed-only) set above, no
+        # evidence, no gap, nothing distinguishing it from a repository that
+        # was never mentioned at all. Gated on the same precondition as
+        # `match_repository_names` so both passes narrate in a coherent
+        # order and the dedup below (`existing`) already covers a name
+        # matched by *both* — see `run()`.
+        if ledger.has_fact("repository") and not ledger.attempted(
+            self.name, "match_tracked_repository_names"
+        ):
+            actions.append(
+                InvestigationAction(
+                    provider=self.name,
+                    key="match_tracked_repository_names",
+                    intent="I'll also check whether the request names a repository "
+                    "you're tracking but haven't indexed yet.",
+                    targets="repository",
+                    params={
+                        "text": state.derived.get("enriched_text") or state.metadata.goal,
+                        "existing": existing,
+                    },
+                    cost=0,
+                )
+            )
+
         return actions
 
     @staticmethod
@@ -186,9 +213,14 @@ class RequestParseInvestigator:
         self, action: InvestigationAction, session: SessionContext, recorder: Recorder
     ) -> InvestigationOutcome:
         state_text: str = action.params["text"]
-        known_repos: frozenset[str] = action.params.get("known_repositories", frozenset())
         existing: set[str] = action.params.get("existing", set())
 
+        if action.key == "match_tracked_repository_names":
+            return await self._match_tracked_repository_names(
+                state_text, existing, session, recorder
+            )
+
+        known_repos: frozenset[str] = action.params.get("known_repositories", frozenset())
         references = detect_references(state_text, known_repo_names=known_repos)
         # Only local-repository matches are new on the repository-name pass;
         # everything else was already found against the raw text and must not
@@ -218,6 +250,73 @@ class RequestParseInvestigator:
             + ".",
         )
         for ref in fresh:
+            value: dict[str, Any] = {
+                "type": ref.type.value,
+                "provider": ref.provider,
+                "confidence": ref.confidence,
+                "raw_value": ref.raw_value,
+                "normalized_value": ref.normalized_value,
+            }
+            if action.key == "match_repository_names":
+                # Explicit, not merely the absence of the Theme E marker —
+                # so `capabilities.py` never has to guess what an old fact
+                # recorded before this field existed means.
+                value["indexed"] = True
+            recorder.fact("reference", ref.normalized_value, value=value)
+
+        described = ", ".join(f"{r.normalized_value}" for r in fresh)
+        return InvestigationOutcome(
+            observation=f"I found {len(fresh)} reference(s) I can resolve: {described}.",
+            yielded=True,
+        )
+
+    @staticmethod
+    async def _match_tracked_repository_names(
+        state_text: str, existing: set[str], session: SessionContext, recorder: Recorder
+    ) -> InvestigationOutcome:
+        """ADR 0010 (Theme E) — a repository the user tracks but has never
+        indexed is otherwise invisible to the whole pipeline if the request
+        names it: `match_repository_names` above only ever compares against
+        *indexed* repositories, so a tracked-but-unindexed match produces no
+        reference, no evidence, no gap. Recording it here, with `indexed:
+        False`, is what lets `capabilities._repository_signals` phrase the
+        actionable gap ("X was mentioned but hasn't been indexed yet")
+        instead of the generic "the request does not name a known
+        repository" — no new capability, no new fact kind, just a marker on
+        the same `reference` fact kind every other pass already uses.
+        """
+        from sqlalchemy import select
+
+        from app.models.repository import Repository
+
+        result = await session.db.execute(
+            select(Repository.name).where(Repository.user_id == session.user_id)
+        )
+        tracked_names = frozenset(name for (name,) in result.all())
+
+        references = [
+            r
+            for r in detect_references(state_text, known_repo_names=tracked_names)
+            if r.type == ReferenceType.LOCAL_REPOSITORY
+        ]
+        fresh = [r for r in references if r.normalized_value not in existing]
+
+        looked_for = (
+            f"Checked the request against the {len(tracked_names)} tracked repository name(s)"
+        )
+        if not fresh:
+            recorder.evidence("not_found", f"{looked_for} — nothing new found.")
+            return InvestigationOutcome(
+                observation=f"{looked_for} — nothing new to flag.", yielded=False
+            )
+
+        recorder.evidence(
+            "success",
+            f"{looked_for} — found "
+            + ", ".join(f"{r.normalized_value} (not indexed)" for r in fresh)
+            + ".",
+        )
+        for ref in fresh:
             recorder.fact(
                 "reference",
                 ref.normalized_value,
@@ -227,12 +326,16 @@ class RequestParseInvestigator:
                     "confidence": ref.confidence,
                     "raw_value": ref.raw_value,
                     "normalized_value": ref.normalized_value,
+                    "indexed": False,
                 },
             )
 
-        described = ", ".join(f"{r.normalized_value}" for r in fresh)
+        described = ", ".join(r.normalized_value for r in fresh)
         return InvestigationOutcome(
-            observation=f"I found {len(fresh)} reference(s) I can resolve: {described}.",
+            observation=(
+                f"I found {len(fresh)} repository name(s) you're tracking but haven't "
+                f"indexed: {described}."
+            ),
             yielded=True,
         )
 
@@ -240,6 +343,74 @@ class RequestParseInvestigator:
 # ---------------------------------------------------------------------------
 # Jira
 # ---------------------------------------------------------------------------
+
+# Section headers a real ticket description commonly uses, matched
+# case-insensitively at the start of their own line, optionally followed
+# by a colon — e.g. "Acceptance Criteria:", "AC", "Business Goal". Purely
+# a line-boundary/heading match, never a semantic guess at what a
+# paragraph "is about" — the same deterministic, no-inference precedent
+# as the rest of this codebase's extraction (ADR 0007). A ticket that
+# doesn't use any of these headings yields no structured sections at
+# all, which is the honest outcome — this is a real-format-detector, not
+# a paraphraser that invents structure a ticket never had.
+_TICKET_SECTION_HEADERS: dict[str, tuple[str, ...]] = {
+    "problem": ("problem", "problem statement", "issue", "bug"),
+    "business_goal": ("business goal", "goal", "objective", "business objective"),
+    "acceptance_criteria": ("acceptance criteria", "ac", "definition of done", "dod"),
+    "constraints": ("constraints", "known constraints", "limitations"),
+    "dependencies": ("dependencies", "depends on", "blocked by"),
+}
+
+_ALL_SECTION_ALIASES = [h for headers in _TICKET_SECTION_HEADERS.values() for h in headers]
+# Matches a heading at the start of its own line, in either common ticket
+# style: alone on its own line ("Acceptance Criteria" / "Acceptance
+# Criteria:", content follows on subsequent lines), or with the content
+# starting immediately after a colon on the SAME line ("Acceptance
+# Criteria: user can log in"). Group 2 (the optional inline remainder)
+# only participates when a colon is actually present — a bare heading
+# word followed by unrelated prose on the same line ("Goal is unclear
+# without more info") has no colon, so `$` must match right after the
+# heading itself and correctly fails to match at all.
+_SECTION_HEADER_RE = re.compile(
+    r"^\s*(" + "|".join(re.escape(h) for h in _ALL_SECTION_ALIASES) + r")\s*(?::[ \t]*(.*))?$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _extract_ticket_sections(description: str) -> dict[str, str]:
+    """Split a ticket description into the structured sections a real
+    engineer would look for (Problem, Business Goal, Acceptance Criteria,
+    Constraints, Dependencies) — by real section-heading lines the
+    description itself contains, never by summarizing/inferring content
+    with an LLM. A ticket that doesn't use any of these headings (plain
+    prose, no structure) returns an empty dict — the honest outcome; the
+    raw description is still available in full via the `work_item`
+    fact's own `text`, this is additive, not a replacement.
+    """
+    if not description:
+        return {}
+
+    matches = list(_SECTION_HEADER_RE.finditer(description))
+    if not matches:
+        return {}
+
+    header_by_alias = {
+        alias.lower(): key for key, aliases in _TICKET_SECTION_HEADERS.items() for alias in aliases
+    }
+
+    sections: dict[str, str] = {}
+    for i, match in enumerate(matches):
+        key = header_by_alias.get(match.group(1).strip().lower())
+        if key is None:
+            continue
+        inline = (match.group(2) or "").strip()
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(description)
+        rest = description[start:end].strip()
+        content = f"{inline}\n{rest}".strip() if inline and rest else (inline or rest)
+        if content:
+            sections[key] = content
+    return sections
 
 
 class JiraInvestigator:
@@ -322,10 +493,27 @@ class JiraInvestigator:
             )
 
         recorder.evidence("success", f"Retrieved Jira issue {reference.normalized_value}.")
+        # `artifact.raw` already carries the structured fields JiraTool's
+        # own result had (summary/description/status/issue_type/priority/
+        # labels) — previously discarded in favor of only the combined
+        # `context_text`. `sections` is this same description, further
+        # split by whatever real section headings it contains (Problem,
+        # Business Goal, Acceptance Criteria, Constraints, Dependencies —
+        # see `_extract_ticket_sections`), so "Business Objective" and
+        # "Acceptance Criteria" are answerable without an LLM re-reading
+        # the raw ticket text every time.
+        description = str(artifact.raw.get("description", ""))
         recorder.fact(
             "work_item",
             reference.normalized_value,
-            value={"title": artifact.title},
+            value={
+                "title": artifact.title,
+                "status": artifact.raw.get("status", ""),
+                "issue_type": artifact.raw.get("issue_type", ""),
+                "priority": artifact.raw.get("priority", ""),
+                "labels": artifact.raw.get("labels", []),
+                "sections": _extract_ticket_sections(description),
+            },
             text=artifact.text,
         )
         return InvestigationOutcome(
@@ -648,8 +836,19 @@ class GraphInvestigator:
 
         # -- verify: a human claim outranks everything else, because until
         # it's checked the engine is holding an unverified belief.
+        #
+        # Scoped to `repository` claims only: a claimed gap on *any*
+        # capability used to reach this loop, so answering a work_item
+        # clarification question (a corrected Jira key) was treated as a
+        # repository name to verify. That ran a real graph query for a
+        # ticket key, narrated a nonsensical "You pointed me at 'PROJ-456'"
+        # intent, and — because `_reassess_candidates` unconditionally
+        # withdraws every live `repository_candidate` inference before
+        # deciding whether the focus matched anything — silently destroyed
+        # an already-correct, already-satisfied repository identification
+        # any time an unrelated claim was being settled.
         for gap in state.gaps:
-            if gap.status != "claimed" or not gap.user_claim:
+            if gap.capability != "repository" or gap.status != "claimed" or not gap.user_claim:
                 continue
             key = f"verify_repository:{gap.user_claim}"
             if ledger.attempted(self.name, key):
@@ -759,6 +958,13 @@ class GraphInvestigator:
                     "user_id": session.user_id,
                     "relevance_terms": terms,
                     "graph_repo": session.graph_repo_override,
+                    # A "scope"/"verify" action already knows which
+                    # repository this is about — restrict traversal to it
+                    # instead of re-fetching every OTHER indexed
+                    # repository's full component list too. A genuine
+                    # "survey" (focus is None) still traverses everything,
+                    # which is the one case that legitimately needs to.
+                    "repository_filter": [focus] if focus else None,
                 },
             )
         )
@@ -814,9 +1020,22 @@ class GraphInvestigator:
         if components or topics:
             derived["graph_context_text"] = ContextBuilder().build([result]).context_text
 
-        observation, ranked = self._reassess_candidates(
+        observation, ranked = self._record_observations(
             recorder, repo_facts, components, terms, focus
         )
+        recorded_relationships = self._record_relationships(
+            recorder, result.data.get("cross_repository_edges", []), repo_facts, repos_evidence
+        )
+        if recorded_relationships:
+            # Purely descriptive: these are relationships *observed*, not
+            # relationships *promoted* into suggestions — deciding which of
+            # them become a suggested candidate is `capabilities.resync_
+            # relationship_candidates`'s job, not this investigator's (ADR
+            # 0010, invariant I1). This never claims more than was recorded.
+            observation += (
+                f" Found {len(recorded_relationships)} relationship(s) to other repositories "
+                "in the knowledge graph."
+            )
         if ranked:
             # The full relevance ordering of every indexed repository, best
             # first — distinct from the candidate shortlist. Planning consumes
@@ -882,8 +1101,7 @@ class GraphInvestigator:
                 logger.warning("context_discovery_graph_budget_exhausted error=%s", error)
                 recorder.evidence(
                     "unavailable",
-                    "Reached this run's graph read budget, so no further traversal was "
-                    "performed.",
+                    "Reached this run's graph read budget, so no further traversal was performed.",
                     action=GRAPH_TRAVERSAL_ACTION,
                 )
                 return
@@ -925,7 +1143,7 @@ class GraphInvestigator:
                 unique_on=("repository",),
             )
 
-    def _reassess_candidates(
+    def _record_observations(
         self,
         recorder: Recorder,
         repo_facts: list[Any],
@@ -933,22 +1151,20 @@ class GraphInvestigator:
         terms: list[str],
         focus: str | None,
     ) -> tuple[str, list[str]]:
-        """Re-derive which repositories are plausible implementation sites.
+        """Record what this query observed about repository ranking —
+        nothing more. Interpretation of what these observations mean for
+        candidacy (explicit/suggested, single-leader-vs-tie) belongs
+        exclusively to `capabilities.LEDGER_RESYNC_HOOKS` (ADR 0010,
+        invariant I1) — this method writes only `Fact`s (via `recorder`,
+        which has no way to write an `Inference` at all) and returns
+        human-readable narration.
 
-        Candidates are *inferences* citing repository facts, never facts
-        themselves — "this is where the work probably goes" is an
-        interpretation, and keeping it on the inference side of the ledger is
-        what stops it from being read back later as established truth.
-
-        Ambiguity needs no special representation: two surviving candidates
-        leave `repository`'s "Owning repository identified" signal
-        unsatisfied, which is what eventually produces the question. One
-        surviving candidate satisfies it.
+        Returns `(observation, ranked_names)` — `ranked_names` is the full
+        relevance ordering of every indexed repository, best first (or, for
+        a focused query, the focused repository first and the rest stably
+        ordered); Planning consumes this positionally regardless of what
+        became a candidate.
         """
-        # Superseded, not deleted — a later scoped query replaces an earlier
-        # broad query's shortlist.
-        recorder.withdraw("repository_candidate")
-
         if not repo_facts:
             return (
                 "No repositories are indexed in the knowledge graph, so I can't tell which "
@@ -959,9 +1175,11 @@ class GraphInvestigator:
         by_name = {f.subject: f for f in repo_facts}
 
         # A verification/scoping query names its target explicitly: if the
-        # graph confirms that repository exists, it *is* the candidate, cited
-        # to the fact proving it exists. No ranking heuristic needed, and no
-        # fabricated fallback when the name isn't there.
+        # graph confirms that repository exists, the `repository` fact
+        # already recorded above *is* the observation — nothing further to
+        # record here. No ranking is computed for a focused query, matching
+        # what a focused query has always meant: "tell me about this one,"
+        # not "rank everything."
         if focus is not None:
             match = by_name.get(focus)
             if match is None:
@@ -970,15 +1188,10 @@ class GraphInvestigator:
                     f"what I do have is: {', '.join(sorted(by_name))}.",
                     [],
                 )
-            recorder.inference("repository_candidate", focus, [match])
             # The confirmed repository leads the ordering; the rest keep a
             # stable position so Planning's per-repository star ranking still
             # covers every indexed repository.
             rest = sorted(n for n in by_name if n != focus)
-            # Say what the traversal actually returned. "Traversed it for
-            # architecture" read as success even when the repository turned out
-            # to hold nothing, which is the one case the user most needs to know
-            # about.
             observation = (
                 f"Confirmed '{focus}' is indexed, and traversed it for architecture."
                 if components
@@ -988,21 +1201,8 @@ class GraphInvestigator:
 
         if len(by_name) == 1:
             only = next(iter(by_name.values()))
-            recorder.inference("repository_candidate", only.subject, [only])
-            # Reasoning from absence, not from a match: nothing in the request
-            # actually pointed at this repository, it is simply the only one
-            # indexed. That is an assumption and is recorded as one, so the user
-            # sees it stated rather than discovering later that "the repository"
-            # was a default.
-            recorder.inference(
-                "assumption",
-                f"This work belongs to '{only.subject}' — it is the only indexed repository, "
-                "not something the request named.",
-                [only],
-            )
             return (
-                f"Only one repository is indexed — '{only.subject}' — "
-                "so that's the one I'll use.",
+                f"Only one repository is indexed — '{only.subject}' — so that's the one I'll use.",
                 [only.subject],
             )
 
@@ -1019,11 +1219,16 @@ class GraphInvestigator:
             scored = []
 
         ranked = [name for _score, name in scored]
+        # Recorded even when nothing scored — `resync_ranked_candidates`
+        # needs to see "we tried, nothing matched" as much as a real ranking,
+        # and a fact is the only honest way to say that happened.
+        recorder.fact(
+            "repository_ranking",
+            "ranking",
+            value={"scored": [[score, name] for score, name in scored]},
+        )
+
         if not scored or scored[0][0] <= 0:
-            # Nothing in the request matched anything in the graph. Honest
-            # outcome: no *candidate* at all, rather than arbitrarily promoting
-            # whichever repository happened to sort first. The ranking is still
-            # returned — it is an ordering, not a claim of ownership.
             return (
                 f"I found {len(by_name)} indexed repositories but nothing in the request "
                 "matches any of them strongly enough for me to pick one.",
@@ -1031,35 +1236,72 @@ class GraphInvestigator:
             )
 
         top_score = scored[0][0]
-        leaders = [name for score, name in scored if score >= top_score * _TIE_RATIO]
-        for name in leaders:
-            fact = by_name.get(name)
-            if fact is not None:
-                recorder.inference("repository_candidate", name, [fact])
-
+        leaders = [name for score, name in scored if score >= top_score * TIE_RATIO]
         if len(leaders) == 1:
-            leader_fact = by_name.get(leaders[0])
-            if leader_fact is not None and not any(
-                f.subject == leaders[0]
-                for f in recorder.facts_of("reference")
-                if f.value.get("type") in _REPO_REFERENCE_TYPES
-            ):
-                # Chosen by component-name relevance, not because the request
-                # named it. Worth stating: relevance ranking is a heuristic, and
-                # a user who disagrees can only push back if they know it was a
-                # judgement rather than a lookup.
-                recorder.inference(
-                    "assumption",
-                    f"This work belongs to '{leaders[0]}' — inferred from how closely its "
-                    "components match the request, which did not name a repository.",
-                    [leader_fact],
-                )
             return f"'{leaders[0]}' is the clear match for this request.", ranked
         return (
             f"{len(leaders)} repositories score almost identically for this request: "
             f"{', '.join(leaders)}.",
             ranked,
         )
+
+    @staticmethod
+    def _relationship_reason(source_repo: str, rel_type: str, properties: dict[str, Any]) -> str:
+        if rel_type == "CALLS_SERVICE":
+            return f"Called by {source_repo} via a Feign client."
+        if rel_type == "SHARES_TOPIC":
+            topics = properties.get("topics") or []
+            topic_text = ", ".join(f"'{t}'" for t in topics) if topics else "a Kafka topic"
+            return f"Shares Kafka topic {topic_text} with {source_repo}."
+        if rel_type == "DEPENDS_ON_REPOSITORY":
+            return f"{source_repo} declares a dependency matching this repository's name."
+        return f"Related to {source_repo} in the knowledge graph."
+
+    def _record_relationships(
+        self,
+        recorder: Recorder,
+        cross_repository_edges: list[dict[str, Any]],
+        repo_facts: list[Any],
+        repos_evidence: Any,
+    ) -> list[str]:
+        """Record a `repository_relationship` fact for *every* real
+        cross-repository graph edge observed (see
+        `app.indexer.graph.cross_repo_linker`), unconditionally — this sole
+        renderer of `reason` text (`_relationship_reason`) stores it onto the
+        fact so `capabilities.resync_relationship_candidates` never needs to
+        recompute it or call back into this module.
+
+        Deciding *which* of these ever becomes a suggested candidate (only
+        ever from an already-explicit source, per ADR 0010 Theme A) is not
+        this method's job — it happens later, in the resync hook, which can
+        run on a cycle after this one recorded the fact. Recording every edge
+        here regardless of whether its source is explicit *yet* is exactly
+        what closes the ordering gap the original implementation had.
+        """
+        by_name = {f.subject: f for f in repo_facts}
+        recorded: list[str] = []
+        for edge in cross_repository_edges:
+            source_repo = str(edge.get("source_repository", ""))
+            target_repo = str(edge.get("target_repository", ""))
+            if not source_repo or target_repo not in by_name:
+                continue
+            rel_type = str(edge.get("type", ""))
+            properties = dict(edge.get("properties") or {})
+            reason = self._relationship_reason(source_repo, rel_type, properties)
+            fact = recorder.fact_once(
+                "repository_relationship",
+                target_repo,
+                value={
+                    "via": rel_type,
+                    "source_repository": source_repo,
+                    "reason": reason,
+                    **properties,
+                },
+                evidence=repos_evidence,
+                unique_on=("via", "source_repository"),
+            )
+            recorded.append(fact.subject)
+        return recorded
 
 
 class TestCoverageInvestigator:
@@ -1171,3 +1413,140 @@ def default_investigators() -> list[Any]:
         GoogleDriveInvestigator(),
         TestCoverageInvestigator(),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Curation — the new stage that runs once, after the investigation loop
+# exits (see engine.investigate), turning the flat `component` facts
+# GraphInvestigator already gathered into a bounded, tiered
+# `EvidencePackage` instead of a raw, unranked dump (see
+# app.context_pipeline.reasoning.curation's own module docstring for the
+# real bug this closes).
+#
+# Not an Investigator: it proposes nothing and never competes for a
+# reasoning cycle's action slot — the necessity-ranked action selection
+# in engine._select is for gathering facts, and this runs deterministically
+# once gathering is already finished, over whatever facts exist by then.
+# ---------------------------------------------------------------------------
+
+_NEIGHBORHOOD_EDGE_TYPES = ("CALLS", "IMPORTS", "INHERITS_FROM", "CONTAINS")
+_NEIGHBORHOOD_MAX_HOPS = 2
+
+
+def _primary_repository(state: WorkingContext) -> str | None:
+    """The single repository the bounded-neighborhood fetch is scoped to
+    — the redesign's own "Primary Repository: 1" concept, not every
+    repository the request touches. Prefers an explicit/live candidate
+    (ADR 0010) in ranked order; falls back to the top of the raw
+    relevance ranking when no candidate has resolved yet.
+
+    Candidate order is preserved from the ledger (insertion order, via
+    `dict.fromkeys` — not a `set`, whose iteration order is not something
+    this codebase should ever depend on): this function must return the
+    same repository on every call over the same state, matching the
+    engine's own deterministic-and-reproducible design (see engine.py's
+    module docstring on `_select` never being an LLM call for the same
+    reason). A `set`-backed fallback here would pick a repository whose
+    identity varies across process restarts (Python's string hashing is
+    randomized per-process) whenever no ranking covers any candidate —
+    rare, but a real reproducibility bug once it does happen.
+    """
+    candidates = list(
+        dict.fromkeys(i.statement for i in state.ledger.live_inferences("repository_candidate"))
+    )
+    ranked: list[str] = state.derived.get("ranked_repositories") or []
+    for name in ranked:
+        if name in candidates:
+            return name
+    if candidates:
+        return candidates[0]
+    return ranked[0] if ranked else None
+
+
+def _target_repositories(state: WorkingContext) -> list[str]:
+    """Every repository under consideration — used for the ownership
+    bonus in `curate()`, deliberately broader than `_primary_repository`
+    (a component in a *related*, non-primary repository can still score
+    as an architecture dependency, it just never seeds the neighborhood
+    traversal itself)."""
+    return [i.statement for i in state.ledger.live_inferences("repository_candidate")]
+
+
+async def curate_evidence(state: WorkingContext, session: SessionContext) -> None:
+    """Compute `state.derived["evidence_package"]` from the component
+    facts already gathered — see the module-level comment above for why
+    this runs once, deterministically, rather than as another proposed
+    investigation action.
+
+    Degrades gracefully, never raises: a failed or skipped neighborhood
+    fetch (no primary repository identified yet, no anchor found, the
+    graph read itself failing) still produces a valid `EvidencePackage`
+    — relevance/repository-ownership/test-penalty scoring alone, with
+    every component's `proximity_score` at 0 rather than a fabricated
+    value. An empty anchor set is a real, honest outcome (see
+    `select_anchor_ids`'s own docstring) — nothing here manufactures a
+    neighborhood to compensate for one not being found.
+    """
+    from app.context_pipeline.reasoning.curation import EvidencePackage, curate, select_anchor_ids
+    from app.graph.neo4j_repository import Neo4jGraphRepository
+    from app.graph.session import get_driver
+
+    components = [dict(f.value) for f in state.ledger.facts_of("component")]
+    if not components:
+        state.derived["evidence_package"] = EvidencePackage().model_dump()
+        return
+
+    enriched_text = state.derived.get("enriched_text", "")
+    target_repos = _target_repositories(state)
+    primary_repository = _primary_repository(state)
+
+    neighborhood_nodes: list[dict[str, Any]] = []
+    if primary_repository:
+        anchor_ids = select_anchor_ids(components, enriched_text, primary_repository)
+        if anchor_ids:
+            repository_id = anchor_ids[0].split(":", 1)[0]
+            graph_repo = session.graph_repo_override or Neo4jGraphRepository(get_driver())
+            try:
+                payload = await graph_repo.get_neighborhood(
+                    repository_id,
+                    anchor_ids,
+                    list(_NEIGHBORHOOD_EDGE_TYPES),
+                    _NEIGHBORHOOD_MAX_HOPS,
+                )
+                neighborhood_nodes = [
+                    {"id": node.id, "hop_distance": node.properties.get("hop_distance")}
+                    for node in payload.nodes
+                ]
+                state.ledger.add_evidence(
+                    provider="graph",
+                    action="get_neighborhood",
+                    outcome="success" if neighborhood_nodes else "not_found",
+                    summary=(
+                        f"Traversed {_NEIGHBORHOOD_MAX_HOPS} hops from {len(anchor_ids)} "
+                        f"component(s) named in the request — found {len(neighborhood_nodes)} "
+                        f"connected component(s) in '{primary_repository}'."
+                    ),
+                    iteration=state.metadata.iteration,
+                )
+            except Exception:
+                logger.exception(
+                    "context_discovery_curation_neighborhood_failed repository=%s",
+                    primary_repository,
+                )
+                state.ledger.add_evidence(
+                    provider="graph",
+                    action="get_neighborhood",
+                    outcome="failed",
+                    summary=(
+                        f"Could not traverse the architecture graph around '{primary_repository}'."
+                    ),
+                    iteration=state.metadata.iteration,
+                )
+
+    package = curate(
+        components=components,
+        neighborhood_nodes=neighborhood_nodes,
+        enriched_text=enriched_text,
+        target_repositories=target_repos,
+    )
+    state.derived["evidence_package"] = package.model_dump()

@@ -42,7 +42,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
-import time
+from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -57,6 +57,7 @@ from app.agents._contract import (
     Evidence,
 )
 from app.agents.blueprint.factory import BlueprintFactory
+from app.agents.component_grounding import check_test_used_as_production, to_contract_warnings
 from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.llm import STAGE_PLANNING, invoke_llm_json, stage_for
 from app.agents.planning.classifier import PlanningProfile, analyse, pattern_for_key
@@ -74,7 +75,7 @@ from app.agents.planning.schemas import (
 from app.agents.planning.tools import stars_for_rank
 from app.agents.prompt_utils import parse_json_response, render_prompt_template
 from app.agents.reflection import run_with_reflection
-from app.ai.providers.pricing import estimate_cost_usd
+from app.context_pipeline.reasoning.curation import EvidencePackage, render_evidence_package_text
 from app.context_pipeline.reasoning.engine import discover
 from app.context_pipeline.reasoning.investigation import SessionContext
 from app.context_pipeline.reasoning.projection import build_result, to_contract_evidence
@@ -122,6 +123,9 @@ async def _call_llm(
     model: str | None = None,
     _metadata_out: dict[str, Any] | None = None,
     stage: str = STAGE_PLANNING,
+    context: AgentContext | None = None,
+    purpose: str = "initial",
+    sequence: int = 0,
 ) -> str:
     """Send a single JSON-mode completion through the AI configuration layer
     and return the raw content string.
@@ -169,6 +173,9 @@ async def _call_llm(
         model=model,
         error_cls=PlanningLLMError,
         metadata_out=_metadata_out,
+        context=context,
+        purpose=purpose,
+        sequence=sequence,
     )
 
 
@@ -384,10 +391,74 @@ class _ResolvedContext:
     graph_components: list[dict[str, Any]]
     graph_topics: list[dict[str, Any]]
     ranked_repo_names: list[str]
+    # The confirmed set of repositories this work touches — Context
+    # Discovery's explicit-plus-human-selected repositories (or, for a
+    # result persisted before multi-repository selection existed, the
+    # single repository the old single-candidate behavior would have used).
+    # Always non-empty when `ranked_repo_names` is; `ranked_repo_names[0]`
+    # remains in here as element `[0]` whenever selection couldn't be
+    # determined, so every existing single-repo caller of `ranked_repo_
+    # names[0]` keeps working unchanged.
+    selected_repo_names: list[str]
     graph_context_text: str
     graph_available: bool
     graph_has_data: bool
     evidence: list[Evidence]
+
+
+def _selected_repo_names(result: dict[str, Any], ranked_repo_names: list[str]) -> list[str]:
+    """The repositories Planning should treat as confirmed for this work.
+
+    `repositories` (ADR 0010 §2's canonical model) is checked first and, if
+    present, is authoritative — `selected` is re-derived from it directly
+    rather than trusted from the stored `selected_repositories` projection
+    key, because a human override always targets `repositories` itself
+    (`_OVERRIDABLE_FIELDS["context_discovery"]` in `workflow_service.py`)
+    and `get_stage_result()`'s merge is a shallow dict replace: it never
+    recomputes `selected_repositories` after `repositories` changes, so
+    trusting the stored projection would silently ignore an override
+    (invariant I6).
+
+    For a result persisted before `repositories` existed, the fallback
+    chain continues through `selected_repositories`, then the older
+    `implementation_candidates` (a single-candidate result predating
+    multi-repository selection), then `ranked_repo_names[:1]` (a result
+    predating even that) — every step a real prior schema this codebase has
+    shipped, so an old persisted `AgentStep.result` always resolves to
+    *something* rather than an empty selection.
+    """
+    if "repositories" in result:
+        names = [
+            str(r.get("name", ""))
+            for r in (result.get("repositories") or [])
+            if r.get("selected")
+        ]
+        return names or ranked_repo_names[:1]
+    selected = result.get("selected_repositories")
+    if selected:
+        names = [str(r.get("name", "")) for r in selected if r.get("name")]
+        if names:
+            return names
+    candidates = result.get("implementation_candidates")
+    if candidates:
+        return list(candidates)
+    return ranked_repo_names[:1]
+
+
+def _graph_context_text_from(result: dict[str, Any]) -> str:
+    """The graph-context text this stage's prompt actually uses — the
+    curated `evidence_package` rendering when Context Discovery produced
+    one (see reasoning.curation.render_evidence_package_text), falling
+    back to the older, unranked `graph_context_text` only for a run that
+    predates curation or where curation found no components at all to
+    work with. This is the fix for "Planning receives hundreds of
+    components instead of actionable knowledge": the prompt itself now
+    contains only what `curate()` decided matters, not a raw dump.
+    """
+    package = result.get("evidence_package")
+    if package and package.get("items"):
+        return render_evidence_package_text(EvidencePackage.model_validate(package))
+    return result.get("graph_context_text") or ""
 
 
 async def _resolve_context(context: AgentContext, db: AsyncSession) -> _ResolvedContext:
@@ -411,14 +482,16 @@ async def _resolve_context(context: AgentContext, db: AsyncSession) -> _Resolved
             len(context_discovery_result.get("graph_components") or []),
             len(context_discovery_result.get("graph_topics") or []),
         )
+        ranked_repo_names = context_discovery_result.get("ranked_repository_names") or []
         return _ResolvedContext(
             task_description=enriched_text,
             profile=analyse(enriched_text),
             indexed_repos=context_discovery_result.get("indexed_repositories") or [],
             graph_components=context_discovery_result.get("graph_components") or [],
             graph_topics=context_discovery_result.get("graph_topics") or [],
-            ranked_repo_names=context_discovery_result.get("ranked_repository_names") or [],
-            graph_context_text=context_discovery_result.get("graph_context_text") or "",
+            ranked_repo_names=ranked_repo_names,
+            selected_repo_names=_selected_repo_names(context_discovery_result, ranked_repo_names),
+            graph_context_text=_graph_context_text_from(context_discovery_result),
             graph_available=bool(context_discovery_result.get("graph_available")),
             graph_has_data=bool(context_discovery_result.get("graph_has_data")),
             evidence=[
@@ -482,7 +555,8 @@ async def _resolve_context(context: AgentContext, db: AsyncSession) -> _Resolved
         graph_components=discovered["graph_components"],
         graph_topics=discovered["graph_topics"],
         ranked_repo_names=discovered["ranked_repository_names"],
-        graph_context_text=discovered["graph_context_text"],
+        selected_repo_names=_selected_repo_names(discovered, discovered["ranked_repository_names"]),
+        graph_context_text=_graph_context_text_from(discovered),
         graph_available=discovered["graph_available"],
         graph_has_data=discovered["graph_has_data"],
         # Own copy: the agent appends its own reasoning/verification evidence
@@ -543,6 +617,7 @@ class PlanningAgent:
         graph_components: list[dict[str, Any]] = resolved.graph_components
         graph_topics: list[dict[str, Any]] = resolved.graph_topics
         ranked_repo_names: list[str] = resolved.ranked_repo_names
+        selected_repo_names: list[str] = resolved.selected_repo_names
         component_count = len(graph_components)
         topic_count = len(graph_topics)
 
@@ -561,6 +636,9 @@ class PlanningAgent:
         # the LLM's specific claims before showing them to a reviewer.
         # ------------------------------------------------------------------
         verification_warnings: list[str] = []
+        # Structured counterpart populated below by
+        # check_test_used_as_production — see PlanningResult.component_warnings.
+        component_warnings: list[Any] = []
         if ranked_repo_names:
             mismatch = verification.check_entity_mismatch(task_description, ranked_repo_names[0])
             if mismatch:
@@ -607,12 +685,17 @@ class PlanningAgent:
             for repo, comps in components_by_repo.items()
         }
 
-        def _owning_repo(claim: str, exclude: str | None) -> str | None:
+        def _owning_repo(claim: str, exclude: Collection[str] | None) -> str | None:
             """Which OTHER indexed repository's own pool actually supports
             this claim, if any — lets a misattribution warning name the
-            real owner instead of just saying "not found"."""
+            real owner instead of just saying "not found". `exclude` is every
+            repository already checked (a single `repository_usage` entry's
+            own name, or the full set of selected/target repositories) —
+            never just one, now that more than one repository can be in
+            scope at once."""
+            excluded = set(exclude or ())
             for repo, pool in per_repo_pool.items():
-                if repo == exclude:
+                if repo in excluded:
                     continue
                 if verification.verify_claims([claim], pool).all_verified:
                     return repo
@@ -648,7 +731,6 @@ class PlanningAgent:
             profile.key,
         )
 
-        llm_started = time.monotonic()
         llm_metadata: dict[str, Any] = {}
         try:
             raw_response = await _call_llm(
@@ -656,6 +738,9 @@ class PlanningAgent:
                 model=context.model,
                 _metadata_out=llm_metadata,
                 stage=stage,
+                context=context,
+                purpose="initial",
+                sequence=0,
             )
             planning_result = _parse_llm_response(raw_response, original_task_description, profile)
         except PlanningLLMError as exc:
@@ -690,6 +775,9 @@ class PlanningAgent:
                 model=context.model,
                 _metadata_out=metadata_out,
                 stage=stage,
+                context=context,
+                purpose="reflection",
+                sequence=1,
             )
 
         reflection = await run_with_reflection(
@@ -721,34 +809,37 @@ class PlanningAgent:
                 )
             )
 
-        llm_latency_ms = int((time.monotonic() - llm_started) * 1000)
-
         # The actual prompt/response, not just a one-line Evidence summary —
         # capped so a pathological graph-context blowup or a runaway model
         # response can't bloat the stored Run row unboundedly. `prompt`
         # already had Jira/GitHub content redacted before this point;
         # `raw_response` is redacted here defensively in case the model
         # echoed something secret-shaped back.
-        trace_model = llm_metadata.get("model") or context.model or "default"
-        cost_estimate = estimate_cost_usd(
-            trace_model,
-            llm_metadata.get("prompt_tokens"),
-            llm_metadata.get("completion_tokens"),
-        )
+        #
+        # Every metric below is read from `llm_metadata` — the shared
+        # invocation metadata `app.agents.llm.invoke_llm_json` fills for any
+        # caller that opts in (see LLM_INVOCATION_METADATA_KEYS). This agent
+        # previously timed the call and computed the cost estimate itself;
+        # both now come from the one shared pathway, so this agent's trace
+        # and every other agent's observability report identical fields
+        # derived identically. Only the prompt/response text — genuinely
+        # Planning-specific, and deliberately not collected for every agent
+        # — is assembled here.
         planning_result.llm_trace = LLMTrace(
-            model=trace_model,
+            model=llm_metadata.get("model") or context.model or "default",
             provider=llm_metadata.get("provider", ""),
             prompt=prompt[:_MAX_TRACE_CHARS],
             raw_response=redact_secrets(raw_response[:_MAX_TRACE_CHARS]),
-            latency_ms=llm_latency_ms,
+            latency_ms=llm_metadata.get("latency_ms"),
             prompt_tokens=llm_metadata.get("prompt_tokens"),
             completion_tokens=llm_metadata.get("completion_tokens"),
             total_tokens=llm_metadata.get("total_tokens"),
-            estimated_cost_usd=cost_estimate.total_usd if cost_estimate else None,
+            estimated_cost_usd=llm_metadata.get("estimated_cost_usd"),
         )
 
         # Back-fill repositories_consulted from the graph traversal
         planning_result.repositories_consulted = [r["name"] for r in indexed_repos]
+        planning_result.target_repositories = list(selected_repo_names)
 
         # Never trust the LLM's self-reported graph_context_used — derive it
         # from what the tools actually returned. If traversal failed or the
@@ -784,7 +875,7 @@ class PlanningAgent:
             )
             verified_file_paths.extend(files_check.verified)
             for path in files_check.unverified:
-                owner = _owning_repo(path, exclude=usage.name)
+                owner = _owning_repo(path, exclude={usage.name})
                 if owner:
                     verification_warnings.append(
                         f"File '{path}' claimed for '{usage.name}' is indexed under "
@@ -805,21 +896,60 @@ class PlanningAgent:
             verification_warnings.append(reuse_mismatch)
 
         # `affected_components` is plan-wide rather than per-repository, so
-        # it's checked against the top-ranked (target) repository's own
-        # pool — the repository the plan is actually about — falling back
-        # to the pooled evidence only when nothing was ranked at all.
-        target_repo = ranked_repo_names[0] if ranked_repo_names else None
-        target_pool = per_repo_pool.get(target_repo, set()) if target_repo else evidence_pool
+        # it's checked against the *union* of every confirmed target
+        # repository's own pool — the repositories the plan is actually
+        # about, however many there are — falling back to the pooled
+        # evidence only when nothing was ranked/selected at all. A single
+        # selected repository (today's exact prior behavior) reduces this
+        # to exactly the old single-`target_repo` check.
+        target_repos: list[str] = selected_repo_names or (
+            [ranked_repo_names[0]] if ranked_repo_names else []
+        )
+        target_pool: set[str] = set()
+        for repo in target_repos:
+            target_pool |= per_repo_pool.get(repo, set())
+        if not target_repos:
+            target_pool = evidence_pool
+
+        # Test-vs-production validation (see app.agents.component_grounding):
+        # runs BEFORE the existence check below, on the raw LLM output, so a
+        # test class named as production code is rejected/replaced first —
+        # `verify_claims` only knows how to ask "does this exist", and a
+        # real test class always answers yes to that question. This is what
+        # a real run needed and didn't have: `TestSCDType2Merger`/
+        # `TestExactDeduplicator` existed in the graph (they're real test
+        # classes), so the existence check below passed them every time.
+        corrected_components, test_as_prod_warnings = check_test_used_as_production(
+            planning_result.affected_components, graph_components, task_description
+        )
+        if test_as_prod_warnings:
+            planning_result.affected_components = corrected_components
+            component_warnings.extend(test_as_prod_warnings)
+            verification_warnings.extend(w.message for w in test_as_prod_warnings)
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="component_grounding",
+                    summary=(
+                        f"{len(test_as_prod_warnings)} affected component(s) named a test "
+                        "class instead of the production code it tests — corrected against "
+                        "this run's own indexed graph data: "
+                        + "; ".join(w.message for w in test_as_prod_warnings)
+                    ),
+                )
+            )
+
         components_check = verification.verify_claims(
             planning_result.affected_components, target_pool
         )
         for name in components_check.unverified:
-            owner = _owning_repo(name, exclude=target_repo)
+            owner = _owning_repo(name, exclude=target_repos)
             if owner:
                 verification_warnings.append(
                     f"Affected component '{name}' is indexed under '{owner}', not "
-                    f"under the target repository '{target_repo}' — likely "
-                    "misattributed to the wrong repository."
+                    f"under any of the target repositories "
+                    f"({', '.join(target_repos) or 'none'}) — likely misattributed to "
+                    "the wrong repository."
                 )
             else:
                 verification_warnings.append(
@@ -852,6 +982,7 @@ class PlanningAgent:
             )
 
         planning_result.verification_warnings = verification_warnings
+        planning_result.component_warnings = to_contract_warnings(component_warnings)
         if verification_warnings:
             evidence.append(
                 Evidence(

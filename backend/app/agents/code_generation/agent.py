@@ -88,7 +88,11 @@ class CodeGenerationRepositoryError(AppError):
 
 
 async def _call_llm(
-    user_prompt: str, model: str | None = None, stage: str = STAGE_GENERATE_CODE
+    user_prompt: str,
+    model: str | None = None,
+    stage: str = STAGE_GENERATE_CODE,
+    _metadata_out: dict[str, Any] | None = None,
+    context: AgentContext | None = None,
 ) -> str:
     """Delegates to the shared `app.agents.llm.invoke_llm_json` — kept as a
     module-level function so existing test seams
@@ -99,6 +103,8 @@ async def _call_llm(
         stage=stage,
         model=model,
         error_cls=CodeGenerationLLMError,
+        metadata_out=_metadata_out,
+        context=context,
     )
 
 
@@ -305,10 +311,13 @@ class CodeGenerationAgent:
         prompt = _render_prompt(blueprint_context)
 
         try:
+            llm_metadata: dict[str, Any] = {}
             raw_response = await _call_llm(
                 user_prompt=prompt,
                 model=context.model,
                 stage=stage_for(context.extras, STAGE_GENERATE_CODE),
+                _metadata_out=llm_metadata,
+                context=context,
             )
         except CodeGenerationLLMError as exc:
             logger.error("code_generation_agent_llm_failed error=%s", str(exc))

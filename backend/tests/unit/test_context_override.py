@@ -316,6 +316,55 @@ async def test_override_rejects_an_empty_correction() -> None:
 
 
 @pytest.mark.asyncio
+async def test_override_accepts_the_canonical_repositories_field() -> None:
+    """ADR 0010 §2 — `repositories` is the one repository-shaped field a
+    human correction may target. `RepositorySelector.tsx`'s save action
+    sends exactly this shape."""
+    workflow = _make_workflow_with_completed_stage(
+        "context_discovery",
+        {"repositories": [{"name": "payment-service", "source": "explicit", "selected": True}]},
+    )
+    mock_db = AsyncMock()
+    override = {
+        "repositories": [
+            {"name": "payment-service", "source": "explicit", "selected": True},
+            {"name": "billing-service", "source": "suggested", "selected": True},
+        ]
+    }
+
+    await override_stage_result(mock_db, workflow, "context_discovery", override, uuid.uuid4())
+
+    effective = get_stage_result(workflow, "context_discovery")
+    assert effective["repositories"] == override["repositories"]
+
+
+@pytest.mark.asyncio
+async def test_override_rejects_every_repository_projection_field() -> None:
+    """ADR 0010, invariant I6 — a human correction may never target a
+    projection field directly; each is derived exclusively from
+    `repositories` by `reasoning.projection.project_repositories`. Allowing
+    any of these here would let an override silently disagree with the
+    canonical field it's supposed to be derived from."""
+    workflow = _make_workflow_with_completed_stage(
+        "context_discovery", {"repositories": [], "ranked_repository_names": []}
+    )
+    mock_db = AsyncMock()
+
+    for forged_field in (
+        "selected_repositories",
+        "explicit_repositories",
+        "suggested_repositories",
+        "ranked_repository_names",
+        "implementation_candidates",
+    ):
+        with pytest.raises(AppError) as excinfo:
+            await override_stage_result(
+                mock_db, workflow, "context_discovery", {forged_field: []}, uuid.uuid4()
+            )
+        assert excinfo.value.error_code == "field_not_overridable", forged_field
+
+
+@pytest.mark.asyncio
 async def test_a_stage_with_no_declared_correctable_fields_accepts_nothing() -> None:
     """Fails closed: a stage nobody has thought about is not silently editable."""
     workflow = _make_workflow_with_completed_stage("planning", {"executive_summary": "A plan."})

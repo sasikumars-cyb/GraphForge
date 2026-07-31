@@ -617,3 +617,123 @@ def test_selector_routes_review_readiness_goal() -> None:
     register_agents()
     selector = AgentSelector(global_registry)
     assert selector.select("review_readiness") == "engineering_review"
+
+
+# ---------------------------------------------------------------------------
+# Weakness #5 — cross_repository_impact's dependency_type/confidence/evidence
+# are graph-derived (backfilled from Context Discovery's canonical
+# `repositories` list), never invented by the LLM.
+# ---------------------------------------------------------------------------
+
+
+def _context_discovery_result_with_repositories(repositories: list[dict]) -> dict:
+    return {"repositories": repositories}
+
+
+def test_cross_repository_impact_is_backfilled_from_graph_data() -> None:
+    from app.agents.engineering_review.agent import _parse_llm_response
+
+    context_discovery_result = _context_discovery_result_with_repositories(
+        [
+            {
+                "name": "etl-core",
+                "source": "suggested",
+                "selected": True,
+                "reason": "Shares Kafka topic 'orders-created' with ingestion-framework.",
+                "relationship": "SHARES_TOPIC",
+                "confidence": "structural",
+            }
+        ]
+    )
+    raw = json.dumps(
+        {
+            "executive_summary": "ok",
+            "cross_repository_impact": [
+                {
+                    "repository": "etl-core",
+                    "depends_on": ["ingestion-framework"],
+                    "concern": "Blueprint doesn't mention the shared topic contract.",
+                }
+            ],
+        }
+    )
+
+    report = _parse_llm_response(raw, "plan_freeform", context_discovery_result)
+
+    assert len(report.cross_repository_impact) == 1
+    impact = report.cross_repository_impact[0]
+    # LLM-assessed field, passed through as-is.
+    assert impact.concern == "Blueprint doesn't mention the shared topic contract."
+    # Graph-derived fields — never present in the LLM's own JSON above.
+    assert impact.dependency_type == "SHARES_TOPIC"
+    assert impact.confidence == "structural"
+    assert impact.evidence == ["Shares Kafka topic 'orders-created' with ingestion-framework."]
+
+
+def test_cross_repository_impact_backfill_is_empty_for_an_unknown_repository() -> None:
+    """The LLM is free to name a repository Context Discovery never
+    suggested (e.g. inferred from prose in the blueprint) — the graph-derived
+    fields must stay honestly empty, never fabricated to match."""
+    from app.agents.engineering_review.agent import _parse_llm_response
+
+    context_discovery_result = _context_discovery_result_with_repositories([])
+    raw = json.dumps(
+        {
+            "executive_summary": "ok",
+            "cross_repository_impact": [
+                {"repository": "some-other-repo", "depends_on": [], "concern": "unclear"}
+            ],
+        }
+    )
+
+    report = _parse_llm_response(raw, "plan_freeform", context_discovery_result)
+
+    impact = report.cross_repository_impact[0]
+    assert impact.dependency_type == ""
+    assert impact.confidence == ""
+    assert impact.evidence == []
+
+
+def test_cross_repository_impact_backfill_handles_missing_context_discovery_result() -> None:
+    """No Context Discovery result at all (a result predating this field,
+    or a run with none) must degrade to empty graph-derived fields, not
+    raise."""
+    from app.agents.engineering_review.agent import _parse_llm_response
+
+    raw = json.dumps(
+        {
+            "executive_summary": "ok",
+            "cross_repository_impact": [
+                {"repository": "etl-core", "depends_on": [], "concern": "unclear"}
+            ],
+        }
+    )
+
+    report = _parse_llm_response(raw, "plan_freeform", None)
+
+    impact = report.cross_repository_impact[0]
+    assert impact.dependency_type == ""
+    assert impact.confidence == ""
+
+
+def test_format_repository_relationships_block_includes_relationship_and_confidence() -> None:
+    from app.agents.stage_context import format_repository_relationships_block
+
+    result = {
+        "explicit_repositories": [{"name": "ingestion-framework"}],
+        "suggested_repositories": [
+            {
+                "name": "etl-core",
+                "reason": "Shares Kafka topic 'orders-created' with ingestion-framework.",
+                "relationship": "SHARES_TOPIC",
+                "confidence": "structural",
+            }
+        ],
+        "selected_repositories": [{"name": "ingestion-framework"}, {"name": "etl-core"}],
+    }
+
+    block = format_repository_relationships_block(result)
+
+    assert "SHARES_TOPIC" in block
+    assert "structural" in block
+    assert "etl-core" in block

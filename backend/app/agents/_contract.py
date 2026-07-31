@@ -66,6 +66,27 @@ class Evidence(BaseModel):
     status: Literal["success", "not_found", "unavailable", "failed"] | None = None
 
 
+class ComponentWarning(BaseModel):
+    """A structured verification finding — distinct from the free-text
+    `verification_warnings: list[str]` every planning-family agent already
+    returns (kept, unchanged, for backward compatibility). This is the
+    pydantic mirror of `app.agents.component_grounding.ComponentWarning`
+    (a plain dataclass, so that module has no pydantic/schema dependency);
+    each agent converts to this type when populating its own result.
+
+    `warning_type` lets a caller (the UI, a future automated gate) branch
+    on the *kind* of problem without parsing prose — today's producers:
+    "test_used_as_production" (see app.agents.component_grounding),
+    "nonexistent_file", "nonexistent_class", "nonexistent_method"
+    (see each agent's post-generation verification section).
+    """
+
+    claim: str
+    warning_type: str
+    message: str
+    suggested_replacement: str | None = None
+
+
 class Confidence(BaseModel):
     """Numeric confidence in [0.0, 1.0] with a mandatory reasoning
     string. Mirrors the existing ConfidenceScore but is the contract-level
@@ -127,6 +148,32 @@ class AgentManifest:
     cost_class: Literal["cheap", "standard", "expensive"]
     max_graph_hops: int = 2
     output_schema_name: str = "AgentOutput"
+
+    # ADR 0011, OD-3 — the statically-determinable infrastructure this agent
+    # depends on, e.g. frozenset({DEPENDENCY_LLM, DEPENDENCY_NEO4J})
+    # (see app.orchestrator.preflight for the closed set of valid values,
+    # DEPENDENCY_LLM/DEPENDENCY_NEO4J/DEPENDENCY_GITHUB_WRITE). Not imported
+    # here — this module must stay dependency-free (see the file docstring)
+    # — so the value is a plain string, validated by
+    # app.orchestrator.preflight.agent_requires and by the manifest-registry
+    # test suite, not by this dataclass itself.
+    #
+    # Generalizes what `max_graph_hops > 0` and `default_stage_for_agent(...)
+    # is not None` already imply for Neo4j and the LLM respectively: a single
+    # declarative field a *future* pre-flight check's `applies_to` can test
+    # membership against (`DEPENDENCY_GITHUB_WRITE in manifest.
+    # required_dependencies`, exactly what `app.orchestrator.preflight.
+    # WARNING_CHECKS` already does for the git_ops agents) instead of
+    # hardcoding its own bespoke signal. Deliberately does not
+    # replace `max_graph_hops` (which also drives the graph hop *budget*, a
+    # different concern) or `default_stage_for_agent` (which resolves *which*
+    # AI stage config to use, not just whether one is needed) — both of
+    # those checks are already implemented and unaffected by this field; see
+    # ADR 0011 OD-3 for the full reasoning. Default empty: an agent with no
+    # statically-determinable dependency (none exist yet beyond LLM/Neo4j/
+    # GitHub-write) declares nothing, which is also what every agent
+    # declared, implicitly, before this field existed.
+    required_dependencies: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.agent_id:
