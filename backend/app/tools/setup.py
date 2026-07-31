@@ -164,6 +164,30 @@ def register_all_tools() -> None:
         )
     )
 
+    from app.tools.implementations.testrail_tool import TestRailTool
+
+    registry.register(
+        ToolSpec(
+            tool_id="testrail",
+            display_name="TestRail",
+            description=(
+                "Reads test cases, suites, and sections from TestRail for syncing into "
+                "the Knowledge Graph and grounding the Testing agent's coverage analysis."
+            ),
+            category=ToolCategory.TESTING,
+            capabilities=["test_cases", "test_suites", "test_sections", "test_projects"],
+            factory=lambda cfg: TestRailTool(cfg),
+            requires_auth=True,
+            auth_fields=["testrail_base_url", "testrail_email", "testrail_api_token"],
+            default_enabled=False,
+            icon="🧪",
+            notes=(
+                "REST only: TestRail base URL + account email + API key "
+                "(TestRail's API uses Basic Auth with the key as the password)."
+            ),
+        )
+    )
+
     logger.info("tool_registration_complete tool_count=%d", len(registry.all_specs()))
 
 
