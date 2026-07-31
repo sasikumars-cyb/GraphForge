@@ -5,7 +5,6 @@ import { Card } from "../components/Card";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { PipelineGraph } from "../components/workflow/PipelineGraph";
 import { WorkflowHeader } from "../components/workflow/WorkflowHeader";
-import { AgentActivityFeed } from "../components/workflow/AgentActivityFeed";
 import { ApprovalGateBanner } from "../components/workflow/ApprovalGateBanner";
 import { WorkflowApprovalBanner } from "../components/workflow/WorkflowApprovalBanner";
 import { ContextClarificationBanner } from "../components/workflow/ContextClarificationBanner";
@@ -458,10 +457,6 @@ export function WorkflowPage() {
           onReject={handleRejectWorkflow}
         />
       )}
-
-      <Card title="Agent Activity" description="Live evidence as each agent works">
-        <AgentActivityFeed stages={workflow.stages} stepsByRunId={stepsByRunId} />
-      </Card>
 
       {stageTabs.length > 1 && (
         <div className="flex flex-wrap gap-2">

@@ -631,6 +631,69 @@ export interface DiscoveryReport {
   investigation: InvestigationStep[];
 }
 
+// --- Engineering Understanding DTO (RFC-003) ---
+
+export interface RepositorySummaryDTO {
+  primary: string;
+  supporting: string[];
+  ownership: string[];
+}
+
+export interface AreaClusterDTO {
+  name: string;
+  components: string[];
+}
+
+export interface UnknownItemDTO {
+  category: "known" | "unknown" | "unavailable";
+  description: string;
+}
+
+export interface PlanningFactorDTO {
+  satisfied: boolean;
+  description: string;
+}
+
+export interface PlanningAssessmentDTO {
+  status: ContextReadiness;
+  reasons: PlanningFactorDTO[];
+}
+
+export interface DebugBundleDTO {
+  investigation_trail: Record<string, unknown>[];
+  confidence_breakdown: Record<string, unknown>[];
+  findings: Record<string, unknown>[];
+  gaps: Record<string, unknown>[];
+  transcript: Record<string, unknown>[];
+  graph_components: Record<string, unknown>[];
+  graph_topics: Record<string, unknown>[];
+  repository_ranking: string[];
+  capability_confidence: Record<string, number>;
+  planning_metadata: Record<string, unknown>;
+  working_memory: Record<string, unknown>;
+  assumptions: string[];
+  evidence_package_raw: Record<string, unknown>;
+}
+
+export interface EngineeringUnderstandingDTO {
+  business_goal: string;
+  current_situation: string;
+  expected_outcome: string;
+  repository_summary: RepositorySummaryDTO;
+  architecture_summary: string;
+  relevant_areas: AreaClusterDTO[];
+  known_constraints: string[];
+  missing_information: string[];
+  unknowns: UnknownItemDTO[];
+  evidence_summary: string[];
+  recommendations: string[];
+  planning_assessment: PlanningAssessmentDTO;
+  confidence_explanation: string;
+  documentation_status: string;
+  next_step: string;
+  debug_bundle: DebugBundleDTO | null;
+}
+
 // --- Workflow Types ---
 
 export type WorkflowStage =
