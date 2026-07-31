@@ -1,14 +1,21 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
 import { AuthContext, type AuthContextValue } from "../../app/auth-context";
+import * as workflowsApi from "../../lib/api/workflows";
 import { ContextClarificationBanner } from "./ContextClarificationBanner";
 import { ContextExplorerPanel } from "./ContextExplorerPanel";
-import type { ContextDiscoveryResult, PendingClarification } from "../../types/agent";
+import type {
+  ContextDiscoveryResult,
+  DebugBundleDTO,
+  EngineeringUnderstandingDTO,
+  PendingClarification,
+} from "../../types/agent";
 
 vi.mock("../../lib/api/workflows", () => ({
   overrideStageResult: vi.fn(),
+  fetchUnderstanding: vi.fn(),
 }));
 
 function renderWithAuth(ui: React.ReactElement) {
@@ -257,76 +264,287 @@ function makeResult(overrides: Partial<ContextDiscoveryResult> = {}): ContextDis
   };
 }
 
+// ---------------------------------------------------------------------------
+// ContextExplorerPanel now renders the Engineering Understanding projection
+// (fetched via `fetchUnderstanding`) instead of reading `discovery_report`
+// directly. These fixtures mirror what the backend mapper actually produces
+// — see `backend/app/mappers/engineering_understanding_mapper.py` and its
+// `DebugBundleDTO` pass-through fields in `_build_projection_input`.
+// ---------------------------------------------------------------------------
+
+function makeUnderstandingDto(
+  overrides: Partial<EngineeringUnderstandingDTO> = {},
+): EngineeringUnderstandingDTO {
+  return {
+    business_goal: "Add retry backoff for flaky downstream calls",
+    current_situation: "Calls fail without retrying.",
+    expected_outcome: "Calls retry with exponential backoff.",
+    repository_summary: { primary: "payment-service", supporting: [], ownership: [] },
+    architecture_summary: "payment-service calls the ledger service directly.",
+    relevant_areas: [{ name: "Retry handling", components: ["RetryHandler"] }],
+    known_constraints: ["Must not exceed 3 retries."],
+    missing_information: ["Design docs for the retry policy"],
+    unknowns: [{ category: "unknown", description: "Design docs for the retry policy" }],
+    evidence_summary: ["Must-modify (1): RetryHandler"],
+    recommendations: ["Reuse the existing backoff utility"],
+    planning_assessment: {
+      status: "PARTIAL",
+      reasons: [
+        { satisfied: true, description: "Code understanding" },
+        { satisfied: false, description: "Architecture components discovered" },
+      ],
+    },
+    confidence_explanation: "Completed: Code understanding. Outstanding: Architecture.",
+    documentation_status: "Documentation requirements not yet satisfied.",
+    next_step: "Resolve blocking issues: design docs missing",
+    debug_bundle: null,
+    ...overrides,
+  };
+}
+
+function makeDebugBundle(): DebugBundleDTO {
+  return {
+    investigation_trail: [
+      {
+        evidence_id: "ev1",
+        provider: "graph",
+        action: "survey_architecture",
+        outcome: "success",
+        summary: "Queried the graph: 1 repository.",
+        intent: "Work out which service this belongs to.",
+        iteration: 1,
+      },
+    ],
+    confidence_breakdown: [
+      {
+        capability: "architecture",
+        label: "Architecture",
+        necessity: "required",
+        score: 0.29,
+        satisfied: false,
+        explanation: "29%",
+        signals: [
+          {
+            label: "Knowledge graph reachable",
+            satisfied: true,
+            detail: "",
+            evidence_ids: ["ev1"],
+          },
+          {
+            label: "Architecture components discovered",
+            satisfied: false,
+            detail: "the repository is likely not indexed yet",
+            evidence_ids: [],
+          },
+        ],
+      },
+      {
+        capability: "work_item",
+        label: "Work item",
+        necessity: "not_applicable",
+        score: 0,
+        satisfied: false,
+        explanation: "",
+        signals: [],
+      },
+    ],
+    findings: [
+      {
+        kind: "repository",
+        total: 2,
+        items: [
+          {
+            fact_id: "f1",
+            subject: "payment-service",
+            provider: "graph",
+            verified: true,
+            evidence: {
+              evidence_id: "ev1",
+              summary: "Queried the graph: 1 repository.",
+              outcome: "success",
+            },
+          },
+          {
+            fact_id: "f2",
+            subject: "ghost-service",
+            provider: "user",
+            verified: false,
+            evidence: {
+              evidence_id: "ev2",
+              summary: "You answered: ghost-service",
+              outcome: "success",
+            },
+          },
+        ],
+      },
+    ],
+    gaps: [
+      {
+        gap_id: "gap_documentation",
+        capability: "documentation",
+        summary: "No design documentation was found for this work.",
+        why: "Design docs often carry constraints a ticket omits.",
+        severity: "advisory",
+        status: "unresolvable",
+        missing: [],
+        recommended_action: ["Connect Confluence"],
+        resolution_note: "",
+        user_claim: null,
+      },
+    ],
+    transcript: [
+      { kind: "intent", text: "I'll search the indexed repositories.", iteration: 1, evidence_ids: [] },
+      {
+        kind: "observation",
+        text: "Only one repository is indexed.",
+        iteration: 1,
+        evidence_ids: ["ev1"],
+      },
+    ],
+    graph_components: [{ name: "RetryHandler" }],
+    graph_topics: [],
+    repository_ranking: ["payment-service"],
+    capability_confidence: { architecture: 0.29 },
+    planning_metadata: {},
+    working_memory: {},
+    assumptions: ["Design docs are not required to proceed"],
+    evidence_package_raw: {},
+  };
+}
+
 describe("ContextExplorerPanel", () => {
-  it("leads with the verdict in the engine's own words", () => {
-    renderWithAuth(
-      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+  beforeEach(() => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockImplementation((_token, _workflowId, debug) =>
+      Promise.resolve(
+        debug ? { ...makeUnderstandingDto(), debug_bundle: makeDebugBundle() } : makeUnderstandingDto(),
+      ),
     );
-    expect(screen.getByText("PARTIAL")).toBeInTheDocument();
-    expect(screen.getByText(/design docs are missing/)).toBeInTheDocument();
-    expect(screen.getByText("72% confidence")).toBeInTheDocument();
   });
 
-  it("narrates how it reached the conclusion", () => {
-    renderWithAuth(
-      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
-    );
-    expect(screen.getByText("I'll search the indexed repositories.")).toBeInTheDocument();
-    expect(screen.getByText("Only one repository is indexed.")).toBeInTheDocument();
-  });
-
-  it("shows each capability score with the signals that produced it", () => {
-    renderWithAuth(
-      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
-    );
-    expect(screen.getByText("29%")).toBeInTheDocument();
-    expect(screen.getByText("Knowledge graph reachable")).toBeInTheDocument();
-    // An unsatisfied signal must explain what is missing, not just show a cross.
-    expect(screen.getByText(/the repository is likely not indexed yet/)).toBeInTheDocument();
-  });
-
-  it("omits capabilities that do not apply to the request", () => {
-    renderWithAuth(
-      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
-    );
-    expect(screen.queryByText("Work item")).not.toBeInTheDocument();
-  });
-
-  it("shows each finding with the evidence that established it", () => {
-    renderWithAuth(
-      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
-    );
-    // "payment-service" now also appears in the Repositories panel above
-    // the findings section, so this asserts presence rather than uniqueness.
-    expect(screen.getAllByText("payment-service").length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/Queried the graph: 1 repository\./).length).toBeGreaterThan(0);
-  });
-
-  it("labels an uncorroborated human claim rather than presenting it as knowledge", () => {
-    renderWithAuth(
-      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
-    );
-    expect(screen.getByText("ghost-service")).toBeInTheDocument();
-    expect(screen.getByText("unverified claim")).toBeInTheDocument();
-  });
-
-  it("states what is missing, why it matters, and what to do about it", () => {
+  it("shows the Engineering Understanding projection as the default view", async () => {
     renderWithAuth(
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     expect(
-      screen.getByText("No design documentation was found for this work."),
+      await screen.findByText("Add retry backoff for flaky downstream calls"),
     ).toBeInTheDocument();
-    expect(screen.getByText(/constraints a ticket omits/)).toBeInTheDocument();
-    expect(screen.getByText(/Connect Confluence/)).toBeInTheDocument();
+    expect(screen.getByText("Calls fail without retrying.")).toBeInTheDocument();
+    expect(screen.getByText("Calls retry with exponential backoff.")).toBeInTheDocument();
+    expect(screen.getByText("RetryHandler")).toBeInTheDocument();
+    expect(screen.getByText(/Must not exceed 3 retries\./)).toBeInTheDocument();
   });
 
-  it("discloses the full investigation trail", async () => {
+  it("preserves the readiness verdict, in the engine's own words", async () => {
     renderWithAuth(
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
-    await userEvent.click(screen.getByText(/What I searched \(1 step\)/));
-    expect(screen.getByText(/Work out which service this belongs to\./)).toBeInTheDocument();
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    expect(screen.getByText("PARTIAL")).toBeInTheDocument();
+    expect(screen.getByText("72% confidence")).toBeInTheDocument();
+  });
+
+  it("hides Debug's implementation internals by default", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+
+    expect(screen.getByText("Debug")).toBeInTheDocument();
+    expect(screen.queryByText("I'll search the indexed repositories.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Knowledge graph reachable")).not.toBeInTheDocument();
+    expect(screen.queryByText("ghost-service")).not.toBeInTheDocument();
+    // Only the non-debug fetch has happened — expanding Debug is what
+    // triggers the second, `?debug=true` request.
+    expect(workflowsApi.fetchUnderstanding).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps capability readiness, evidence summary, and recommendations inside Advanced Details, not the default view", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+
+    // Present in the DOM (Advanced Details isn't fetched separately — it's
+    // the same already-loaded DTO), but not visible until expanded.
+    expect(screen.getByText(/Completed: Code understanding/)).not.toBeVisible();
+    expect(screen.getByText(/Reuse the existing backoff utility/)).not.toBeVisible();
+
+    await userEvent.click(screen.getByText("Advanced Details"));
+
+    expect(screen.getByText(/Completed: Code understanding/)).toBeInTheDocument();
+    expect(screen.getByText(/Reuse the existing backoff utility/)).toBeInTheDocument();
+    expect(screen.getByText(/Must-modify \(1\): RetryHandler/)).toBeInTheDocument();
+    expect(screen.getByText("Documentation requirements not yet satisfied.")).toBeInTheDocument();
+    expect(screen.getByText("Code understanding")).toBeInTheDocument();
+  });
+
+  it("expands Debug on demand and fetches the debug bundle (?debug=true), not before", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+
+    await userEvent.click(screen.getByText("Debug"));
+
+    await waitFor(() => {
+      expect(workflowsApi.fetchUnderstanding).toHaveBeenLastCalledWith("tok", "w1", true);
+    });
+  });
+
+  it("shows the investigation trail inside Debug", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    await userEvent.click(screen.getByText("Debug"));
+
+    expect(
+      await screen.findByText("Work out which service this belongs to."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("I'll search the indexed repositories.")).toBeInTheDocument();
+    expect(screen.getByText("Only one repository is indexed.")).toBeInTheDocument();
+  });
+
+  it("shows capability signals inside Debug, omitting inapplicable capabilities", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    await userEvent.click(screen.getByText("Debug"));
+
+    expect(await screen.findByText("29%")).toBeInTheDocument();
+    expect(screen.getByText("Knowledge graph reachable")).toBeInTheDocument();
+    // An unsatisfied signal must explain what is missing, not just show a cross.
+    expect(screen.getByText(/the repository is likely not indexed yet/)).toBeInTheDocument();
+    expect(screen.queryByText("Work item")).not.toBeInTheDocument();
+  });
+
+  it("shows findings and evidence inside Debug, labeling unverified claims", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    await userEvent.click(screen.getByText("Debug"));
+
+    expect(await screen.findByText("ghost-service")).toBeInTheDocument();
+    expect(screen.getByText("unverified claim")).toBeInTheDocument();
+    expect(screen.getAllByText(/Queried the graph: 1 repository\./).length).toBeGreaterThan(0);
+  });
+
+  it("shows raw gaps and graph traversal information inside Debug", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    await userEvent.click(screen.getByText("Debug"));
+
+    expect(
+      await screen.findByText("No design documentation was found for this work."),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/constraints a ticket omits/)).toBeInTheDocument();
+    expect(screen.getByText(/Connect Confluence/)).toBeInTheDocument();
+    expect(screen.getByText(/Repository ranking:/)).toBeInTheDocument();
   });
 
   it("shows a saved human correction, not the agent's superseded text", async () => {
@@ -374,9 +592,14 @@ describe("ContextExplorerPanel", () => {
     expect(screen.getByRole("textbox")).toHaveValue("human corrected text");
   });
 
-  it("renders without a report, for a run persisted before the reasoning engine", () => {
+  it("shows a load error without crashing when Engineering Understanding fails to fetch", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockRejectedValue(new Error("Network error"));
     const legacy = makeResult({ discovery_report: undefined as never });
     renderWithAuth(<ContextExplorerPanel workflowId="w1" result={legacy} onOverridden={vi.fn()} />);
+
+    expect(await screen.findByText("Network error")).toBeInTheDocument();
+    // The readiness verdict comes from `result`, not the understanding
+    // fetch, so it still renders even when Engineering Understanding fails.
     expect(screen.getByText("PARTIAL")).toBeInTheDocument();
   });
 });

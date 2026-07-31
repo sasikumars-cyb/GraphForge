@@ -6,6 +6,7 @@ import { apiFetch } from "./client";
 import type {
   ContinueWorkflowResponse,
   CreateWorkflowRequest,
+  EngineeringUnderstandingDTO,
   OverrideStageResultRequest,
   WorkflowApprovalResponse,
   WorkflowDetail,
@@ -150,4 +151,20 @@ export function cancelWorkflow(
     method: "POST",
     token,
   });
+}
+
+/** Fetch the Engineering Understanding projection for a workflow's Context
+ * Discovery result.  Returns a presentation DTO — no raw execution data
+ * unless `debug` is true. */
+export function fetchUnderstanding(
+  token: string,
+  workflowId: string,
+  debug = false,
+  signal?: AbortSignal,
+): Promise<EngineeringUnderstandingDTO> {
+  const qs = debug ? "?debug=true" : "";
+  return apiFetch<EngineeringUnderstandingDTO>(
+    `/workflows/${encodeURIComponent(workflowId)}/understanding${qs}`,
+    { token, signal },
+  );
 }

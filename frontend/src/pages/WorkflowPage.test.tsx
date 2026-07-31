@@ -314,7 +314,7 @@ describe("WorkflowPage", () => {
     };
   }
 
-  it("renders the header, pipeline, and activity feed once loaded", async () => {
+  it("renders the header, pipeline, and the selected run's evidence once loaded", async () => {
     vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(makeWorkflow());
     vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
 
@@ -322,9 +322,13 @@ describe("WorkflowPage", () => {
 
     expect(await screen.findByText("Implement JWT auth")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Planning: Complete" })).toBeInTheDocument();
-    // The same real evidence line legitimately appears in both the
-    // Activity Feed and the Evidence Trail panel.
-    expect(screen.getAllByText("Found 3 repositories.").length).toBeGreaterThan(0);
+    // Evidence lives in the Summary/Evidence/Log/JSON tab strip on
+    // StageResultPanel, inside its own collapsed Evidence Trail card — it's
+    // no longer ambiently visible via AgentActivityFeed, so reaching it now
+    // takes an explicit tab click plus expanding the trail itself.
+    await userEvent.click(await screen.findByRole("tab", { name: "Evidence" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Expand" }));
+    expect(await screen.findByText("Found 3 repositories.")).toBeInTheDocument();
   });
 
   it("shows the planning stage's artifacts in the Summary tab (active by default)", async () => {

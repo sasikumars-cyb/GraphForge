@@ -26,15 +26,26 @@ from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.review_adapter import resolve_pr_subject
 from app.api.v1.dependencies import get_current_user
 from app.context.resolvers.freetext import resolve as resolve_freetext
+from app.context_pipeline.reasoning.curation import EvidencePackage
+from app.context_pipeline.reasoning.understanding import EngineeringUnderstanding
 from app.core.exceptions import AppError, NotFoundError
 from app.core.rate_limit import check_rate_limit
 from app.core.request_context import set_workflow_context
 from app.database.session import get_db_session
+from app.mappers.engineering_understanding_mapper import map_to_dto
 from app.models.run import Run
 from app.models.user import User
 from app.models.workflow import Workflow
 from app.orchestrator.registry import global_registry
 from app.orchestrator.selector import AgentSelector
+from app.schemas.engineering_understanding import (
+    CapabilityFactor,
+    ComponentProjection,
+    DebugBundleDTO,
+    EngineeringUnderstandingDTO,
+    ProjectionInput,
+    TopicProjection,
+)
 from app.services import workflow_service
 
 if TYPE_CHECKING:
@@ -439,6 +450,152 @@ def _build_run_responses(workflow: Workflow) -> list[WorkflowRunResponse]:
     return items
 
 
+def _build_projection_input(
+    cd_result: dict[str, Any],
+    *,
+    debug: bool,
+) -> ProjectionInput:
+    """Parse persisted ContextDiscoveryResult into a typed ProjectionInput.
+
+    This is the **parsing boundary**: all ``.get()`` calls, raw-dict
+    access, and untyped-data handling happen here.  The mapper
+    (``map_to_dto``) never sees raw data.
+    """
+    understanding = EngineeringUnderstanding(
+        **cd_result.get("engineering_understanding", {}),
+    )
+    evidence_package = EvidencePackage(
+        **cd_result.get("evidence_package", {}),
+    )
+
+    original_request: str = cd_result.get("original_request", "")
+    raw_readiness = cd_result.get("readiness", "BLOCKED")
+    readiness = (
+        raw_readiness
+        if raw_readiness in ("READY", "PARTIAL", "BLOCKED")
+        else "BLOCKED"
+    )
+    blocking_reasons: list[str] = cd_result.get("blocking_reasons") or []
+
+    # Typed graph projections from raw dicts
+    graph_topics = [
+        TopicProjection(name=t["name"])
+        for t in cd_result.get("graph_topics") or []
+        if t.get("name")
+    ]
+    graph_components = [
+        ComponentProjection(name=c["name"], topic=c.get("topic", ""))
+        for c in cd_result.get("graph_components") or []
+        if c.get("name")
+    ]
+
+    # Extract from discovery_report
+    report: dict[str, Any] = cd_result.get("discovery_report") or {}
+    breakdown: list[dict[str, Any]] = report.get("confidence_breakdown") or []
+    gaps: list[dict[str, Any]] = report.get("gaps") or []
+
+    # Filter not_applicable capabilities — irrelevant to readiness and UX
+    capability_factors = [
+        CapabilityFactor(
+            capability=entry.get("capability", ""),
+            label=entry.get("label", ""),
+            satisfied=entry.get("satisfied", False),
+        )
+        for entry in breakdown
+        if entry.get("necessity") != "not_applicable"
+    ]
+
+    gap_summaries = [
+        g["summary"]
+        for g in gaps
+        if g.get("status") != "verified" and g.get("summary")
+    ]
+    unavailable_gaps = [
+        g["summary"]
+        for g in gaps
+        if g.get("status") == "unresolvable" and g.get("summary")
+    ]
+
+    documentation_status = _derive_documentation_status(breakdown, gaps)
+    next_step = _derive_next_step(readiness, blocking_reasons)
+
+    debug_bundle = None
+    if debug:
+        debug_bundle = DebugBundleDTO(
+            investigation_trail=report.get("investigation") or [],
+            confidence_breakdown=breakdown,
+            findings=report.get("findings") or [],
+            gaps=gaps,
+            transcript=report.get("transcript") or [],
+            graph_components=cd_result.get("graph_components") or [],
+            graph_topics=cd_result.get("graph_topics") or [],
+            repository_ranking=cd_result.get("ranked_repository_names") or [],
+            capability_confidence=cd_result.get("capability_confidence") or {},
+            planning_metadata=cd_result.get("planning_metadata") or {},
+            working_memory=cd_result.get("working_memory") or {},
+            assumptions=cd_result.get("assumptions") or [],
+            evidence_package_raw=cd_result.get("evidence_package") or {},
+        )
+
+    return ProjectionInput(
+        understanding=understanding,
+        evidence_package=evidence_package,
+        original_request=original_request,
+        readiness=readiness,
+        blocking_reasons=blocking_reasons,
+        graph_topics=graph_topics,
+        graph_components=graph_components,
+        capability_factors=capability_factors,
+        gap_summaries=gap_summaries,
+        unavailable_gaps=unavailable_gaps,
+        documentation_status=documentation_status,
+        next_step=next_step,
+        debug_bundle=debug_bundle,
+    )
+
+
+def _derive_documentation_status(
+    breakdown: list[dict[str, Any]],
+    gaps: list[dict[str, Any]],
+) -> str:
+    """Derive documentation status from capability assessment and gaps.
+
+    Presentation-time workflow decision — belongs in the endpoint (caller),
+    not the mapper.
+    """
+    doc_factor = next(
+        (e for e in breakdown if e.get("capability") == "documentation"),
+        None,
+    )
+    if doc_factor is None:
+        return "Documentation status unknown."
+    if doc_factor.get("satisfied", False):
+        return "Documentation requirements satisfied."
+    doc_gaps = [
+        g["summary"]
+        for g in gaps
+        if g.get("capability") == "documentation"
+        and g.get("status") != "verified"
+        and g.get("summary")
+    ]
+    if doc_gaps:
+        return "; ".join(doc_gaps)
+    return "Documentation requirements not yet satisfied."
+
+
+def _derive_next_step(readiness: str, blocking_reasons: list[str]) -> str:
+    """Derive next-step guidance from readiness and blocking reasons.
+
+    Presentation-time workflow decision — belongs in the endpoint (caller),
+    not the mapper.
+    """
+    if readiness == "READY":
+        return "Context is ready to proceed to planning."
+    if blocking_reasons:
+        return "Resolve blocking issues: " + "; ".join(blocking_reasons)
+    return "Continue context discovery to gather more information."
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
@@ -709,6 +866,41 @@ async def get_workflow(
         refinement_note=workflow.refinement_note,
         pending_clarification=_pending_clarification(workflow),
     )
+
+
+@router.get(
+    "/{workflow_id}/understanding",
+    response_model=EngineeringUnderstandingDTO,
+)
+async def get_understanding(
+    workflow_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+    debug: bool = Query(False),
+) -> EngineeringUnderstandingDTO:
+    """Read-time projection of Context Discovery results as an Engineering
+    Understanding DTO.
+
+    The endpoint owns all parsing of persisted data — the mapper
+    (``map_to_dto``) receives only typed models and performs pure
+    transformation.  No new data is written.  Existing endpoints and
+    Planning behavior are unchanged.
+    """
+    try:
+        wid = uuid.UUID(workflow_id)
+    except ValueError as exc:
+        raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
+
+    workflow = await workflow_service.get_workflow(db, wid, user_id=user.id)
+
+    cd_result = get_stage_result(workflow, "context_discovery")
+    if cd_result is None:
+        raise NotFoundError(
+            "No completed context discovery result for this workflow.",
+        )
+
+    projection_input = _build_projection_input(cd_result, debug=debug)
+    return map_to_dto(projection_input, include_debug=debug)
 
 
 @router.delete("/{workflow_id}", status_code=204)
