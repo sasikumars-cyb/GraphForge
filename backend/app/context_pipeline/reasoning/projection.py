@@ -444,6 +444,15 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         # not re-derived here. Empty ({}) only for a run that predates
         # this field or produced no components at all.
         "evidence_package": state.derived.get("evidence_package") or {},
+        # The synthesized, hypothesis-tested, self-challenged engineering
+        # conclusion (see reasoning.understanding) — computed once,
+        # immediately after evidence_package, in engine.investigate. This,
+        # not evidence_package/graph_context_text, is Planning's primary
+        # prompt input under the Frontier-Class Investigation Agent
+        # redesign (see app.agents.planning.agent._graph_context_text_from).
+        # `{}` for a run that predates this field or produced no evidence
+        # to synthesize over.
+        "engineering_understanding": state.derived.get("engineering_understanding") or {},
         "graph_topics": [dict(f.value) for f in ledger.facts_of("topic")],
         "repositories": [r.model_dump() for r in repositories],
         **projected_repositories,

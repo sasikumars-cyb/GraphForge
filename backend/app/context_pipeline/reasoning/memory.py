@@ -160,6 +160,13 @@ class DiscoveryMetadata(BaseModel):
     # Set when the engine stops proposing actions because no investigator had
     # anything left to offer — the precondition for asking a human anything.
     providers_exhausted: bool = False
+    # How many times `reasoning.understanding.synthesize_engineering_
+    # understanding` has actually called the LLM (not counted: the
+    # zero-evidence short-circuit, which never calls it at all) — bounds
+    # mid-loop re-synthesis to a fixed budget (see engine.py's
+    # `_MAX_MID_LOOP_SYNTHESIS_CALLS`) so "understanding drives
+    # investigation" doesn't mean an unbounded LLM call per cycle.
+    synthesis_calls: int = 0
 
 
 class WorkingContext(BaseModel):

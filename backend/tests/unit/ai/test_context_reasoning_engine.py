@@ -26,9 +26,15 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.context_pipeline.reasoning import capabilities
-from app.context_pipeline.reasoning.capabilities import assess, overall_confidence, unmet
+from app.context_pipeline.reasoning.capabilities import (
+    CapabilityAssessment,
+    assess,
+    overall_confidence,
+    unmet,
+)
 from app.context_pipeline.reasoning.engine import (
     MAX_CLARIFICATION_ROUNDS,
+    MAX_MID_LOOP_SYNTHESIS_CALLS,
     _select,
     _settle_claims,
     discover,
@@ -263,6 +269,122 @@ def test_selection_prefers_required_capabilities_over_recommended() -> None:
     marker = object()
     chosen, _ = _select([(recommended, marker), (required, marker)], assessments)  # type: ignore[list-item]
     assert chosen is required, "a cheap optional lookup must not preempt required context"
+
+
+def test_select_priority_boost_breaks_ties_within_the_same_necessity_tier() -> None:
+    """`priority_boost` (engineering understanding's read of which
+    investigation would most improve its current hypotheses — see
+    reasoning.understanding.capability_priority) can prefer one candidate
+    over an equally-scored one of the SAME necessity, without needing a
+    real LLM call at selection time: this test builds the boost by hand."""
+    marker = object()
+    assessments = [
+        CapabilityAssessment(
+            capability="architecture",
+            label="Architecture",
+            necessity="recommended",
+            score=0.5,
+            signals=[],
+        ),
+        CapabilityAssessment(
+            capability="documentation",
+            label="Documentation",
+            necessity="recommended",
+            score=0.5,
+            signals=[],
+        ),
+    ]
+    architecture_action = InvestigationAction(
+        provider="graph", key="a", intent="i", targets="architecture", cost=1
+    )
+    documentation_action = InvestigationAction(
+        provider="confluence", key="b", intent="i", targets="documentation", cost=1
+    )
+    candidates = [(architecture_action, marker), (documentation_action, marker)]  # type: ignore[list-item]
+
+    # With no boost, tied necessity/score/cost falls back to the action key —
+    # "a" sorts before "b", so architecture wins on tie-break alone.
+    chosen, _ = _select(candidates, assessments)
+    assert chosen is architecture_action
+
+    # A contradiction-driven boost on documentation must be able to flip that.
+    chosen, _ = _select(candidates, assessments, {"documentation": 0.4})
+    assert chosen is documentation_action
+
+
+def test_select_priority_boost_never_overrides_necessity_tier() -> None:
+    """A required capability must always win over a recommended one, no
+    matter how large a priority boost the recommended one receives — the
+    boost is a tie-breaker within a tier, never a way to skip required
+    context (same invariant `test_selection_prefers_required_capabilities_
+    over_recommended` already guarantees for the un-boosted case)."""
+    marker = object()
+    assessments = [
+        CapabilityAssessment(
+            capability="repository",
+            label="Repository",
+            necessity="required",
+            score=0.9,
+            signals=[],
+        ),
+        CapabilityAssessment(
+            capability="documentation",
+            label="Documentation",
+            necessity="recommended",
+            score=0.1,
+            signals=[],
+        ),
+    ]
+    required_action = InvestigationAction(
+        provider="graph", key="a", intent="i", targets="repository", cost=3
+    )
+    recommended_action = InvestigationAction(
+        provider="confluence", key="b", intent="i", targets="documentation", cost=1
+    )
+    candidates = [(recommended_action, marker), (required_action, marker)]  # type: ignore[list-item]
+
+    chosen, _ = _select(candidates, assessments, {"documentation": 100.0})
+    assert chosen is required_action
+
+
+@pytest.mark.asyncio
+async def test_mid_loop_synthesis_runs_and_is_bounded_by_its_own_budget() -> None:
+    """Engineering understanding actively participating in investigation,
+    not just summarizing it afterward: a mid-loop call happens after a real
+    (paid) retrieval yields something, its `investigation_priority` output
+    lands on `state.derived` where the next `_select` call reads it, and the
+    total call count never exceeds the mid-loop budget plus the one
+    always-run call after the loop exits (see engine.py's own comments on
+    both call sites). `synthesize_engineering_understanding` itself is
+    replaced with a deterministic fake — the real LLM-backed version is
+    covered by test_understanding.py; this test is only about the wiring."""
+    calls: list[int] = []
+
+    async def fake_synthesize(state: WorkingContext, session: SessionContext) -> None:
+        calls.append(1)
+        state.metadata.synthesis_calls += 1
+        state.derived["investigation_priority"] = {"documentation": 0.9}
+
+    productive = FakeInvestigator(
+        "graph", repositories=["payment-service"], components=[("RateLimiter", "payment-service")]
+    )
+    extra = FakeInvestigator("confluence", targets="documentation", cost=3)
+
+    with patch(
+        "app.context_pipeline.reasoning.understanding.synthesize_engineering_understanding",
+        new=fake_synthesize,
+    ):
+        state = await discover(
+            request="Add a rate limiter to payment-service",
+            session=_session(),
+            investigators=[productive, extra],
+        )
+
+    # One mid-loop call (the budget is 1) plus the always-run call after the
+    # loop exits — never more, regardless of how many cycles ran.
+    assert len(calls) == MAX_MID_LOOP_SYNTHESIS_CALLS + 1
+    assert state.metadata.synthesis_calls == len(calls)
+    assert state.derived["investigation_priority"] == {"documentation": 0.9}
 
 
 @pytest.mark.asyncio

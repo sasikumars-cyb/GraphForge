@@ -66,6 +66,20 @@ MAX_CYCLES = 8
 # an endless interrogation.
 MAX_CLARIFICATION_ROUNDS = 2
 
+# How many times `synthesize_engineering_understanding` may run *inside* the
+# gather loop (not counting the always-run call once the loop exits). Bounds
+# the cost of "understanding drives investigation": each mid-loop call is a
+# real LLM invocation, so this stays a fixed, small budget rather than one
+# call per cycle — re-synthesizing after every single retrieval on an
+# 8-cycle run would be 8 additional LLM calls for a discovery run that used
+# to make exactly one. Deliberately 1, not more: one mid-loop checkpoint is
+# enough for a live hypothesis/contradiction to redirect the *rest* of the
+# run (see the `priority_boost` it produces, consulted by every remaining
+# `_select` call), and keeps worst-case cost at 2x a single-synthesis run
+# (one mid-loop + the always-run final call) rather than growing with cycle
+# count.
+MAX_MID_LOOP_SYNTHESIS_CALLS = 1
+
 
 # ---------------------------------------------------------------------------
 # Gap derivation — one gap per unmet capability, stable identity across cycles
@@ -165,6 +179,7 @@ def _candidate_actions(
 def _select(
     candidates: list[tuple[InvestigationAction, Investigator]],
     assessments: list[CapabilityAssessment],
+    priority_boost: dict[str, float] | None = None,
 ) -> tuple[InvestigationAction, Investigator]:
     """Pick the most valuable next action.
 
@@ -173,25 +188,36 @@ def _select(
     1. Actions targeting a *required* capability beat actions targeting a
        recommended one — never spend a turn on documentation while the
        repository is still unknown.
-    2. Among those, target the weakest capability first (lowest score), since
-       that's where a single retrieval buys the most.
+    2. Among those, target the weakest capability first (lowest score),
+       adjusted downward by `priority_boost` (see
+       `reasoning.understanding.capability_priority`) — engineering
+       understanding's own read of which investigation would most improve
+       its current hypotheses, so a capability the ledger scores as
+       "adequate" can still be picked next when an unresolved contradiction
+       or a live hypothesis specifically calls for more evidence there.
     3. Cheaper actions win ties, so a local graph query is preferred over a
        multi-turn MCP conversation.
 
-    Deliberately not an LLM call. Which provider can answer "which repository
-    owns this" is a structural property of the providers, not a judgement
-    call, and making it deterministic means the investigation is reproducible
-    and testable.
+    Still deliberately not an LLM call. `priority_boost` is itself a plain
+    dict computed once, earlier, by a deterministic function reading the
+    LLM's *already-produced* workspace — not a fresh judgement call made
+    here. Which provider can structurally answer a given question stays a
+    property this function reads off `assessments`/`priority_boost`, never
+    something it asks a model to decide live, so action selection remains
+    reproducible and unit-testable given a fixed `(assessments,
+    priority_boost)` pair.
     """
     necessity_rank = {"required": 0, "recommended": 1, "not_applicable": 2}
     by_capability = {a.capability: a for a in assessments}
+    boost = priority_boost or {}
 
     def sort_key(entry: tuple[InvestigationAction, Investigator]) -> tuple[int, float, int, str]:
         action, _ = entry
         assessment = by_capability.get(action.targets)
         necessity = assessment.necessity if assessment else "recommended"
         score = assessment.score if assessment else 1.0
-        return (necessity_rank[necessity], score, action.cost, action.key)
+        adjusted_score = score - boost.get(action.targets, 0.0)
+        return (necessity_rank[necessity], adjusted_score, action.cost, action.key)
 
     return sorted(candidates, key=sort_key)[0]
 
@@ -266,7 +292,8 @@ async def investigate(
             if not candidates:
                 break
 
-        action, investigator = _select(free or candidates, state.assessments)
+        priority_boost = state.derived.get("investigation_priority") or {}
+        action, investigator = _select(free or candidates, state.assessments, priority_boost)
         state.transcript.say("intent", action.intent, iteration=iteration)
 
         recorder = Recorder(state.ledger, action, iteration)
@@ -298,6 +325,30 @@ async def investigate(
             "observation", outcome.observation, iteration=iteration, evidence_ids=new_evidence
         )
 
+        # Mid-loop re-synthesis: engineering understanding actively driving
+        # the *next* action, not just summarizing the last one. Gated three
+        # ways so "understanding drives investigation" doesn't become "an
+        # LLM call every cycle": only after a real (paid) retrieval that
+        # actually yielded something new, only when the evidence count has
+        # moved since the last synthesis at all (a `not_found`/`failed`
+        # outcome that added evidence but taught nothing new doesn't
+        # deserve a fresh reasoning pass), and only within
+        # `MAX_MID_LOOP_SYNTHESIS_CALLS`. The always-run call after the loop
+        # exits (below) is what guarantees Planning gets understanding
+        # regardless of whether this budget was ever spent.
+        if (
+            action.cost > 0
+            and outcome.yielded
+            and state.metadata.synthesis_calls < MAX_MID_LOOP_SYNTHESIS_CALLS
+            and len(state.ledger.evidence) != state.derived.get("_last_synthesis_evidence_count")
+        ):
+            from app.context_pipeline.reasoning.understanding import (
+                synthesize_engineering_understanding,
+            )
+
+            await synthesize_engineering_understanding(state, session)
+            state.derived["_last_synthesis_evidence_count"] = len(state.ledger.evidence)
+
     # Whether we ran out of proposals or out of budget, automated
     # investigation is over — this is the gate `next_question()` waits on.
     state.metadata.providers_exhausted = True
@@ -317,6 +368,19 @@ async def investigate(
     from app.context_pipeline.reasoning.investigators import curate_evidence
 
     await curate_evidence(state, session)
+
+    # Synthesis (see reasoning.understanding's own docstring): the cognitive
+    # reasoning layer above retrieval. Zero or more mid-loop calls already
+    # ran above, each time engineering understanding itself had a chance to
+    # redirect the *next* action (see `priority_boost` above); this final
+    # call is unconditional regardless of that budget, because it is the
+    # only one that runs after `curate_evidence` — the curated architecture
+    # evidence package it just produced is new information no earlier
+    # in-loop call could have reasoned over. Guarantees Planning always
+    # gets an understanding built from the complete, final evidence.
+    from app.context_pipeline.reasoning.understanding import synthesize_engineering_understanding
+
+    await synthesize_engineering_understanding(state, session)
 
     return state
 

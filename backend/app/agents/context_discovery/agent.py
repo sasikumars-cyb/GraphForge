@@ -88,6 +88,7 @@ class ContextDiscoveryAgent:
             graph_repo_override=context.extras.get("graph_repository"),
             model=context.model,
             stage=stage_for(context.extras, STAGE_CONTEXT_DISCOVERY),
+            agent_context=context,
         )
 
         resume_payload: dict[str, Any] | None = context.extras.get("resume")

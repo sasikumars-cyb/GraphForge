@@ -72,6 +72,16 @@ class ContextDiscoveryResult(BaseModel):
     # their own component selection now (see each agent's own
     # `_resolve_context`/equivalent) rather than the raw list above.
     evidence_package: dict[str, Any] = Field(default_factory=dict)
+    # The synthesized engineering conclusion — reasoning.understanding.
+    # EngineeringUnderstanding.model_dump(). Distinct from evidence_package:
+    # this is judgment (hypotheses tested, cross-source synthesis, insights),
+    # not curated retrieval. Planning's prompt is now built from this field
+    # first, falling back to evidence_package/graph_context_text only when
+    # this is empty (a run that predates it, or synthesis found nothing to
+    # work with). `investigation_workspace` (the scratch reasoning that
+    # produced this) is deliberately NOT projected here — it must never
+    # reach Planning; it stays in the persisted WorkingContext only.
+    engineering_understanding: dict[str, Any] = Field(default_factory=dict)
     # Every indexed repository in relevance order, best first. A *ranking*, not
     # a claim of ownership — Planning reads it positionally (star ratings, and
     # `[0]` as the target for its component-ownership verification), so it stays

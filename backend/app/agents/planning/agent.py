@@ -79,6 +79,10 @@ from app.context_pipeline.reasoning.curation import EvidencePackage, render_evid
 from app.context_pipeline.reasoning.engine import discover
 from app.context_pipeline.reasoning.investigation import SessionContext
 from app.context_pipeline.reasoning.projection import build_result, to_contract_evidence
+from app.context_pipeline.reasoning.understanding import (
+    EngineeringUnderstanding,
+    render_engineering_understanding_text,
+)
 from app.core.exceptions import AppError
 from app.core.redact import redact_secrets
 
@@ -446,19 +450,48 @@ def _selected_repo_names(result: dict[str, Any], ranked_repo_names: list[str]) -
 
 
 def _graph_context_text_from(result: dict[str, Any]) -> str:
-    """The graph-context text this stage's prompt actually uses — the
-    curated `evidence_package` rendering when Context Discovery produced
-    one (see reasoning.curation.render_evidence_package_text), falling
-    back to the older, unranked `graph_context_text` only for a run that
-    predates curation or where curation found no components at all to
-    work with. This is the fix for "Planning receives hundreds of
-    components instead of actionable knowledge": the prompt itself now
-    contains only what `curate()` decided matters, not a raw dump.
+    """The graph-context text this stage's prompt actually uses.
+
+    Under the Frontier-Class Investigation Agent redesign, Planning's
+    primary input is the synthesized `engineering_understanding` — a
+    hypothesis-tested, self-challenged conclusion, not a data dump (see
+    `reasoning.understanding`'s own docstring: "Planning quality can never
+    exceed Context Discovery quality"). The curated `evidence_package`
+    rendering (see reasoning.curation.render_evidence_package_text) is
+    appended after it, unconditionally when both exist, purely for
+    traceability — never as the primary basis for the plan.
+
+    Falls back to evidence-package-only, then to the older unranked
+    `graph_context_text`, for a run that predates synthesis/curation or
+    where either produced nothing to work with — so nothing regresses for
+    an already-persisted `AgentStep.result`.
     """
     package = result.get("evidence_package")
-    if package and package.get("items"):
-        return render_evidence_package_text(EvidencePackage.model_validate(package))
-    return result.get("graph_context_text") or ""
+    evidence_text = (
+        render_evidence_package_text(EvidencePackage.model_validate(package))
+        if package and package.get("items")
+        else (result.get("graph_context_text") or "")
+    )
+
+    understanding_dump = result.get("engineering_understanding")
+    if understanding_dump:
+        try:
+            understanding_text = render_engineering_understanding_text(
+                EngineeringUnderstanding.model_validate(understanding_dump)
+            )
+        except Exception:
+            understanding_text = ""
+        if understanding_text:
+            if evidence_text:
+                return (
+                    understanding_text
+                    + "\n\n---\n\n**Supporting evidence** (for traceability — not the "
+                    "primary basis for this plan):\n\n"
+                    + evidence_text
+                )
+            return understanding_text
+
+    return evidence_text
 
 
 async def _resolve_context(context: AgentContext, db: AsyncSession) -> _ResolvedContext:
