@@ -5,20 +5,39 @@ database-over-environment precedence, and that /github/connect and
 """
 
 import uuid
+from collections.abc import Generator
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
+from app.models.oauth_app_credential import OAuthAppCredential
 from app.models.user import User
 
 pytestmark = pytest.mark.asyncio
 
 
+@pytest.fixture(autouse=True)
+async def clean_oauth_app_credentials(db_session: AsyncSession) -> None:
+    """This suite runs against the same database as the running dev app -
+    db_session only wraps and rolls back THIS test's own transaction, it
+    doesn't erase rows already committed by real usage (an admin actually
+    configuring a real OAuth App through the UI). Deletes any pre-existing
+    github/google_drive rows at the start of this transaction so every
+    test here starts from a real "unset" baseline regardless of what's
+    genuinely configured - the rollback at teardown restores whatever was
+    really there, nothing is lost."""
+    await db_session.execute(
+        delete(OAuthAppCredential).where(
+            OAuthAppCredential.provider_key.in_(["github", "google_drive"])
+        )
+    )
+
+
 @pytest.fixture
-def no_env_credentials(monkeypatch: pytest.MonkeyPatch):
+def no_env_credentials(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     """Forces every provider's env-var credentials unset, regardless of a
     developer's own backend/.env - same convention as
     test_github_oauth.py's github_not_configured fixture."""
