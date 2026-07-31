@@ -4,6 +4,7 @@ import {
   CheckCircle2,
   Loader2,
   PenLine,
+  Terminal,
   X,
 } from "lucide-react";
 import { Card } from "../Card";
@@ -15,7 +16,7 @@ import type {
 import { fetchUnderstanding, overrideStageResult } from "../../lib/api/workflows";
 import { useAuth } from "../../app/auth-context";
 import { RepositorySelector } from "./RepositorySelector";
-import { EngineeringUnderstandingPanel } from "./EngineeringUnderstandingPanel";
+import { EngineeringUnderstandingPanel, SectionHeading } from "./EngineeringUnderstandingPanel";
 import { AdvancedDetailsSection } from "./AdvancedDetailsSection";
 import { DebugPanel } from "./DebugPanel";
 
@@ -153,13 +154,6 @@ export function ContextExplorerPanel({
       }
     >
       <div className="flex flex-col gap-4">
-        <RepositorySelector
-          workflowId={workflowId}
-          result={result}
-          humanOverride={humanOverride}
-          onOverridden={onOverridden}
-        />
-
         {/* Engineering Understanding projection */}
         {isLoadingUnderstanding && (
           <div className="flex items-center gap-2 py-4 text-xs text-fg-muted">
@@ -175,20 +169,11 @@ export function ContextExplorerPanel({
             </p>
           </div>
         )}
-        {understanding && (
-          <>
-            <EngineeringUnderstandingPanel dto={understanding} />
-            <AdvancedDetailsSection dto={understanding} />
-            <DebugPanel
-              bundle={debugBundle}
-              isLoading={isLoadingDebug}
-              error={debugError}
-              onExpand={handleExpandDebug}
-            />
-          </>
-        )}
-
-        {/* Readiness verdict badge — compact summary below the understanding */}
+        {/* Planning Readiness — the answer to "is Planning ready?", one of
+            Level 1's nine questions, placed first rather than left to
+            trail below two collapsible sections. Sourced from `result`
+            (not the understanding fetch) so it still renders even if that
+            fetch fails — unchanged resilience from before this reorder. */}
         <div className="flex items-center gap-2 rounded-lg border border-line-muted bg-surface-raised px-3 py-2">
           <span
             className={`flex items-center gap-1 text-xs font-semibold ${
@@ -211,61 +196,104 @@ export function ContextExplorerPanel({
           </span>
         </div>
 
-        {isEditing ? (
-          <div className="flex flex-col gap-2">
-            <label htmlFor="context-correction" className="text-xs font-medium text-fg-secondary">
-              Graph context passed to Planning
-            </label>
-            <textarea
-              id="context-correction"
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              disabled={isSaving}
-              rows={8}
-              className="w-full rounded-lg border border-line bg-surface-raised px-3 py-2 font-mono text-xs text-fg placeholder-fg-subtle focus:border-accent-line disabled:opacity-50"
+        {understanding && (
+          <>
+            <EngineeringUnderstandingPanel dto={understanding} />
+
+            {/* Repository Selector — an adjustment to the narrative above,
+                not the first thing an engineer sees. */}
+            <RepositorySelector
+              workflowId={workflowId}
+              result={result}
+              humanOverride={humanOverride}
+              onOverridden={onOverridden}
             />
-            {error && <p className="text-xs text-danger-fg">{error}</p>}
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={handleSave}
-                disabled={isSaving}
-                className="inline-flex items-center gap-1.5 rounded-lg bg-accent-solid px-3 py-1.5 text-xs font-medium text-accent-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-              >
-                {isSaving ? "Saving…" : "Save correction"}
-              </button>
-              <button
-                type="button"
-                onClick={() => setIsEditing(false)}
-                disabled={isSaving}
-                className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted ring-1 ring-inset ring-line hover:bg-surface-raised"
-              >
-                <X className="h-3.5 w-3.5" aria-hidden="true" />
-                Cancel
-              </button>
-            </div>
-          </div>
-        ) : (
-          <details className="group">
-            <summary className="cursor-pointer text-xs font-medium text-fg-muted hover:text-fg-secondary">
-              View graph context passed to Planning
-              {correctedContext !== null && (
-                <span className="ml-1.5 rounded bg-accent-bg px-1.5 py-0.5 font-normal text-accent-fg">
-                  edited by you
-                </span>
-              )}
-            </summary>
-            {correctedContext !== null && (
-              <p className="mt-2 text-xs text-fg-muted">
-                This is your correction — it&apos;s what Planning will read. The agent&apos;s
-                original text is kept unchanged on the run record.
-              </p>
-            )}
-            <p className="mt-2 rounded-lg bg-canvas p-3 font-mono text-xs whitespace-pre-wrap text-fg-secondary">
-              {effectiveContext || "No graph context text."}
-            </p>
-          </details>
+
+            <AdvancedDetailsSection
+              dto={understanding}
+              bundle={debugBundle}
+              isLoading={isLoadingDebug}
+              error={debugError}
+              onExpand={handleExpandDebug}
+            />
+            <DebugPanel
+              bundle={debugBundle}
+              isLoading={isLoadingDebug}
+              error={debugError}
+              onExpand={handleExpandDebug}
+            />
+          </>
         )}
+
+        {/* Technical: the raw text Planning's prompt is built from — a
+            deliberately separate, clearly-labelled technical section, not
+            part of the curated Engineering Understanding narrative above. */}
+        <section className="rounded-lg border border-line-muted bg-canvas px-3 py-2.5">
+          <SectionHeading icon={Terminal}>Technical: Graph Context</SectionHeading>
+          <p className="mt-0.5 text-[11px] text-fg-subtle">
+            The raw text Planning's prompt is built from. For advanced correction only.
+          </p>
+          <div className="mt-2">
+            {isEditing ? (
+              <div className="flex flex-col gap-2">
+                <label
+                  htmlFor="context-correction"
+                  className="text-xs font-medium text-fg-secondary"
+                >
+                  Graph context passed to Planning
+                </label>
+                <textarea
+                  id="context-correction"
+                  value={draft}
+                  onChange={(e) => setDraft(e.target.value)}
+                  disabled={isSaving}
+                  rows={8}
+                  className="w-full rounded-lg border border-line bg-surface-raised px-3 py-2 font-mono text-xs text-fg placeholder-fg-subtle focus:border-accent-line disabled:opacity-50"
+                />
+                {error && <p className="text-xs text-danger-fg">{error}</p>}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSave}
+                    disabled={isSaving}
+                    className="inline-flex items-center gap-1.5 rounded-lg bg-accent-solid px-3 py-1.5 text-xs font-medium text-accent-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {isSaving ? "Saving…" : "Save correction"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsEditing(false)}
+                    disabled={isSaving}
+                    className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted ring-1 ring-inset ring-line hover:bg-surface-raised"
+                  >
+                    <X className="h-3.5 w-3.5" aria-hidden="true" />
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <details className="group">
+                <summary className="cursor-pointer text-xs font-medium text-fg-muted hover:text-fg-secondary">
+                  View graph context passed to Planning
+                  {correctedContext !== null && (
+                    <span className="ml-1.5 rounded bg-accent-bg px-1.5 py-0.5 font-normal text-accent-fg">
+                      edited by you
+                    </span>
+                  )}
+                </summary>
+                {correctedContext !== null && (
+                  <p className="mt-2 text-xs text-fg-muted">
+                    This is your correction — it&apos;s what Planning will read. The agent&apos;s
+                    original text is kept unchanged on the run record.
+                  </p>
+                )}
+                <p className="mt-2 rounded-lg bg-canvas p-3 font-mono text-xs whitespace-pre-wrap text-fg-secondary">
+                  {effectiveContext || "No graph context text."}
+                </p>
+              </details>
+            )}
+          </div>
+        </section>
       </div>
     </Card>
   );

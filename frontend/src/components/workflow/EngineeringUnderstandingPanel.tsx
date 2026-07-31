@@ -127,6 +127,9 @@ function RelevantAreas({
   return (
     <section className="flex flex-col gap-1.5">
       <SectionHeading icon={Layers}>Relevant Areas</SectionHeading>
+      <p className="text-[11px] text-fg-subtle">
+        What's involved, grouped by area — see Advanced Details for how they relate.
+      </p>
       {areas.map((area) => (
         <div key={area.name} className="rounded-lg bg-surface-raised px-3 py-2">
           <p className="text-xs font-medium text-fg-secondary">{area.name}</p>

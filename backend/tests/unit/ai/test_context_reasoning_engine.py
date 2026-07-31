@@ -161,6 +161,28 @@ def test_ledger_rejects_an_uncited_interpretation() -> None:
         )
 
 
+def test_ledger_rejects_an_inference_citing_a_fact_not_in_this_ledger() -> None:
+    ledger = Ledger()
+    with pytest.raises(ValueError, match="not in this ledger"):
+        ledger.add_inference(
+            kind="assumption",
+            statement="probably the payment service",
+            supporting_fact_ids=["f_nonexistent"],
+        )
+
+
+def test_ledger_accepts_an_inference_citing_a_real_fact() -> None:
+    ledger = Ledger()
+    ev = ledger.add_evidence(provider="graph", action="a", outcome="success", summary="s")
+    fact = ledger.add_fact(
+        kind="repository", subject="payment-service", provider="graph", evidence_id=ev.evidence_id
+    )
+    inference = ledger.add_inference(
+        kind="repository_candidate", statement="payment-service", supporting_fact_ids=[fact.fact_id]
+    )
+    assert inference.supporting_fact_ids == [fact.fact_id]
+
+
 def test_withdrawn_inferences_are_superseded_not_deleted() -> None:
     ledger = Ledger()
     ev = ledger.add_evidence(provider="graph", action="a", outcome="success", summary="s")

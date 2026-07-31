@@ -408,7 +408,7 @@ function makeDebugBundle(): DebugBundleDTO {
     planning_metadata: {},
     working_memory: {},
     assumptions: ["Design docs are not required to proceed"],
-    evidence_package_raw: {},
+    evidence_package_raw: { items: [{ name: "RetryHandler", tier: "must_modify" }] },
   };
 }
 
@@ -506,33 +506,60 @@ describe("ContextExplorerPanel", () => {
     expect(screen.getByText("Only one repository is indexed.")).toBeInTheDocument();
   });
 
-  it("shows capability signals inside Debug, omitting inapplicable capabilities", async () => {
+  it("shows capability signals inside Advanced Details, not Debug, omitting inapplicable capabilities", async () => {
     renderWithAuth(
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    await userEvent.click(screen.getByText("Debug"));
+    await userEvent.click(screen.getByText("Advanced Details"));
 
-    expect(await screen.findByText("29%")).toBeInTheDocument();
-    expect(screen.getByText("Knowledge graph reachable")).toBeInTheDocument();
+    expect(await screen.findByText("29%")).toBeVisible();
+    expect(screen.getByText("Knowledge graph reachable")).toBeVisible();
     // An unsatisfied signal must explain what is missing, not just show a cross.
-    expect(screen.getByText(/the repository is likely not indexed yet/)).toBeInTheDocument();
+    expect(screen.getByText(/the repository is likely not indexed yet/)).toBeVisible();
     expect(screen.queryByText("Work item")).not.toBeInTheDocument();
   });
 
-  it("shows findings and evidence inside Debug, labeling unverified claims", async () => {
+  it("shows evidence details inside Advanced Details, not Debug, labeling unverified claims", async () => {
     renderWithAuth(
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    await userEvent.click(screen.getByText("Debug"));
+    await userEvent.click(screen.getByText("Advanced Details"));
 
-    expect(await screen.findByText("ghost-service")).toBeInTheDocument();
-    expect(screen.getByText("unverified claim")).toBeInTheDocument();
+    expect(await screen.findByText("ghost-service")).toBeVisible();
+    expect(screen.getByText("unverified claim")).toBeVisible();
     expect(screen.getAllByText(/Queried the graph: 1 repository\./).length).toBeGreaterThan(0);
   });
 
-  it("shows raw gaps and graph traversal information inside Debug", async () => {
+  it("opening Advanced Details alone triggers the shared ?debug=true fetch", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    await userEvent.click(screen.getByText("Advanced Details"));
+
+    await waitFor(() => {
+      expect(workflowsApi.fetchUnderstanding).toHaveBeenLastCalledWith("tok", "w1", true);
+    });
+  });
+
+  it("keeps capability signals and evidence details out of Debug's own visible content", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    // Opening Debug alone (not Advanced Details) still populates the shared
+    // bundle, so this proves the *placement* moved, not just data
+    // availability: the signal/finding text is present in the DOM (inside
+    // the still-collapsed Advanced Details), but not visible under Debug.
+    await userEvent.click(screen.getByText("Debug"));
+
+    expect(await screen.findByText("29%")).not.toBeVisible();
+    expect(screen.getByText("ghost-service")).not.toBeVisible();
+  });
+
+  it("shows raw gaps, graph traversal, and the raw payload inside Debug", async () => {
     renderWithAuth(
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
@@ -541,10 +568,11 @@ describe("ContextExplorerPanel", () => {
 
     expect(
       await screen.findByText("No design documentation was found for this work."),
-    ).toBeInTheDocument();
-    expect(screen.getByText(/constraints a ticket omits/)).toBeInTheDocument();
-    expect(screen.getByText(/Connect Confluence/)).toBeInTheDocument();
-    expect(screen.getByText(/Repository ranking:/)).toBeInTheDocument();
+    ).toBeVisible();
+    expect(screen.getByText(/constraints a ticket omits/)).toBeVisible();
+    expect(screen.getByText(/Connect Confluence/)).toBeVisible();
+    expect(screen.getByText(/Repository ranking:/)).toBeVisible();
+    expect(screen.getByText(/"must_modify"/)).toBeVisible();
   });
 
   it("shows a saved human correction, not the agent's superseded text", async () => {

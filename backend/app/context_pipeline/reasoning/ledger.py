@@ -260,11 +260,22 @@ class Ledger(BaseModel):
         """Record an interpretation. Requires at least one supporting fact —
         an uncited interpretation is an unsupported assumption, and the whole
         point of separating inference from fact is that those can't be
-        stored as if they were knowledge."""
+        stored as if they were knowledge. Every cited id must also resolve to
+        a real fact already in this ledger — the same "no orphan provenance"
+        rule `add_fact` already enforces for `evidence_id`, applied here to
+        `supporting_fact_ids` so a fabricated citation is rejected rather
+        than stored as if it were real."""
         if not supporting_fact_ids:
             raise ValueError(
                 f"Cannot add inference {statement!r} with no supporting facts — "
                 "every interpretation must cite the facts it rests on."
+            )
+        known_fact_ids = {f.fact_id for f in self.facts}
+        missing = [fid for fid in supporting_fact_ids if fid not in known_fact_ids]
+        if missing:
+            raise ValueError(
+                f"Cannot add inference {statement!r}: supporting_fact_ids {missing!r} "
+                "are not in this ledger."
             )
         inference = Inference(
             kind=kind,
