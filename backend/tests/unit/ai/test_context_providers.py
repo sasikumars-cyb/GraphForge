@@ -187,6 +187,57 @@ async def test_github_provider_resolves_a_successful_fetch() -> None:
 
 
 @pytest.mark.asyncio
+async def test_github_provider_resolves_a_bare_repository_reference_via_get_repository() -> None:
+    """A GITHUB_REPOSITORY reference (no #issue/#pr) has no shape execute()'s
+    regex matches — this is the fix for that gap: resolve() must call
+    get_repository() directly instead of routing through execute()."""
+    github_tool = MagicMock()
+    github_tool.get_repository = AsyncMock(
+        return_value=ToolResult(
+            tool_id="github",
+            tool_name="GitHub",
+            success=True,
+            data={"context_text": "GitHub repository acme/widgets — Widget factory"},
+            summary="Fetched GitHub repository acme/widgets",
+        )
+    )
+    reference = Reference(
+        type=ReferenceType.GITHUB_REPOSITORY,
+        provider="github",
+        confidence=0.7,
+        raw_value="acme/widgets",
+        normalized_value="acme/widgets",
+    )
+
+    artifact = await GitHubProvider(MagicMock(), github_tool=github_tool).resolve(reference)
+
+    github_tool.get_repository.assert_awaited_once_with("acme", "widgets")
+    assert artifact is not None
+    assert artifact.text == "GitHub repository acme/widgets — Widget factory"
+    assert artifact.evidence.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_github_provider_reports_failure_for_a_malformed_repository_reference() -> None:
+    github_tool = MagicMock()
+    github_tool.get_repository = AsyncMock()
+    reference = Reference(
+        type=ReferenceType.GITHUB_REPOSITORY,
+        provider="github",
+        confidence=0.7,
+        raw_value="not-a-valid-repo-ref",
+        normalized_value="not-a-valid-repo-ref",
+    )
+
+    artifact = await GitHubProvider(MagicMock(), github_tool=github_tool).resolve(reference)
+
+    github_tool.get_repository.assert_not_awaited()
+    assert artifact is not None
+    assert artifact.text == ""
+    assert artifact.evidence.status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_confluence_provider_reports_unavailable_without_mcp_config() -> None:
     """Not configured at all — distinct from "searched, found nothing"
     (status="not_found", tested below): nothing was looked up because

@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -30,6 +31,7 @@ from app.agents._contract import (
     Evidence,
     Subject,
 )
+from app.agents.git_ops._artifact_reader import HasRuns, get_stage_result
 from app.agents.llm import STAGE_REVIEW, StageAwareLLMProvider, stage_for
 from app.ai.agent.investigation_agent import InvestigationAgent, InvestigationResult
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
@@ -137,6 +139,36 @@ def _map_evidence(result: InvestigationResult) -> list[Evidence]:
     return evidence
 
 
+def _upstream_context_summary(source_workflow: HasRuns) -> str:
+    """One line per upstream stage's executive summary, read from the
+    approved blueprint this PR was generated from (`context.extras[
+    "source_workflow"]` — populated by the same auto_execution linkage
+    `code_generation`'s own blueprint context already reads, see
+    `app.api.v1.routers.workflows`'s `extras={"source_workflow": ...}`).
+
+    Deliberately additive-only, not a change to `InvestigationAgent`
+    itself (see this module's docstring — "app/ai/agent/* is never
+    modified"): this doesn't feed the summaries into the Review Agent's
+    own reasoning, it attaches them as evidence so a human reading the
+    review can see what was planned/tested alongside what
+    `InvestigationAgent` independently found in the actual diff, without
+    touching that agent's investigation logic at all.
+    """
+    lines: list[str] = []
+    for stage, label in (
+        ("planning", "Planning"),
+        ("development", "Development"),
+        ("testing", "Testing"),
+    ):
+        result = get_stage_result(source_workflow, stage)
+        summary = result.get("executive_summary") if result else None
+        if summary:
+            lines.append(f"{label}: {summary}")
+    if not lines:
+        return ""
+    return "What was planned for this change:\n" + "\n".join(lines)
+
+
 class ReviewAgentAdapter:
     """Adapts InvestigationAgent.investigate() to the IAgent protocol.
 
@@ -185,6 +217,25 @@ class ReviewAgentAdapter:
         result = await agent.investigate(pr_uuid)
 
         evidence = _map_evidence(result)
+
+        # Lighter-touch upstream context handoff — see
+        # _upstream_context_summary's own docstring for why this is
+        # evidence-only rather than a change to InvestigationAgent itself.
+        # Only present when this review is part of an Auto Execution
+        # workflow chained from an approved planning blueprint; a
+        # standalone/webhook-triggered review has no source_workflow and
+        # this is simply skipped.
+        source_workflow: Any = context.extras.get("source_workflow")
+        if source_workflow is not None:
+            upstream_summary = _upstream_context_summary(source_workflow)
+            if upstream_summary:
+                evidence.append(
+                    Evidence(
+                        kind="tool_call",
+                        reference="source_workflow_context",
+                        summary=upstream_summary,
+                    )
+                )
 
         return AgentOutput(
             agent_id="review",

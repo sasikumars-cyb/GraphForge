@@ -573,7 +573,7 @@ async def test_testing_agent_happy_path() -> None:
     assert 0.0 <= output.confidence.score <= 1.0
     assert output.confidence.score > 0.7
     assert output.agent_id == "testing"
-    assert output.prompt_version == "1.0"
+    assert output.prompt_version == "1.2"
 
 
 @pytest.mark.asyncio

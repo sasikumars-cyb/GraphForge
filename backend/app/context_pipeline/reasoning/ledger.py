@@ -56,6 +56,9 @@ FactKind = Literal[
     "component",
     # A Kafka topic discovered by graph traversal.
     "topic",
+    # An existing TestRail/uploaded test case relevant to this request,
+    # discovered by relevance search over the test-case graph.
+    "test_case",
     # Something the human asserted. A claim, NOT a verified fact — see
     # `Fact.verified` and engine.py's verify-then-resolve flow.
     "user_statement",

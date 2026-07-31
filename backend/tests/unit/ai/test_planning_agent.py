@@ -30,11 +30,11 @@ from app.agents.planning.tools import (
     GetIndexedRepositoriesTool,
     PlanningObservation,
     TraverseArchitectureGraphTool,
-    _term_weights,
     format_graph_context,
     rank_repositories,
     to_evidence,
 )
+from app.agents.text_relevance import relevance, term_weights
 from app.graph.models import GraphNode
 
 # ---------------------------------------------------------------------------
@@ -255,7 +255,7 @@ def test_key_terms_ignore_urls_and_absolute_paths_but_keep_repo_paths() -> None:
     checkout path. Those two locators supplied 16 of the 25 extracted
     terms, pushing the ticket's actual subject ("manifest") to position
     23, and — because each locator token matched only one or two
-    components — `_term_weights` then scored them as the *most*
+    components — `term_weights` then scored them as the *most*
     discriminating terms in the run. The resulting top-ranked components
     were a Jira-comment helper and three path utilities.
 
@@ -337,9 +337,9 @@ def test_ranking_prefers_production_code_over_a_matching_test_module() -> None:
     first_test_pos = min(
         pos for pos in (ctx.find("test_manifest_"), ctx.find("FakeDbutils")) if pos != -1
     )
-    assert parser_pos < first_test_pos, (
-        "production code should outrank a test module that merely shares its vocabulary"
-    )
+    assert (
+        parser_pos < first_test_pos
+    ), "production code should outrank a test module that merely shares its vocabulary"
 
 
 def test_ranking_uses_file_path_so_generic_names_are_reachable() -> None:
@@ -381,9 +381,9 @@ def test_ranking_uses_file_path_so_generic_names_are_reachable() -> None:
     ctx = format_graph_context(repos_obs, traverse_obs, relevance_terms=profile.search_terms)
 
     assert ctx.find("declare_widgets") != -1
-    assert ctx.find("declare_widgets") < ctx.find("helper"), (
-        "a generically-named component in a topically-named file should still rank"
-    )
+    assert ctx.find("declare_widgets") < ctx.find(
+        "helper"
+    ), "a generically-named component in a topically-named file should still rank"
 
 
 class TestDetectTaskMode:
@@ -480,31 +480,27 @@ class TestReusePercentMismatch:
 def test_relevance_requires_whole_token_match_not_substring() -> None:
     """ "process" must not match "processed", and "page" must not match
     "pagination" — a search term is a real word, not an arbitrary substring
-    of an unrelated one. See app.agents.planning.tools._tokenize."""
-    from app.agents.planning.tools import _relevance
-
-    assert _relevance("test_already_processed_file", ["process"]) == 0
-    assert _relevance("test_s3_pagination_fetches_pages", ["page"]) == 0
+    of an unrelated one. See app.agents.text_relevance.tokenize."""
+    assert relevance("test_already_processed_file", ["process"]) == 0
+    assert relevance("test_s3_pagination_fetches_pages", ["page"]) == 0
     # But a real whole-word match still counts.
-    assert _relevance("process_batch", ["process"]) == 1
+    assert relevance("process_batch", ["process"]) == 1
 
 
 def test_term_weights_pins_zero_document_frequency_terms_to_zero() -> None:
-    """A7 regression: a term matching no component in the pool must not
+    """A7 regression: a term matching no item in the pool must not
     receive the *maximum* possible weight. `1/(1+log1p(0))` evaluates to
-    `1/(1+0) == 1.0` — the same value a term matching exactly one
-    component out of thousands would get, for a term that was never
-    actually measured as rare, just never measured at all."""
-    components = [
-        {"name": "WidgetLoader", "type": "Class", "file_path": "svc/widget_loader.py"},
-    ]
-    weights = _term_weights(["internal", "widget"], components)
+    `1/(1+0) == 1.0` — the same value a term matching exactly one item
+    out of thousands would get, for a term that was never actually
+    measured as rare, just never measured at all."""
+    match_texts = ["WidgetLoader Class svc/widget_loader.py"]
+    weights = term_weights(["internal", "widget"], match_texts)
     assert weights["internal"] == 0.0
     assert weights["widget"] > 0.0
 
 
 def test_rank_repositories_does_not_reward_a_zero_df_term_matching_only_a_repo_name() -> None:
-    """A7 regression, black-box: `_term_weights`' df is measured over the
+    """A7 regression, black-box: `term_weights`' df is measured over the
     *component* pool, but the same weights dict also scores bare
     repository-name text — text that never contributed to that df count.
     Before the fix, a repository with zero real component evidence could
@@ -1252,9 +1248,9 @@ async def test_planning_agent_graph_unavailable_confidence_reasoning() -> None:
         output = await agent.run(context)
 
     # Confidence must be lower than the healthy-empty case (0.45)
-    assert output.confidence.score <= 0.35, (
-        f"Graph unavailable should give very low confidence, got {output.confidence.score}"
-    )
+    assert (
+        output.confidence.score <= 0.35
+    ), f"Graph unavailable should give very low confidence, got {output.confidence.score}"
     assert "unavailable" in output.confidence.reasoning.lower()
 
 
@@ -1295,9 +1291,9 @@ async def test_planning_agent_graph_empty_confidence_reasoning() -> None:
         output = await agent.run(context)
 
     # Should be healthy-empty confidence (0.45 + possible step bump)
-    assert 0.40 <= output.confidence.score <= 0.55, (
-        f"Healthy-empty graph should give moderate confidence, got {output.confidence.score}"
-    )
+    assert (
+        0.40 <= output.confidence.score <= 0.55
+    ), f"Healthy-empty graph should give moderate confidence, got {output.confidence.score}"
     assert "healthy" in output.confidence.reasoning.lower()
     assert "unavailable" not in output.confidence.reasoning.lower()
 
@@ -1396,9 +1392,9 @@ async def test_planning_agent_flags_component_misattributed_to_wrong_repo() -> N
     misattribution = [w for w in warnings if "OtherRepoOnlyComponent" in w]
     assert misattribution, f"expected a misattribution warning, got: {warnings}"
     assert "ds-team-gpc-svc" in misattribution[0], "warning must name the real owning repository"
-    assert "ds-team-apc-svc" in misattribution[0], (
-        "warning must name the wrongly-claimed repository"
-    )
+    assert (
+        "ds-team-apc-svc" in misattribution[0]
+    ), "warning must name the wrongly-claimed repository"
     # The genuinely-owned component must not be caught in the same net.
     assert not any("ZulutronManifestWidget" in w for w in warnings)
 
@@ -1445,9 +1441,9 @@ async def test_planning_agent_repository_usage_verified_false_on_misattributed_f
         "repository must not read as verified"
     )
     warnings = output.result["verification_warnings"]
-    assert any("other_repo_only_component.py" in w and "ds-team-gpc-svc" in w for w in warnings), (
-        f"expected a file-misattribution warning naming the real owner, got: {warnings}"
-    )
+    assert any(
+        "other_repo_only_component.py" in w and "ds-team-gpc-svc" in w for w in warnings
+    ), f"expected a file-misattribution warning naming the real owner, got: {warnings}"
 
 
 @pytest.mark.asyncio
@@ -1491,6 +1487,6 @@ async def test_planning_agent_flags_unindexed_sibling_repo_reference() -> None:
         output = await agent.run(context)
 
     warnings = output.result["verification_warnings"]
-    assert any("MPC" in w and "not itself indexed" in w for w in warnings), (
-        f"expected an unindexed-sibling-repo warning, got: {warnings}"
-    )
+    assert any(
+        "MPC" in w and "not itself indexed" in w for w in warnings
+    ), f"expected an unindexed-sibling-repo warning, got: {warnings}"

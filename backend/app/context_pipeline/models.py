@@ -30,6 +30,7 @@ class ReferenceType(StrEnum):
     GITHUB_PULL_REQUEST = "github_pull_request"
     GITHUB_FILE = "github_file"
     LOCAL_REPOSITORY = "local_repository"
+    GOOGLE_DRIVE_FILE = "google_drive_file"
 
 
 class ProviderCapability(StrEnum):
@@ -44,6 +45,7 @@ class ProviderCapability(StrEnum):
     REPOSITORY_METADATA = "repository_metadata"
     KNOWLEDGE_SOURCE = "knowledge_source"
     GRAPH = "graph"
+    TEST_COVERAGE = "test_coverage"
 
 
 @dataclass(frozen=True)

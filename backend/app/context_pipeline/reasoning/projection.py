@@ -291,6 +291,13 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
             i.statement for i in ledger.live_inferences("repository_candidate")
         ],
         "graph_context_text": state.derived.get("graph_context_text", ""),
+        # Existing TestRail/uploaded test cases relevant to this request —
+        # same derived-view pattern as graph_components/graph_context_text
+        # above, over `test_case` facts instead. See TestCoverageInvestigator
+        # (investigators.py) and app.agents.testing.agent's Step 4, which
+        # prefers this over its own live lookup when a workflow ran discovery.
+        "existing_test_coverage": [dict(f.value) for f in ledger.facts_of("test_case")],
+        "test_coverage_text": state.derived.get("test_coverage_text", ""),
         # The same rule the `architecture` capability uses for "Knowledge graph
         # reachable": we queried it and nothing failed. Planning branches its
         # confidence reasoning on this to distinguish an infrastructure problem

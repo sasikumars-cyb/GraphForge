@@ -12,7 +12,6 @@ agents never write to the graph directly (GraphWriter rule from AGENT_FRAMEWORK.
 from __future__ import annotations
 
 import logging
-import math
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -21,6 +20,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import Evidence
+from app.agents.text_relevance import relevance, term_weights
 from app.graph.interfaces import IGraphRepository
 from app.models.repository import Repository
 
@@ -244,44 +244,6 @@ class TraverseArchitectureGraphTool:
 # ---------------------------------------------------------------------------
 
 
-_TOKEN_BOUNDARY_RE = re.compile(r"[^a-z0-9]+")
-_CAMEL_BOUNDARY_RE = re.compile(r"([a-z0-9])([A-Z])")
-
-
-def _tokenize(text: str) -> frozenset[str]:
-    """Split an identifier, file path, or free-text string into its
-    individual sub-words: `snake_case`, `dotted.paths`, `slash/separated`,
-    and `camelCase` are all token breaks — the same tokenization a code
-    search engine applies to identifiers.
-
-    This is what a component name and a search term are compared through,
-    rather than raw substring containment. Substring containment treats
-    "process" as a hit inside "test_already_**process**ed_file" and "page"
-    as a hit inside "**page**ination" — real words that happen to contain
-    the query as a fragment, not an actual match. Token equality doesn't
-    make that mistake, and it composes correctly for multi-word terms too:
-    "rate_attribute" tokenizes to {"rate", "attribute"}, which overlaps
-    *both* words of `transform_rate_attribute`'s {"transform", "rate",
-    "attribute"} — two-token overlap naturally outscores any single
-    incidental one-token match without needing separate phrase handling.
-    """
-    spaced = _CAMEL_BOUNDARY_RE.sub(r"\1_\2", text)
-    return frozenset(t for t in _TOKEN_BOUNDARY_RE.split(spaced.lower()) if len(t) >= 3)
-
-
-def _relevance(text: str, terms: list[str], weights: dict[str, float] | None = None) -> float:
-    """How much this text matches the search terms, by token overlap —
-    flat count of matching tokens, or (when `weights` is given) the sum of
-    each matched token's weight. See `_term_weights` for where the weights
-    come from."""
-    text_tokens = _tokenize(text)
-    term_tokens = _tokenize(" ".join(terms))
-    matched = text_tokens & term_tokens
-    if weights is None:
-        return float(len(matched))
-    return sum(weights.get(t, 1.0) for t in matched)
-
-
 def _match_text(component: dict[str, Any]) -> str:
     """The text a component is ranked on: its name, its kind, and the file
     it lives in.
@@ -335,62 +297,8 @@ def rank_score(
     it is test code. The single scoring function for both repository
     ranking and per-repository component selection, so the prompt and the
     repository order can never disagree about what scored well."""
-    score = _relevance(_match_text(component), terms, weights)
+    score = relevance(_match_text(component), terms, weights)
     return score * _TEST_RELEVANCE_FACTOR if _is_test_component(component) else score
-
-
-def _term_weights(terms: list[str], components: list[dict[str, Any]]) -> dict[str, float]:
-    """Inverse-document-frequency weight for each search-term token over the
-    *current* component pool: a token that matches almost every component is
-    nearly worthless as a discriminator; a token that matches one or two is
-    exactly what should decide the ranking.
-
-    This is what lets `relevance_terms` mix two very different kinds of
-    vocabulary safely: a fixed capability-keyword list ("loader", "schema",
-    "validator" — deliberately generic, so it matches broadly) and free-text
-    terms pulled straight out of the brief (see
-    `app.agents.planning.classifier.extract_key_terms` — deliberately
-    specific, e.g. a field or function name mentioned once). A flat
-    "one match = one point" count lets the generic terms drown out the
-    specific ones just by matching more often; weighting by rarity fixes
-    that without needing to hand-classify which list a term came from, and
-    self-calibrates to whatever this repository set's own vocabulary is —
-    no fixed thresholds, no stopword tuning per domain.
-
-    The falloff is logarithmic, not linear. A raw `1/(1+df)` is far too
-    steep to use as a ranking weight: over a 2039-component pool it scored
-    a token matching one component at 0.5 and "manifest" — matching 108,
-    and the actual subject of the brief — at 0.0092, a **54x** penalty for
-    being the right word. Rarity should break ties between plausible
-    terms, not overrule topicality outright. `1/(1+log1p(df))` keeps the
-    same ordering while compressing that gap to ~3x, so a genuinely
-    on-topic term stays competitive against an incidental one and a
-    component matching two domain tokens outranks one matching a single
-    rare token.
-    """
-    term_tokens = _tokenize(" ".join(terms))
-    if not term_tokens:
-        return {}
-    token_sets = [_tokenize(_match_text(c)) for c in components]
-    weights: dict[str, float] = {}
-    for t in term_tokens:
-        df = sum(1 for ts in token_sets if t in ts)
-        # A term matching zero components in this pool wasn't measured as
-        # rare — it wasn't measured at all, and its IDF math (log1p(0)==0)
-        # would otherwise land it at the *maximum* possible weight, 1.0,
-        # the same value a component-scoring call could never legitimately
-        # produce. That's silently unreachable here (nothing in
-        # `components` can match a token with df=0 against `components`
-        # itself), but this same weights dict is also handed to
-        # `_relevance` for scoring bare *repository names* — text that
-        # never went into the df count — where a df=0 term COULD still
-        # match and would cash in that undeserved maximum. Pin it to 0.0
-        # explicitly rather than counting on `_relevance`'s `.get(t, 1.0)`
-        # fallback to ever agree; an *absent* key still resolves to 1.0
-        # there, so leaving df=0 terms out of this dict is not the same
-        # fix as this.
-        weights[t] = 0.0 if df == 0 else 1.0 / (1 + math.log1p(df))
-    return weights
 
 
 def rank_repositories(
@@ -410,12 +318,12 @@ def rank_repositories(
     by_repo: dict[str, list[dict[str, Any]]] = {}
     for comp in components:
         by_repo.setdefault(comp["repository"], []).append(comp)
-    weights = _term_weights(terms, components)
+    weights = term_weights(terms, [_match_text(c) for c in components])
 
     def score(name: str) -> float:
         if not terms:
             return 0.0
-        total = _relevance(name, terms, weights) * 2
+        total = relevance(name, terms, weights) * 2
         for comp in by_repo.get(name, []):
             total += rank_score(comp, terms, weights)
         return total
@@ -490,7 +398,7 @@ def format_graph_context(
     for comp in components:
         by_repo_all.setdefault(comp["repository"], []).append(comp)
 
-    weights = _term_weights(terms, components)
+    weights = term_weights(terms, [_match_text(c) for c in components])
     scored = rank_repositories(indexed_repos, components, terms)
     if terms:
         # Drop repositories that match no required capability at all — they

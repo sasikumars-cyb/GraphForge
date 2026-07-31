@@ -29,6 +29,7 @@ from app.agents.planning.confluence_context import (
 )
 from app.agents.planning.tools import PlanningObservation, to_evidence
 from app.agents.prompt_utils import wrap_untrusted_content
+from app.agents.text_relevance import relevance, term_weights
 from app.context_pipeline.models import (
     ProviderCapability,
     Reference,
@@ -36,8 +37,10 @@ from app.context_pipeline.models import (
     ResolvedArtifact,
 )
 from app.core.redact import redact_secrets
+from app.graph.test_case_repository import ITestCaseGraphRepository
 from app.tools import ToolExecutor, ToolInput
 from app.tools.implementations.github_tool import GitHubTool
+from app.tools.implementations.google_drive_tool import GoogleDriveTool
 from app.tools.interfaces import ToolResult
 
 logger = logging.getLogger(__name__)
@@ -230,9 +233,32 @@ class GitHubProvider:
         )
 
     async def resolve(self, reference: Reference, **kwargs: Any) -> ResolvedArtifact | None:
-        result = await self._executor.execute_instance(
-            self._github_tool, "github", "GitHub", ToolInput(query=reference.raw_value)
-        )
+        if reference.type == ReferenceType.GITHUB_REPOSITORY:
+            # A bare "owner/repo" mention has no #issue/#pr number for
+            # execute()'s regex to find - it never matches this reference
+            # type, so without this branch a GITHUB_REPOSITORY reference was
+            # detected (see reference_detection.py) but silently never
+            # fetched. get_repository() is a direct call, not routed through
+            # `self._executor`, since it isn't shaped like ITool.execute()
+            # (owner/repo, not a ToolInput) - both its REST and MCP paths
+            # already carry their own bounded timeouts (see GitHubTool) and
+            # already never raise, matching execute_instance's own
+            # error-isolation guarantee.
+            owner_repo = reference.normalized_value.split("/", 1)
+            if len(owner_repo) != 2:
+                result = ToolResult(
+                    tool_id="github",
+                    tool_name="GitHub",
+                    success=False,
+                    error=f"'{reference.normalized_value}' isn't a valid owner/repo reference.",
+                )
+            else:
+                owner, repo = owner_repo
+                result = await self._github_tool.get_repository(owner, repo)
+        else:
+            result = await self._executor.execute_instance(
+                self._github_tool, "github", "GitHub", ToolInput(query=reference.raw_value)
+            )
         observation = PlanningObservation(
             tool_name="fetch_github_reference",
             summary=result.summary or (result.error or ""),
@@ -263,6 +289,68 @@ class GitHubProvider:
             capability=self.capability,
             reference=reference,
             title=f"GitHub {reference.normalized_value}",
+            text=text,
+            evidence=evidence,
+            raw=result.data,
+        )
+
+
+class GoogleDriveProvider:
+    """Documentation capability. Drive access is per-user (an OAuth
+    connection, not an install-wide credential — see app.models.
+    google_drive_connection), so — same as GitHubProvider above — a
+    fresh `GoogleDriveTool` instance is constructed per run using that
+    run's own decrypted (and, unlike GitHub, auto-refreshed — see
+    app.services.google_drive_service.get_decrypted_access_token) token,
+    never the shared Tool Registry singleton.
+    """
+
+    capability = ProviderCapability.DOCUMENTATION
+
+    def __init__(self, executor: ToolExecutor, google_drive_tool: GoogleDriveTool) -> None:
+        self._executor = executor
+        self._google_drive_tool = google_drive_tool
+
+    def can_resolve(self, reference: Reference) -> bool:
+        return reference.type == ReferenceType.GOOGLE_DRIVE_FILE
+
+    async def resolve(self, reference: Reference, **kwargs: Any) -> ResolvedArtifact | None:
+        result = await self._executor.execute_instance(
+            self._google_drive_tool,
+            "google_drive",
+            "Google Drive",
+            ToolInput(query=reference.raw_value),
+        )
+        observation = PlanningObservation(
+            tool_name="fetch_google_drive_file",
+            summary=result.summary or (result.error or ""),
+            data=result.data,
+            succeeded=result.success,
+            error=result.error or "",
+        )
+        evidence = to_evidence(observation, "tool_call")
+        if not result.success:
+            logger.info(
+                "context_pipeline_google_drive_fetch_failed ref=%s error=%s",
+                reference.normalized_value,
+                result.error,
+            )
+            return ResolvedArtifact(
+                provider="google_drive",
+                capability=self.capability,
+                reference=reference,
+                title=f"Google Drive {reference.normalized_value}",
+                text="",
+                evidence=evidence,
+                raw=result.data,
+            )
+        text = redact_secrets(result.data.get("context_text", ""))
+        logger.info("context_pipeline_google_drive_enriched ref=%s", reference.normalized_value)
+        return ResolvedArtifact(
+            provider="google_drive",
+            capability=self.capability,
+            reference=reference,
+            title=f"Google Drive: {result.data.get('name', reference.normalized_value)}",
             text=text,
             evidence=evidence,
             raw=result.data,
@@ -320,6 +408,51 @@ class GraphProvider:
             error=graph_result.error or "",
         )
         return repos_obs, traverse_obs
+
+
+class TestCoverageProvider:
+    """Existing test coverage capability (TestRail-synced or CSV/Excel-
+    uploaded cases — same graph subtree, see
+    app.indexer.graph.testrail_builder). Always retrieves, like
+    `GraphProvider` above: not `Reference`-triggered, since there's no
+    "test coverage reference" a request could name to resolve against.
+
+    Ranks by the same token-overlap relevance already used for repository/
+    component ranking (`app.agents.text_relevance`) and by the Testing
+    agent's own `TestRailCoverageTool`
+    (`app.agents.testing.tools`) — same algorithm reused, not
+    reimplemented a third time.
+    """
+
+    capability = ProviderCapability.TEST_COVERAGE
+
+    def __init__(self, test_case_graph_repository: ITestCaseGraphRepository) -> None:
+        self._repo = test_case_graph_repository
+
+    async def retrieve(self, terms: list[str], limit: int = 15) -> tuple[list[dict[str, Any]], int]:
+        """Returns `(ranked cases, total cases synced/uploaded)` — the
+        total is what lets a caller distinguish "nothing synced at all"
+        from "synced, but none matched this request". Each case is
+        `{"title", "refs"}`."""
+        cases = await self._repo.get_all_test_cases(limit=2000)
+        if not cases or not terms:
+            return [], len(cases)
+
+        titles = [str(node.properties.get("title", "")) for node in cases]
+        weights = term_weights(terms, titles)
+        scored = sorted(
+            (
+                (relevance(title, terms, weights), node)
+                for title, node in zip(titles, cases, strict=True)
+            ),
+            key=lambda pair: -pair[0],
+        )
+        ranked = [
+            {"title": node.properties.get("title", ""), "refs": node.properties.get("refs", "")}
+            for score, node in scored[:limit]
+            if score > 0
+        ]
+        return ranked, len(cases)
 
 
 def wrap_artifact_text(provider: str, text: str) -> str:

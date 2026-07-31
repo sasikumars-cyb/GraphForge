@@ -7,8 +7,9 @@ reference for at all (see `discovery.py`).
 
 Reuses the exact same extraction functions the Planning Agent used to
 call directly (`jira_tool.extract_issue_key`,
-`github_tool.extract_pr_or_issue_ref`) plus a Confluence URL pattern and
-a local-repository heuristic — nothing here reimplements detection that
+`github_tool.extract_pr_or_issue_ref`, `google_drive_tool.
+extract_drive_file_id`) plus a Confluence URL pattern and a
+local-repository heuristic — nothing here reimplements detection that
 already existed, it only gives the result a uniform `Reference` shape.
 """
 
@@ -18,6 +19,7 @@ import re
 
 from app.context_pipeline.models import Reference, ReferenceType
 from app.tools.implementations.github_tool import extract_pr_or_issue_ref
+from app.tools.implementations.google_drive_tool import extract_drive_file_id
 from app.tools.implementations.jira_tool import extract_issue_key
 
 # A Confluence page URL: "<site>/wiki/spaces/<SPACE>/pages/<id>/<title>" or
@@ -110,6 +112,18 @@ def detect_references(
                     normalized_value=f"{owner}/{repo}",
                 )
             )
+
+    drive_file_id = extract_drive_file_id(text)
+    if drive_file_id is not None:
+        references.append(
+            Reference(
+                type=ReferenceType.GOOGLE_DRIVE_FILE,
+                provider="google_drive",
+                confidence=1.0,
+                raw_value=drive_file_id,
+                normalized_value=drive_file_id,
+            )
+        )
 
     for name in known_repo_names:
         if name and re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", text):

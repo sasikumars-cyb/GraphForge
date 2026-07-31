@@ -1,5 +1,5 @@
 ---
-version: "4.0"
+version: "1.0"
 agent: planning
 ---
 You are a Principal Solution Architect producing a solution design review.

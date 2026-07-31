@@ -57,6 +57,7 @@ from app.agents._contract import (
 )
 from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.llm import STAGE_TESTING, invoke_llm_json, stage_for
+from app.agents.planning.classifier import extract_key_terms
 from app.agents.prompt_utils import parse_json_response, render_prompt_template
 from app.agents.stage_context import format_development_block, format_planning_block
 from app.agents.testing.schemas import (
@@ -75,17 +76,19 @@ from app.agents.testing.tools import (
     TestComponentDiscoveryTool,
     TestDependencyTraversalTool,
     TestingObservation,
+    TestRailCoverageTool,
     TestRepositoryDiscoveryTool,
     format_graph_context,
     to_evidence,
 )
 from app.core.exceptions import AppError
 from app.graph.neo4j_repository import Neo4jGraphRepository
+from app.graph.test_case_repository import Neo4jTestCaseGraphRepository
 from app.graph.session import get_driver
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_VERSION = "1.0"
+_PROMPT_VERSION = "1.2"
 _PROMPT_DIR = Path(__file__).parent / "prompts"
 _MAX_GRAPH_CONTEXT_CHARS = 8_000
 
@@ -106,9 +109,7 @@ class TestingLLMError(AppError):
     error_code = "testing_llm_error"
 
 
-async def _call_llm(
-    user_prompt: str, model: str | None = None, stage: str = STAGE_TESTING
-) -> str:
+async def _call_llm(user_prompt: str, model: str | None = None, stage: str = STAGE_TESTING) -> str:
     """Send a single JSON-mode completion through the configured AI
     provider and return the raw content string. Delegates to the shared
     `app.agents.llm.invoke_llm_json` — kept as a module-level function so
@@ -280,6 +281,12 @@ class TestPlanningAgent:
         # unbudgeted one only when running outside that dispatcher (e.g.
         # a unit test calling `.run()` directly).
         graph_repo = context.extras.get("graph_repository") or Neo4jGraphRepository(get_driver())
+        # Same injectable-with-a-real-default pattern as graph_repo above —
+        # lets a unit test substitute a fake without touching a real Neo4j
+        # (this codebase's unit tests are I/O-free by convention).
+        test_case_graph_repo = context.extras.get(
+            "test_case_graph_repository"
+        ) or Neo4jTestCaseGraphRepository(get_driver())
 
         evidence: list[Evidence] = []
 
@@ -404,6 +411,46 @@ class TestPlanningAgent:
         )
 
         # ------------------------------------------------------------------
+        # Step 4 — Existing TestRail/uploaded test coverage relevant to this
+        # task. Supplementary, not gating: coverage existing or not never
+        # affects confidence below, only whether the prompt gets an extra
+        # "here's what's already covered" section.
+        #
+        # Same "prefer the context_discovery stage's result, fall back to
+        # this agent's own tool for a standalone run" pattern as
+        # repositories/components above (Steps 1-2) — context_discovery's
+        # TestCoverageInvestigator already ran this exact relevance search
+        # once per workflow; re-running it here would just be a second live
+        # Neo4j query for data already sitting in the stage result.
+        # ------------------------------------------------------------------
+        if context_discovery_result is not None:
+            existing_cases = context_discovery_result.get("existing_test_coverage") or []
+            testrail_obs = TestingObservation(
+                tool_name="context_discovery_test_coverage",
+                summary=(
+                    f"Reused {len(existing_cases)} relevant test case(s) already found by the "
+                    "Context Discovery stage."
+                    if existing_cases
+                    else "Context Discovery found no existing test coverage relevant to this "
+                    "task."
+                ),
+                data={"cases": existing_cases, "total_synced": len(existing_cases)},
+            )
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="read_context_discovery_test_coverage",
+                    summary="Read existing TestRail/uploaded test coverage from the Context "
+                    "Discovery stage's result via get_stage_result().",
+                )
+            )
+        else:
+            testrail_terms = list(extract_key_terms(task_description))
+            testrail_tool = TestRailCoverageTool(test_case_graph_repository=test_case_graph_repo)
+            testrail_obs = await testrail_tool.execute(testrail_terms)
+            evidence.append(to_evidence(testrail_obs, "graph_traversal"))
+
+        # ------------------------------------------------------------------
         # Observe: determine confidence
         # ------------------------------------------------------------------
         graph_unavailable = not repos_obs.succeeded or (
@@ -429,7 +476,7 @@ class TestPlanningAgent:
         # ------------------------------------------------------------------
         # Synthesize: LLM call with full graph context
         # ------------------------------------------------------------------
-        graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs)
+        graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs, testrail_obs)
         prompt_task_description = (
             f"{task_description}\n\n{prior_stage_context}"
             if prior_stage_context

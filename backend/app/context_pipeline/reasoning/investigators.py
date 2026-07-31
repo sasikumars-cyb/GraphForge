@@ -431,14 +431,20 @@ class ConfluenceInvestigator:
 
 
 class GitHubInvestigator:
-    """Source control. Proposes a fetch for any GitHub PR/issue reference
-    recognized in the request *or* inside retrieved ticket prose — which is
-    how a failed Jira lookup can still end up with useful code context
-    instead of an immediate question to the user."""
+    """Source control. Proposes a fetch for any GitHub PR/issue/repository
+    reference recognized in the request *or* inside retrieved ticket prose —
+    which is how a failed Jira lookup can still end up with useful code
+    context instead of an immediate question to the user.
+
+    "github_repository" (a bare "owner/repo" mention, no #issue/#pr) is
+    included alongside the PR/issue types: `GitHubProvider.resolve()`
+    already declared it resolvable (`can_resolve()`) and now actually
+    fetches it (see providers.py), so proposing it here is what makes that
+    reachable rather than a reference that's detected and then dropped."""
 
     name = "github"
 
-    _FETCHABLE = ("github_pull_request", "github_issue")
+    _FETCHABLE = ("github_pull_request", "github_issue", "github_repository")
 
     def propose(self, state: WorkingContext) -> list[InvestigationAction]:
         ledger = state.ledger
@@ -520,6 +526,95 @@ class GitHubInvestigator:
         )
         return InvestigationOutcome(
             observation=f"I read {reference.normalized_value} for the surrounding code context.",
+            yielded=True,
+        )
+
+
+class GoogleDriveInvestigator:
+    """Documentation capability — Drive's counterpart to GitHubInvestigator
+    above: proposes a fetch for any Google Drive file/folder reference
+    recognized in the request or inside retrieved ticket prose. Feeds the
+    same `documentation` capability Confluence does (see capabilities.py)
+    rather than a new one — from Context Discovery's point of view, Drive
+    is just another place design docs happen to live.
+    """
+
+    name = "google_drive"
+
+    def propose(self, state: WorkingContext) -> list[InvestigationAction]:
+        ledger = state.ledger
+        retrieved = set(ledger.subjects_of("document"))
+        actions: list[InvestigationAction] = []
+
+        for fact in ledger.facts_of("reference"):
+            if fact.value.get("type") != "google_drive_file":
+                continue
+            key = f"fetch_drive_file:{fact.subject}"
+            if fact.subject in retrieved or ledger.attempted(self.name, key):
+                continue
+            actions.append(
+                InvestigationAction(
+                    provider=self.name,
+                    key=key,
+                    intent=f"{fact.subject} is referenced — I'll read it as linked "
+                    "documentation for this change.",
+                    targets="documentation",
+                    params={"reference": fact.value},
+                    cost=2,
+                )
+            )
+        return actions
+
+    async def run(
+        self, action: InvestigationAction, session: SessionContext, recorder: Recorder
+    ) -> InvestigationOutcome:
+        from app.context_pipeline.providers import GoogleDriveProvider
+        from app.services.google_drive_service import get_decrypted_access_token
+        from app.tools import ToolExecutor, get_tool_registry
+        from app.tools.implementations.google_drive_tool import GoogleDriveTool
+
+        reference = _reference_from_fact_value(action.params["reference"])
+
+        token = (
+            await get_decrypted_access_token(session.db, session.user_id)
+            if session.user_id is not None
+            else None
+        )
+        if token is None:
+            recorder.evidence(
+                "unavailable",
+                "Cannot read the referenced Google Drive file: no Google Drive account "
+                "is connected.",
+            )
+            return InvestigationOutcome(
+                observation="I can see a Google Drive file referenced, but no Google Drive "
+                "account is connected so I can't read it.",
+                yielded=False,
+            )
+
+        provider = GoogleDriveProvider(
+            ToolExecutor(registry=get_tool_registry()),
+            GoogleDriveTool({"google_drive_access_token": token}),
+        )
+        artifact = await provider.resolve(reference)
+
+        if artifact is None or not artifact.text:
+            recorder.evidence("not_found", "Could not retrieve the referenced Google Drive file.")
+            return InvestigationOutcome(
+                observation="I couldn't retrieve the referenced Google Drive file.",
+                yielded=False,
+            )
+
+        recorder.evidence("success", f"Retrieved '{artifact.title}' from Google Drive.")
+        recorder.fact(
+            "document",
+            reference.normalized_value,
+            value={"title": artifact.title},
+            text=artifact.text,
+        )
+        return InvestigationOutcome(
+            observation=f"I read '{artifact.title}' from Google Drive for the surrounding "
+            "context.",
             yielded=True,
         )
 
@@ -967,6 +1062,103 @@ class GraphInvestigator:
         )
 
 
+class TestCoverageInvestigator:
+    """Existing test coverage — TestRail-synced or CSV/Excel-uploaded test
+    cases (same graph subtree, see app.indexer.graph.testrail_builder).
+
+    Unlike the graph investigator above, this has no survey/scope/verify
+    split: there is no "which project owns this" question to narrow down
+    first, just one relevance-ranked search over whatever has been synced
+    or uploaded. Proposes exactly once per session (the `attempted()`
+    guard), the same shape `GraphInvestigator`'s initial survey uses.
+    """
+
+    name = "test_coverage"
+
+    def propose(self, state: WorkingContext) -> list[InvestigationAction]:
+        if state.ledger.attempted(self.name, "survey_test_coverage"):
+            return []
+        return [
+            InvestigationAction(
+                provider=self.name,
+                key="survey_test_coverage",
+                intent="I'll check for existing TestRail or uploaded test cases relevant to "
+                "this request.",
+                targets="test_coverage",
+                params={"search_terms": _search_terms(state)},
+                cost=1,
+            )
+        ]
+
+    async def run(
+        self, action: InvestigationAction, session: SessionContext, recorder: Recorder
+    ) -> InvestigationOutcome:
+        from app.context_pipeline.providers import TestCoverageProvider
+        from app.graph.session import get_driver
+        from app.graph.test_case_repository import Neo4jTestCaseGraphRepository
+
+        terms: list[str] = action.params.get("search_terms") or []
+        repo = session.test_case_graph_repo_override or Neo4jTestCaseGraphRepository(get_driver())
+        provider = TestCoverageProvider(repo)
+
+        try:
+            cases, total_synced = await provider.retrieve(terms)
+        except Exception as exc:
+            recorder.evidence("failed", f"The test-case graph could not be queried: {exc}.")
+            return InvestigationOutcome(
+                observation="I couldn't reach the test-case graph, so I have no existing "
+                "coverage to check against.",
+                yielded=False,
+            )
+
+        if total_synced == 0:
+            recorder.evidence(
+                "not_found", "No TestRail or uploaded test cases have been synced yet."
+            )
+            return InvestigationOutcome(
+                observation="No test cases have been synced from TestRail or uploaded yet, "
+                "so there's no existing coverage to check.",
+                yielded=False,
+                derived={},
+            )
+
+        evidence = recorder.evidence(
+            "success" if cases else "not_found",
+            (
+                f"Found {len(cases)} relevant test case(s) out of {total_synced} synced/uploaded."
+                if cases
+                else f"None of the {total_synced} synced/uploaded test case(s) matched this request."
+            ),
+        )
+        for case in cases:
+            recorder.fact_once(
+                "test_case",
+                str(case.get("title", "")),
+                value=dict(case),
+                evidence=evidence,
+            )
+
+        derived: dict[str, Any] = {}
+        if cases:
+            case_lines = [
+                f"  {c['title']}" + (f" (refs: {c['refs']})" if c.get("refs") else "")
+                for c in cases
+            ]
+            derived["test_coverage_text"] = (
+                "**Existing test coverage relevant to this request**:\n" + "\n".join(case_lines)
+            )
+
+        return InvestigationOutcome(
+            observation=(
+                f"Found {len(cases)} existing test case(s) relevant to this request."
+                if cases
+                else f"{total_synced} test case(s) are synced, but none matched this request."
+            ),
+            yielded=bool(cases),
+            derived=derived,
+        )
+
+
 def default_investigators() -> list[Any]:
     """The investigator set a discovery run uses, cheapest-first as a tiebreak
     hint only — the engine ranks by value, not by this order."""
@@ -976,4 +1168,6 @@ def default_investigators() -> list[Any]:
         GraphInvestigator(),
         GitHubInvestigator(),
         ConfluenceInvestigator(),
+        GoogleDriveInvestigator(),
+        TestCoverageInvestigator(),
     ]

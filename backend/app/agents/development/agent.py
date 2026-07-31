@@ -75,7 +75,7 @@ from app.graph.session import get_driver
 
 logger = logging.getLogger(__name__)
 
-_PROMPT_VERSION = "1.0"
+_PROMPT_VERSION = "1.1"
 _PROMPT_DIR = Path(__file__).parent / "prompts"
 _MAX_GRAPH_CONTEXT_CHARS = 8_000  # larger budget for detailed blueprint
 

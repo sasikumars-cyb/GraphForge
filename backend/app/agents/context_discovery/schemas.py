@@ -69,6 +69,12 @@ class ContextDiscoveryResult(BaseModel):
     # are exhausted, produces the clarification question.
     implementation_candidates: list[str] = Field(default_factory=list)
     graph_context_text: str = ""
+    # Existing TestRail/uploaded test cases relevant to this request — same
+    # derived-view relationship to `test_case` facts that graph_components
+    # has to `component` facts. See TestCoverageInvestigator (reasoning/
+    # investigators.py).
+    existing_test_coverage: list[dict[str, Any]] = Field(default_factory=list)
+    test_coverage_text: str = ""
     graph_available: bool = False
     graph_has_data: bool = False
 

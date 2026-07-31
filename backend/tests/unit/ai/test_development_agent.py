@@ -577,7 +577,7 @@ async def test_development_agent_happy_path() -> None:
 
     # Agent ID
     assert output.agent_id == "development"
-    assert output.prompt_version == "1.0"
+    assert output.prompt_version == "1.1"
 
 
 @pytest.mark.asyncio

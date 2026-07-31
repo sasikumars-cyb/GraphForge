@@ -19,7 +19,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import Evidence
+from app.agents.text_relevance import relevance, term_weights
 from app.graph.interfaces import IGraphRepository
+from app.graph.test_case_repository import ITestCaseGraphRepository
 from app.models.repository import Repository
 
 logger = logging.getLogger(__name__)
@@ -279,6 +281,89 @@ class TestDependencyTraversalTool:
         )
 
 
+class TestRailCoverageTool:
+    """Finds existing TestRail test cases relevant to this task, by
+    token-overlap relevance against the task description (and any
+    already-discovered component names) — not graph traversal to code,
+    since TestRail cases carry no Component/Repository edge in this pass
+    (see app.indexer.graph.testrail_builder's own docstring for why).
+
+    This is the concrete "impact on existing test coverage" signal the
+    Testing agent's plan cites: which of the change's regression/
+    integration tests already have TestRail coverage, and which are
+    net-new gaps — see format_graph_context's "Existing TestRail
+    coverage" section below and testing.md's instruction to cross-
+    reference against it.
+
+    Evidence kind: graph_traversal — it *is* a live Neo4j read, even
+    without a code-graph edge to traverse.
+    """
+
+    name = "find_testrail_coverage"
+
+    def __init__(self, test_case_graph_repository: ITestCaseGraphRepository) -> None:
+        self._repo = test_case_graph_repository
+
+    async def execute(self, terms: list[str], limit: int = 15) -> TestingObservation:
+        try:
+            # Bounded fetch, then rank in Python (same pattern
+            # rank_repositories uses for components) - simpler and more
+            # transparent than building a full-text Cypher index for what
+            # is, per project, at most a few thousand cases.
+            cases = await self._repo.get_all_test_cases(limit=2000)
+        except Exception as exc:
+            logger.warning("testing_tool_testrail_coverage_failed error=%s", str(exc))
+            return TestingObservation(
+                tool_name=self.name,
+                summary=f"Failed to read TestRail coverage: {exc}",
+                data={"cases": []},
+                succeeded=False,
+                error=str(exc),
+            )
+
+        if not cases:
+            return TestingObservation(
+                tool_name=self.name,
+                summary="No TestRail test cases have been synced yet.",
+                data={"cases": [], "total_synced": 0},
+            )
+
+        titles = [str(node.properties.get("title", "")) for node in cases]
+        weights = term_weights(terms, titles) if terms else None
+        scored = sorted(
+            (
+                (relevance(title, terms, weights) if terms else 0.0, node)
+                for title, node in zip(titles, cases, strict=True)
+            ),
+            key=lambda pair: -pair[0],
+        )
+        # With no terms to rank against, there's nothing principled to
+        # prefer - surface none rather than an arbitrary first-N slice
+        # the LLM would otherwise mistake for a ranked shortlist.
+        top = [node for score, node in scored[:limit] if score > 0] if terms else []
+
+        summary = (
+            f"Found {len(top)} relevant TestRail case(s) out of {len(cases)} synced."
+            if top
+            else f"None of the {len(cases)} synced TestRail case(s) matched this task's terms."
+        )
+
+        return TestingObservation(
+            tool_name=self.name,
+            summary=summary,
+            data={
+                "cases": [
+                    {
+                        "title": node.properties.get("title", ""),
+                        "refs": node.properties.get("refs", ""),
+                    }
+                    for node in top
+                ],
+                "total_synced": len(cases),
+            },
+        )
+
+
 # ---------------------------------------------------------------------------
 # Graph context formatter
 # ---------------------------------------------------------------------------
@@ -288,13 +373,16 @@ def format_graph_context(
     repos_obs: TestingObservation,
     components_obs: TestingObservation,
     deps_obs: TestingObservation,
+    testrail_obs: TestingObservation | None = None,
 ) -> str:
     """Format tool observations into LLM-readable context for test planning."""
     parts: list[str] = []
 
     indexed_repos = repos_obs.data.get("indexed_repositories", [])
     if not indexed_repos:
-        return "No repositories have been indexed into the Knowledge Graph yet."
+        parts.append("No repositories have been indexed into the Knowledge Graph yet.")
+        parts.extend(_testrail_coverage_parts(testrail_obs))
+        return "\n\n".join(parts)
 
     repo_names = [r["name"] for r in indexed_repos]
     parts.append(f"**Indexed repositories**: {', '.join(repo_names)}")
@@ -349,7 +437,32 @@ def format_graph_context(
             + "\n".join(coupling_lines)
         )
 
+    parts.extend(_testrail_coverage_parts(testrail_obs))
+
     return "\n\n".join(parts)
+
+
+def _testrail_coverage_parts(testrail_obs: TestingObservation | None) -> list[str]:
+    """Zero, one, or two lines to append for TestRail coverage — a
+    separate helper (not inlined) so both the early-return "no repos"
+    path and the normal path above render it identically."""
+    if testrail_obs is None:
+        return []
+    cases = testrail_obs.data.get("cases", [])
+    if cases:
+        case_lines = [
+            f"  {c['title']}" + (f" (refs: {c['refs']})" if c.get("refs") else "") for c in cases
+        ]
+        return [
+            "**Existing TestRail coverage relevant to this task** — cross-reference proposed "
+            "tests below against these; note explicitly which are already covered vs. net-new:\n"
+            + "\n".join(case_lines)
+        ]
+    if testrail_obs.data.get("total_synced", 0) > 0:
+        return ["**Existing TestRail coverage**: none of the synced cases matched this task."]
+    # Nothing synced at all - omit the section rather than asserting an
+    # absence that was never actually checked.
+    return []
 
 
 # ---------------------------------------------------------------------------

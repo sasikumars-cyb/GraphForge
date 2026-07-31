@@ -44,6 +44,11 @@ class SessionContext:
     db: AsyncSession
     user_id: uuid.UUID | None
     graph_repo_override: Any = None
+    # Same purpose as graph_repo_override, for TestCoverageInvestigator's
+    # ITestCaseGraphRepository — lets a unit test substitute a fake without
+    # touching a real Neo4j (this codebase's unit tests are I/O-free by
+    # convention).
+    test_case_graph_repo_override: Any = None
     model: str | None = None
     stage: str = "context_discovery"
 
