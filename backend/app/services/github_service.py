@@ -20,6 +20,7 @@ from app.integrations.github import (
     GitHubOAuthProvider,
     fetch_token_scopes,
     fetch_user_profile,
+    list_repositories,
 )
 from app.models.github_connection import GitHubConnection
 from app.models.repository import Repository
@@ -238,14 +239,17 @@ async def disconnect(db: AsyncSession, user: User) -> None:
 
 async def list_available_repositories(db: AsyncSession, user: User) -> list[AvailableRepository]:
     """Live list from GitHub (not persisted), cross-referenced against what
-    this user already has tracked in `repositories`."""
+    this user already has tracked in `repositories`. Calls the module-level
+    `list_repositories()` directly rather than going through
+    `_build_provider()` - listing repos only needs the access token, never
+    the OAuth App's client_id/secret, so a PAT-only connection (which never
+    has those configured, by design) must not be gated on them here."""
     connection = await get_connection(db, user)
     if connection is None:
         raise UnauthorizedError("GitHub is not connected for this user.")
 
-    provider = await _build_provider(db)
     access_token = decrypt_secret(connection.encrypted_access_token)
-    repos = await provider.list_repositories(access_token)
+    repos = await list_repositories(access_token)
 
     tracked_result = await db.execute(
         select(Repository.github_repo_id).where(Repository.user_id == user.id)

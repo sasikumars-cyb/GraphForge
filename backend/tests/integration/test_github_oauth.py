@@ -229,7 +229,7 @@ async def test_list_available_repositories_marks_already_selected_ones(
         },
     )
 
-    with patch.object(GitHubOAuthProvider, "list_repositories", AsyncMock(return_value=FAKE_REPOS)):
+    with patch("app.services.github_service.list_repositories", AsyncMock(return_value=FAKE_REPOS)):
         response = await db_client.get("/api/v1/github/repositories", headers=headers)
 
     assert response.status_code == 200

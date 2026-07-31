@@ -15,7 +15,7 @@ from httpx import AsyncClient
 
 from app.core.config import get_settings
 from app.integrations.github import GitHubApiError
-from app.integrations.interfaces import OAuthUserProfile
+from app.integrations.interfaces import OAuthUserProfile, RepositoryInfo
 
 pytestmark = pytest.mark.asyncio
 
@@ -82,6 +82,55 @@ async def test_connect_with_pat_creates_a_connection(
     status_body = status_response.json()
     assert status_body["connected"] is True
     assert status_body["auth_method"] == "pat"
+
+
+async def test_listing_repositories_after_pat_connect_does_not_need_an_oauth_app(
+    db_client: AsyncClient, github_not_configured: None
+) -> None:
+    """Regression test: listing repos only needs the access token (see
+    `list_repositories`'s own module-level signature - no client_id/secret
+    involved), so it must work for a PAT-only connection exactly like
+    connecting itself does. `list_available_repositories` used to route
+    through `_build_provider()` regardless, which raised
+    'GitHub integration is not configured' even though nothing about
+    listing repos actually needed an OAuth App - a real user hit this."""
+    token = await _register_and_get_token(db_client)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    with (
+        patch(
+            "app.services.github_service.fetch_user_profile",
+            AsyncMock(return_value=FAKE_PROFILE),
+        ),
+        patch(
+            "app.services.github_service.fetch_token_scopes",
+            AsyncMock(return_value=["repo", "read:user"]),
+        ),
+    ):
+        connect_response = await db_client.post(
+            "/api/v1/github/connection/pat", headers=headers, json={"token": "ghp_realtoken"}
+        )
+    assert connect_response.status_code == 200
+
+    fake_repos = [
+        RepositoryInfo(
+            provider_repo_id="1001",
+            owner="grace",
+            name="engine",
+            full_name="grace/engine",
+            private=False,
+            default_branch="main",
+            html_url="https://github.com/grace/engine",
+        )
+    ]
+    with patch(
+        "app.services.github_service.list_repositories",
+        AsyncMock(return_value=fake_repos),
+    ):
+        repos_response = await db_client.get("/api/v1/github/repositories", headers=headers)
+
+    assert repos_response.status_code == 200
+    assert repos_response.json()[0]["full_name"] == "grace/engine"
 
 
 async def test_connect_with_pat_rejects_an_invalid_token(
