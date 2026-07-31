@@ -45,6 +45,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -107,7 +108,11 @@ class TestingLLMError(AppError):
 
 
 async def _call_llm(
-    user_prompt: str, model: str | None = None, stage: str = STAGE_TESTING
+    user_prompt: str,
+    model: str | None = None,
+    stage: str = STAGE_TESTING,
+    _metadata_out: dict[str, Any] | None = None,
+    context: AgentContext | None = None,
 ) -> str:
     """Send a single JSON-mode completion through the configured AI
     provider and return the raw content string. Delegates to the shared
@@ -119,6 +124,8 @@ async def _call_llm(
         stage=stage,
         model=model,
         error_cls=TestingLLMError,
+        metadata_out=_metadata_out,
+        context=context,
     )
 
 
@@ -444,10 +451,13 @@ class TestPlanningAgent:
         )
 
         try:
+            llm_metadata: dict[str, Any] = {}
             raw_response = await _call_llm(
                 user_prompt=prompt,
                 model=context.model,
                 stage=stage_for(context.extras, STAGE_TESTING),
+                _metadata_out=llm_metadata,
+                context=context,
             )
             test_plan = _parse_llm_response(raw_response, task_description)
         except TestingLLMError as exc:

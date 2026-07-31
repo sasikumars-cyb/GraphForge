@@ -107,14 +107,27 @@ async def run_with_reflection(
         refined_raw = await call_llm(refine_prompt, refined_metadata)
         refined_result = parse(refined_raw)
 
-        # Both calls cost real money regardless of which draft wins — sum
-        # token counts across both rather than reporting only the final
-        # one, so the trace reflects actual spend for this run.
-        for tok_field in ("prompt_tokens", "completion_tokens", "total_tokens"):
-            if refined_metadata.get(tok_field) is not None:
-                initial_metadata[tok_field] = (
-                    initial_metadata.get(tok_field) or 0
-                ) + refined_metadata[tok_field]
+        # Both calls cost real money and real time regardless of which draft
+        # wins — sum the additive metrics across both rather than reporting
+        # only one of them, so the metadata reflects what this run actually
+        # spent. `latency_ms`/`estimated_cost_usd`/`retry_count` are summed
+        # for the same reason token counts always were: reporting only the
+        # first call's latency alongside both calls' tokens would be
+        # internally inconsistent. Non-additive fields (`status`,
+        # `finish_reason`, timestamps, provider/model) are handled below —
+        # for those the *final* call is the meaningful one.
+        for additive in (
+            "prompt_tokens",
+            "completion_tokens",
+            "total_tokens",
+            "latency_ms",
+            "estimated_cost_usd",
+            "retry_count",
+        ):
+            if refined_metadata.get(additive) is not None:
+                initial_metadata[additive] = (
+                    initial_metadata.get(additive) or 0
+                ) + refined_metadata[additive]
 
         if find_gaps(refined_result):
             logger.info("reflection_did_not_resolve_gaps")
@@ -127,10 +140,13 @@ async def run_with_reflection(
                 gaps=gaps,
             )
 
-        initial_metadata["provider"] = refined_metadata.get(
-            "provider", initial_metadata.get("provider")
-        )
-        initial_metadata["model"] = refined_metadata.get("model", initial_metadata.get("model"))
+        # Non-additive fields: the refined call is the one whose result is
+        # being returned, so its provider/model/outcome are the meaningful
+        # ones to report. `started_at` deliberately keeps the *first* call's
+        # value so the pair spans the whole reflection window.
+        for last_wins in ("provider", "model", "finish_reason", "status", "finished_at"):
+            if refined_metadata.get(last_wins) is not None:
+                initial_metadata[last_wins] = refined_metadata[last_wins]
         return ReflectionOutcome(
             prompt=refine_prompt,
             raw_response=refined_raw,

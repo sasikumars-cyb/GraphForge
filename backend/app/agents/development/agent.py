@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -97,7 +98,11 @@ class DevelopmentLLMError(AppError):
 
 
 async def _call_llm(
-    user_prompt: str, model: str | None = None, stage: str = STAGE_DEVELOPMENT
+    user_prompt: str,
+    model: str | None = None,
+    stage: str = STAGE_DEVELOPMENT,
+    _metadata_out: dict[str, Any] | None = None,
+    context: AgentContext | None = None,
 ) -> str:
     """Send a single JSON-mode completion through the configured AI
     provider and return the raw content string. Delegates to the shared
@@ -110,6 +115,8 @@ async def _call_llm(
         stage=stage,
         model=model,
         error_cls=DevelopmentLLMError,
+        metadata_out=_metadata_out,
+        context=context,
     )
 
 
@@ -391,10 +398,13 @@ class DevelopmentAgent:
         )
 
         try:
+            llm_metadata: dict[str, Any] = {}
             raw_response = await _call_llm(
                 user_prompt=prompt,
                 model=context.model,
                 stage=stage_for(context.extras, STAGE_DEVELOPMENT),
+                _metadata_out=llm_metadata,
+                context=context,
             )
             plan = _parse_llm_response(raw_response, task_description)
         except DevelopmentLLMError as exc:

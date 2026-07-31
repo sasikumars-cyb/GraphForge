@@ -13,6 +13,7 @@ All graph and LLM calls are mocked — no real Neo4j or OpenAI needed.
 from __future__ import annotations
 
 import json
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -847,13 +848,46 @@ async def test_planning_agent_result_includes_real_llm_trace() -> None:
 
     llm_response = _make_llm_response()
 
+    async def _fake_call_llm(
+        user_prompt: str,
+        model: str | None = None,
+        _metadata_out: dict[str, Any] | None = None,
+        stage: str = "planning",
+        context: Any = None,
+        purpose: str = "initial",
+        sequence: int = 0,
+    ) -> str:
+        """Honours the *whole* `_call_llm` contract, not just its return
+        value: the real function fills `_metadata_out` in place (see
+        `app.agents.llm.invoke_llm_json` / `LLM_INVOCATION_METADATA_KEYS`),
+        and `llm_trace` is assembled from exactly those keys. A bare
+        `AsyncMock(return_value=...)` returns the string but silently skips
+        the out-param, so the trace it produced was missing every metric —
+        a gap in the double, not in the agent."""
+        if _metadata_out is not None:
+            _metadata_out.update(
+                {
+                    "provider": "openai",
+                    "model": "gpt-4",
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "total_tokens": 150,
+                    "estimated_cost_usd": 0.01,
+                    "latency_ms": 42,
+                    "retry_count": 0,
+                    "finish_reason": "stop",
+                    "status": "completed",
+                }
+            )
+        return llm_response
+
     with (
         patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
         patch(
             "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
             return_value=mock_graph_repo,
         ),
-        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+        patch("app.agents.planning.agent._call_llm", new=_fake_call_llm),
     ):
         agent = PlanningAgent()
         output = await agent.run(context)
@@ -864,6 +898,11 @@ async def test_planning_agent_result_includes_real_llm_trace() -> None:
     assert context.subject.display_name in trace["prompt"]
     assert trace["latency_ms"] is not None
     assert trace["latency_ms"] >= 0
+    # The trace is now assembled entirely from the shared invocation
+    # metadata — assert the metrics actually flow through, not just latency.
+    assert trace["provider"] == "openai"
+    assert trace["total_tokens"] == 150
+    assert trace["estimated_cost_usd"] == 0.01
 
 
 @pytest.mark.asyncio

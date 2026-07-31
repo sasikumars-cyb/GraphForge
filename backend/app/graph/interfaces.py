@@ -33,6 +33,19 @@ class IGraphRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def get_kafka_topic_edges(self, repository_id: str) -> list[GraphEdge]:
+        """Every `PRODUCES_TO`/`CONSUMES_FROM` edge from a `repository_id`
+        component to one of its own `KafkaTopic` nodes.
+
+        A targeted alternative to `get_full_graph` for callers that only
+        need Kafka producer/consumer direction (see
+        `app.indexer.graph.cross_repo_linker`) - fetching every node and
+        edge in the repository just to filter for these two relationship
+        types is wasteful once a repository's graph is large.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def has_graph(self, repository_id: str) -> bool:
         """Whether `repository_id` has ever been successfully indexed."""
         raise NotImplementedError

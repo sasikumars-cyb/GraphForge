@@ -189,6 +189,29 @@ class Neo4jGraphRepository(IGraphRepository):
 
         return GraphPayload(nodes=list(nodes_by_id.values()), edges=edges)
 
+    async def get_kafka_topic_edges(self, repository_id: str) -> list[GraphEdge]:
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (a {repository_id: $repository_id})
+                      -[r:PRODUCES_TO|CONSUMES_FROM]->
+                      (b:KafkaTopic {repository_id: $repository_id})
+                RETURN a, r, b
+                """,
+                repository_id=repository_id,
+            )
+            records = [record async for record in result]
+
+        return [
+            GraphEdge(
+                source_id=record["a"]["id"],
+                target_id=record["b"]["id"],
+                type=record["r"].type,
+                properties=dict(record["r"]),
+            )
+            for record in records
+        ]
+
     async def get_nodes_by_label(self, repository_id: str, label: str) -> list[GraphNode]:
         if label not in _ALLOWED_LABELS:
             raise ValueError(f"Unknown graph label: {label!r}")
@@ -244,9 +267,14 @@ class Neo4jGraphRepository(IGraphRepository):
             )
             records = [record async for record in result]
 
+        # `source_id` is always `source_node_id` here (every match starts at
+        # it by construction) — read directly from the Python value rather
+        # than `record["r"].start_node`, whose properties aren't hydrated
+        # since `a` was never RETURNed (would otherwise silently yield
+        # `None`; found via live verification against real Neo4j).
         return [
             GraphEdge(
-                source_id=record["r"].start_node["id"],
+                source_id=source_node_id,
                 target_id=record["b"]["id"],
                 type=record["r"].type,
                 properties=dict(record["r"]),

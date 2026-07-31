@@ -25,6 +25,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.agents._contract import AgentContext, AgentOutput, Subject
 from app.models.agent_step import AgentStep
 from app.models.run import Run
+from app.orchestrator.preflight import (
+    PreFlightCheckFailed,
+    check_llm_provider_configured,
+    check_neo4j_reachable,
+)
 from app.orchestrator.registry import AgentRegistry
 from app.orchestrator.selector import AgentSelector
 
@@ -227,9 +232,21 @@ class RunCoordinator:
             "db": self._db,
             "user_id": run.user_id,
             "stage": run.workflow_stage,
+            # ADR 0012: the only two identifiers `invoke_llm_json`'s
+            # persistence pathway needs and cannot derive itself — only the
+            # orchestrator knows which Run/AgentStep it just created.
+            "run_id": run.id,
+            "agent_step_id": step.id,
         }
         if extras:
             ctx_extras.update(extras)
+
+        # Looked up once, unconditionally — used both for the graph_repository
+        # wiring below (only when the caller hasn't already injected one) and
+        # for the Neo4j pre-flight check, which needs max_graph_hops
+        # regardless of whether graph_repository injection happens.
+        manifest_entry = self._registry.get(agent_id)
+        max_graph_hops = manifest_entry[0].max_graph_hops if manifest_entry is not None else 0
 
         # --- Manifest-driven context preparation (Part 2: max_graph_hops).
         # Built once per run from the dispatched agent's own manifest —
@@ -239,22 +256,41 @@ class RunCoordinator:
         # hasn't already provided one: tests routinely inject a stub/mock
         # `graph_repository` via `extras`, and that must keep working
         # unbudgeted rather than being silently replaced.
-        if "graph_repository" not in ctx_extras:
-            manifest_entry = self._registry.get(agent_id)
-            if manifest_entry is not None:
-                manifest, _ = manifest_entry
-                from app.graph.hop_budget import build_hop_budgeted_repository
-                from app.graph.neo4j_repository import Neo4jGraphRepository
-                from app.graph.session import get_driver
+        if "graph_repository" not in ctx_extras and manifest_entry is not None:
+            from app.graph.hop_budget import build_hop_budgeted_repository
+            from app.graph.neo4j_repository import Neo4jGraphRepository
+            from app.graph.session import get_driver
 
-                ctx_extras["graph_repository"] = build_hop_budgeted_repository(
-                    Neo4jGraphRepository(get_driver()), manifest.max_graph_hops, agent_id
-                )
+            ctx_extras["graph_repository"] = build_hop_budgeted_repository(
+                Neo4jGraphRepository(get_driver()), max_graph_hops, agent_id
+            )
 
         context = AgentContext(subject=subject, goal=goal, model=model, extras=ctx_extras)
         start_ms = time.monotonic()
 
         try:
+            # Pre-flight: catch missing/misconfigured infrastructure before
+            # ever calling agent.run() — see app.orchestrator.preflight for
+            # each check's own docstring (LLM credentials: synchronous,
+            # no-I/O; Neo4j: a real connectivity probe reused from the Tools
+            # admin UI). Deliberately *inside* this try block, not before
+            # it: check_llm_provider_configured() calls resolve(), which is
+            # not guaranteed exception-free (require_provider_spec() raises
+            # UnsupportedProviderError for a stale/invalid stored provider
+            # key) — placing the call outside this try left that failure
+            # mode unguarded, escaping past _fail_step/_fail_run entirely
+            # and leaving the run/step at whatever status they reverted to
+            # when the session closed without a commit (confirmed live:
+            # silently back to "queued"/"awaiting_input" with no error
+            # message, not "failed"). Raising inside this try instead
+            # reuses the exact same handling agent.run()'s own failures
+            # already get — no separate code path to keep in sync.
+            preflight_failure = check_llm_provider_configured(
+                agent_id, run.workflow_stage
+            ) or await check_neo4j_reachable(max_graph_hops)
+            if preflight_failure is not None:
+                raise PreFlightCheckFailed(f"Pre-flight check failed: {preflight_failure}")
+
             output: AgentOutput = await agent.run(context)  # type: ignore[attr-defined]
         except Exception as exc:
             latency_ms = int((time.monotonic() - start_ms) * 1000)
@@ -262,7 +298,9 @@ class RunCoordinator:
             await self._fail_run(run, str(exc))
             await self._commit_with_hook(run, on_pre_commit)
             logger.error(
-                "agent_run_failed run_id=%s agent_id=%s error=%s",
+                "agent_run_preflight_failed run_id=%s agent_id=%s error=%s"
+                if isinstance(exc, PreFlightCheckFailed)
+                else "agent_run_failed run_id=%s agent_id=%s error=%s",
                 str(run.id),
                 agent_id,
                 str(exc),
@@ -317,26 +355,40 @@ class RunCoordinator:
             "db": self._db,
             "user_id": run.user_id,
             "stage": run.workflow_stage,
+            "run_id": run.id,
+            "agent_step_id": step.id,
         }
         if extras:
             ctx_extras.update(extras)
 
-        if "graph_repository" not in ctx_extras:
-            manifest_entry = self._registry.get(agent_id)
-            if manifest_entry is not None:
-                manifest, _ = manifest_entry
-                from app.graph.hop_budget import build_hop_budgeted_repository
-                from app.graph.neo4j_repository import Neo4jGraphRepository
-                from app.graph.session import get_driver
+        manifest_entry = self._registry.get(agent_id)
+        max_graph_hops = manifest_entry[0].max_graph_hops if manifest_entry is not None else 0
 
-                ctx_extras["graph_repository"] = build_hop_budgeted_repository(
-                    Neo4jGraphRepository(get_driver()), manifest.max_graph_hops, agent_id
-                )
+        if "graph_repository" not in ctx_extras and manifest_entry is not None:
+            from app.graph.hop_budget import build_hop_budgeted_repository
+            from app.graph.neo4j_repository import Neo4jGraphRepository
+            from app.graph.session import get_driver
+
+            ctx_extras["graph_repository"] = build_hop_budgeted_repository(
+                Neo4jGraphRepository(get_driver()), max_graph_hops, agent_id
+            )
 
         context = AgentContext(subject=subject, goal=goal, model=model, extras=ctx_extras)
         start_ms = time.monotonic()
 
         try:
+            # Same pre-flight gate as execute_run, and same reason it lives
+            # *inside* this try block rather than before it — see that
+            # method's comment for the full rationale (a bare call here
+            # left resolve()'s non-credential-missing failure modes, e.g.
+            # UnsupportedProviderError from a stale stored provider key,
+            # unguarded and able to escape past _fail_step/_fail_run).
+            preflight_failure = check_llm_provider_configured(
+                agent_id, run.workflow_stage
+            ) or await check_neo4j_reachable(max_graph_hops)
+            if preflight_failure is not None:
+                raise PreFlightCheckFailed(f"Pre-flight check failed: {preflight_failure}")
+
             output: AgentOutput = await agent.run(context)  # type: ignore[attr-defined]
         except Exception as exc:
             latency_ms = int((time.monotonic() - start_ms) * 1000)
@@ -344,7 +396,9 @@ class RunCoordinator:
             await self._fail_run(run, str(exc))
             await self._commit_with_hook(run, on_pre_commit)
             logger.error(
-                "agent_run_resume_failed run_id=%s agent_id=%s error=%s",
+                "agent_run_resume_preflight_failed run_id=%s agent_id=%s error=%s"
+                if isinstance(exc, PreFlightCheckFailed)
+                else "agent_run_resume_failed run_id=%s agent_id=%s error=%s",
                 str(run.id),
                 agent_id,
                 str(exc),

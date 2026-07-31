@@ -250,13 +250,16 @@ async def _load_repo_nodes(
 
     # Producer/consumer direction lives on the PRODUCES_TO/CONSUMES_FROM
     # edge from whichever component owns it, not on the KafkaTopic node
-    # itself — the full per-repository graph is the only way to recover
-    # that distinction.
-    full_graph = await graph_repository.get_full_graph(repository_id)
+    # itself. `get_kafka_topic_edges` reads only those two relationship
+    # types targeting this repository's own KafkaTopic nodes — a targeted
+    # query, not the full per-repository graph (ADR 0010 review, Weakness
+    # #2: `get_full_graph` here previously scaled with total repository
+    # graph size, not just Kafka topic count).
+    topic_edges = await graph_repository.get_kafka_topic_edges(repository_id)
     topic_name_by_id = {n.id: str(n.properties.get("name", "")) for n in kafka_topics}
     produces: set[str] = set()
     consumes: set[str] = set()
-    for edge in full_graph.edges:
+    for edge in topic_edges:
         topic_name = topic_name_by_id.get(edge.target_id)
         if topic_name is None:
             continue

@@ -30,6 +30,7 @@ from app.agents.development.agent import DevelopmentLLMError
 from app.agents.development.agent import _call_llm as call_llm_development
 from app.agents.engineering_review.agent import EngineeringReviewLLMError
 from app.agents.engineering_review.agent import _call_llm as call_llm_engineering_review
+from app.agents.llm import LLM_INVOCATION_METADATA_KEYS
 from app.agents.planning.agent import PlanningLLMError
 from app.agents.planning.agent import _call_llm as call_llm_planning
 from app.agents.testing.agent import TestingLLMError
@@ -132,3 +133,87 @@ async def test_call_llm_error_without_provider_metadata_defaults_to_none(
 
     assert str(exc_info.value) == "Not configured."
     assert exc_info.value.provider_error is None
+
+
+# ---------------------------------------------------------------------------
+# Observability (architecture Weakness #4) — every agent must get the full
+# invocation metadata set from the one shared pathway, not collect its own.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES]
+)
+@pytest.mark.asyncio
+async def test_every_agent_gets_the_full_invocation_metadata_set(
+    module_path, call_llm, error_cls, stage
+) -> None:
+    """The point of the shared pathway: an agent opts in by passing a dict
+    and gets every signal, computed identically. Before this, `metadata_out`
+    carried only provider/model/tokens and no caller but Planning used it —
+    latency and cost were Planning-only, computed at its own call site."""
+    resolved = MagicMock()
+    resolved.key = "openai"
+    resolved.model = "gpt-4o"
+
+    mock_provider = MagicMock()
+    mock_provider.last_resolved = resolved
+    mock_provider.last_retry_count = 3
+    mock_provider.complete = AsyncMock(
+        return_value=LLMResponse(
+            text='{"ok": true}',
+            model_name="gpt-4o",
+            finish_reason="stop",
+            prompt_tokens=1_000_000,
+            completion_tokens=1_000_000,
+            total_tokens=2_000_000,
+        )
+    )
+
+    metadata: dict[str, object] = {}
+    with patch("app.agents.llm.StageAwareLLMProvider", MagicMock(return_value=mock_provider)):
+        await call_llm("some prompt", _metadata_out=metadata)
+
+    for key in LLM_INVOCATION_METADATA_KEYS:
+        assert key in metadata, f"{key} missing for {module_path}"
+
+    assert metadata["provider"] == "openai"
+    assert metadata["model"] == "gpt-4o"
+    assert metadata["total_tokens"] == 2_000_000
+    assert metadata["finish_reason"] == "stop"
+    assert metadata["status"] == "completed"
+    assert metadata["error"] is None
+    # Retry count comes from the fallback loop, which used to discard it.
+    assert metadata["retry_count"] == 3
+    assert metadata["latency_ms"] is not None and metadata["latency_ms"] >= 0
+    # gpt-4o is in app.ai.providers.pricing: 1M in @ $2.50 + 1M out @ $10.00.
+    assert metadata["estimated_cost_usd"] == 12.50
+
+
+@pytest.mark.parametrize(
+    "module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES]
+)
+@pytest.mark.asyncio
+async def test_invocation_metadata_is_recorded_on_the_failure_path(
+    module_path, call_llm, error_cls, stage
+) -> None:
+    """A failed invocation is precisely the one worth observing. The agent
+    still receives its own error type — the metadata is a side effect."""
+    mock_provider = MagicMock()
+    mock_provider.last_resolved = None
+    mock_provider.last_retry_count = 0
+    mock_provider.complete = AsyncMock(side_effect=AIProviderRateLimitError("Rate limited."))
+
+    metadata: dict[str, object] = {}
+    with (
+        patch("app.agents.llm.StageAwareLLMProvider", MagicMock(return_value=mock_provider)),
+        pytest.raises(error_cls),
+    ):
+        await call_llm("some prompt", _metadata_out=metadata)
+
+    assert metadata["status"] == "failed"
+    assert metadata["error"] == "Rate limited."
+    assert metadata["latency_ms"] is not None
+    # No response, so these are honestly None rather than zero.
+    assert metadata["total_tokens"] is None
+    assert metadata["estimated_cost_usd"] is None

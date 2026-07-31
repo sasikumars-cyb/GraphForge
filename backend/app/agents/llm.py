@@ -59,8 +59,14 @@ superset of what existed before, never a reduction.
 from __future__ import annotations
 
 import logging
+import time
+import uuid
+from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.agents._contract import AgentContext
 from app.ai.config.fallback import complete_with_fallback
 from app.ai.config.resolver import ResolvedProvider, resolve
 from app.ai.interfaces.llm_provider import ILLMProvider
@@ -72,6 +78,7 @@ from app.ai.providers.base import (
     ToolTurnResult,
 )
 from app.ai.providers.factory import validate_resolution
+from app.ai.providers.pricing import estimate_cost_usd
 from app.ai.schemas.analysis_result import AIAnalysisResult
 from app.ai.services.context_builder import AIContext
 from app.core.exceptions import AppError
@@ -168,6 +175,11 @@ class StageAwareLLMProvider(ILLMProvider):
         self._stage = stage
         self._model = model
         self.last_resolved: ResolvedProvider | None = None
+        # Failed provider attempts that preceded the most recent successful
+        # `complete()` (0 when the primary answered). Same
+        # "record what actually happened" role as `last_resolved`, for the
+        # one signal the fallback loop computes but used to discard.
+        self.last_retry_count: int = 0
 
     # -- introspection -----------------------------------------------------
 
@@ -201,14 +213,17 @@ class StageAwareLLMProvider(ILLMProvider):
         """
         self.preview()  # raises on unimplemented / unknown model / no key
 
+        attempts: list[int] = []
         response, served_by = await complete_with_fallback(
             system_prompt=system_prompt,
             user_prompt=user_prompt,
             options=options,
             model=self._model,
             stage=self._stage,
+            attempts_out=attempts,
         )
         self.last_resolved = served_by
+        self.last_retry_count = attempts[0] if attempts else 0
         logger.info(
             "llm_completed stage=%s provider=%s model=%s source=%s profile=%s",
             self._stage or "-",
@@ -281,6 +296,188 @@ class StageAwareLLMProvider(ILLMProvider):
 # its body to `invoke_llm_json` below rather than repeating it.
 
 
+# Every key `_fill_invocation_metadata` writes. Documented as a constant so a
+# consumer (an agent's own result schema, a UI payload, a future analytics
+# table) can be checked against this list rather than against whichever
+# subset one agent happened to read.
+LLM_INVOCATION_METADATA_KEYS = (
+    "provider",
+    "model",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "estimated_cost_usd",
+    "latency_ms",
+    "retry_count",
+    "finish_reason",
+    "status",
+    "started_at",
+    "finished_at",
+    "error",
+)
+
+
+def _derive_invocation_metadata(
+    *,
+    provider: StageAwareLLMProvider | None,
+    response: LLMResponse | None,
+    started: float,
+    started_at: datetime,
+    error: Exception | None,
+) -> dict[str, Any]:
+    """Derive one invocation's full observability set — the single place
+    these signals are computed, so every agent reports the same fields
+    computed the same way. Values are honestly `None` when the serving
+    provider didn't report them (token counts, `finish_reason`) or when the
+    model isn't in `app.ai.providers.pricing`'s table (`estimated_cost_usd`)
+    — never a fabricated stand-in, matching the policy `LLMTrace` already
+    documents for the same fields.
+
+    `retry_count` is the number of *failed provider attempts* that preceded
+    the successful one (see `app.ai.config.fallback`), not an
+    orchestrator-level re-run count.
+
+    Computed unconditionally — independent of whether a caller wants an
+    in-memory copy (`metadata_out`) or persistence (ADR 0012) — so neither
+    concern can silently disable the other.
+    """
+    served = provider.last_resolved if provider is not None else None
+    finished_at = datetime.now(UTC)
+
+    model = (served.model if served else None) or (response.model_name if response else None) or ""
+    prompt_tokens = response.prompt_tokens if response else None
+    completion_tokens = response.completion_tokens if response else None
+    cost = (
+        estimate_cost_usd(model, prompt_tokens, completion_tokens) if response is not None else None
+    )
+
+    return {
+        "provider": served.key if served else "",
+        "model": model,
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": response.total_tokens if response else None,
+        "finish_reason": response.finish_reason if response else None,
+        "estimated_cost_usd": cost.total_usd if cost else None,
+        "latency_ms": int((time.monotonic() - started) * 1000),
+        "retry_count": provider.last_retry_count if provider is not None else 0,
+        "status": "failed" if error is not None else "completed",
+        "error": str(getattr(error, "message", error)) if error is not None else None,
+        "started_at": started_at,
+        "finished_at": finished_at,
+    }
+
+
+async def _fill_invocation_metadata(
+    metadata_out: dict[str, Any] | None,
+    *,
+    provider: StageAwareLLMProvider | None,
+    response: LLMResponse | None,
+    started: float,
+    started_at: datetime,
+    error: Exception | None,
+    db: AsyncSession | None,
+    run_id: uuid.UUID | None,
+    agent_step_id: uuid.UUID | None,
+    stage: str | None,
+    purpose: str,
+    sequence: int,
+) -> None:
+    """Derive one invocation's metadata, optionally copy it into
+    `metadata_out` (an agent's own in-memory use, e.g. Planning's
+    `LLMTrace`), and — the ADR 0012 persistence pathway — write it to
+    `llm_invocations` whenever a db session and the owning run/step are
+    available. This is the *only* place in the codebase that writes to
+    that table; no agent persists an invocation record itself.
+    """
+    derived = _derive_invocation_metadata(
+        provider=provider, response=response, started=started, started_at=started_at, error=error
+    )
+
+    if metadata_out is not None:
+        metadata_out.update(derived)
+        metadata_out["started_at"] = derived["started_at"].isoformat()
+        metadata_out["finished_at"] = derived["finished_at"].isoformat()
+
+    if db is not None and run_id is not None and agent_step_id is not None:
+        await persist_llm_invocation(
+            db,
+            run_id=run_id,
+            agent_step_id=agent_step_id,
+            stage=stage,
+            purpose=purpose,
+            sequence=sequence,
+            metadata=derived,
+            error=error,
+        )
+
+
+async def persist_llm_invocation(
+    db: AsyncSession,
+    *,
+    run_id: uuid.UUID,
+    agent_step_id: uuid.UUID,
+    stage: str | None,
+    purpose: str,
+    sequence: int,
+    metadata: dict[str, Any],
+    error: Exception | None,
+) -> None:
+    """Write one immutable `LLMInvocation` row (ADR 0012).
+
+    Flushes, does not commit — this reuses whatever transaction the caller
+    (always `RunCoordinator`, via `context.extras["db"]`) already owns, so
+    the row commits atomically with the rest of that run's own persistence
+    (including on the failure path: `RunCoordinator._commit_with_hook`
+    always commits, never rolls back, so a failed invocation's row is not
+    lost). Never called with a session this function doesn't already share
+    with the run/step it's recording — no independent transaction is
+    opened here.
+
+    Also updates `AIProviderUsage` (best-effort, swallows its own errors
+    per its own docstring) from the same data, at the same call site —
+    completing the wiring `app.ai.config.usage.record_outcome` previously
+    had zero callers for (ADR 0012, Current Repository State #4).
+    """
+    from app.ai.config.usage import record_outcome
+    from app.models.llm_invocation import LLMInvocation
+
+    invocation = LLMInvocation(
+        agent_step_id=agent_step_id,
+        run_id=run_id,
+        purpose=purpose,
+        sequence=sequence,
+        provider=metadata["provider"],
+        model=metadata["model"],
+        stage=stage,
+        status=metadata["status"],
+        error=metadata["error"],
+        prompt_tokens=metadata["prompt_tokens"],
+        completion_tokens=metadata["completion_tokens"],
+        total_tokens=metadata["total_tokens"],
+        estimated_cost_usd=metadata["estimated_cost_usd"],
+        finish_reason=metadata["finish_reason"],
+        latency_ms=metadata["latency_ms"],
+        retry_count=metadata["retry_count"],
+        started_at=metadata["started_at"],
+        finished_at=metadata["finished_at"],
+    )
+    db.add(invocation)
+    await db.flush()
+
+    if metadata["provider"]:
+        # The real exception object, not a reconstruction from its
+        # stringified message — record_outcome classifies rate-limit/auth
+        # failures by isinstance(), which a synthetic exception could
+        # never match.
+        await record_outcome(
+            db,
+            provider_key=metadata["provider"],
+            latency_ms=metadata["latency_ms"],
+            error=error,
+        )
+
+
 async def invoke_llm_json(
     *,
     system_prompt: str,
@@ -289,22 +486,49 @@ async def invoke_llm_json(
     model: str | None,
     error_cls: type[AppError],
     metadata_out: dict[str, Any] | None = None,
+    context: AgentContext | None = None,
+    purpose: str = "initial",
+    sequence: int = 0,
 ) -> str:
     """Single JSON-mode completion through the stage-aware provider, with
     the one piece of per-agent variation (which `AppError` subclass a
     provider failure becomes) taken as a parameter instead of duplicated.
 
-    `metadata_out`, when given, is filled in-place with whichever provider
-    actually served the request (including after a fallback hop) plus its
-    reported token usage — the exact out-param contract the Planning Agent
-    already relied on, generalized so any caller can opt in without
-    changing its own return type.
+    `metadata_out`, when given, is filled in-place with everything known
+    about the invocation — see `LLM_INVOCATION_METADATA_KEYS` for the full
+    set and `_fill_invocation_metadata` for how each value is derived. This
+    is the single pathway through which *every* agent gets observability;
+    no agent should collect these signals itself (that fragmentation is
+    exactly what this out-param exists to prevent).
+
+    `context`, when given, is where ADR 0012 persistence reads `db`,
+    `run_id`, and `agent_step_id` from — `RunCoordinator.execute_run`/
+    `resume_step` inject all three into `AgentContext.extras` (the same
+    dict every agent already reads `db`/`user_id`/`stage` from) before
+    calling the agent, since only the orchestrator knows the Run/AgentStep
+    it just created. Persistence is unconditional whenever all three are
+    present — it does not require `metadata_out` to also be given, since
+    most agents (everything but Planning) have no in-memory use for the
+    metadata but must still be observable. `purpose`/`sequence` distinguish
+    more than one invocation per step (see `app.agents.reflection` — a
+    reflection call passes `purpose="reflection", sequence=1`).
+
+    Metadata is recorded on the failure path too, not only on success: a
+    failed invocation is precisely the one worth observing. On failure the
+    caller still receives `error_cls` — the metadata is a side effect, not
+    a return value, so no caller's error handling changes.
 
     Raises `error_cls` (constructed from the underlying AppError's message,
     with `.provider_error` carried over) for any provider-layer failure —
     the same remapping every agent performed inline before.
     """
+    db = context.extras.get("db") if context is not None else None
+    run_id = context.extras.get("run_id") if context is not None else None
+    agent_step_id = context.extras.get("agent_step_id") if context is not None else None
+
     provider: StageAwareLLMProvider | None = None
+    started = time.monotonic()
+    started_at = datetime.now(UTC)
     try:
         provider = StageAwareLLMProvider(stage=stage, model=model)
         response = await provider.complete(
@@ -313,15 +537,36 @@ async def invoke_llm_json(
             options=LLMRequestOptions(response_format=ResponseFormat.JSON),
         )
     except AppError as exc:
+        await _fill_invocation_metadata(
+            metadata_out,
+            provider=provider,
+            response=None,
+            started=started,
+            started_at=started_at,
+            error=exc,
+            db=db,
+            run_id=run_id,
+            agent_step_id=agent_step_id,
+            stage=stage,
+            purpose=purpose,
+            sequence=sequence,
+        )
         error = error_cls(exc.message)
         error.provider_error = getattr(exc, "provider_error", None)  # type: ignore[attr-defined]
         raise error from exc
 
-    if metadata_out is not None:
-        served = provider.last_resolved if provider is not None else None
-        metadata_out["provider"] = served.key if served else ""
-        metadata_out["model"] = (served.model if served else None) or response.model_name or ""
-        metadata_out["prompt_tokens"] = response.prompt_tokens
-        metadata_out["completion_tokens"] = response.completion_tokens
-        metadata_out["total_tokens"] = response.total_tokens
+    await _fill_invocation_metadata(
+        metadata_out,
+        provider=provider,
+        response=response,
+        started=started,
+        started_at=started_at,
+        error=None,
+        db=db,
+        run_id=run_id,
+        agent_step_id=agent_step_id,
+        stage=stage,
+        purpose=purpose,
+        sequence=sequence,
+    )
     return response.text

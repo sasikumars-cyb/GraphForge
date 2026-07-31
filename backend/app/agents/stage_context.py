@@ -81,10 +81,16 @@ def format_repository_relationships_block(result: dict[str, Any] | None) -> str:
             "Explicitly referenced: " + ", ".join(r.get("name", "?") for r in explicit)
         )
     if suggested:
-        lines.append(
-            "Suggested by the knowledge graph: "
-            + _join(suggested, lambda r: f"{r.get('name', '?')} ({r.get('reason', '')})")
-        )
+
+        def _describe_suggested(r: dict[str, Any]) -> str:
+            name = r.get("name", "?")
+            reason = r.get("reason", "")
+            relationship = r.get("relationship", "")
+            confidence = r.get("confidence", "")
+            tag = f" [{relationship}, {confidence}]" if relationship else ""
+            return f"{name} ({reason}){tag}"
+
+        lines.append("Suggested by the knowledge graph: " + _join(suggested, _describe_suggested))
     if selected:
         lines.append("Confirmed selection: " + ", ".join(r.get("name", "?") for r in selected))
     return "\n".join(lines)

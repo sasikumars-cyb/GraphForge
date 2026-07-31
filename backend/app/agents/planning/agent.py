@@ -42,7 +42,6 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
-import time
 from collections.abc import Collection
 from dataclasses import dataclass
 from pathlib import Path
@@ -75,7 +74,6 @@ from app.agents.planning.schemas import (
 from app.agents.planning.tools import stars_for_rank
 from app.agents.prompt_utils import parse_json_response, render_prompt_template
 from app.agents.reflection import run_with_reflection
-from app.ai.providers.pricing import estimate_cost_usd
 from app.context_pipeline.reasoning.engine import discover
 from app.context_pipeline.reasoning.investigation import SessionContext
 from app.context_pipeline.reasoning.projection import build_result, to_contract_evidence
@@ -123,6 +121,9 @@ async def _call_llm(
     model: str | None = None,
     _metadata_out: dict[str, Any] | None = None,
     stage: str = STAGE_PLANNING,
+    context: AgentContext | None = None,
+    purpose: str = "initial",
+    sequence: int = 0,
 ) -> str:
     """Send a single JSON-mode completion through the AI configuration layer
     and return the raw content string.
@@ -170,6 +171,9 @@ async def _call_llm(
         model=model,
         error_cls=PlanningLLMError,
         metadata_out=_metadata_out,
+        context=context,
+        purpose=purpose,
+        sequence=sequence,
     )
 
 
@@ -706,7 +710,6 @@ class PlanningAgent:
             profile.key,
         )
 
-        llm_started = time.monotonic()
         llm_metadata: dict[str, Any] = {}
         try:
             raw_response = await _call_llm(
@@ -714,6 +717,9 @@ class PlanningAgent:
                 model=context.model,
                 _metadata_out=llm_metadata,
                 stage=stage,
+                context=context,
+                purpose="initial",
+                sequence=0,
             )
             planning_result = _parse_llm_response(raw_response, original_task_description, profile)
         except PlanningLLMError as exc:
@@ -748,6 +754,9 @@ class PlanningAgent:
                 model=context.model,
                 _metadata_out=metadata_out,
                 stage=stage,
+                context=context,
+                purpose="reflection",
+                sequence=1,
             )
 
         reflection = await run_with_reflection(
@@ -779,30 +788,32 @@ class PlanningAgent:
                 )
             )
 
-        llm_latency_ms = int((time.monotonic() - llm_started) * 1000)
-
         # The actual prompt/response, not just a one-line Evidence summary —
         # capped so a pathological graph-context blowup or a runaway model
         # response can't bloat the stored Run row unboundedly. `prompt`
         # already had Jira/GitHub content redacted before this point;
         # `raw_response` is redacted here defensively in case the model
         # echoed something secret-shaped back.
-        trace_model = llm_metadata.get("model") or context.model or "default"
-        cost_estimate = estimate_cost_usd(
-            trace_model,
-            llm_metadata.get("prompt_tokens"),
-            llm_metadata.get("completion_tokens"),
-        )
+        #
+        # Every metric below is read from `llm_metadata` — the shared
+        # invocation metadata `app.agents.llm.invoke_llm_json` fills for any
+        # caller that opts in (see LLM_INVOCATION_METADATA_KEYS). This agent
+        # previously timed the call and computed the cost estimate itself;
+        # both now come from the one shared pathway, so this agent's trace
+        # and every other agent's observability report identical fields
+        # derived identically. Only the prompt/response text — genuinely
+        # Planning-specific, and deliberately not collected for every agent
+        # — is assembled here.
         planning_result.llm_trace = LLMTrace(
-            model=trace_model,
+            model=llm_metadata.get("model") or context.model or "default",
             provider=llm_metadata.get("provider", ""),
             prompt=prompt[:_MAX_TRACE_CHARS],
             raw_response=redact_secrets(raw_response[:_MAX_TRACE_CHARS]),
-            latency_ms=llm_latency_ms,
+            latency_ms=llm_metadata.get("latency_ms"),
             prompt_tokens=llm_metadata.get("prompt_tokens"),
             completion_tokens=llm_metadata.get("completion_tokens"),
             total_tokens=llm_metadata.get("total_tokens"),
-            estimated_cost_usd=cost_estimate.total_usd if cost_estimate else None,
+            estimated_cost_usd=llm_metadata.get("estimated_cost_usd"),
         )
 
         # Back-fill repositories_consulted from the graph traversal

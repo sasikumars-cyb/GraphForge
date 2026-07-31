@@ -60,6 +60,10 @@ class _CountingGraphRepository:
         self._count("get_full_graph")
         return await self._inner.get_full_graph(repository_id)
 
+    async def get_kafka_topic_edges(self, repository_id: str) -> list[GraphEdge]:
+        self._count("get_kafka_topic_edges")
+        return await self._inner.get_kafka_topic_edges(repository_id)
+
     async def get_nodes_by_label(self, repository_id: str, label: str) -> list[GraphNode]:
         self._count("get_nodes_by_label")
         return await self._inner.get_nodes_by_label(repository_id, label)
@@ -234,6 +238,72 @@ async def test_feign_kafka_and_dependency_edges_are_written_and_readable(
         await graph_repository.replace_repository_graph(etl_core_id, GraphPayload())
 
 
+async def test_cross_repository_edge_source_id_is_the_real_source_node(
+    db_session: AsyncSession, graph_repository: Neo4jGraphRepository
+) -> None:
+    """Regression test: `get_outgoing_cross_repository_edges` previously
+    returned `source_id=None` for every edge, because its Cypher query
+    returned `r, b` but never `a` — the Neo4j driver's
+    `Relationship.start_node` isn't property-hydrated unless the connected
+    node is itself part of the RETURN clause, so `start_node["id"]`
+    silently resolved to `None` instead of raising. Nothing consumed this
+    field before this test existed (confirmed via a full-codebase search),
+    so the bug was latent rather than actively wrong in production, but the
+    method's own contract (`GraphEdge.source_id` is a real node id) was
+    violated. Found via live verification against real Neo4j, not by
+    reading the code."""
+    user = await _make_user(db_session)
+    repo_a = await _make_repository(db_session, user, "repo-a")
+    repo_b = await _make_repository(db_session, user, "repo-b")
+    await db_session.flush()
+    a_id, b_id = str(repo_a.id), str(repo_b.id)
+
+    await graph_repository.replace_repository_graph(
+        a_id, _repository_payload(a_id, feign_target="repo-b")
+    )
+    await graph_repository.replace_repository_graph(b_id, _repository_payload(b_id))
+
+    try:
+        await relink_account(graph_repository=graph_repository, db=db_session, user_id=user.id)
+
+        edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
+        assert edges, "expected the CALLS_SERVICE edge to have been computed"
+        assert edges[0].source_id == f"{a_id}:repository", (
+            f"source_id must be the real source Repository node id, got {edges[0].source_id!r}"
+        )
+    finally:
+        await graph_repository.replace_repository_graph(a_id, GraphPayload())
+        await graph_repository.replace_repository_graph(b_id, GraphPayload())
+
+
+async def test_kafka_topic_edge_source_id_is_the_producing_or_consuming_component(
+    db_session: AsyncSession, graph_repository: Neo4jGraphRepository
+) -> None:
+    """Regression test: `get_kafka_topic_edges` (introduced to replace
+    `get_full_graph` in `_load_repo_nodes` — see Weakness #2 of the
+    architecture audit) initially had the identical `source_id=None` bug as
+    above, for the identical reason (query returned `r, b` but not `a`),
+    caught by live verification before this test existed rather than by
+    reading the code."""
+    user = await _make_user(db_session)
+    repo = await _make_repository(db_session, user, "repo-a")
+    await db_session.flush()
+    repo_id = str(repo.id)
+
+    await graph_repository.replace_repository_graph(
+        repo_id, _repository_payload(repo_id, produces_topic="orders-created")
+    )
+    try:
+        edges = await graph_repository.get_kafka_topic_edges(repo_id)
+        assert edges, "expected the PRODUCES_TO edge to be present"
+        assert edges[0].source_id == f"{repo_id}:component:Producer", (
+            f"source_id must be the real producing component's node id, got "
+            f"{edges[0].source_id!r}"
+        )
+    finally:
+        await graph_repository.replace_repository_graph(repo_id, GraphPayload())
+
+
 async def test_graph_version_is_stamped_from_the_latest_completed_indexing_job(
     db_session: AsyncSession, graph_repository: Neo4jGraphRepository
 ) -> None:
@@ -358,9 +428,13 @@ async def test_relink_account_fetches_each_repositorys_nodes_at_most_once(
         await relink_account(graph_repository=counting, db=db_session, user_id=user.id)
 
         # 4 node-label reads per repo (FeignClient/KafkaTopic/MavenDependency/
-        # PythonDependency) + 1 get_full_graph per repo = 5*N, not 5*N*(N-1).
+        # PythonDependency) + 1 get_kafka_topic_edges per repo = 5*N, not
+        # 5*N*(N-1). get_full_graph is never called at all now — Kafka
+        # producer/consumer direction is read via the targeted
+        # get_kafka_topic_edges query instead (see Weakness #2 fix).
         assert counting.calls["get_nodes_by_label"] == 4 * len(repos)
-        assert counting.calls["get_full_graph"] == len(repos)
+        assert counting.calls["get_kafka_topic_edges"] == len(repos)
+        assert "get_full_graph" not in counting.calls
         # One scoped write per repository — never more than N.
         assert counting.calls["replace_cross_repository_edges"] == len(repos)
     finally:

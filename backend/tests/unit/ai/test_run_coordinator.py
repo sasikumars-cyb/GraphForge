@@ -13,7 +13,7 @@ Covers:
 from __future__ import annotations
 
 import uuid
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -28,6 +28,7 @@ from app.agents._contract import (
 from app.core.exceptions import NotFoundError, SubjectTypeMismatchError
 from app.models.agent_step import AgentStep
 from app.models.run import Run
+from app.orchestrator.preflight import PreFlightCheckFailed
 from app.orchestrator.registry import AgentRegistry
 from app.orchestrator.run_coordinator import RunCoordinator
 from app.orchestrator.selector import AgentSelector
@@ -326,6 +327,164 @@ async def test_agent_exception_commits_before_raising() -> None:
         await coordinator.execute(subject, "plan_freeform")
 
     mock_db.commit.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Pre-flight validation (architecture audit Weakness #1) — a missing LLM
+# provider credential must fail the run *before* agent.run() is ever
+# called, not mid-execution.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_preflight_failure_never_calls_agent_run() -> None:
+    coordinator, mock_db, mock_agent = _build_coordinator()
+    subject = _make_subject()
+
+    with (
+        patch(
+            "app.orchestrator.run_coordinator.check_llm_provider_configured",
+            return_value="No API key is configured for the 'OpenAI' provider (stage 'planning').",
+        ),
+        pytest.raises(PreFlightCheckFailed, match="Pre-flight check failed"),
+    ):
+        await coordinator.execute(subject, "plan_freeform")
+
+    mock_agent.run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_preflight_failure_marks_run_and_step_failed() -> None:
+    coordinator, mock_db, _ = _build_coordinator()
+    subject = _make_subject()
+
+    with (
+        patch(
+            "app.orchestrator.run_coordinator.check_llm_provider_configured",
+            return_value="No API key is configured for the 'OpenAI' provider (stage 'planning').",
+        ),
+        pytest.raises(PreFlightCheckFailed),
+    ):
+        await coordinator.execute(subject, "plan_freeform")
+
+    run = mock_db.add.call_args_list[0][0][0]
+    step = mock_db.add.call_args_list[1][0][0]
+    assert run.status == "failed"
+    assert "Pre-flight check failed" in run.error_message
+    assert "No API key is configured" in run.error_message
+    assert step.status == "failed"
+    assert step.error_message == run.error_message
+    mock_db.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_preflight_failure_asks_the_same_question_the_agent_would() -> None:
+    """The check must be called with (agent_id, run.workflow_stage) — the
+    same precedence `app.agents.llm.stage_for` uses — so a pre-flight
+    rejection is never based on a different stage than the one the agent's
+    own LLM call would actually resolve under."""
+    coordinator, mock_db, _ = _build_coordinator(agent_id="planning", goal="plan_freeform")
+    subject = _make_subject()
+
+    with patch(
+        "app.orchestrator.run_coordinator.check_llm_provider_configured", return_value=None
+    ) as mock_check:
+        run = await coordinator.execute(subject, "plan_freeform")
+
+    assert run.status == "completed"
+    mock_check.assert_called_once()
+    called_agent_id, called_stage = mock_check.call_args[0]
+    assert called_agent_id == "planning"
+    assert called_stage == run.workflow_stage
+
+
+@pytest.mark.asyncio
+async def test_preflight_pass_proceeds_to_agent_run_normally() -> None:
+    """A configured provider (the normal case for every existing test in
+    this file, none of which mock the pre-flight check) must not change
+    any existing behavior — this makes that assumption explicit rather
+    than only inferred from every other test in this file still passing."""
+    coordinator, mock_db, mock_agent = _build_coordinator()
+    subject = _make_subject()
+
+    with patch(
+        "app.orchestrator.run_coordinator.check_llm_provider_configured", return_value=None
+    ):
+        run = await coordinator.execute(subject, "plan_freeform")
+
+    assert run.status == "completed"
+    mock_agent.run.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_preflight_check_raising_still_fails_the_run_cleanly() -> None:
+    """Regression test: `check_llm_provider_configured` calls `resolve()`,
+    which is NOT guaranteed exception-free (`require_provider_spec()`
+    raises `UnsupportedProviderError` for a stale/invalid stored provider
+    key — see `app.ai.providers.registry`). An earlier version of this
+    pre-flight gate called it *before* the try/except that wraps
+    agent.run(), so this exact exception escaped `execute_run` entirely,
+    bypassing `_fail_step`/`_fail_run`, and (confirmed live against real
+    Postgres through the actual `background_execution` wrapper) the run
+    silently reverted to its pre-execution status with no error message at
+    all, instead of being marked "failed". The check must now live inside
+    the same try/except that already handles any other agent.run() failure."""
+    coordinator, mock_db, mock_agent = _build_coordinator()
+    subject = _make_subject()
+
+    with (
+        patch(
+            "app.orchestrator.run_coordinator.check_llm_provider_configured",
+            side_effect=RuntimeError("Unknown AI provider: 'deprecated-vendor'."),
+        ),
+        pytest.raises(RuntimeError, match="deprecated-vendor"),
+    ):
+        await coordinator.execute(subject, "plan_freeform")
+
+    mock_agent.run.assert_not_called()
+    run = mock_db.add.call_args_list[0][0][0]
+    step = mock_db.add.call_args_list[1][0][0]
+    assert run.status == "failed"
+    assert "deprecated-vendor" in run.error_message
+    assert step.status == "failed"
+    assert step.error_message == run.error_message
+    mock_db.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_resume_preflight_check_raising_still_fails_the_run_cleanly() -> None:
+    """Same regression as above, for `resume_step` — the paused-resume
+    entry point has the identical structure and had the identical bug."""
+    coordinator, mock_db, mock_agent = _build_coordinator(
+        agent_id="context_discovery", goal="discover_context"
+    )
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:abc123",
+        subject_type="freetext",
+        goal="discover_context",
+        status="awaiting_input",
+    )
+    step = AgentStep(
+        id=uuid.uuid4(), run_id=run.id, agent_id="context_discovery", status="awaiting_input"
+    )
+
+    with (
+        patch(
+            "app.orchestrator.run_coordinator.check_llm_provider_configured",
+            side_effect=RuntimeError("Unknown AI provider: 'deprecated-vendor'."),
+        ),
+        pytest.raises(RuntimeError, match="deprecated-vendor"),
+    ):
+        await coordinator.resume_step(
+            run, step, "context_discovery", mock_agent, _make_subject(), "discover_context"
+        )
+
+    mock_agent.run.assert_not_called()
+    assert run.status == "failed"
+    assert step.status == "failed"
+    assert "deprecated-vendor" in run.error_message
+    assert step.error_message == run.error_message
 
 
 # ---------------------------------------------------------------------------

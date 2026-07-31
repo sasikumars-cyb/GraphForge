@@ -153,7 +153,11 @@ class DocumentationPlanningLLMError(AppError):
 
 
 async def _call_llm(
-    user_prompt: str, model: str | None = None, stage: str = STAGE_DOCUMENTATION_PLANNING
+    user_prompt: str,
+    model: str | None = None,
+    stage: str = STAGE_DOCUMENTATION_PLANNING,
+    _metadata_out: dict[str, Any] | None = None,
+    context: AgentContext | None = None,
 ) -> str:
     """Delegates to the shared `app.agents.llm.invoke_llm_json` — kept as a
     module-level function so existing test seams
@@ -164,6 +168,8 @@ async def _call_llm(
         stage=stage,
         model=model,
         error_cls=DocumentationPlanningLLMError,
+        metadata_out=_metadata_out,
+        context=context,
     )
 
 
@@ -326,10 +332,13 @@ class DocumentationPlanningAgent:
         prompt = _render_prompt(blueprint_context)
 
         try:
+            llm_metadata: dict[str, Any] = {}
             raw_response = await _call_llm(
                 user_prompt=prompt,
                 model=context.model,
                 stage=stage_for(context.extras, STAGE_DOCUMENTATION_PLANNING),
+                _metadata_out=llm_metadata,
+                context=context,
             )
             plan = _parse_llm_response(raw_response, context.goal)
         except DocumentationPlanningLLMError as exc:

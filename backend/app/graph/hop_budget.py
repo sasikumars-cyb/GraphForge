@@ -109,6 +109,10 @@ class GraphHopBudgetRepository(IGraphRepository):
         self._consume(repository_id, "get_nodes_by_label")
         return await self._inner.get_nodes_by_label(repository_id, label)
 
+    async def get_kafka_topic_edges(self, repository_id: str) -> list[GraphEdge]:
+        self._consume(repository_id, "get_kafka_topic_edges")
+        return await self._inner.get_kafka_topic_edges(repository_id)
+
     async def has_graph(self, repository_id: str) -> bool:
         # An indexing-status existence check, not a graph traversal — free
         # regardless of budget, same reasoning `verify_repository` already

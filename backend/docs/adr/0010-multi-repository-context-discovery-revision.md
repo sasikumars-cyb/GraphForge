@@ -223,3 +223,154 @@ Walked through the likely accidental violations and what stops each one:
 **Architecture Approved.**
 
 Implementation resumes at P0 (item 1: the revised Theme A). No implementation code has been written during this review.
+
+---
+
+## 9. Addendum (2026-07-31) — Weakness #2 / I8 reaffirmed, incremental relinking rejected
+
+A later architecture review (tracked as "Weakness #2") asked whether **I8**
+should be revised: should `relink_account` patch only the affected
+repository's edges incrementally, instead of recomputing the whole account on
+every relink? Evaluated against the current implementation
+(`app/indexer/graph/cross_repo_linker.py`, `app/indexer/services/
+indexing_service.py::run_indexing`).
+
+**Current architecture.** `run_indexing` calls `relink_account` unconditionally
+after every single repository's `index_repository` completes — not only when
+that repository's relationship-relevant signals (Feign targets, Kafka topics,
+dependency coordinates) actually changed. `relink_account` then: acquires a
+blocking, transaction-scoped `pg_advisory_xact_lock` keyed on `user_id`;
+loads every indexed repository the user owns in `O(N)` round-trips
+(`load_all_repo_nodes`); computes every repository's full outgoing edge set
+in memory, `O(N²)` pairwise, against the three-rule registry
+(`compute_edges`, pure, no I/O); and replaces each repository's *complete*
+outgoing edge set via `replace_cross_repository_edges` (full delete-then-write,
+scoped to that repository's outgoing edges only).
+
+**Problem analysis.** The concern behind revisiting I8 is cost: relinking the
+whole account on every single-repository index event looks wasteful when
+only one repository actually changed. Two independent questions are
+entangled here and must be separated: (a) *when* to trigger a relink (today:
+unconditionally, every index event) and (b) *how much* to recompute once
+triggered (today, per I8: everything). Only (b) is what I8 governs, and only
+(b) is what "incremental relinking" would change.
+
+Incrementally patching (b) requires, for a changed repository R, correctly
+determining: every edge that should be *added* because some other repository
+Y's signals now match R (already required today); every edge that should be
+*removed* because a previously-matching signal on R or on some Y no longer
+matches (an add-only patch is unsound — it would let stale edges accumulate
+forever); and, per I7/Theme C, this must hold not just for R's own outgoing
+edges but for the possibility that R's change alters what edges *other*
+repositories should now have pointing at R (the exact scenario I8's own text
+already calls out: "a change to repo X can affect what repo Y's own outgoing
+edges *should* be"). Computing that minimal patch set correctly requires
+comparing R's new signals against every other repository's signals anyway —
+the same `O(N)` fetch and `O(N²)` comparison work `compute_edges` already
+does — the only thing an incremental design would actually save is the
+`replace_cross_repository_edges` write for repositories whose edge set is
+provably unchanged, not the read/compute cost, which dominates.
+
+**Decision: I8 is reaffirmed. Incremental relinking is rejected.** Full
+account-scoped recomputation remains the only recomputation strategy.
+
+**Reasoning:**
+1. **No demonstrated cost problem.** Per-account repository counts are
+   documented elsewhere in this ADR as "tens to low hundreds" (§8,
+   Enterprise scalability). `compute_edges` is pure, in-memory,
+   no I/O — cheap relative to the Neo4j round-trips that dominate either
+   design. There is no measurement anywhere in this codebase showing
+   `relink_account` as a bottleneck; revising a correctness invariant to
+   solve an unmeasured performance concern is not justified.
+2. **Incremental correctness is strictly harder, not simpler.** As shown
+   above, a sound patch still requires the same full pairwise comparison to
+   determine the removal set — it does not avoid the `O(N²)` work, it only
+   risks getting the removal half wrong. A missed removal is a silent,
+   permanently-stale edge with no mechanism to ever self-correct, since
+   nothing else re-derives it later.
+3. **Concurrency.** The existing blocking `pg_advisory_xact_lock` design
+   proves convergence specifically *because* every relink is a full,
+   idempotent replace: "whichever concurrent caller acquires the lock last
+   is guaranteed to observe every repository committed by any other caller
+   already waiting on (or holding) the same lock" (see `relink_account`'s own
+   docstring). This is the exact design that replaced an earlier
+   `pg_try_advisory_xact_lock` ("try, don't block") approach after it was
+   found to silently drop a concurrent caller's repository under contention
+   (`tests/integration/test_finding3_concurrent_relink_repro.py`). Two
+   concurrent relinks each computing and applying a *partial* patch have no
+   equivalent convergence proof — patch order would matter, and a naive
+   implementation could reintroduce precisely the dropped-repository defect
+   class this system has already been burned by once.
+4. **Failure recovery.** `replace_cross_repository_edges` is a full
+   delete-then-write per repository, so a crashed or retried `relink_account`
+   simply recomputes cleanly from scratch — there is no "was the previous
+   patch half-applied?" question to answer. An incremental design would need
+   to track patch-application state to recover correctly from a partial
+   failure, a genuinely new failure mode with no current equivalent.
+5. **Maintenance.** `compute_edges` is a small, pure, easily-tested function
+   specifically *because* it always computes the full answer. A diff-based
+   design roughly doubles the surface area (add-set logic, remove-set logic,
+   and edge cases where a rule's match status flips) for a saving that is
+   neither measured nor architecturally necessary.
+
+**Risks of this decision.** At very large per-account repository counts (the
+existing scalability note's own upper bound, "low hundreds"), `O(N²)`
+in-memory comparison and `O(N)` Neo4j round-trips will eventually become the
+actual bottleneck. This is a known, bounded, and currently theoretical risk,
+not an active problem.
+
+### 9.1 Architectural invariants (never violated)
+
+This subsection restates, for this specific question, what §1's I8 already
+makes binding — collected here so a future contributor evaluating a relink
+performance change can check it in one place without re-deriving the
+reasoning above.
+
+I8's text is unchanged and remains binding, verbatim: *"Every relink is a
+full account-scoped recomputation, never a partial patch."* Concretely
+prohibited **without a new ADR**, each a direct restatement of "partial
+patch" for a specific implementation shape a future change might otherwise
+reach for:
+
+- **Partial relinking** — computing or writing edges for a subset of an
+  account's indexed repositories on a triggered relink, rather than every
+  repository the account owns.
+- **Partial edge recomputation** — computing only *some* of a repository's
+  outgoing edge rules (e.g. re-running `feign_service_calls` but not
+  `kafka_topic_overlap`) instead of the full rule set in `CROSS_REPO_LINK_RULES`.
+- **Incremental edge repair** — diffing a repository's previous edge set
+  against a newly computed one and writing only the delta, instead of
+  `replace_cross_repository_edges`'s existing full delete-then-write.
+
+Any of the three is an I8 violation exactly as much as the incremental
+relinking design rejected above — they are the same non-goal expressed at
+different levels (account scope, rule scope, write scope). A future change
+that wants one of them must open a new ADR and win the argument this
+addendum just settled against, not land as a routine optimization PR.
+
+### 9.2 Future optimization (non-goal of I8)
+
+I8 governs *how much* a triggered relink computes (§9.1: always everything).
+It does not govern *how often* a relink is triggered — that is a separate,
+already-identified axis with real headroom, left explicitly out of scope
+here as future work:
+
+- **Skip relink when relationship-relevant signals have not changed.**
+  `run_indexing` could gate the `relink_account` call on whether the
+  just-indexed repository's relationship-relevant signals (Feign
+  `target_name`s, Kafka topic names, dependency coordinates) actually
+  changed since its last successful index, skipping the call entirely when
+  they didn't.
+
+This reduces *execution frequency* — fewer `relink_account` calls overall —
+without touching what any single triggered call computes: when it does run,
+it still recomputes the full account, exactly as I8 requires. That is what
+keeps this a non-goal of I8 rather than a backdoor revision of it: the
+invariant is about the shape of one recomputation, not about how many
+recomputations happen. No evidence was gathered on how often a re-index
+actually leaves these signals unchanged in practice; sizing this
+optimization — whether it's worth the added bookkeeping of tracking a
+"signals changed" flag per repository — is future work, not a decision made
+here.
+
+**Weakness #2 architecture is now finalized.**

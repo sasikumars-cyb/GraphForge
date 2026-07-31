@@ -70,11 +70,19 @@ async def complete_with_fallback(
     model: str | None = None,
     stage: str | None = None,
     profile: str | None = None,
+    attempts_out: list[int] | None = None,
 ) -> tuple[LLMResponse, ResolvedProvider]:
     """Run a completion, falling back only on recoverable failures.
 
     Returns the response together with the provider that actually served it,
     so callers can record which vendor produced a result.
+
+    `attempts_out`, when given, has the number of *failed* attempts that
+    preceded the successful one appended to it (0 when the primary provider
+    answered) — the count this loop already computes as `index` but
+    previously discarded. An out-param rather than a third return value so
+    the existing two-tuple contract, which callers unpack positionally,
+    is unchanged.
     """
     primary = resolve(provider=provider, model=model, stage=stage, profile=profile)
     attempts: list[ResolvedProvider] = [primary]
@@ -114,6 +122,8 @@ async def complete_with_fallback(
                     attempt.model,
                     index,
                 )
+            if attempts_out is not None:
+                attempts_out.append(index)
             return response, attempt
         except Exception as exc:  # noqa: BLE001 — re-raised below
             last_error = exc
