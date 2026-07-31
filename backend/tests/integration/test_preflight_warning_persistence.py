@@ -49,9 +49,7 @@ async def _cleanup_created_runs() -> AsyncIterator[None]:
         return
     cleanup = _RealSession()
     for run_id in _created_run_ids:
-        step_result = await cleanup.execute(
-            select(AgentStep).where(AgentStep.run_id == run_id)
-        )
+        step_result = await cleanup.execute(select(AgentStep).where(AgentStep.run_id == run_id))
         for step in step_result.scalars().all():
             await cleanup.delete(step)
         run_result = await cleanup.execute(select(Run).where(Run.id == run_id))

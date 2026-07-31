@@ -59,23 +59,45 @@ services:
       dockerfile: Dockerfile
       target: dev
     restart: unless-stopped
+    # List form (not the usual `KEY: value` mapping) so AWS_PROFILE below can
+    # use bare-name pass-through - see the comment on that line for why.
     environment:
-      ENVIRONMENT: development
-      DEBUG: "true"
-      DATABASE_URL: postgresql+asyncpg://graphforge:graphforge@db:5432/graphforge
-      CORS_ALLOW_ORIGINS: '["http://localhost:5173","http://localhost:5174"]'
-      NEO4J_URI: bolt://neo4j:7687
-      NEO4J_USER: neo4j
-      NEO4J_PASSWORD: graphforge-dev
+      - ENVIRONMENT=development
+      - DEBUG=true
+      - DATABASE_URL=postgresql+asyncpg://graphforge:graphforge@db:5432/graphforge
+      - CORS_ALLOW_ORIGINS=["http://localhost:5173","http://localhost:5174"]
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USER=neo4j
+      - NEO4J_PASSWORD=graphforge-dev
       # Bedrock (boto3) reads these from the real process environment, not
       # from backend/.env - values come from docker/.env (git-ignored,
-      # never committed), substituted in here by Docker Compose. Empty
-      # defaults so compose doesn't warn/fail when docker/.env hasn't been
-      # created yet (Bedrock just stays unconfigured until it has).
-      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
-      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
-      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
-      AWS_DEFAULT_REGION: us-east-1
+      # never committed) and the shell, substituted in here by Docker
+      # Compose. Empty defaults so compose doesn't warn/fail when unset -
+      # botocore's EnvProvider treats an empty string as "not set" and
+      # falls through to the next provider in the credential chain, so
+      # leaving these blank is exactly what makes AWS_PROFILE / the ~/.aws
+      # mount below work (see docs/bedrock-setup.md).
+      #
+      # Precedence (standard boto3 chain): explicit keys > AWS_PROFILE >
+      # IAM role. Set AWS_PROFILE (recommended - survives SSO re-login
+      # with no docker/.env edits) OR the three AWS_* keys below, not
+      # both - if both are set, the explicit keys win and AWS_PROFILE is
+      # ignored.
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
+      # Bare name (no `=value`): Compose passes AWS_PROFILE through only if
+      # it's actually defined in docker/.env or the shell, and OMITS the key
+      # from the container entirely otherwise - unlike the `${VAR:-}` map
+      # form used above, this never injects an empty string. That matters
+      # specifically for AWS_PROFILE because botocore treats AWS_PROFILE=""
+      # as an explicit (invalid) profile name and raises ProfileNotFound,
+      # rather than falling through like it does for the credential keys
+      # above (verified empirically - see backend/docker-entrypoint.sh for
+      # the remaining defense-in-depth: this alone doesn't cover every case,
+      # e.g. docker/.env containing a literal blank `AWS_PROFILE=` line).
+      - AWS_PROFILE
+      - AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-us-east-1}
     ports:
       - "8000:8000"
     volumes:
@@ -84,6 +106,17 @@ services:
       # the container - the image's own site-packages are what actually run.
       - ../backend:/app
       - /app/.venv
+      # AWS SSO / shared-config support: the dev image's `dev` stage (see
+      # backend/Dockerfile) has no USER directive, so it runs as root and
+      # HOME=/root - mounted here, not /home/appuser (that's the `runtime`
+      # stage's user, used only by docker-compose.prod.yml, which relies on
+      # an IAM role instead and needs no mount at all). Read-only: the
+      # container only needs to read cached SSO tokens and profile config,
+      # never write them. If ~/.aws doesn't exist on the host, Docker
+      # creates it as an empty directory automatically - harmless, and
+      # AWS_PROFILE/AWS_ACCESS_KEY_ID being unset just leaves Bedrock
+      # unconfigured either way. See docs/bedrock-setup.md.
+      - ${HOME}/.aws:/root/.aws:ro
     depends_on:
       db:
         condition: service_healthy

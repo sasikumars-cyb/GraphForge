@@ -54,6 +54,7 @@ from app.context_pipeline.reference_detection import detect_references
 
 logger = logging.getLogger(__name__)
 
+
 def _reference_from_fact_value(value: dict[str, Any]) -> Reference:
     """Rebuild a provider-facing `Reference` from the flat fact that recorded
     it. Facts stay JSON-serializable (they're persisted across a pause);
@@ -133,6 +134,15 @@ class RequestParseInvestigator:
                         "text": "\n".join(
                             f.text for f in ledger.facts_of("work_item", "document") if f.text
                         ),
+                        # Same known-repository-name list `match_repository_names`
+                        # uses (empty before any repository facts exist, which is
+                        # a safe no-op — see `run()`). Without this, a ticket body
+                        # naming an indexed repository by its bare name (e.g. "Repo:
+                        # etl-core") could never be recognized here: `match_
+                        # repository_names` already ran once, against the
+                        # pre-fetch request text, and is never re-run once the
+                        # ticket body makes more names visible.
+                        "known_repositories": frozenset(ledger.subjects_of("repository")),
                         "existing": existing,
                     },
                     cost=0,
@@ -903,8 +913,7 @@ class GraphInvestigator:
                 logger.warning("context_discovery_graph_budget_exhausted error=%s", error)
                 recorder.evidence(
                     "unavailable",
-                    "Reached this run's graph read budget, so no further traversal was "
-                    "performed.",
+                    "Reached this run's graph read budget, so no further traversal was performed.",
                     action=GRAPH_TRAVERSAL_ACTION,
                 )
                 return
@@ -1005,8 +1014,7 @@ class GraphInvestigator:
         if len(by_name) == 1:
             only = next(iter(by_name.values()))
             return (
-                f"Only one repository is indexed — '{only.subject}' — "
-                "so that's the one I'll use.",
+                f"Only one repository is indexed — '{only.subject}' — so that's the one I'll use.",
                 [only.subject],
             )
 

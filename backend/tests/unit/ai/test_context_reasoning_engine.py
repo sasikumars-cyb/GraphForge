@@ -1062,9 +1062,9 @@ def test_graph_hop_budget_accommodates_more_than_one_graph_query() -> None:
     reads_per_query = 2  # one Component label read, one KafkaTopic read
     # survey, then a scoped traversal, then a verification query on resume.
     distinct_graph_queries = 3
-    assert (
-        CONTEXT_DISCOVERY_MANIFEST.max_graph_hops >= reads_per_query * distinct_graph_queries
-    ), "the manifest must declare the traversal shape the engine actually performs"
+    assert CONTEXT_DISCOVERY_MANIFEST.max_graph_hops >= reads_per_query * distinct_graph_queries, (
+        "the manifest must declare the traversal shape the engine actually performs"
+    )
 
 
 def test_budget_exhaustion_is_not_reported_as_an_unreachable_graph() -> None:
@@ -1187,3 +1187,83 @@ async def test_suggested_repositories_are_not_auto_selected_alongside_explicit_o
     selected_names = {r["name"] for r in result["selected_repositories"]}
     assert selected_names == {"ingestion-framework"}
     assert "etl-core" not in selected_names
+
+
+@pytest.mark.asyncio
+async def test_parse_retrieved_content_recognizes_an_indexed_repository_named_in_ticket_body() -> (
+    None
+):
+    """Regression: a repository named only in *fetched* ticket content (e.g.
+    a Jira description reading "Repo: etl-core"), not in the original
+    request text, must still be recognized — previously `parse_retrieved_
+    content` never received the known-repository-name list `match_
+    repository_names` uses (it runs before the ticket is even fetched, so it
+    can't see this text at all), so an indexed repository named explicitly
+    in a ticket body was silently missed and the user was asked to pick
+    manually between every indexed repository instead."""
+    ledger = Ledger()
+    repo_ev = ledger.add_evidence(
+        provider="graph", action="survey_architecture", outcome="success", summary="s"
+    )
+    ledger.add_fact(
+        kind="repository", subject="etl-core", provider="graph", evidence_id=repo_ev.evidence_id
+    )
+
+    work_item_ev = ledger.add_evidence(
+        provider="jira", action="fetch_work_item", outcome="success", summary="s"
+    )
+    ledger.add_fact(
+        kind="work_item",
+        subject="NPT-29",
+        provider="jira",
+        evidence_id=work_item_ev.evidence_id,
+        text=(
+            "Duplicate records in SCD2 merge during concurrent writes. "
+            "Repo: etl-core. Branch: bugfix/scd2-duplicate"
+        ),
+    )
+
+    state = WorkingContext(ledger=ledger)
+    investigator = RequestParseInvestigator()
+    action = next(a for a in investigator.propose(state) if a.key == "parse_retrieved_content")
+    assert action.params["known_repositories"] == frozenset({"etl-core"})
+
+    recorder = Recorder(ledger, action, iteration=0)
+    outcome = await investigator.run(action, _session(), recorder)
+
+    assert outcome.yielded is True
+    local_repo_facts = [
+        f for f in ledger.facts_of("reference") if f.value.get("type") == "local_repository"
+    ]
+    assert {f.subject for f in local_repo_facts} == {"etl-core"}
+    # The branch name is still recognized too — this pass must gain the new
+    # signal, not lose the one it already had.
+    github_repo_facts = [
+        f for f in ledger.facts_of("reference") if f.value.get("type") == "github_repository"
+    ]
+    assert {f.subject for f in github_repo_facts} == {"bugfix/scd2-duplicate"}
+
+
+def test_parse_retrieved_content_known_repositories_is_empty_before_any_repository_facts() -> None:
+    """Safe no-op, matching `match_repository_names`'s own existing
+    behavior: before any repository fact exists, the known-name list is
+    empty and no local-repository match can ever fire — this is the
+    pre-existing state for every ticket-content parse until the graph
+    survey runs, not a regression."""
+    ledger = Ledger()
+    work_item_ev = ledger.add_evidence(
+        provider="jira", action="fetch_work_item", outcome="success", summary="s"
+    )
+    ledger.add_fact(
+        kind="work_item",
+        subject="NPT-29",
+        provider="jira",
+        evidence_id=work_item_ev.evidence_id,
+        text="Repo: etl-core.",
+    )
+
+    state = WorkingContext(ledger=ledger)
+    action = next(
+        a for a in RequestParseInvestigator().propose(state) if a.key == "parse_retrieved_content"
+    )
+    assert action.params["known_repositories"] == frozenset()

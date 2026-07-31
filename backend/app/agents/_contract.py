@@ -140,8 +140,10 @@ class AgentManifest:
     # Generalizes what `max_graph_hops > 0` and `default_stage_for_agent(...)
     # is not None` already imply for Neo4j and the LLM respectively: a single
     # declarative field a *future* pre-flight check's `applies_to` can test
-    # membership against (`DEPENDENCY_JIRA in manifest.required_dependencies`)
-    # instead of hardcoding its own bespoke signal. Deliberately does not
+    # membership against (`DEPENDENCY_GITHUB_WRITE in manifest.
+    # required_dependencies`, exactly what `app.orchestrator.preflight.
+    # WARNING_CHECKS` already does for the git_ops agents) instead of
+    # hardcoding its own bespoke signal. Deliberately does not
     # replace `max_graph_hops` (which also drives the graph hop *budget*, a
     # different concern) or `default_stage_for_agent` (which resolves *which*
     # AI stage config to use, not just whether one is needed) — both of
