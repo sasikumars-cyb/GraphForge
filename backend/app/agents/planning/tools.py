@@ -140,7 +140,34 @@ class TraverseArchitectureGraphTool:
     def __init__(self, graph_repository: IGraphRepository) -> None:
         self._graph_repository = graph_repository
 
-    async def execute(self, repositories: list[dict[str, str]]) -> PlanningObservation:
+    async def execute(
+        self,
+        repositories: list[dict[str, str]],
+        *,
+        repository_filter: list[str] | None = None,
+    ) -> PlanningObservation:
+        """Traverse `repositories`, or only the subset named in
+        `repository_filter` when one is given.
+
+        `repository_filter` is what stops a "scope" investigation action
+        (the owning repository is already known — see
+        `GraphInvestigator.propose`'s `scope_architecture` branch) from
+        still fetching every Component node of every OTHER indexed
+        repository too, which it did unconditionally before this
+        parameter existed: `GraphInvestigator.run()` folded the known
+        repository into `relevance_terms` for scoring, but never actually
+        restricted which repositories got traversed, so a user with
+        hundreds of indexed repositories paid a full-component fetch for
+        every one of them on every single reasoning cycle, even after the
+        owning repository was already settled. A genuine "survey" (no
+        repository known yet — `repository_filter=None`) still traverses
+        everything, which is the legitimate, unavoidable case: nothing
+        can be ranked without first seeing what exists.
+        """
+        if repository_filter is not None:
+            wanted = {name.lower() for name in repository_filter}
+            repositories = [r for r in repositories if r["name"].lower() in wanted]
+
         if not repositories:
             return PlanningObservation(
                 tool_name=self.name,
@@ -322,7 +349,20 @@ _TEST_RELEVANCE_FACTOR = 0.3
 
 
 def _is_test_component(component: dict[str, Any]) -> bool:
-    """Whether this component is test code, by path or by name."""
+    """Whether this component is test code.
+
+    Prefers the persisted `is_test` property computed once at index time
+    (see `app.indexer.classification`) — the same ground truth every
+    other consumer (Development/Testing/Documentation Planning's own
+    independent grounding, the UI) now agrees on — falling back to this
+    same regex-based recomputation only for a graph indexed before that
+    property existed, so this fix takes effect immediately for anything
+    indexed going forward without requiring every existing repository to
+    be re-indexed first.
+    """
+    persisted = component.get("is_test")
+    if persisted is not None:
+        return bool(persisted)
     path = str(component.get("file_path", ""))
     name = str(component.get("name", ""))
     return bool(_TEST_PATH_RE.search(path)) or name.split(".")[-1].startswith("test_")
@@ -517,22 +557,43 @@ def format_graph_context(
         comp_lines = []
         for repo in shown:
             comps = by_repo_all.get(repo, [])
-            if terms:
-                comps = sorted(
-                    comps,
-                    key=lambda c: (
-                        -rank_score(c, terms, weights),
-                        # Every component sharing a file scores identically
-                        # once the path is part of the match text, so the
-                        # tiebreak decides which of them the model actually
-                        # sees. Alphabetical order alone hands those slots
-                        # to `__init__` and other private members — real
-                        # code, but the least self-describing name in the
-                        # file. Prefer names that mean something.
-                        c["name"].split(".")[-1].startswith("_"),
-                        c["name"],
-                    ),
-                )
+            # Production components always sort ahead of test components,
+            # unconditionally — not just discounted by `rank_score` when
+            # `terms` produces a nonzero match. `rank_score` multiplies a
+            # test component's *relevance* score by 0.3, which is a no-op
+            # when that score is already 0 (no term overlap at all): 0 *
+            # 0.3 == 0, identical to a production component that also
+            # scored 0, so the two compared equal and fell back to
+            # traversal order — arbitrary with respect to test-vs-
+            # production. Combined with `_component_budget` capping a
+            # large repository to as few as 8 entries, that let a
+            # repository's test classes fill the entire budget while its
+            # real production classes never reached the prompt at all.
+            # This is exactly what happened to a real run: etl-core's
+            # `SCDType2Merger`/`ExactDeduplicator` never appeared in the
+            # component list the LLM saw, only their test classes did, and
+            # the LLM had no way to know the real ones existed. Sorting on
+            # `_is_test_component` first, before the score, makes that
+            # structurally impossible: every production component in a
+            # repository is listed before any test component from the same
+            # repository is considered, regardless of how term-matching
+            # scores either of them.
+            comps = sorted(
+                comps,
+                key=lambda c: (
+                    _is_test_component(c),
+                    -rank_score(c, terms, weights) if terms else 0.0,
+                    # Every component sharing a file scores identically
+                    # once the path is part of the match text, so the
+                    # tiebreak decides which of them the model actually
+                    # sees. Alphabetical order alone hands those slots
+                    # to `__init__` and other private members — real
+                    # code, but the least self-describing name in the
+                    # file. Prefer names that mean something.
+                    c["name"].split(".")[-1].startswith("_"),
+                    c["name"],
+                ),
+            )
             budget = max_components_per_repo or _component_budget(len(comps))
             listed = [f"{c['name']} ({c['type']})" for c in comps[:budget]]
             if listed:

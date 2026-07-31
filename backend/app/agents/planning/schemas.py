@@ -10,6 +10,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agents._contract import ComponentWarning
+
 
 class ImplementationStep(BaseModel):
     """One ordered step in the implementation plan."""
@@ -186,6 +188,15 @@ class PlanningResult(BaseModel):
     # LLM-generated, never silently dropped. Empty when nothing was flagged.
     # See app.agents.verification.
     verification_warnings: list[str] = Field(default_factory=list)
+
+    # Structured counterpart to verification_warnings above, populated only
+    # by app.agents.component_grounding.check_test_used_as_production — a
+    # claim (test class named as production code) that was rejected or
+    # replaced, with enough structure for the UI to render distinctly and
+    # for a future automated gate to act on `warning_type` without parsing
+    # prose. Additive: existing readers of verification_warnings are
+    # unaffected; this is empty whenever nothing was rejected/replaced.
+    component_warnings: list[ComponentWarning] = Field(default_factory=list)
 
     # Capability analysis (v4) — derived deterministically from the brief
     # before any repository context is assembled, so the architecture is

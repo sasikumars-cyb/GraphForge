@@ -57,6 +57,7 @@ from app.agents._contract import (
     Evidence,
 )
 from app.agents.blueprint.factory import BlueprintFactory
+from app.agents.component_grounding import check_test_used_as_production, to_contract_warnings
 from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.llm import STAGE_PLANNING, invoke_llm_json, stage_for
 from app.agents.planning.classifier import PlanningProfile, analyse, pattern_for_key
@@ -74,6 +75,7 @@ from app.agents.planning.schemas import (
 from app.agents.planning.tools import stars_for_rank
 from app.agents.prompt_utils import parse_json_response, render_prompt_template
 from app.agents.reflection import run_with_reflection
+from app.context_pipeline.reasoning.curation import EvidencePackage, render_evidence_package_text
 from app.context_pipeline.reasoning.engine import discover
 from app.context_pipeline.reasoning.investigation import SessionContext
 from app.context_pipeline.reasoning.projection import build_result, to_contract_evidence
@@ -443,6 +445,22 @@ def _selected_repo_names(result: dict[str, Any], ranked_repo_names: list[str]) -
     return ranked_repo_names[:1]
 
 
+def _graph_context_text_from(result: dict[str, Any]) -> str:
+    """The graph-context text this stage's prompt actually uses — the
+    curated `evidence_package` rendering when Context Discovery produced
+    one (see reasoning.curation.render_evidence_package_text), falling
+    back to the older, unranked `graph_context_text` only for a run that
+    predates curation or where curation found no components at all to
+    work with. This is the fix for "Planning receives hundreds of
+    components instead of actionable knowledge": the prompt itself now
+    contains only what `curate()` decided matters, not a raw dump.
+    """
+    package = result.get("evidence_package")
+    if package and package.get("items"):
+        return render_evidence_package_text(EvidencePackage.model_validate(package))
+    return result.get("graph_context_text") or ""
+
+
 async def _resolve_context(context: AgentContext, db: AsyncSession) -> _ResolvedContext:
     raw_request: str = context.subject.display_name
     workflow = context.extras.get("workflow")
@@ -473,7 +491,7 @@ async def _resolve_context(context: AgentContext, db: AsyncSession) -> _Resolved
             graph_topics=context_discovery_result.get("graph_topics") or [],
             ranked_repo_names=ranked_repo_names,
             selected_repo_names=_selected_repo_names(context_discovery_result, ranked_repo_names),
-            graph_context_text=context_discovery_result.get("graph_context_text") or "",
+            graph_context_text=_graph_context_text_from(context_discovery_result),
             graph_available=bool(context_discovery_result.get("graph_available")),
             graph_has_data=bool(context_discovery_result.get("graph_has_data")),
             evidence=[
@@ -538,7 +556,7 @@ async def _resolve_context(context: AgentContext, db: AsyncSession) -> _Resolved
         graph_topics=discovered["graph_topics"],
         ranked_repo_names=discovered["ranked_repository_names"],
         selected_repo_names=_selected_repo_names(discovered, discovered["ranked_repository_names"]),
-        graph_context_text=discovered["graph_context_text"],
+        graph_context_text=_graph_context_text_from(discovered),
         graph_available=discovered["graph_available"],
         graph_has_data=discovered["graph_has_data"],
         # Own copy: the agent appends its own reasoning/verification evidence
@@ -618,6 +636,9 @@ class PlanningAgent:
         # the LLM's specific claims before showing them to a reviewer.
         # ------------------------------------------------------------------
         verification_warnings: list[str] = []
+        # Structured counterpart populated below by
+        # check_test_used_as_production — see PlanningResult.component_warnings.
+        component_warnings: list[Any] = []
         if ranked_repo_names:
             mismatch = verification.check_entity_mismatch(task_description, ranked_repo_names[0])
             if mismatch:
@@ -889,6 +910,35 @@ class PlanningAgent:
             target_pool |= per_repo_pool.get(repo, set())
         if not target_repos:
             target_pool = evidence_pool
+
+        # Test-vs-production validation (see app.agents.component_grounding):
+        # runs BEFORE the existence check below, on the raw LLM output, so a
+        # test class named as production code is rejected/replaced first —
+        # `verify_claims` only knows how to ask "does this exist", and a
+        # real test class always answers yes to that question. This is what
+        # a real run needed and didn't have: `TestSCDType2Merger`/
+        # `TestExactDeduplicator` existed in the graph (they're real test
+        # classes), so the existence check below passed them every time.
+        corrected_components, test_as_prod_warnings = check_test_used_as_production(
+            planning_result.affected_components, graph_components, task_description
+        )
+        if test_as_prod_warnings:
+            planning_result.affected_components = corrected_components
+            component_warnings.extend(test_as_prod_warnings)
+            verification_warnings.extend(w.message for w in test_as_prod_warnings)
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="component_grounding",
+                    summary=(
+                        f"{len(test_as_prod_warnings)} affected component(s) named a test "
+                        "class instead of the production code it tests — corrected against "
+                        "this run's own indexed graph data: "
+                        + "; ".join(w.message for w in test_as_prod_warnings)
+                    ),
+                )
+            )
+
         components_check = verification.verify_claims(
             planning_result.affected_components, target_pool
         )
@@ -932,6 +982,7 @@ class PlanningAgent:
             )
 
         planning_result.verification_warnings = verification_warnings
+        planning_result.component_warnings = to_contract_warnings(component_warnings)
         if verification_warnings:
             evidence.append(
                 Evidence(

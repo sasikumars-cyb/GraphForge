@@ -89,6 +89,17 @@ def _validate_rel_type(rel_type: str) -> str:
     return rel_type
 
 
+# Cypher cannot parameterize the hop-count bound of a variable-length
+# relationship pattern (`*1..$n` is not valid Cypher — only a literal
+# integer works there), so `get_neighborhood` interpolates `max_hops`
+# directly into the query string, the same way labels/rel-types are
+# interpolated above. Bounded here, before interpolation, so a caller
+# passing an unreasonable value can't turn one call into an unbounded
+# (or malformed) traversal - 5 hops is already generous for "components
+# near an anchor" and far more than any caller in this codebase requests.
+_MAX_NEIGHBORHOOD_HOPS = 5
+
+
 def _label_cypher(labels: tuple[str, ...]) -> str:
     return "".join(f":`{label}`" for label in labels)
 
@@ -281,3 +292,103 @@ class Neo4jGraphRepository(IGraphRepository):
             )
             for record in records
         ]
+
+    async def get_neighborhood(
+        self,
+        repository_id: str,
+        seed_node_ids: list[str],
+        edge_types: list[str],
+        max_hops: int,
+    ) -> GraphPayload:
+        if not seed_node_ids or not edge_types:
+            return GraphPayload()
+        if not isinstance(max_hops, int) or not (1 <= max_hops <= _MAX_NEIGHBORHOOD_HOPS):
+            raise ValueError(
+                f"max_hops must be an integer in [1, {_MAX_NEIGHBORHOOD_HOPS}], got {max_hops!r}."
+            )
+        rel_pattern = "|".join(f"`{_validate_rel_type(t)}`" for t in dict.fromkeys(edge_types))
+
+        async with self._driver.session() as session:
+            # Pass 1: every node within max_hops of any seed, via the
+            # allowed edge types, either direction — undirected traversal
+            # is deliberate here (a caller of X is exactly as relevant to
+            # X's neighborhood as something X calls; direction is
+            # preserved per-edge in pass 2 below for anyone who needs it).
+            # `hop_distance` is the minimum over every seed and every path,
+            # so a node reachable both at 1 hop from one seed and 3 hops
+            # from another reports 1.
+            neighbor_result = await session.run(
+                f"""
+                MATCH (a:`{_BASE_LABEL}` {{repository_id: $repository_id}})
+                WHERE a.id IN $seed_ids
+                MATCH p = (a)-[:{rel_pattern}*1..{max_hops}]-
+                    (b:`{_BASE_LABEL}` {{repository_id: $repository_id}})
+                WHERE NOT b.id IN $seed_ids
+                WITH b, min(length(p)) AS hop_distance
+                RETURN b, hop_distance
+                """,
+                repository_id=repository_id,
+                seed_ids=seed_node_ids,
+            )
+            neighbor_records = [record async for record in neighbor_result]
+
+            seed_result = await session.run(
+                f"""
+                MATCH (a:`{_BASE_LABEL}` {{repository_id: $repository_id}})
+                WHERE a.id IN $seed_ids
+                RETURN a
+                """,
+                repository_id=repository_id,
+                seed_ids=seed_node_ids,
+            )
+            seed_records = [record async for record in seed_result]
+
+            nodes_by_id: dict[str, GraphNode] = {}
+            for record in seed_records:
+                node = node_from_value(record["a"])
+                nodes_by_id[node.id] = GraphNode(
+                    id=node.id,
+                    labels=node.labels,
+                    properties={**node.properties, "hop_distance": 0},
+                )
+            for record in neighbor_records:
+                node = node_from_value(record["b"])
+                nodes_by_id[node.id] = GraphNode(
+                    id=node.id,
+                    labels=node.labels,
+                    properties={**node.properties, "hop_distance": record["hop_distance"]},
+                )
+
+            if not nodes_by_id:
+                return GraphPayload()
+
+            # Pass 2: the induced subgraph — every edge of the allowed
+            # types with BOTH endpoints among the nodes pass 1 found. This
+            # is what lets a caller compute real connectivity (e.g.
+            # personalized PageRank) over the neighborhood, not just a
+            # flat "how far away" number.
+            all_ids = list(nodes_by_id.keys())
+            edge_result = await session.run(
+                f"""
+                MATCH (x:`{_BASE_LABEL}` {{repository_id: $repository_id}})
+                      -[r:{rel_pattern}]->
+                      (y:`{_BASE_LABEL}` {{repository_id: $repository_id}})
+                WHERE x.id IN $all_ids AND y.id IN $all_ids
+                RETURN x.id AS source_id, y.id AS target_id, type(r) AS rel_type,
+                       properties(r) AS props
+                """,
+                repository_id=repository_id,
+                all_ids=all_ids,
+            )
+            edge_records = [record async for record in edge_result]
+
+        edges = [
+            GraphEdge(
+                source_id=record["source_id"],
+                target_id=record["target_id"],
+                type=record["rel_type"],
+                properties=dict(record["props"]),
+            )
+            for record in edge_records
+        ]
+        return GraphPayload(nodes=list(nodes_by_id.values()), edges=edges)

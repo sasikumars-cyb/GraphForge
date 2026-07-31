@@ -421,7 +421,29 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         "enriched_text": state.derived.get("enriched_text") or state.metadata.goal,
         "resolved_references": [dict(f.value) for f in ledger.facts_of("reference")],
         "indexed_repositories": [dict(f.value) for f in ledger.facts_of("repository")],
+        # The primary work item's structured fields (see
+        # investigators.JiraInvestigator/`_extract_ticket_sections`) —
+        # status/issue_type/priority/labels plus whatever Problem/
+        # Business Goal/Acceptance Criteria/Constraints/Dependencies
+        # sections the ticket's own description actually contains, by
+        # real heading detection, never LLM summarization. `{}` when no
+        # work item was ever resolved (a freeform request) or the run
+        # predates this field.
+        "ticket_summary": (
+            dict(ledger.facts_of("work_item")[0].value) if ledger.facts_of("work_item") else {}
+        ),
+        # Complete and uncurated, deliberately — the debugging/JSON-tab
+        # view, kept exactly as before (see this function's own
+        # docstring). No agent's prompt construction should read this
+        # directly anymore; see `evidence_package` below for the
+        # bounded, tiered, ranked replacement every agent now uses.
         "graph_components": [dict(f.value) for f in ledger.facts_of("component")],
+        # The curated Evidence Package (see reasoning.curation) — computed
+        # once, after the investigation loop exits
+        # (investigators.curate_evidence, called from engine.investigate),
+        # not re-derived here. Empty ({}) only for a run that predates
+        # this field or produced no components at all.
+        "evidence_package": state.derived.get("evidence_package") or {},
         "graph_topics": [dict(f.value) for f in ledger.facts_of("topic")],
         "repositories": [r.model_dump() for r in repositories],
         **projected_repositories,

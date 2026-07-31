@@ -305,6 +305,19 @@ async def investigate(
     state.refresh_assessments()
     _sync_gaps(state)
     state.derived["enriched_text"] = render_enriched_text(state)
+
+    # Curation (see investigators.curate_evidence's own docstring): runs
+    # once, here, over whatever component facts gathering already
+    # produced — never as a competing proposed action, and never on a
+    # partial/mid-cycle state. Both call sites that reach this point
+    # (discover()'s first pass, resume()'s continuation after a human
+    # answer) want the same thing: a final, bounded EvidencePackage
+    # before _conclude() runs, so this belongs here rather than
+    # duplicated in both callers.
+    from app.context_pipeline.reasoning.investigators import curate_evidence
+
+    await curate_evidence(state, session)
+
     return state
 
 

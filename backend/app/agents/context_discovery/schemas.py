@@ -54,8 +54,24 @@ class ContextDiscoveryResult(BaseModel):
 
     resolved_references: list[dict[str, Any]] = Field(default_factory=list)
     indexed_repositories: list[dict[str, Any]] = Field(default_factory=list)
+    # The primary work item's structured fields — status/issue_type/
+    # priority/labels plus any Problem/Business Goal/Acceptance Criteria/
+    # Constraints/Dependencies sections detected in its description (see
+    # investigators._extract_ticket_sections). `{}` when no work item
+    # was resolved.
+    ticket_summary: dict[str, Any] = Field(default_factory=dict)
+    # Complete and uncurated — every `component` fact, unranked, kept for
+    # debugging/the JSON tab (see `projection.build_result`'s comment on
+    # this field). No agent's own prompt construction should read this
+    # directly; see `evidence_package` below.
     graph_components: list[dict[str, Any]] = Field(default_factory=list)
     graph_topics: list[dict[str, Any]] = Field(default_factory=list)
+    # The curated, bounded, tiered replacement for `graph_components` —
+    # `reasoning.curation.EvidencePackage.model_dump()`. Planning,
+    # Development, Testing, and Documentation Planning all read this for
+    # their own component selection now (see each agent's own
+    # `_resolve_context`/equivalent) rather than the raw list above.
+    evidence_package: dict[str, Any] = Field(default_factory=dict)
     # Every indexed repository in relevance order, best first. A *ranking*, not
     # a claim of ownership — Planning reads it positionally (star ratings, and
     # `[0]` as the target for its component-ownership verification), so it stays

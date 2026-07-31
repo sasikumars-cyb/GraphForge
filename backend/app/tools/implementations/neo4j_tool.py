@@ -93,6 +93,14 @@ class Neo4jGraphTool:
         )
 
         relevance_terms: list[str] = input.parameters.get("relevance_terms") or []
+        # Restricts traversal to specific repositories by name — set by
+        # GraphInvestigator when the owning repository is already known
+        # (a "scope" or "verify" action), so this run doesn't re-fetch
+        # every Component node of every OTHER indexed repository just to
+        # refresh a ranking that's already settled. None (the default,
+        # used for a genuine "survey" with no repository known yet) still
+        # traverses everything — see TraverseArchitectureGraphTool.execute.
+        repository_filter: list[str] | None = input.parameters.get("repository_filter")
 
         try:
             repos_tool = GetIndexedRepositoriesTool(
@@ -103,7 +111,9 @@ class Neo4jGraphTool:
             indexed_repos: list[dict[str, Any]] = repos_obs.data.get("indexed_repositories", [])
 
             traverse_tool = TraverseArchitectureGraphTool(graph_repository=graph_repo)
-            traverse_obs = await traverse_tool.execute(indexed_repos)
+            traverse_obs = await traverse_tool.execute(
+                indexed_repos, repository_filter=repository_filter
+            )
 
             context_text = format_graph_context(
                 repos_obs, traverse_obs, relevance_terms=relevance_terms
@@ -114,13 +124,25 @@ class Neo4jGraphTool:
 
             # Real cross-repository relationships (see
             # app.indexer.graph.cross_repo_linker) — one Neo4j read per
-            # indexed repository, each already-cheap relative to the
+            # repository considered, each already-cheap relative to the
             # component/topic traversal above. Only ever connects repos
             # already in `indexed_repos` (the same user's own), by
             # construction of the linker that wrote them.
+            #
+            # Scoped by the same `repository_filter` as the component
+            # traversal above, for the same reason: this used to loop
+            # over EVERY indexed repository regardless of whether a
+            # "scope"/"verify" action already knew which one repository
+            # this run was about, spending that repository's own
+            # hop-budget allowance for every OTHER repository too.
             id_to_name = {repo["id"]: repo["name"] for repo in indexed_repos}
+            if repository_filter is not None:
+                wanted = {n.lower() for n in repository_filter}
+                edge_source_repos = [r for r in indexed_repos if r["name"].lower() in wanted]
+            else:
+                edge_source_repos = indexed_repos
             cross_repository_edges: list[dict[str, Any]] = []
-            for repo in indexed_repos:
+            for repo in edge_source_repos:
                 edges = await graph_repo.get_outgoing_cross_repository_edges(repo["id"])
                 for edge in edges:
                     target_repository_id = edge.target_id.rsplit(":repository", 1)[0]

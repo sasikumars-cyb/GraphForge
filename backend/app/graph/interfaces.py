@@ -71,3 +71,38 @@ class IGraphRepository(ABC):
         Repository node — what Context Discovery reads to turn a real graph
         relationship into a suggested repository."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def get_neighborhood(
+        self,
+        repository_id: str,
+        seed_node_ids: list[str],
+        edge_types: list[str],
+        max_hops: int,
+    ) -> GraphPayload:
+        """The induced subgraph within `max_hops` of `seed_node_ids`,
+        traversing only `edge_types` (either direction).
+
+        This is the hop-bounded traversal primitive `get_full_graph` is
+        not: cost scales with the size of the neighborhood actually
+        reachable from the seeds, never with the size of the whole
+        repository — the difference that matters once a repository has
+        thousands or millions of nodes (`get_full_graph` loads every one
+        of them into memory regardless of how localized the caller's real
+        interest is).
+
+        Returns every node touched (seeds included) plus every edge of
+        `edge_types` connecting them — an induced subgraph, not just a
+        node list — so a caller can compute real connectivity-based
+        ranking (BFS distance, personalized PageRank, ...) rather than
+        only "was it reachable at all". Nodes carry a `hop_distance`
+        property (minimum hops from ANY seed, 0 for the seeds
+        themselves) that no other node in this graph legitimately has,
+        since it's a query-scoped annotation, not a stored graph fact.
+
+        An empty `seed_node_ids` or `edge_types` list returns an empty
+        payload without querying — there is nothing to seed a
+        neighborhood from, and asking anyway would either error or
+        (worse) silently traverse every edge type.
+        """
+        raise NotImplementedError

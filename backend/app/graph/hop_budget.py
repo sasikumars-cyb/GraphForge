@@ -131,6 +131,26 @@ class GraphHopBudgetRepository(IGraphRepository):
         self._consume(repository_id, "get_outgoing_cross_repository_edges")
         return await self._inner.get_outgoing_cross_repository_edges(repository_id)
 
+    async def get_neighborhood(
+        self,
+        repository_id: str,
+        seed_node_ids: list[str],
+        edge_types: list[str],
+        max_hops: int,
+    ) -> GraphPayload:
+        # Counts as a single call regardless of `max_hops` — the whole
+        # point of this primitive (see its own docstring on
+        # IGraphRepository) is that its internal traversal is genuinely
+        # hop-bounded by Neo4j itself, unlike `get_full_graph`, which also
+        # costs exactly one call today despite having no depth bound at
+        # all. This is intentionally the cheaper, more precise option a
+        # caller should prefer over `get_full_graph` wherever a seed set
+        # is available.
+        self._consume(repository_id, "get_neighborhood")
+        return await self._inner.get_neighborhood(
+            repository_id, seed_node_ids, edge_types, max_hops
+        )
+
 
 def build_hop_budgeted_repository(
     inner: IGraphRepository, max_hops: int, agent_id: str

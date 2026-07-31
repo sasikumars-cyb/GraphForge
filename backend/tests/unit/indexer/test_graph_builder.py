@@ -385,3 +385,138 @@ def test_spark_table_read_with_no_matching_module_is_skipped() -> None:
 
     graph = build_graph("repo-1", model)
     assert not any(e.type == "READS_FROM" for e in graph.edges)
+
+
+# ---------------------------------------------------------------------------
+# is_test / component_type / symbol_type / confidence / language classification
+# ---------------------------------------------------------------------------
+#
+# Regression coverage for the real bug this closes: a Planning run named
+# `TestSCDType2Merger` (a pytest test class) as if it were the production
+# `SCDType2Merger` it tests. Every Component-labeled node must now carry
+# enough classification metadata for a consumer to tell the two apart
+# without recomputing a private regex.
+
+
+def test_python_test_class_is_flagged_is_test_with_high_confidence() -> None:
+    test_location = SourceLocation(file_path="tests/unit/test_scd2.py")
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="tests.unit.test_scd2",
+                package="tests.unit",
+                location=test_location,
+                classes=[PythonClass(name="TestSCDType2Merger", location=test_location)],
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    class_id = "repo-1:class:tests.unit.test_scd2.TestSCDType2Merger"
+    node = next(n for n in graph.nodes if n.id == class_id)
+
+    assert node.properties["is_test"] is True
+    assert node.properties["confidence"] == 1.0
+    assert node.properties["symbol_type"] == "class"
+    assert node.properties["component_type"] == "Class"
+    assert node.properties["language"] == "python"
+
+
+def test_python_production_class_is_not_flagged_is_test() -> None:
+    prod_location = SourceLocation(file_path="src/etl_core/scd/scd_type2.py")
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="etl_core.scd.scd_type2",
+                package="etl_core.scd",
+                location=prod_location,
+                classes=[PythonClass(name="SCDType2Merger", location=prod_location)],
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    class_id = "repo-1:class:etl_core.scd.scd_type2.SCDType2Merger"
+    node = next(n for n in graph.nodes if n.id == class_id)
+
+    assert node.properties["is_test"] is False
+    assert node.properties["symbol_type"] == "class"
+
+
+def test_python_method_symbol_type_distinguishes_from_bare_function() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="app.services.order_service",
+                package="app.services",
+                location=PY_LOCATION,
+                classes=[
+                    PythonClass(
+                        name="OrderService",
+                        location=PY_LOCATION,
+                        methods=[PythonFunction(name="create_order", location=PY_LOCATION)],
+                    )
+                ],
+                functions=[PythonFunction(name="build_default_service", location=PY_LOCATION)],
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    method_id = "repo-1:function:app.services.order_service.OrderService.create_order"
+    function_id = "repo-1:function:app.services.order_service.build_default_service"
+    method_node = next(n for n in graph.nodes if n.id == method_id)
+    function_node = next(n for n in graph.nodes if n.id == function_id)
+
+    assert method_node.properties["symbol_type"] == "method"
+    assert function_node.properties["symbol_type"] == "function"
+
+
+def test_java_controller_test_source_root_is_flagged_is_test() -> None:
+    test_location = SourceLocation(file_path="src/test/java/com/example/OrderControllerTest.java")
+    model = ArchitectureModel(
+        language="java",
+        framework="spring-boot",
+        controllers=[
+            Controller(
+                name="OrderControllerTest",
+                package="com.example",
+                base_path="/orders",
+                location=test_location,
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    controller_id = "repo-1:controller:com.example.OrderControllerTest"
+    node = next(n for n in graph.nodes if n.id == controller_id)
+
+    assert node.properties["is_test"] is True
+    assert node.properties["component_type"] == "Controller"
+
+
+def test_java_production_controller_is_not_flagged_is_test() -> None:
+    graph = build_graph(
+        "repo-1",
+        ArchitectureModel(
+            language="java",
+            framework="spring-boot",
+            controllers=[
+                Controller(
+                    name="OrderController",
+                    package="com.example",
+                    base_path="/orders",
+                    location=LOCATION,
+                )
+            ],
+        ),
+    )
+    controller_id = "repo-1:controller:com.example.OrderController"
+    node = next(n for n in graph.nodes if n.id == controller_id)
+    assert node.properties["is_test"] is False

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.agents._contract import ComponentWarning
+
 
 def _none_to_empty(v: str | None) -> str:
     """Coerce ``null`` from LLM JSON into an empty string."""
@@ -131,6 +133,17 @@ class DocumentationPlan(BaseModel):
     # those stages already flagged as unverified should not be trusted
     # blindly either.
     prior_verification_warnings: list[str] = Field(default_factory=list)
+
+    # This agent's OWN independent check — distinct from
+    # prior_verification_warnings above, which only carries forward what
+    # earlier stages already found. This agent has no `affected_components`
+    # field of its own (its output names documents, not components), so it
+    # scans its own narrative text (reason/summary_of_changes/
+    # release_notes_draft) for indexed component names and independently
+    # re-checks each one via app.agents.component_grounding — not just
+    # trusting that a name already flagged upstream is the only one that
+    # could be wrong. See PlanningResult.component_warnings.
+    component_warnings: list[ComponentWarning] = Field(default_factory=list)
 
     prompt_version: str = "1.0"
 

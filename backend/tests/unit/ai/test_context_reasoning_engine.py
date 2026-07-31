@@ -1062,9 +1062,13 @@ def test_graph_hop_budget_accommodates_more_than_one_graph_query() -> None:
     reads_per_query = 2  # one Component label read, one KafkaTopic read
     # survey, then a scoped traversal, then a verification query on resume.
     distinct_graph_queries = 3
-    assert CONTEXT_DISCOVERY_MANIFEST.max_graph_hops >= reads_per_query * distinct_graph_queries, (
-        "the manifest must declare the traversal shape the engine actually performs"
-    )
+    # Plus one bounded-neighborhood fetch (`get_neighborhood`) — the
+    # curation stage's own graph read, run once after the investigation
+    # loop exits (see investigators.curate_evidence).
+    curation_reads = 1
+    assert CONTEXT_DISCOVERY_MANIFEST.max_graph_hops >= (
+        reads_per_query * distinct_graph_queries + curation_reads
+    ), "the manifest must declare the traversal shape the engine actually performs"
 
 
 def test_budget_exhaustion_is_not_reported_as_an_unreachable_graph() -> None:

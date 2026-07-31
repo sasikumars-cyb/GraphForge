@@ -1,12 +1,19 @@
 """Documentation Planning Agent — Documentation Planning capability.
 
 Implements the IAgent protocol for goal=plan_documentation. Like
-Engineering Review, this agent runs no graph tools of its own — it
+Engineering Review, this agent runs no graph traversal of its own — it
 synthesizes over the prior three stages' structured results (Planning,
 Development, Testing), read via get_stage_result() (the untruncated
 AgentStep.result JSON — see app.agents.git_ops._artifact_reader and
 app.agents.stage_context), not via workflow_service.build_stage_context()/
 resolve_freetext()'s 256-char-truncated summary chain.
+
+It does read Context Discovery's already-gathered `graph_components` (no
+new Neo4j query — reusing what that stage already fetched) for one
+purpose: independently re-checking its own narrative text against the
+test-vs-production distinction (see `_scan_narrative_for_component_mentions`
+and `app.agents.component_grounding`), rather than only ever repeating
+whatever Planning/Development/Testing already flagged.
 
 This is a planning stage, not a documentation generator: it determines
 which documentation should be created, updated, or left unchanged once
@@ -22,6 +29,7 @@ Development/Testing already read each other's.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +38,10 @@ from app.agents._contract import (
     AgentOutput,
     Confidence,
     Evidence,
+)
+from app.agents.component_grounding import (
+    check_test_used_as_production,
+    to_contract_warnings,
 )
 from app.agents.confidence import WeightedEvidence, calculate_weighted_confidence
 from app.agents.documentation_planning.schemas import (
@@ -100,6 +112,42 @@ def _collect_verification_warnings(
         for w in (result or {}).get("verification_warnings", []) or []:
             warnings.append(f"[{label}] {w}")
     return warnings
+
+
+def _scan_narrative_for_component_mentions(
+    plan: DocumentationPlan, components: list[dict[str, Any]]
+) -> list[str]:
+    """Component names, from this run's own indexed graph data, that
+    appear (word-boundary) anywhere in this plan's own narrative text.
+
+    This agent has no `affected_components` field of its own — its output
+    names documents, not components — so this is how it gets an
+    independent claims list to run through
+    `app.agents.component_grounding.check_test_used_as_production` rather
+    than only ever carrying forward what Planning/Development/Testing
+    already flagged (see `prior_verification_warnings` above, which does
+    exactly that and nothing more). A documentation plan that repeats a
+    test-class-as-production mistake in its own release notes (a real
+    run's release notes described "DeduplicatingTransformer" behavior in
+    specific, invented detail) is checked independently here, not just
+    inherited as someone else's already-reported problem.
+    """
+    narrative = "\n".join(
+        [
+            *(u.document for u in plan.required_updates),
+            *(u.reason for u in plan.required_updates),
+            *(i.name for i in plan.new_documentation),
+            *(i.purpose for i in plan.new_documentation),
+            *plan.release_notes_draft,
+            *plan.recommendations,
+        ]
+    )
+    mentioned: list[str] = []
+    for component in components:
+        name = str(component.get("name", ""))
+        if name and re.search(rf"\b{re.escape(name)}\b", narrative):
+            mentioned.append(name)
+    return mentioned
 
 
 def _build_blueprint_context(
@@ -273,6 +321,12 @@ class DocumentationPlanningAgent:
         planning_result = get_stage_result(workflow, "planning") if workflow else None
         development_result = get_stage_result(workflow, "development") if workflow else None
         testing_result = get_stage_result(workflow, "testing") if workflow else None
+        context_discovery_result = (
+            get_stage_result(workflow, "context_discovery") if workflow else None
+        )
+        graph_components: list[dict[str, Any]] = (
+            context_discovery_result or {}
+        ).get("graph_components") or []
 
         prior_verification_warnings = _collect_verification_warnings(
             planning_result, development_result, testing_result
@@ -346,6 +400,30 @@ class DocumentationPlanningAgent:
             raise
 
         plan.prior_verification_warnings = prior_verification_warnings
+
+        # Independent grounding (not inherited from Planning/Development/
+        # Testing's own warnings): this agent's own narrative text is
+        # scanned for indexed component names and re-checked itself — see
+        # _scan_narrative_for_component_mentions's docstring.
+        mentioned_components = _scan_narrative_for_component_mentions(plan, graph_components)
+        _, component_warnings = check_test_used_as_production(
+            mentioned_components, graph_components, context.subject.display_name
+        )
+        plan.component_warnings = to_contract_warnings(component_warnings)
+        if component_warnings:
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="component_grounding",
+                    summary=(
+                        f"{len(component_warnings)} component mention(s) in this "
+                        "documentation plan's own narrative text were test classes named "
+                        "as production code, independently re-checked against this run's "
+                        "indexed graph data (not just carried forward from an earlier "
+                        "stage's warnings): " + "; ".join(w.message for w in component_warnings)
+                    ),
+                )
+            )
 
         evidence.append(
             Evidence(

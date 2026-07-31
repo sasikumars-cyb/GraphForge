@@ -8,7 +8,29 @@ upserts in place) and ids never collide across repositories.
 """
 
 from app.graph.models import GraphEdge, GraphNode, GraphPayload
+from app.indexer.classification import classify
 from app.indexer.models.architecture import ArchitectureModel, PythonFunction
+
+
+def _classification_properties(
+    *, file_path: str, name: str, labels: list[str], class_name: str | None, language: str
+) -> dict[str, object]:
+    """`is_test`/`confidence`/`symbol_type`/`component_type`/`language` for
+    any Component-labeled node, of any language — see
+    `app.indexer.classification` for what each means and why. Added to
+    every node's `properties` dict alongside its existing fields, so
+    nothing that already reads `file_path`/`name` from these nodes needs
+    to change; this is purely additive.
+    """
+    result = classify(file_path=file_path, name=name, labels=labels, class_name=class_name)
+    component_type = next((label for label in labels if label != "Component"), "Component")
+    return {
+        "is_test": result.is_test,
+        "confidence": result.confidence,
+        "symbol_type": result.symbol_type,
+        "component_type": component_type,
+        "language": language,
+    }
 
 
 def _repository_node_id(repository_id: str) -> str:
@@ -99,6 +121,15 @@ def _build_python_graph(
         }
         if class_name is not None:
             properties["class_name"] = class_name
+        properties.update(
+            _classification_properties(
+                file_path=function.location.file_path,
+                name=function.name,
+                labels=["Component", "Function"],
+                class_name=class_name,
+                language=model.language,
+            )
+        )
         nodes.append(GraphNode(id=node_id, labels=["Component", "Function"], properties=properties))
         if function.name in function_node_id_by_bare_name:
             function_node_id_by_bare_name[function.name] = None
@@ -135,18 +166,24 @@ def _build_python_graph(
 
         for python_class in module.classes:
             class_id = _class_node_id(repository_id, module.name, python_class.name)
-            nodes.append(
-                GraphNode(
-                    id=class_id,
+            class_properties: dict[str, object] = {
+                "name": python_class.name,
+                "package": module.package,
+                "file_path": python_class.location.file_path,
+                "bases": list(python_class.bases),
+                "decorators": list(python_class.decorators),
+            }
+            class_properties.update(
+                _classification_properties(
+                    file_path=python_class.location.file_path,
+                    name=python_class.name,
                     labels=["Component", "Class"],
-                    properties={
-                        "name": python_class.name,
-                        "package": module.package,
-                        "file_path": python_class.location.file_path,
-                        "bases": list(python_class.bases),
-                        "decorators": list(python_class.decorators),
-                    },
+                    class_name=None,
+                    language=model.language,
                 )
+            )
+            nodes.append(
+                GraphNode(id=class_id, labels=["Component", "Class"], properties=class_properties)
             )
             edges.append(GraphEdge(source_id=module_id, target_id=class_id, type="CONTAINS"))
 
@@ -249,16 +286,24 @@ def build_graph(repository_id: str, model: ArchitectureModel) -> GraphPayload:
     for controller in model.controllers:
         node_id = _controller_node_id(repository_id, controller.package, controller.name)
         component_by_class_name[controller.name] = node_id
+        controller_properties: dict[str, object] = {
+            "name": controller.name,
+            "package": controller.package,
+            "base_path": controller.base_path,
+            "file_path": controller.location.file_path,
+        }
+        controller_properties.update(
+            _classification_properties(
+                file_path=controller.location.file_path,
+                name=controller.name,
+                labels=["Component", "Controller"],
+                class_name=None,
+                language=model.language,
+            )
+        )
         nodes.append(
             GraphNode(
-                id=node_id,
-                labels=["Component", "Controller"],
-                properties={
-                    "name": controller.name,
-                    "package": controller.package,
-                    "base_path": controller.base_path,
-                    "file_path": controller.location.file_path,
-                },
+                id=node_id, labels=["Component", "Controller"], properties=controller_properties
             )
         )
         edges.append(GraphEdge(source_id=repo_id, target_id=node_id, type="CONTAINS"))
@@ -284,34 +329,46 @@ def build_graph(repository_id: str, model: ArchitectureModel) -> GraphPayload:
     for service in model.services:
         node_id = _service_node_id(repository_id, service.package, service.name)
         component_by_class_name[service.name] = node_id
-        nodes.append(
-            GraphNode(
-                id=node_id,
+        service_properties: dict[str, object] = {
+            "name": service.name,
+            "package": service.package,
+            "file_path": service.location.file_path,
+        }
+        service_properties.update(
+            _classification_properties(
+                file_path=service.location.file_path,
+                name=service.name,
                 labels=["Component", "Service"],
-                properties={
-                    "name": service.name,
-                    "package": service.package,
-                    "file_path": service.location.file_path,
-                },
+                class_name=None,
+                language=model.language,
             )
+        )
+        nodes.append(
+            GraphNode(id=node_id, labels=["Component", "Service"], properties=service_properties)
         )
         edges.append(GraphEdge(source_id=repo_id, target_id=node_id, type="CONTAINS"))
 
     for feign_client in model.feign_clients:
         node_id = _feign_client_node_id(repository_id, feign_client.package, feign_client.name)
         component_by_class_name[feign_client.name] = node_id
-        nodes.append(
-            GraphNode(
-                id=node_id,
+        feign_properties: dict[str, object] = {
+            "name": feign_client.name,
+            "package": feign_client.package,
+            "target_name": feign_client.target_name,
+            "target_url": feign_client.target_url or "",
+            "file_path": feign_client.location.file_path,
+        }
+        feign_properties.update(
+            _classification_properties(
+                file_path=feign_client.location.file_path,
+                name=feign_client.name,
                 labels=["Component", "FeignClient"],
-                properties={
-                    "name": feign_client.name,
-                    "package": feign_client.package,
-                    "target_name": feign_client.target_name,
-                    "target_url": feign_client.target_url or "",
-                    "file_path": feign_client.location.file_path,
-                },
+                class_name=None,
+                language=model.language,
             )
+        )
+        nodes.append(
+            GraphNode(id=node_id, labels=["Component", "FeignClient"], properties=feign_properties)
         )
         edges.append(GraphEdge(source_id=repo_id, target_id=node_id, type="CONTAINS"))
 
@@ -342,11 +399,21 @@ def build_graph(repository_id: str, model: ArchitectureModel) -> GraphPayload:
 
         node_id = _generic_component_node_id(repository_id, class_name)
         if not any(node.id == node_id for node in nodes):
+            generic_properties: dict[str, object] = {"name": class_name, "file_path": file_path}
+            generic_properties.update(
+                _classification_properties(
+                    file_path=file_path,
+                    name=class_name,
+                    labels=["Component"],
+                    class_name=None,
+                    language=model.language,
+                )
+            )
             nodes.append(
                 GraphNode(
                     id=node_id,
                     labels=["Component"],
-                    properties={"name": class_name, "file_path": file_path},
+                    properties=generic_properties,
                 )
             )
             edges.append(GraphEdge(source_id=repo_id, target_id=node_id, type="CONTAINS"))

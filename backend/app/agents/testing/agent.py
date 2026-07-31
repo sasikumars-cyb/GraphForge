@@ -56,6 +56,7 @@ from app.agents._contract import (
     Confidence,
     Evidence,
 )
+from app.agents.component_grounding import check_test_used_as_production, to_contract_warnings
 from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.llm import STAGE_TESTING, invoke_llm_json, stage_for
 from app.agents.prompt_utils import parse_json_response, render_prompt_template
@@ -80,6 +81,7 @@ from app.agents.testing.tools import (
     format_graph_context,
     to_evidence,
 )
+from app.context_pipeline.reasoning.curation import EvidencePackage, render_evidence_package_text
 from app.core.exceptions import AppError
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
@@ -436,7 +438,16 @@ class TestPlanningAgent:
         # ------------------------------------------------------------------
         # Synthesize: LLM call with full graph context
         # ------------------------------------------------------------------
-        graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs)
+        # Prefer the curated Evidence Package (see reasoning.curation) when
+        # Context Discovery produced one — see development/agent.py's
+        # identical comment for the full rationale.
+        evidence_package = (context_discovery_result or {}).get("evidence_package") or {}
+        if evidence_package.get("items"):
+            graph_context_text = render_evidence_package_text(
+                EvidencePackage.model_validate(evidence_package)
+            )
+        else:
+            graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs)
         prompt_task_description = (
             f"{task_description}\n\n{prior_stage_context}"
             if prior_stage_context
@@ -495,17 +506,88 @@ class TestPlanningAgent:
                 f"Repository '{name}' cited in this test plan was not found among the "
                 "repositories this run's graph traversal actually returned — unverified."
             )
-        component_claims = list(test_plan.affected_components)
-        component_claims += [t.component for t in test_plan.regression_tests]
-        component_claims += [t.source_component for t in test_plan.integration_tests]
-        component_claims += [t.target_component for t in test_plan.integration_tests]
-        comp_check = verification.verify_claims(component_claims, evidence_pool)
+
+        # ------------------------------------------------------------------
+        # Independent grounding (see app.agents.component_grounding): this
+        # agent's OWN re-check against the graph_components it just read
+        # above — a test plan that repeats an earlier stage's test-class-
+        # as-production mistake (a real run's regression/integration tests
+        # were built entirely around `TestSCDType2Merger`/
+        # `TestExactDeduplicator`) is caught here independently, not just
+        # inherited from Planning/Development's own warnings.
+        # ------------------------------------------------------------------
+        graph_components_list = components_obs.data.get("components", [])
+        test_plan_claims = list(test_plan.affected_components)
+        test_plan_claims += [t.component for t in test_plan.regression_tests]
+        test_plan_claims += [t.source_component for t in test_plan.integration_tests]
+        test_plan_claims += [t.target_component for t in test_plan.integration_tests]
+        _, component_warnings = check_test_used_as_production(
+            test_plan_claims, graph_components_list, task_description
+        )
+        corrections = {w.claim: w.suggested_replacement for w in component_warnings}
+        if corrections:
+            test_plan.affected_components = [
+                corrections.get(name, name)
+                for name in test_plan.affected_components
+                if corrections.get(name, name) is not None
+            ]
+            kept_regression_tests = []
+            for rt in test_plan.regression_tests:
+                if rt.component in corrections:
+                    replacement = corrections[rt.component]
+                    if replacement is None:
+                        continue  # rejected — no production sibling found
+                    rt.component = replacement
+                kept_regression_tests.append(rt)
+            test_plan.regression_tests = kept_regression_tests
+            kept_integration_tests = []
+            for it in test_plan.integration_tests:
+                source_rejected = (
+                    it.source_component in corrections
+                    and corrections[it.source_component] is None
+                )
+                target_rejected = (
+                    it.target_component in corrections
+                    and corrections[it.target_component] is None
+                )
+                if source_rejected or target_rejected:
+                    continue  # can't test a CALLS relationship with no real endpoint
+                if it.source_component in corrections:
+                    it.source_component = corrections[it.source_component]  # type: ignore[assignment]
+                if it.target_component in corrections:
+                    it.target_component = corrections[it.target_component]  # type: ignore[assignment]
+                kept_integration_tests.append(it)
+            test_plan.integration_tests = kept_integration_tests
+        if component_warnings:
+            verification_warnings.extend(w.message for w in component_warnings)
+            evidence.append(
+                Evidence(
+                    kind="tool_call",
+                    reference="component_grounding",
+                    summary=(
+                        f"{len(component_warnings)} component(s) referenced in this test "
+                        "plan named a test class instead of the production code it tests "
+                        "— independently re-checked against this run's own indexed graph "
+                        "data: " + "; ".join(w.message for w in component_warnings)
+                    ),
+                )
+            )
+
+        # Deduplicated: the same component name commonly appears in more
+        # than one of affected_components/regression_tests/integration_tests
+        # (e.g. as both a regression test's component and an integration
+        # test's source_component) — checking the raw, repeated list
+        # against evidence produced one identical "unverified" warning per
+        # occurrence rather than per distinct claim.
+        unique_component_claims = list(dict.fromkeys(c for c in test_plan_claims if c))
+        comp_check = verification.verify_claims(unique_component_claims, evidence_pool)
         for name in comp_check.unverified:
             verification_warnings.append(
                 f"Component '{name}' referenced in this test plan does not appear in "
                 "this run's indexed graph data — unverified."
             )
         test_plan.verification_warnings = verification_warnings
+        test_plan.component_warnings = to_contract_warnings(component_warnings)
         evidence.append(
             Evidence(
                 kind="tool_call",

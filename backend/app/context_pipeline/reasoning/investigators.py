@@ -31,6 +31,7 @@ which is the precondition for asking the human anything at all.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from app.agents.planning.classifier import analyse
@@ -343,6 +344,74 @@ class RequestParseInvestigator:
 # Jira
 # ---------------------------------------------------------------------------
 
+# Section headers a real ticket description commonly uses, matched
+# case-insensitively at the start of their own line, optionally followed
+# by a colon — e.g. "Acceptance Criteria:", "AC", "Business Goal". Purely
+# a line-boundary/heading match, never a semantic guess at what a
+# paragraph "is about" — the same deterministic, no-inference precedent
+# as the rest of this codebase's extraction (ADR 0007). A ticket that
+# doesn't use any of these headings yields no structured sections at
+# all, which is the honest outcome — this is a real-format-detector, not
+# a paraphraser that invents structure a ticket never had.
+_TICKET_SECTION_HEADERS: dict[str, tuple[str, ...]] = {
+    "problem": ("problem", "problem statement", "issue", "bug"),
+    "business_goal": ("business goal", "goal", "objective", "business objective"),
+    "acceptance_criteria": ("acceptance criteria", "ac", "definition of done", "dod"),
+    "constraints": ("constraints", "known constraints", "limitations"),
+    "dependencies": ("dependencies", "depends on", "blocked by"),
+}
+
+_ALL_SECTION_ALIASES = [h for headers in _TICKET_SECTION_HEADERS.values() for h in headers]
+# Matches a heading at the start of its own line, in either common ticket
+# style: alone on its own line ("Acceptance Criteria" / "Acceptance
+# Criteria:", content follows on subsequent lines), or with the content
+# starting immediately after a colon on the SAME line ("Acceptance
+# Criteria: user can log in"). Group 2 (the optional inline remainder)
+# only participates when a colon is actually present — a bare heading
+# word followed by unrelated prose on the same line ("Goal is unclear
+# without more info") has no colon, so `$` must match right after the
+# heading itself and correctly fails to match at all.
+_SECTION_HEADER_RE = re.compile(
+    r"^\s*(" + "|".join(re.escape(h) for h in _ALL_SECTION_ALIASES) + r")\s*(?::[ \t]*(.*))?$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _extract_ticket_sections(description: str) -> dict[str, str]:
+    """Split a ticket description into the structured sections a real
+    engineer would look for (Problem, Business Goal, Acceptance Criteria,
+    Constraints, Dependencies) — by real section-heading lines the
+    description itself contains, never by summarizing/inferring content
+    with an LLM. A ticket that doesn't use any of these headings (plain
+    prose, no structure) returns an empty dict — the honest outcome; the
+    raw description is still available in full via the `work_item`
+    fact's own `text`, this is additive, not a replacement.
+    """
+    if not description:
+        return {}
+
+    matches = list(_SECTION_HEADER_RE.finditer(description))
+    if not matches:
+        return {}
+
+    header_by_alias = {
+        alias.lower(): key for key, aliases in _TICKET_SECTION_HEADERS.items() for alias in aliases
+    }
+
+    sections: dict[str, str] = {}
+    for i, match in enumerate(matches):
+        key = header_by_alias.get(match.group(1).strip().lower())
+        if key is None:
+            continue
+        inline = (match.group(2) or "").strip()
+        start = match.end()
+        end = matches[i + 1].start() if i + 1 < len(matches) else len(description)
+        rest = description[start:end].strip()
+        content = f"{inline}\n{rest}".strip() if inline and rest else (inline or rest)
+        if content:
+            sections[key] = content
+    return sections
+
 
 class JiraInvestigator:
     """Issue tracker. Proposes a fetch for any Jira reference that has been
@@ -424,10 +493,27 @@ class JiraInvestigator:
             )
 
         recorder.evidence("success", f"Retrieved Jira issue {reference.normalized_value}.")
+        # `artifact.raw` already carries the structured fields JiraTool's
+        # own result had (summary/description/status/issue_type/priority/
+        # labels) — previously discarded in favor of only the combined
+        # `context_text`. `sections` is this same description, further
+        # split by whatever real section headings it contains (Problem,
+        # Business Goal, Acceptance Criteria, Constraints, Dependencies —
+        # see `_extract_ticket_sections`), so "Business Objective" and
+        # "Acceptance Criteria" are answerable without an LLM re-reading
+        # the raw ticket text every time.
+        description = str(artifact.raw.get("description", ""))
         recorder.fact(
             "work_item",
             reference.normalized_value,
-            value={"title": artifact.title},
+            value={
+                "title": artifact.title,
+                "status": artifact.raw.get("status", ""),
+                "issue_type": artifact.raw.get("issue_type", ""),
+                "priority": artifact.raw.get("priority", ""),
+                "labels": artifact.raw.get("labels", []),
+                "sections": _extract_ticket_sections(description),
+            },
             text=artifact.text,
         )
         return InvestigationOutcome(
@@ -777,6 +863,13 @@ class GraphInvestigator:
                     "user_id": session.user_id,
                     "relevance_terms": terms,
                     "graph_repo": session.graph_repo_override,
+                    # A "scope"/"verify" action already knows which
+                    # repository this is about — restrict traversal to it
+                    # instead of re-fetching every OTHER indexed
+                    # repository's full component list too. A genuine
+                    # "survey" (focus is None) still traverses everything,
+                    # which is the one case that legitimately needs to.
+                    "repository_filter": [focus] if focus else None,
                 },
             )
         )
@@ -1126,3 +1219,140 @@ def default_investigators() -> list[Any]:
         GitHubInvestigator(),
         ConfluenceInvestigator(),
     ]
+
+
+# ---------------------------------------------------------------------------
+# Curation — the new stage that runs once, after the investigation loop
+# exits (see engine.investigate), turning the flat `component` facts
+# GraphInvestigator already gathered into a bounded, tiered
+# `EvidencePackage` instead of a raw, unranked dump (see
+# app.context_pipeline.reasoning.curation's own module docstring for the
+# real bug this closes).
+#
+# Not an Investigator: it proposes nothing and never competes for a
+# reasoning cycle's action slot — the necessity-ranked action selection
+# in engine._select is for gathering facts, and this runs deterministically
+# once gathering is already finished, over whatever facts exist by then.
+# ---------------------------------------------------------------------------
+
+_NEIGHBORHOOD_EDGE_TYPES = ("CALLS", "IMPORTS", "INHERITS_FROM", "CONTAINS")
+_NEIGHBORHOOD_MAX_HOPS = 2
+
+
+def _primary_repository(state: WorkingContext) -> str | None:
+    """The single repository the bounded-neighborhood fetch is scoped to
+    — the redesign's own "Primary Repository: 1" concept, not every
+    repository the request touches. Prefers an explicit/live candidate
+    (ADR 0010) in ranked order; falls back to the top of the raw
+    relevance ranking when no candidate has resolved yet.
+
+    Candidate order is preserved from the ledger (insertion order, via
+    `dict.fromkeys` — not a `set`, whose iteration order is not something
+    this codebase should ever depend on): this function must return the
+    same repository on every call over the same state, matching the
+    engine's own deterministic-and-reproducible design (see engine.py's
+    module docstring on `_select` never being an LLM call for the same
+    reason). A `set`-backed fallback here would pick a repository whose
+    identity varies across process restarts (Python's string hashing is
+    randomized per-process) whenever no ranking covers any candidate —
+    rare, but a real reproducibility bug once it does happen.
+    """
+    candidates = list(
+        dict.fromkeys(i.statement for i in state.ledger.live_inferences("repository_candidate"))
+    )
+    ranked: list[str] = state.derived.get("ranked_repositories") or []
+    for name in ranked:
+        if name in candidates:
+            return name
+    if candidates:
+        return candidates[0]
+    return ranked[0] if ranked else None
+
+
+def _target_repositories(state: WorkingContext) -> list[str]:
+    """Every repository under consideration — used for the ownership
+    bonus in `curate()`, deliberately broader than `_primary_repository`
+    (a component in a *related*, non-primary repository can still score
+    as an architecture dependency, it just never seeds the neighborhood
+    traversal itself)."""
+    return [i.statement for i in state.ledger.live_inferences("repository_candidate")]
+
+
+async def curate_evidence(state: WorkingContext, session: SessionContext) -> None:
+    """Compute `state.derived["evidence_package"]` from the component
+    facts already gathered — see the module-level comment above for why
+    this runs once, deterministically, rather than as another proposed
+    investigation action.
+
+    Degrades gracefully, never raises: a failed or skipped neighborhood
+    fetch (no primary repository identified yet, no anchor found, the
+    graph read itself failing) still produces a valid `EvidencePackage`
+    — relevance/repository-ownership/test-penalty scoring alone, with
+    every component's `proximity_score` at 0 rather than a fabricated
+    value. An empty anchor set is a real, honest outcome (see
+    `select_anchor_ids`'s own docstring) — nothing here manufactures a
+    neighborhood to compensate for one not being found.
+    """
+    from app.context_pipeline.reasoning.curation import EvidencePackage, curate, select_anchor_ids
+    from app.graph.neo4j_repository import Neo4jGraphRepository
+    from app.graph.session import get_driver
+
+    components = [dict(f.value) for f in state.ledger.facts_of("component")]
+    if not components:
+        state.derived["evidence_package"] = EvidencePackage().model_dump()
+        return
+
+    enriched_text = state.derived.get("enriched_text", "")
+    target_repos = _target_repositories(state)
+    primary_repository = _primary_repository(state)
+
+    neighborhood_nodes: list[dict[str, Any]] = []
+    if primary_repository:
+        anchor_ids = select_anchor_ids(components, enriched_text, primary_repository)
+        if anchor_ids:
+            repository_id = anchor_ids[0].split(":", 1)[0]
+            graph_repo = session.graph_repo_override or Neo4jGraphRepository(get_driver())
+            try:
+                payload = await graph_repo.get_neighborhood(
+                    repository_id,
+                    anchor_ids,
+                    list(_NEIGHBORHOOD_EDGE_TYPES),
+                    _NEIGHBORHOOD_MAX_HOPS,
+                )
+                neighborhood_nodes = [
+                    {"id": node.id, "hop_distance": node.properties.get("hop_distance")}
+                    for node in payload.nodes
+                ]
+                state.ledger.add_evidence(
+                    provider="graph",
+                    action="get_neighborhood",
+                    outcome="success" if neighborhood_nodes else "not_found",
+                    summary=(
+                        f"Traversed {_NEIGHBORHOOD_MAX_HOPS} hops from {len(anchor_ids)} "
+                        f"component(s) named in the request — found {len(neighborhood_nodes)} "
+                        f"connected component(s) in '{primary_repository}'."
+                    ),
+                    iteration=state.metadata.iteration,
+                )
+            except Exception:
+                logger.exception(
+                    "context_discovery_curation_neighborhood_failed repository=%s",
+                    primary_repository,
+                )
+                state.ledger.add_evidence(
+                    provider="graph",
+                    action="get_neighborhood",
+                    outcome="failed",
+                    summary=(
+                        f"Could not traverse the architecture graph around '{primary_repository}'."
+                    ),
+                    iteration=state.metadata.iteration,
+                )
+
+    package = curate(
+        components=components,
+        neighborhood_nodes=neighborhood_nodes,
+        enriched_text=enriched_text,
+        target_repositories=target_repos,
+    )
+    state.derived["evidence_package"] = package.model_dump()

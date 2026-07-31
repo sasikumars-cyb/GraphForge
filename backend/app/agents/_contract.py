@@ -66,6 +66,27 @@ class Evidence(BaseModel):
     status: Literal["success", "not_found", "unavailable", "failed"] | None = None
 
 
+class ComponentWarning(BaseModel):
+    """A structured verification finding — distinct from the free-text
+    `verification_warnings: list[str]` every planning-family agent already
+    returns (kept, unchanged, for backward compatibility). This is the
+    pydantic mirror of `app.agents.component_grounding.ComponentWarning`
+    (a plain dataclass, so that module has no pydantic/schema dependency);
+    each agent converts to this type when populating its own result.
+
+    `warning_type` lets a caller (the UI, a future automated gate) branch
+    on the *kind* of problem without parsing prose — today's producers:
+    "test_used_as_production" (see app.agents.component_grounding),
+    "nonexistent_file", "nonexistent_class", "nonexistent_method"
+    (see each agent's post-generation verification section).
+    """
+
+    claim: str
+    warning_type: str
+    message: str
+    suggested_replacement: str | None = None
+
+
 class Confidence(BaseModel):
     """Numeric confidence in [0.0, 1.0] with a mandatory reasoning
     string. Mirrors the existing ConfidenceScore but is the contract-level
