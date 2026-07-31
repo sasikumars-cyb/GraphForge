@@ -86,8 +86,8 @@ from app.agents.testing.tools import (
 from app.context_pipeline.reasoning.curation import EvidencePackage, render_evidence_package_text
 from app.core.exceptions import AppError
 from app.graph.neo4j_repository import Neo4jGraphRepository
-from app.graph.test_case_repository import Neo4jTestCaseGraphRepository
 from app.graph.session import get_driver
+from app.graph.test_case_repository import Neo4jTestCaseGraphRepository
 
 logger = logging.getLogger(__name__)
 
@@ -499,7 +499,9 @@ class TestPlanningAgent:
                 EvidencePackage.model_validate(evidence_package)
             )
         else:
-            graph_context_text = format_graph_context(repos_obs, components_obs, deps_obs, testrail_obs)
+            graph_context_text = format_graph_context(
+                repos_obs, components_obs, deps_obs, testrail_obs
+            )
         prompt_task_description = (
             f"{task_description}\n\n{prior_stage_context}"
             if prior_stage_context
@@ -578,11 +580,10 @@ class TestPlanningAgent:
         )
         corrections = {w.claim: w.suggested_replacement for w in component_warnings}
         if corrections:
-            test_plan.affected_components = [
-                corrections.get(name, name)
-                for name in test_plan.affected_components
-                if corrections.get(name, name) is not None
+            corrected_components = [
+                corrections.get(name, name) for name in test_plan.affected_components
             ]
+            test_plan.affected_components = [c for c in corrected_components if c is not None]
             kept_regression_tests = []
             for rt in test_plan.regression_tests:
                 if rt.component in corrections:
@@ -595,12 +596,10 @@ class TestPlanningAgent:
             kept_integration_tests = []
             for it in test_plan.integration_tests:
                 source_rejected = (
-                    it.source_component in corrections
-                    and corrections[it.source_component] is None
+                    it.source_component in corrections and corrections[it.source_component] is None
                 )
                 target_rejected = (
-                    it.target_component in corrections
-                    and corrections[it.target_component] is None
+                    it.target_component in corrections and corrections[it.target_component] is None
                 )
                 if source_rejected or target_rejected:
                     continue  # can't test a CALLS relationship with no real endpoint

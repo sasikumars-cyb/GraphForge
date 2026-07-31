@@ -1529,9 +1529,9 @@ async def test_planning_agent_flags_unindexed_sibling_repo_reference() -> None:
         output = await agent.run(context)
 
     warnings = output.result["verification_warnings"]
-    assert any("MPC" in w and "not itself indexed" in w for w in warnings), (
-        f"expected an unindexed-sibling-repo warning, got: {warnings}"
-    )
+    assert any(
+        "MPC" in w and "not itself indexed" in w for w in warnings
+    ), f"expected an unindexed-sibling-repo warning, got: {warnings}"
 
 
 # ---------------------------------------------------------------------------
@@ -1576,10 +1576,10 @@ def test_selected_repo_names_falls_back_to_ranked_repo_names_when_nothing_select
 def test_selected_repo_names_falls_back_through_legacy_shapes_when_repositories_is_absent() -> None:
     """A result persisted before ADR 0010 (no `repositories` key at all)
     must still resolve via the pre-existing fallback chain."""
-    assert _selected_repo_names(
-        {"selected_repositories": [{"name": "legacy-service"}]}, []
-    ) == ["legacy-service"]
-    assert _selected_repo_names(
-        {"implementation_candidates": ["older-service"]}, []
-    ) == ["older-service"]
+    assert _selected_repo_names({"selected_repositories": [{"name": "legacy-service"}]}, []) == [
+        "legacy-service"
+    ]
+    assert _selected_repo_names({"implementation_candidates": ["older-service"]}, []) == [
+        "older-service"
+    ]
     assert _selected_repo_names({}, ["oldest-service"]) == ["oldest-service"]
