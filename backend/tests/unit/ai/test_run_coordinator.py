@@ -64,13 +64,16 @@ def _make_output(agent_id: str = "planning") -> AgentOutput:
     )
 
 
-def _make_manifest(agent_id: str, goal: str) -> AgentManifest:
+def _make_manifest(
+    agent_id: str, goal: str, required_dependencies: frozenset[str] = frozenset()
+) -> AgentManifest:
     return AgentManifest(
         agent_id=agent_id,
         purpose=f"Test {agent_id}.",
         goals=frozenset({goal}),
         accepted_subject_types=frozenset({"freetext"}),
         cost_class="cheap",
+        required_dependencies=required_dependencies,
     )
 
 
@@ -79,6 +82,7 @@ def _build_coordinator(
     goal: str = "plan_freeform",
     agent_run_side_effect: Exception | None = None,
     register_agent: bool = True,
+    required_dependencies: frozenset[str] = frozenset(),
 ) -> tuple[RunCoordinator, AsyncMock, AsyncMock]:
     """Build a RunCoordinator with a mocked db, registry, and selector.
 
@@ -100,7 +104,7 @@ def _build_coordinator(
         mock_agent.run = AsyncMock(return_value=_make_output(agent_id))
 
     if register_agent:
-        registry.register(_make_manifest(agent_id, goal), mock_agent)
+        registry.register(_make_manifest(agent_id, goal, required_dependencies), mock_agent)
 
     selector = AgentSelector(registry)
     coordinator = RunCoordinator(db=mock_db, registry=registry, selector=selector)
@@ -407,9 +411,7 @@ async def test_preflight_pass_proceeds_to_agent_run_normally() -> None:
     coordinator, mock_db, mock_agent = _build_coordinator()
     subject = _make_subject()
 
-    with patch(
-        "app.orchestrator.run_coordinator.check_llm_provider_configured", return_value=None
-    ):
+    with patch("app.orchestrator.run_coordinator.check_llm_provider_configured", return_value=None):
         run = await coordinator.execute(subject, "plan_freeform")
 
     assert run.status == "completed"
@@ -488,6 +490,249 @@ async def test_resume_preflight_check_raising_still_fails_the_run_cleanly() -> N
 
 
 # ---------------------------------------------------------------------------
+# WARNING-severity pre-flight (ADR 0011, PR3) — collect_preflight_warnings +
+# record_preflight_warnings integrated into the same pre-flight lifecycle,
+# never affecting BLOCKING behavior.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_healthy_environment_produces_no_warnings() -> None:
+    """Backward compatibility: an agent declaring no required_dependencies
+    (every manifest's state before this PR, and still the default) must
+    behave exactly as before — this uses the *real*
+    `collect_preflight_warnings`, unmocked, to prove it never even touches
+    the db for such an agent."""
+    coordinator, mock_db, mock_agent = _build_coordinator()  # no required_dependencies
+    subject = _make_subject()
+
+    run = await coordinator.execute(subject, "plan_freeform")
+
+    assert run.status == "completed"
+    step = mock_db.add.call_args_list[1][0][0]
+    assert step.preflight_warnings in ([], None)
+
+
+@pytest.mark.asyncio
+async def test_warning_check_result_is_persisted_onto_step() -> None:
+    from app.orchestrator.preflight import PreflightWarning
+
+    coordinator, mock_db, mock_agent = _build_coordinator(
+        agent_id="create_branch",
+        goal="create_branch",
+        required_dependencies=frozenset({"github_write"}),
+    )
+    subject = _make_subject()
+
+    warning = PreflightWarning(
+        code="github_write_available",
+        dependency="GitHub",
+        message="No GitHub connection found.",
+        checked_at="2026-07-31T00:00:00Z",
+    )
+    with patch(
+        "app.orchestrator.run_coordinator.collect_preflight_warnings",
+        AsyncMock(return_value=[warning]),
+    ):
+        run = await coordinator.execute(subject, "create_branch")
+
+    assert run.status == "completed"
+    mock_agent.run.assert_called_once()  # a WARNING never blocks execution
+    step = mock_db.add.call_args_list[1][0][0]
+    assert step.preflight_warnings == [
+        {
+            "code": "github_write_available",
+            "dependency": "GitHub",
+            "message": "No GitHub connection found.",
+            "checked_at": "2026-07-31T00:00:00Z",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_multiple_warnings_all_persisted_in_order() -> None:
+    from app.orchestrator.preflight import PreflightWarning
+
+    coordinator, mock_db, mock_agent = _build_coordinator(
+        agent_id="create_branch",
+        goal="create_branch",
+        required_dependencies=frozenset({"github_write"}),
+    )
+    subject = _make_subject()
+
+    warnings = [
+        PreflightWarning(code="first", dependency="A", message="m1", checked_at="t0"),
+        PreflightWarning(code="second", dependency="B", message="m2", checked_at="t1"),
+    ]
+    with patch(
+        "app.orchestrator.run_coordinator.collect_preflight_warnings",
+        AsyncMock(return_value=warnings),
+    ):
+        await coordinator.execute(subject, "create_branch")
+
+    step = mock_db.add.call_args_list[1][0][0]
+    assert [w["code"] for w in step.preflight_warnings] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_warning_collection_called_with_manifest_db_and_user_id() -> None:
+    coordinator, mock_db, mock_agent = _build_coordinator(
+        agent_id="create_branch",
+        goal="create_branch",
+        required_dependencies=frozenset({"github_write"}),
+    )
+    subject = _make_subject()
+
+    with patch(
+        "app.orchestrator.run_coordinator.collect_preflight_warnings",
+        AsyncMock(return_value=[]),
+    ) as mock_collect:
+        run = await coordinator.execute(subject, "create_branch")
+
+    mock_collect.assert_called_once()
+    called_manifest, called_db, called_user_id = mock_collect.call_args[0]
+    assert called_manifest.agent_id == "create_branch"
+    assert called_db is mock_db
+    assert called_user_id == run.user_id
+
+
+@pytest.mark.asyncio
+async def test_blocking_failure_never_collects_warnings() -> None:
+    """BLOCKING short-circuits before WARNING collection is ever reached —
+    proven by making collect_preflight_warnings raise if called at all."""
+    coordinator, mock_db, mock_agent = _build_coordinator(
+        agent_id="create_branch",
+        goal="create_branch",
+        required_dependencies=frozenset({"github_write"}),
+    )
+    subject = _make_subject()
+
+    with (
+        patch(
+            "app.orchestrator.run_coordinator.check_llm_provider_configured",
+            return_value="No API key configured.",
+        ),
+        patch(
+            "app.orchestrator.run_coordinator.collect_preflight_warnings",
+            AsyncMock(side_effect=AssertionError("must not be called")),
+        ),
+        pytest.raises(PreFlightCheckFailed),
+    ):
+        await coordinator.execute(subject, "create_branch")
+
+    mock_agent.run.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_blocking_pass_and_warning_present_together() -> None:
+    """The BLOCKING check passing and a WARNING firing are independent —
+    both can be true for the same step, and the run still completes."""
+    from app.orchestrator.preflight import PreflightWarning
+
+    coordinator, mock_db, mock_agent = _build_coordinator(
+        agent_id="create_branch",
+        goal="create_branch",
+        required_dependencies=frozenset({"github_write"}),
+    )
+    subject = _make_subject()
+
+    with (
+        patch("app.orchestrator.run_coordinator.check_llm_provider_configured", return_value=None),
+        patch(
+            "app.orchestrator.run_coordinator.collect_preflight_warnings",
+            AsyncMock(
+                return_value=[
+                    PreflightWarning(
+                        code="github_write_available",
+                        dependency="GitHub",
+                        message="No GitHub connection found.",
+                        checked_at="t0",
+                    )
+                ]
+            ),
+        ),
+    ):
+        run = await coordinator.execute(subject, "create_branch")
+
+    assert run.status == "completed"
+    mock_agent.run.assert_called_once()
+    step = mock_db.add.call_args_list[1][0][0]
+    assert len(step.preflight_warnings) == 1
+
+
+@pytest.mark.asyncio
+async def test_warning_persistence_does_not_add_an_extra_commit() -> None:
+    """Transaction ownership: recording a warning must not introduce any
+    new commit — RunCoordinator still commits exactly once, the warning
+    rides along in that same commit."""
+    from app.orchestrator.preflight import PreflightWarning
+
+    coordinator, mock_db, mock_agent = _build_coordinator(
+        agent_id="create_branch",
+        goal="create_branch",
+        required_dependencies=frozenset({"github_write"}),
+    )
+    subject = _make_subject()
+
+    with patch(
+        "app.orchestrator.run_coordinator.collect_preflight_warnings",
+        AsyncMock(
+            return_value=[PreflightWarning(code="c", dependency="d", message="m", checked_at="t")]
+        ),
+    ):
+        await coordinator.execute(subject, "create_branch")
+
+    mock_db.commit.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_resume_step_also_collects_and_persists_warnings() -> None:
+    from app.orchestrator.preflight import PreflightWarning
+
+    coordinator, mock_db, mock_agent = _build_coordinator(
+        agent_id="create_branch",
+        goal="create_branch",
+        required_dependencies=frozenset({"github_write"}),
+    )
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:abc123",
+        subject_type="freetext",
+        goal="create_branch",
+        status="awaiting_input",
+    )
+    step = AgentStep(
+        id=uuid.uuid4(), run_id=run.id, agent_id="create_branch", status="awaiting_input"
+    )
+
+    with patch(
+        "app.orchestrator.run_coordinator.collect_preflight_warnings",
+        AsyncMock(
+            return_value=[
+                PreflightWarning(
+                    code="github_write_available",
+                    dependency="GitHub",
+                    message="No GitHub connection found.",
+                    checked_at="t0",
+                )
+            ]
+        ),
+    ):
+        await coordinator.resume_step(
+            run, step, "create_branch", mock_agent, _make_subject(), "create_branch"
+        )
+
+    assert step.preflight_warnings == [
+        {
+            "code": "github_write_available",
+            "dependency": "GitHub",
+            "message": "No GitHub connection found.",
+            "checked_at": "t0",
+        }
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Status transitions
 # ---------------------------------------------------------------------------
 
@@ -543,7 +788,9 @@ def _make_awaiting_input_output(agent_id: str = "context_discovery") -> AgentOut
         agent_id=agent_id,
         subject_id="freetext:abc123",
         confidence=Confidence(score=0.3, reasoning="Blocked on a clarification question."),
-        evidence=[Evidence(kind="tool_call", reference="neo4j_graph", summary="Queried the graph.")],
+        evidence=[
+            Evidence(kind="tool_call", reference="neo4j_graph", summary="Queried the graph.")
+        ],
         result={"readiness": "BLOCKED", "unresolved_questions": [{"question_id": "q1"}]},
         prompt_version="2.0",
         awaiting_input=True,
@@ -598,7 +845,9 @@ async def test_resume_step_completes_on_non_paused_output() -> None:
         goal="discover_context",
         status="awaiting_input",
     )
-    step = AgentStep(id=uuid.uuid4(), run_id=run.id, agent_id="context_discovery", status="awaiting_input")
+    step = AgentStep(
+        id=uuid.uuid4(), run_id=run.id, agent_id="context_discovery", status="awaiting_input"
+    )
 
     resumed = await coordinator.resume_step(
         run,
@@ -607,7 +856,9 @@ async def test_resume_step_completes_on_non_paused_output() -> None:
         mock_agent,
         _make_subject(),
         "discover_context",
-        extras={"resume": {"working_context": {}, "answer": {"question_id": "q1", "answer": "yes"}}},
+        extras={
+            "resume": {"working_context": {}, "answer": {"question_id": "q1", "answer": "yes"}}
+        },
     )
 
     assert resumed.status == "completed"
@@ -628,9 +879,7 @@ async def test_resume_step_stays_paused_when_output_awaiting_input_again() -> No
     mock_db.add = MagicMock()
 
     registry = AgentRegistry()
-    registry.register(
-        _make_manifest("context_discovery", "discover_context"), AsyncMock()
-    )
+    registry.register(_make_manifest("context_discovery", "discover_context"), AsyncMock())
     mock_agent = AsyncMock()
     mock_agent.run = AsyncMock(return_value=_make_awaiting_input_output())
 
@@ -643,7 +892,9 @@ async def test_resume_step_stays_paused_when_output_awaiting_input_again() -> No
         goal="discover_context",
         status="awaiting_input",
     )
-    step = AgentStep(id=uuid.uuid4(), run_id=run.id, agent_id="context_discovery", status="awaiting_input")
+    step = AgentStep(
+        id=uuid.uuid4(), run_id=run.id, agent_id="context_discovery", status="awaiting_input"
+    )
 
     resumed = await coordinator.resume_step(
         run,

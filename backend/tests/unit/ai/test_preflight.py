@@ -13,6 +13,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.agents._contract import AgentManifest
 from app.ai.config.resolver import ResolvedProvider
 from app.ai.providers.registry import (
     ProviderBuildConfig,
@@ -20,10 +21,18 @@ from app.ai.providers.registry import (
     get_provider_spec,
 )
 from app.models.agent_step import AgentStep
+from app.orchestrator import preflight as preflight_module
 from app.orchestrator.preflight import (
+    ALL_DEPENDENCIES,
+    DEPENDENCY_GITHUB_WRITE,
+    DEPENDENCY_LLM,
+    DEPENDENCY_NEO4J,
     PreflightWarning,
+    WarningCheck,
+    agent_requires,
     check_llm_provider_configured,
     check_neo4j_reachable,
+    collect_preflight_warnings,
     record_preflight_warnings,
     resolve_preflight_stage,
 )
@@ -265,3 +274,173 @@ def test_agent_step_preflight_warnings_column_default_is_empty_list() -> None:
     column = AgentStep.__table__.c.preflight_warnings
     assert column.nullable is False
     assert column.default.arg(None) == []
+
+
+# ---------------------------------------------------------------------------
+# Dependency constants + agent_requires (ADR 0011, OD-3)
+# ---------------------------------------------------------------------------
+
+
+def _manifest(required_dependencies: frozenset[str] = frozenset()) -> AgentManifest:
+    return AgentManifest(
+        agent_id="test",
+        purpose="Test",
+        goals=frozenset({"test_goal"}),
+        accepted_subject_types=frozenset({"freetext"}),
+        cost_class="cheap",
+        required_dependencies=required_dependencies,
+    )
+
+
+def test_dependency_constants_are_distinct_strings() -> None:
+    values = {DEPENDENCY_LLM, DEPENDENCY_NEO4J, DEPENDENCY_GITHUB_WRITE}
+    assert len(values) == 3  # no accidental aliasing
+
+
+def test_all_dependencies_contains_exactly_the_three_constants() -> None:
+    assert {DEPENDENCY_LLM, DEPENDENCY_NEO4J, DEPENDENCY_GITHUB_WRITE} == ALL_DEPENDENCIES
+
+
+def test_agent_requires_true_when_dependency_declared() -> None:
+    manifest = _manifest(frozenset({DEPENDENCY_LLM, DEPENDENCY_NEO4J}))
+    assert agent_requires(manifest, DEPENDENCY_LLM) is True
+    assert agent_requires(manifest, DEPENDENCY_NEO4J) is True
+
+
+def test_agent_requires_false_when_dependency_not_declared() -> None:
+    manifest = _manifest(frozenset({DEPENDENCY_LLM}))
+    assert agent_requires(manifest, DEPENDENCY_NEO4J) is False
+    assert agent_requires(manifest, DEPENDENCY_GITHUB_WRITE) is False
+
+
+def test_agent_requires_false_for_default_empty_declaration() -> None:
+    manifest = _manifest()
+    assert agent_requires(manifest, DEPENDENCY_LLM) is False
+    assert agent_requires(manifest, DEPENDENCY_NEO4J) is False
+    assert agent_requires(manifest, DEPENDENCY_GITHUB_WRITE) is False
+
+
+def test_agent_requires_is_generic_membership_not_agent_specific() -> None:
+    """The whole point of OD-3: this must work identically for any
+    dependency string, including one that doesn't exist yet (a future
+    Jira/Confluence check) — no special-casing inside agent_requires
+    itself."""
+    manifest = _manifest(frozenset({"some_future_dependency"}))
+    assert agent_requires(manifest, "some_future_dependency") is True
+    assert agent_requires(manifest, "another_future_dependency") is False
+
+
+# ---------------------------------------------------------------------------
+# _check_github_write_available (ADR 0011 — WARNING-producing check, PR3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_github_write_check_returns_none_when_connection_present() -> None:
+    with patch.object(
+        preflight_module, "get_decrypted_access_token", AsyncMock(return_value="gh-token")
+    ):
+        result = await preflight_module._check_github_write_available(AsyncMock(), uuid.uuid4())
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_github_write_check_returns_warning_when_connection_absent() -> None:
+    with patch.object(preflight_module, "get_decrypted_access_token", AsyncMock(return_value=None)):
+        result = await preflight_module._check_github_write_available(AsyncMock(), uuid.uuid4())
+    assert result is not None
+    assert result.code == "github_write_available"
+    assert result.dependency == "GitHub"
+    assert "GitHub connection" in result.message
+    assert result.checked_at  # non-empty ISO timestamp
+
+
+@pytest.mark.asyncio
+async def test_github_write_check_never_raises_for_a_missing_connection() -> None:
+    """A missing connection is a normal, expected outcome (most users
+    haven't connected GitHub) — must produce a warning, not propagate as an
+    exception that could be mistaken for a genuine check bug."""
+    with patch.object(preflight_module, "get_decrypted_access_token", AsyncMock(return_value=None)):
+        result = await preflight_module._check_github_write_available(AsyncMock(), uuid.uuid4())
+    assert isinstance(result, PreflightWarning)
+
+
+# ---------------------------------------------------------------------------
+# collect_preflight_warnings (ADR 0011 — WARNING-check registry, PR3)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_collect_preflight_warnings_empty_when_dependency_not_required() -> None:
+    """Dependency filtering: an agent that doesn't declare github_write
+    must never even reach `_check_github_write_available` — proven here by
+    patching it to raise, which would fail this test if it were called."""
+    manifest = _manifest(frozenset({DEPENDENCY_LLM}))
+    with patch.object(
+        preflight_module, "get_decrypted_access_token", AsyncMock(side_effect=AssertionError)
+    ):
+        result = await collect_preflight_warnings(manifest, AsyncMock(), uuid.uuid4())
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_collect_preflight_warnings_empty_when_required_and_healthy() -> None:
+    manifest = _manifest(frozenset({DEPENDENCY_GITHUB_WRITE}))
+    with patch.object(
+        preflight_module, "get_decrypted_access_token", AsyncMock(return_value="gh-token")
+    ):
+        result = await collect_preflight_warnings(manifest, AsyncMock(), uuid.uuid4())
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_collect_preflight_warnings_returns_warning_when_required_and_unavailable() -> None:
+    manifest = _manifest(frozenset({DEPENDENCY_GITHUB_WRITE}))
+    with patch.object(preflight_module, "get_decrypted_access_token", AsyncMock(return_value=None)):
+        result = await collect_preflight_warnings(manifest, AsyncMock(), uuid.uuid4())
+    assert len(result) == 1
+    assert result[0].code == "github_write_available"
+
+
+@pytest.mark.asyncio
+async def test_collect_preflight_warnings_preserves_registry_order() -> None:
+    """Multiple applicable, simultaneously-unavailable checks must come
+    back in `WARNING_CHECKS` tuple order — proven with two synthetic
+    checks patched in, since only one real check exists today."""
+
+    async def _first(db, user_id):
+        return PreflightWarning(code="first", dependency="A", message="m1", checked_at="t0")
+
+    async def _second(db, user_id):
+        return PreflightWarning(code="second", dependency="B", message="m2", checked_at="t1")
+
+    synthetic_checks = (
+        WarningCheck(dependency="dep_a", run=_first),
+        WarningCheck(dependency="dep_b", run=_second),
+    )
+    manifest = _manifest(frozenset({"dep_a", "dep_b"}))
+    with patch.object(preflight_module, "WARNING_CHECKS", synthetic_checks):
+        result = await collect_preflight_warnings(manifest, AsyncMock(), uuid.uuid4())
+    assert [w.code for w in result] == ["first", "second"]
+
+
+@pytest.mark.asyncio
+async def test_collect_preflight_warnings_only_calls_applicable_checks() -> None:
+    """A second, synthetic check whose dependency the manifest does not
+    declare must never run — dependency filtering across multiple
+    registry entries, not just the single real one."""
+
+    async def _applicable(db, user_id):
+        return PreflightWarning(code="applicable", dependency="A", message="m", checked_at="t0")
+
+    async def _not_applicable(db, user_id):
+        raise AssertionError("must not be called — dependency not declared")
+
+    synthetic_checks = (
+        WarningCheck(dependency="dep_a", run=_applicable),
+        WarningCheck(dependency="dep_b", run=_not_applicable),
+    )
+    manifest = _manifest(frozenset({"dep_a"}))
+    with patch.object(preflight_module, "WARNING_CHECKS", synthetic_checks):
+        result = await collect_preflight_warnings(manifest, AsyncMock(), uuid.uuid4())
+    assert [w.code for w in result] == ["applicable"]

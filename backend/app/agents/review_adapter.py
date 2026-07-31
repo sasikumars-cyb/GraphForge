@@ -39,6 +39,7 @@ from app.graph.interfaces import IGraphRepository
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
 from app.integrations.factory import create_version_control_provider
+from app.orchestrator.preflight import DEPENDENCY_LLM, DEPENDENCY_NEO4J
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,9 @@ REVIEW_MANIFEST = AgentManifest(
     cost_class="standard",
     max_graph_hops=3,
     output_schema_name="AIAnalysisResult",
+    # ADR 0011, OD-3 — LLM (this agent's own reasoning), Neo4j (max_graph_hops
+    # > 0, above).
+    required_dependencies=frozenset({DEPENDENCY_LLM, DEPENDENCY_NEO4J}),
 )
 
 # Graph-read tools map to graph_traversal evidence kind.

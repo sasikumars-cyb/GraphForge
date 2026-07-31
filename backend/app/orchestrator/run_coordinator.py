@@ -29,6 +29,8 @@ from app.orchestrator.preflight import (
     PreFlightCheckFailed,
     check_llm_provider_configured,
     check_neo4j_reachable,
+    collect_preflight_warnings,
+    record_preflight_warnings,
 )
 from app.orchestrator.registry import AgentRegistry
 from app.orchestrator.selector import AgentSelector
@@ -291,6 +293,23 @@ class RunCoordinator:
             if preflight_failure is not None:
                 raise PreFlightCheckFailed(f"Pre-flight check failed: {preflight_failure}")
 
+            # WARNING-severity pre-flight (ADR 0011, OD-1/OD-3/PR3): only
+            # reached once the BLOCKING check above has already passed, so
+            # this can never turn into a blocking failure — `collect_
+            # preflight_warnings` returns `[]` (a no-op for `record_
+            # preflight_warnings`) whenever no applicable dependency is
+            # unavailable, or the dispatched agent has no manifest entry at
+            # all. Recorded onto `step` now but not flushed/committed here —
+            # it rides along in whichever commit already happens below,
+            # success or failure (RunCoordinator remains the sole
+            # transaction owner; see record_preflight_warnings's own
+            # docstring).
+            if manifest_entry is not None:
+                warnings = await collect_preflight_warnings(
+                    manifest_entry[0], self._db, run.user_id
+                )
+                record_preflight_warnings(step, warnings)
+
             output: AgentOutput = await agent.run(context)  # type: ignore[attr-defined]
         except Exception as exc:
             latency_ms = int((time.monotonic() - start_ms) * 1000)
@@ -388,6 +407,15 @@ class RunCoordinator:
             ) or await check_neo4j_reachable(max_graph_hops)
             if preflight_failure is not None:
                 raise PreFlightCheckFailed(f"Pre-flight check failed: {preflight_failure}")
+
+            # WARNING-severity pre-flight (ADR 0011, OD-1/OD-3/PR3) — same
+            # placement and reasoning as execute_run's own copy of this
+            # block; see that method's comment for the full rationale.
+            if manifest_entry is not None:
+                warnings = await collect_preflight_warnings(
+                    manifest_entry[0], self._db, run.user_id
+                )
+                record_preflight_warnings(step, warnings)
 
             output: AgentOutput = await agent.run(context)  # type: ignore[attr-defined]
         except Exception as exc:
