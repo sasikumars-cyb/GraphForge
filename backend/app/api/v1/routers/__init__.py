@@ -7,6 +7,7 @@ from app.api.v1.routers.ai_analysis import router as ai_analysis_router
 from app.api.v1.routers.ai_workspace import router as ai_workspace_router
 from app.api.v1.routers.auth import router as auth_router
 from app.api.v1.routers.calibration import router as calibration_router
+from app.api.v1.routers.engineering_sessions import router as engineering_sessions_router
 from app.api.v1.routers.github import router as github_router
 from app.api.v1.routers.google_drive import router as google_drive_router
 from app.api.v1.routers.health import router as health_router
@@ -44,5 +45,6 @@ api_router.include_router(calibration_router)
 api_router.include_router(jira_router)
 api_router.include_router(testrail_router)
 api_router.include_router(test_case_uploads_router)
+api_router.include_router(engineering_sessions_router)
 
 __all__ = ["api_router"]

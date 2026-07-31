@@ -17,12 +17,19 @@ from app.database.base import Base
 from app.models.agent_step import AgentStep  # noqa: F401
 from app.models.ai_profile import AIProfile, AIProviderUsage  # noqa: F401
 from app.models.ai_provider_config import AIProviderConfig, AISettings  # noqa: F401
+from app.models.belief import Belief, Hypothesis  # noqa: F401
 from app.models.confidence_calibration import ConfidenceCalibration  # noqa: F401
+from app.models.contradiction import Contradiction, ContradictionParty  # noqa: F401
+from app.models.decision import Decision, Recommendation  # noqa: F401
+from app.models.engineering_artifact import EngineeringArtifact  # noqa: F401
+from app.models.engineering_session import EngineeringSession, TimelineEntry  # noqa: F401
+from app.models.evidence import Evidence  # noqa: F401
 from app.models.github_connection import GitHubConnection  # noqa: F401
 from app.models.google_drive_connection import GoogleDriveConnection  # noqa: F401
 from app.models.indexing_job import IndexingJob  # noqa: F401
 from app.models.llm_invocation import LLMInvocation  # noqa: F401
 from app.models.oauth_app_credential import OAuthAppCredential  # noqa: F401
+from app.models.participant import Participant  # noqa: F401
 from app.models.pull_request import PullRequest  # noqa: F401
 from app.models.pull_request_ai_analysis import PullRequestAIAnalysis  # noqa: F401
 from app.models.pull_request_analysis import PullRequestAnalysis  # noqa: F401

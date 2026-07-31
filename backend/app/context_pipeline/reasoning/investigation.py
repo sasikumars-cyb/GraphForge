@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents._contract import AgentContext
 from app.context_pipeline.reasoning.ledger import (
     EvidenceRecord,
     Fact,
@@ -49,6 +50,14 @@ class SessionContext:
     test_case_graph_repo_override: Any = None
     model: str | None = None
     stage: str = "context_discovery"
+    # The full agent contract context, when a real agent run built this
+    # session (absent for e.g. ad-hoc test fixtures). Threaded through
+    # purely so `reasoning.understanding.synthesize_engineering_
+    # understanding` can pass it to `invoke_llm_json(context=...)` and get
+    # ADR 0012 invocation persistence for free — `context.extras` already
+    # carries `db`/`run_id`/`agent_step_id`, the same three values every
+    # other agent's LLM call reads them from.
+    agent_context: AgentContext | None = None
 
 
 @dataclass(frozen=True)
