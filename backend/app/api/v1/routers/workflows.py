@@ -11,6 +11,7 @@ POST /workflows/{workflow_id}/reject   → Reject a completed Planning blueprint
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -50,6 +51,8 @@ from app.services import workflow_service
 
 if TYPE_CHECKING:
     from app.orchestrator.background_execution import OnComplete
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workflows", tags=["workflows"])
 
@@ -122,6 +125,13 @@ class OverrideStageResultRequest(BaseModel):
     # own AgentStep.result at read time, never overwriting it. See
     # workflow_service.override_stage_result's docstring.
     override: dict[str, Any]
+    # When True and stage is context_discovery, triggers a fresh
+    # Context Discovery execution using the selected repositories as
+    # explicit input — recomputing all investigation results that depend
+    # on the repository. Without this, overriding repositories only
+    # updates what downstream stages *read* for the repo list, but leaves
+    # all evidence/areas/architecture/documentation stale.
+    rerun: bool = False
 
 
 class WorkflowRunResponse(BaseModel):
@@ -1314,6 +1324,85 @@ async def override_stage_result(
         raise NotFoundError(f"Invalid workflow_id: {workflow_id}") from exc
 
     workflow = await workflow_service.get_workflow_for_update(db, wid, user_id=user.id)
+
+    if body.rerun and stage == "context_discovery":
+        # Re-run Context Discovery with the selected repositories as explicit
+        # input. This recomputes ALL investigation results — relevant areas,
+        # architecture, documentation, engineering synthesis — using the
+        # correct repository, fixing the stale-data issue caused by overriding
+        # repositories without re-investigating.
+        from app.orchestrator.background_execution import schedule_run_execution
+        from app.orchestrator.run_coordinator import RunCoordinator
+
+        check_rate_limit(
+            f"stage_start:{user.id}",
+            max_requests=_STAGE_START_RATE_LIMIT,
+            window_seconds=_STAGE_START_RATE_WINDOW_SECONDS,
+        )
+
+        # Extract selected repository names from the override payload.
+        repos_payload = body.override.get("repositories", [])
+        if not isinstance(repos_payload, list) or not repos_payload:
+            raise AppError(
+                "rerun=true requires a non-empty 'repositories' list in override.",
+                status_code=400,
+                error_code="rerun_missing_repositories",
+            )
+        explicit_repo_names = [
+            r["name"] if isinstance(r, dict) else r
+            for r in repos_payload
+            if (isinstance(r, dict) and r.get("selected", True)) or isinstance(r, str)
+        ]
+        if not explicit_repo_names:
+            raise AppError(
+                "At least one repository must be selected for re-run.",
+                status_code=400,
+                error_code="rerun_no_selected_repositories",
+            )
+
+        # Reset workflow to re-run context_discovery.
+        workflow.current_stage = "context_discovery"
+        workflow.status = "in_progress"
+        workflow.updated_at = datetime.now(UTC)
+
+        # Create and schedule the new run (same execution path as
+        # continue_workflow, reusing the existing agent and coordinator).
+        goal = workflow_service.STAGE_GOALS["context_discovery"]
+        subject = resolve_freetext(workflow.original_prompt)
+
+        selector = AgentSelector(global_registry)
+        coordinator = RunCoordinator(db=db, registry=global_registry, selector=selector)
+        run, agent_id, _agent = await coordinator.create_pending_run(
+            subject=subject, goal=goal, model=None
+        )
+        run.workflow_id = workflow.id
+        run.workflow_stage = "context_discovery"
+        await db.commit()
+
+        set_workflow_context(workflow_id=str(workflow.id), workflow_run_id=str(run.id))
+
+        schedule_run_execution(
+            run_id=run.id,
+            subject=subject,
+            goal=goal,
+            model=None,
+            extras={
+                "workflow": workflow,
+                "user_id": user.id,
+                "explicit_repositories": explicit_repo_names,
+            },
+            agent_id=agent_id,
+            registry=global_registry,
+            on_complete=_workflow_stage_finalizer(workflow.id),
+        )
+
+        logger.info(
+            "context_discovery_rerun_scheduled workflow_id=%s repos=%s",
+            workflow_id,
+            explicit_repo_names,
+        )
+        return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)
+
     await workflow_service.override_stage_result(db, workflow, stage, body.override, user.id)
     await db.commit()
     return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)

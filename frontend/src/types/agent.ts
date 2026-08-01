@@ -830,4 +830,8 @@ export interface OverrideStageResultRequest {
   // at read time (see get_stage_result on the backend) — only the fields a
   // human actually changed, never the whole result.
   override: Record<string, unknown>;
+  // When true, triggers a fresh Context Discovery execution using the
+  // selected repositories as explicit input — recomputing all investigation
+  // results instead of just patching the repository list.
+  rerun?: boolean;
 }

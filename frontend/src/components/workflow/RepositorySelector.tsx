@@ -77,6 +77,7 @@ export function RepositorySelector({
       const updated = repositories.map((r) => ({ ...r, selected: selected.has(r.name) }));
       await overrideStageResult(token, workflowId, "context_discovery", {
         override: { repositories: updated },
+        rerun: true,
       });
       onOverridden();
     } catch (err) {

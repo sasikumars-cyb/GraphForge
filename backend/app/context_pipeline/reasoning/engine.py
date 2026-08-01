@@ -574,18 +574,71 @@ def _verdict_line(state: WorkingContext) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _seed_explicit_repositories(state: WorkingContext, repo_names: list[str]) -> None:
+    """Pre-seed the ledger with user-selected repositories as explicit
+    candidates.
+
+    This mirrors what the Repository Investigator would produce during a
+    normal investigation cycle (evidence → repository fact →
+    repository_candidate inference), but seeds it at iteration 0 so
+    every subsequent investigator (architecture, documentation, graph)
+    targets these repositories from the very first cycle.
+    """
+    evidence = state.ledger.add_evidence(
+        provider="user",
+        action="explicit_repository_selection",
+        outcome="success",
+        summary=f"User explicitly selected {len(repo_names)} repositor{'y' if len(repo_names) == 1 else 'ies'}: {', '.join(repo_names)}.",
+        iteration=0,
+        intent="The user selected these repositories from the Context Explorer UI.",
+    )
+    for name in repo_names:
+        fact = state.ledger.add_fact(
+            kind="repository",
+            subject=name,
+            provider="user",
+            evidence_id=evidence.evidence_id,
+            value={"name": name, "source": "explicit_selection"},
+            iteration=0,
+            verified=True,
+        )
+        state.ledger.add_inference(
+            kind="repository_candidate",
+            statement=name,
+            supporting_fact_ids=[fact.fact_id],
+            value={"source": "explicit", "reason": "Selected by user from Context Explorer."},
+            iteration=0,
+        )
+    state.transcript.say(
+        "repository",
+        f"User pre-selected repositor{'y' if len(repo_names) == 1 else 'ies'}: "
+        f"{', '.join(repo_names)} — investigating these directly.",
+    )
+
+
 async def discover(
     *,
     request: str,
     session: SessionContext,
     investigators: list[Investigator] | None = None,
+    explicit_repositories: list[str] | None = None,
 ) -> WorkingContext:
-    """Fresh discovery for `request`."""
+    """Fresh discovery for `request`.
+
+    When `explicit_repositories` is provided (a user selected repositories
+    from the UI), the ledger is pre-seeded with those repos as explicit
+    candidates before investigation begins — so every investigator
+    (architecture, documentation, graph) targets the correct repositories
+    from cycle 1 rather than having to discover them first.
+    """
     state = WorkingContext()
     state.metadata.goal = request
     state.derived["original_request"] = request
     state.derived["enriched_text"] = request
     state.transcript.say("intent", f"Working out what I need to know about: {request}")
+
+    if explicit_repositories:
+        _seed_explicit_repositories(state, explicit_repositories)
 
     await investigate(state, session, investigators=investigators)
     _conclude(state)

@@ -110,7 +110,12 @@ class ContextDiscoveryAgent:
             logger.info(
                 "context_discovery_starting subject_id=%s request=%.80s", subject_id, raw_request
             )
-            state = await discover(request=raw_request, session=session)
+            explicit_repositories: list[str] | None = context.extras.get("explicit_repositories")
+            state = await discover(
+                request=raw_request,
+                session=session,
+                explicit_repositories=explicit_repositories,
+            )
 
         confidence = _confidence_for(state)
         question = state.next_question()
