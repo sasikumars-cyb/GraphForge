@@ -17,6 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.agents._contract import Subject
+from app.agents.documentation.agent import resolve_repository_subject
 from app.agents.llm import default_stage_for_agent
 from app.agents.title_generation import fallback_title
 from app.ai.config.resolver import resolve
@@ -27,6 +29,7 @@ from app.core.exceptions import AppError, NotFoundError
 from app.core.request_context import set_workflow_context
 from app.database.session import get_db_session
 from app.models.agent_step import AgentStep
+from app.models.repository import Repository
 from app.models.run import Run
 from app.models.user import User
 from app.models.workflow import Workflow
@@ -36,6 +39,27 @@ from app.orchestrator.selector import GOAL_DEVELOP_CHANGE_PLAN, GOAL_PLAN_TESTS,
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent-runs", tags=["agent-runs"])
+
+
+async def _resolve_repository_subject(db: AsyncSession, user_id: uuid.UUID, repository_id: str) -> Subject:
+    """Resolve a `repo:<uuid>` subject_reference to a Subject — the one
+    place a repository-scoped goal (currently: review_documentation) turns
+    a repository id into what the orchestrator needs. Scoped to `user_id`;
+    raises NotFoundError (surfaced as 404) for an unknown or unowned id
+    rather than a generic freetext fallback, since a wrong/stale repo id
+    here should fail loudly, not silently run against the wrong subject.
+    """
+    try:
+        parsed_id = uuid.UUID(repository_id)
+    except ValueError as exc:
+        raise NotFoundError(f"'{repository_id}' is not a valid repository id.") from exc
+    result = await db.execute(
+        select(Repository).where(Repository.id == parsed_id, Repository.user_id == user_id)
+    )
+    repository = result.scalar_one_or_none()
+    if repository is None:
+        raise NotFoundError(f"Repository '{repository_id}' not found for this account.")
+    return resolve_repository_subject(repository)
 
 
 # ---------------------------------------------------------------------------
@@ -458,7 +482,14 @@ async def create_run(
 
     # Resolve subject
     ref = body.subject_reference.strip()
-    if ref.startswith("freetext:") or not ref.startswith(("pr:", "jira:", "http")):
+    if ref.startswith("repo:"):
+        # Repository-scoped goals (currently: review_documentation) — the
+        # only subject_reference form that needs a DB lookup rather than
+        # freetext's pure, I/O-free resolution. Scoped to this user exactly
+        # like every other repository read (see GetIndexedRepositoriesTool's
+        # own docstring on why an unscoped read here would be cross-tenant).
+        subject = await _resolve_repository_subject(db, user.id, ref.removeprefix("repo:"))
+    elif ref.startswith("freetext:") or not ref.startswith(("pr:", "jira:", "http")):
         subject = resolve_freetext(
             ref.removeprefix("freetext:") if ref.startswith("freetext:") else ref
         )

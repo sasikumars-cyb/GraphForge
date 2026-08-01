@@ -8,6 +8,7 @@ import { PlanningPage } from "../pages/PlanningPage";
 import { DevelopmentPage } from "../pages/DevelopmentPage";
 import { TestingPage } from "../pages/TestingPage";
 import { ReviewPage } from "../pages/ReviewPage";
+import { DocumentationPage } from "../pages/DocumentationPage";
 import { RunHistoryPage } from "../pages/RunHistoryPage";
 import { RunDetailPage } from "../pages/RunDetailPage";
 import { PullRequestsPage } from "../pages/PullRequestsPage";
@@ -15,6 +16,7 @@ import { PullRequestDetailPage } from "../pages/PullRequestDetailPage";
 import { RepositoriesPage } from "../pages/RepositoriesPage";
 import { RepositoryDetailPage } from "../pages/RepositoryDetailPage";
 import { ArchitecturePage } from "../pages/ArchitecturePage";
+import { MetricsPage } from "../pages/MetricsPage";
 import { ReportsPage } from "../pages/ReportsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WorkflowPage, NewWorkflowPage } from "../pages/WorkflowPage";
@@ -44,6 +46,7 @@ export const routes: RouteObject[] = [
           { path: "/workspace/development", element: <DevelopmentPage /> },
           { path: "/workspace/testing", element: <TestingPage /> },
           { path: "/workspace/pr-review", element: <ReviewPage /> },
+          { path: "/workspace/documentation", element: <DocumentationPage /> },
 
           // ── Build: Workflows ─────────────────────────────────────
           { path: "/workflows/new", element: <NewWorkflowPage /> },
@@ -53,6 +56,7 @@ export const routes: RouteObject[] = [
           // ── Monitor ──────────────────────────────────────────────
           { path: "/runs", element: <RunHistoryPage /> },
           { path: "/runs/:runId", element: <RunDetailPage /> },
+          { path: "/metrics", element: <MetricsPage /> },
 
           // ── Knowledge ────────────────────────────────────────────
           { path: "/repositories", element: <RepositoriesPage /> },

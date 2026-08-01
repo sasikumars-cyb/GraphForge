@@ -4,6 +4,7 @@ import {
   FolderGit2,
   Network,
   FileBarChart,
+  BarChart3,
   Settings,
   Sparkles,
   History,
@@ -50,7 +51,10 @@ export const NAV_SECTIONS: NavSection[] = [
   },
   {
     section: "Monitor",
-    items: [{ label: "Runs", path: "/runs", icon: History }],
+    items: [
+      { label: "Runs", path: "/runs", icon: History },
+      { label: "Metrics", path: "/metrics", icon: BarChart3 },
+    ],
   },
   {
     section: "Knowledge",

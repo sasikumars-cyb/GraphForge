@@ -15,6 +15,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import StrEnum
 
+from app.context_pipeline.models import ProviderCapability
 from app.core.config import get_settings
 
 
@@ -69,6 +70,18 @@ class TransportSpec:
     # user already entered for REST as the MCP bearer token (see
     # app.tools.setup.sync_knowledge_connection_to_tool).
     known_mcp_endpoint: str | None = None
+
+    # Which `ProviderCapability` values this transport can actually satisfy
+    # for this source, e.g. Confluence's MCP transport declares DOCUMENTATION
+    # (Teamwork Graph traversal) while its REST transport declares none (CQL
+    # search has no live consumer — see ConfluenceTool's removal). This is
+    # what `app.knowledge.access_resolver.derive_access_methods` filters on
+    # when a caller asks "how do I reach `capability`" rather than "give me
+    # every configured transport regardless of what it's for" (the Tool
+    # Registry sync's own use, which passes capability=None to skip this
+    # filter). Empty means "this transport doesn't currently back any
+    # capability a caller resolves by" — not "misconfigured."
+    capabilities: tuple[ProviderCapability, ...] = ()
 
     # --- Tool Registry integration metadata ---
     #
@@ -185,6 +198,7 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                     "api_token": "jira_api_token",
                 },
                 auto_wire_credential="api_token",
+                capabilities=(ProviderCapability.ISSUE_TRACKER,),
             ),
             TransportSpec(
                 transport=Transport.MCP,
@@ -197,6 +211,7 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                     "server_url": "jira_mcp_server_url",
                     "api_key": "jira_mcp_api_key",
                 },
+                capabilities=(ProviderCapability.ISSUE_TRACKER,),
             ),
         ),
     ),
@@ -220,13 +235,25 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                     "basic": ["base_url", "email", "api_token"],
                     "pat": ["base_url", "token"],
                 },
-                tool_id="confluence",
+                # No tool_id: the REST-transport tool that used to exist for
+                # this (ConfluenceTool, CQL search) had zero production call
+                # sites — audited and removed (see access_resolver.py's
+                # module docstring). credential_field_map is kept, unused by
+                # any tool now, purely because KnowledgeAccessResolver's
+                # REST->MCP auto-wire (auto_wire_credential below) still
+                # needs its keys to know which fields make a REST connection
+                # "complete enough" to synthesize MCP access from.
                 credential_field_map={
                     "base_url": "confluence_base_url",
                     "email": "confluence_email",
                     "api_token": "confluence_api_token",
                 },
                 auto_wire_credential="api_token",
+                # Deliberately empty: REST search was never wired to the
+                # DOCUMENTATION capability (see access_resolver.py) and
+                # nothing else in the app asks Confluence for anything REST
+                # could satisfy today.
+                capabilities=(),
             ),
             TransportSpec(
                 transport=Transport.MCP,
@@ -234,11 +261,15 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                 auth_methods=(AuthMethod.API_KEY,),
                 auth_fields={"api_key": ["server_url", "api_key"]},
                 known_mcp_endpoint=_settings.confluence_mcp_default_server_url,
-                tool_id="confluence",
+                # No tool_id — see the REST TransportSpec's comment above;
+                # this source has no ITool at all anymore. Document
+                # discovery reaches this transport through
+                # KnowledgeAccessResolver directly, not the Tool Registry.
                 credential_field_map={
                     "server_url": "confluence_mcp_server_url",
                     "api_key": "confluence_mcp_api_key",
                 },
+                capabilities=(ProviderCapability.DOCUMENTATION,),
             ),
         ),
     ),

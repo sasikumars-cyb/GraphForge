@@ -2,9 +2,9 @@
 
 Lists projects/suites/sections/cases from TestRail for syncing into the
 Knowledge Graph (see app.services.testrail_service /
-app.indexer.graph.testrail_builder) — unlike JiraTool/ConfluenceTool, this
-tool's job is a bulk read for indexing, not a single-reference lookup
-folded into an LLM prompt.
+app.indexer.graph.testrail_builder) — unlike JiraTool, this tool's job is a
+bulk read for indexing, not a single-reference lookup folded into an LLM
+prompt.
 
 Auth: HTTP Basic, with the TestRail account's **email** as username and an
 **API key** as password — this is TestRail's actual API contract, not a

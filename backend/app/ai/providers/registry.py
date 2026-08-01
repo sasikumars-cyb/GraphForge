@@ -229,6 +229,7 @@ _SPECS: tuple[ProviderSpec, ...] = (
         build=_build_bedrock,
         capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION, Capability.REASONING},
         models=(
+            ModelSpec("us.anthropic.claude-opus-4-8", "Claude Opus 4.8", 200_000),
             ModelSpec("us.anthropic.claude-sonnet-5", "Claude Sonnet 5", 200_000),
             ModelSpec("us.anthropic.claude-sonnet-4-6", "Claude Sonnet 4.6", 200_000),
             ModelSpec("us.anthropic.claude-sonnet-4-20250514", "Claude Sonnet 4", 200_000),

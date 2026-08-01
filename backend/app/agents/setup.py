@@ -18,6 +18,10 @@ from app.agents.context_discovery.agent import ContextDiscoveryAgent
 from app.agents.context_discovery.manifest import CONTEXT_DISCOVERY_MANIFEST
 from app.agents.development.agent import DevelopmentAgent
 from app.agents.development.manifest import DEVELOPMENT_MANIFEST
+from app.agents.documentation.agent import DocumentationReviewAgent
+from app.agents.documentation.manifest import DOCUMENTATION_REVIEW_MANIFEST
+from app.agents.documentation_health.agent import DocumentationHealthAgent
+from app.agents.documentation_health.manifest import DOCUMENTATION_HEALTH_MANIFEST
 from app.agents.documentation_planning.agent import DocumentationPlanningAgent
 from app.agents.documentation_planning.manifest import DOCUMENTATION_PLANNING_MANIFEST
 from app.agents.engineering_review.agent import EngineeringReviewAgent
@@ -76,6 +80,20 @@ def register_agents() -> None:
     if "documentation_planning" not in existing_ids:
         global_registry.register(DOCUMENTATION_PLANNING_MANIFEST, DocumentationPlanningAgent())
         logger.info("registered_documentation_planning_agent")
+
+    # Standalone AI Workspace capability (goal=review_documentation) — not a
+    # Workflow stage; see app.agents.documentation.manifest's own docstring
+    # for how this differs from documentation_planning above.
+    if "documentation_review" not in existing_ids:
+        global_registry.register(DOCUMENTATION_REVIEW_MANIFEST, DocumentationReviewAgent())
+        logger.info("registered_documentation_review_agent")
+
+    # Standalone, read-only AI Workspace capability
+    # (goal=analyze_documentation_health) — see its manifest for how it
+    # differs from documentation_review above.
+    if "documentation_health" not in existing_ids:
+        global_registry.register(DOCUMENTATION_HEALTH_MANIFEST, DocumentationHealthAgent())
+        logger.info("registered_documentation_health_agent")
 
     if "engineering_review" not in existing_ids:
         global_registry.register(ENGINEERING_REVIEW_MANIFEST, EngineeringReviewAgent())
