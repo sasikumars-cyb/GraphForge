@@ -15,7 +15,7 @@ from app.context_pipeline.reasoning.investigation import SessionContext
 from app.context_pipeline.reasoning.investigators import _primary_repository, curate_evidence
 from app.context_pipeline.reasoning.ledger import Ledger
 from app.context_pipeline.reasoning.memory import WorkingContext
-from app.graph.models import GraphNode
+from app.graph.models import GraphEdge, GraphNode, GraphPayload
 
 
 def _state_with_components(
@@ -107,9 +107,7 @@ async def test_anchor_found_fetches_neighborhood_and_populates_hop_distance():
 
     graph_repo = AsyncMock()
     seed_node = GraphNode(id=anchor_id, labels=["Component"], properties={"hop_distance": 0})
-    graph_repo.get_neighborhood = AsyncMock(
-        return_value=type("Payload", (), {"nodes": [seed_node]})()
-    )
+    graph_repo.get_neighborhood = AsyncMock(return_value=GraphPayload(nodes=[seed_node]))
 
     await curate_evidence(state, _session_with_graph_repo(graph_repo))
 
@@ -125,6 +123,199 @@ async def test_anchor_found_fetches_neighborhood_and_populates_hop_distance():
     graph_evidence = [e for e in state.ledger.evidence if e.action == "get_neighborhood"]
     assert len(graph_evidence) == 1
     assert graph_evidence[0].outcome == "success"
+
+
+# ---------------------------------------------------------------------------
+# Runtime Execution Discovery (RFC-004 Capability 1, shadow mode) — reuses
+# the exact same neighborhood payload already fetched above. See Commit 4's
+# own docstring note on `curate_evidence` for what this must and must not
+# affect.
+# ---------------------------------------------------------------------------
+
+
+def _anchor_state() -> tuple[str, WorkingContext]:
+    anchor_id = "etl-core:class:SCDType2Merger"
+    components = [
+        {
+            "id": anchor_id,
+            "name": "SCDType2Merger",
+            "repository": "etl-core",
+            "file_path": "src/etl_core/merge/scd2_merger.py",
+            "is_test": False,
+        },
+    ]
+    state = _state_with_components(components)
+    # Must name the component so `select_anchor_ids` actually seeds a
+    # neighborhood fetch — `_state_with_components`'s own default enriched
+    # text names a different component entirely.
+    state.derived["enriched_text"] = "Fix SCDType2Merger in etl-core."
+    return anchor_id, state
+
+
+@pytest.mark.asyncio
+async def test_calls_edges_produce_a_call_edge_fact_traceable_to_its_evidence():
+    anchor_id, state = _anchor_state()
+
+    graph_repo = AsyncMock()
+    seed_node = GraphNode(id=anchor_id, labels=["Component"], properties={"hop_distance": 0})
+    called_node_id = "etl-core:function:_detect_changes"
+    graph_repo.get_neighborhood = AsyncMock(
+        return_value=GraphPayload(
+            nodes=[seed_node],
+            edges=[GraphEdge(source_id=anchor_id, target_id=called_node_id, type="CALLS")],
+        )
+    )
+
+    await curate_evidence(state, _session_with_graph_repo(graph_repo))
+
+    call_edge_facts = state.ledger.facts_of("call_edge")
+    assert len(call_edge_facts) == 1
+    fact = call_edge_facts[0]
+    assert fact.subject == anchor_id
+    assert fact.value["steps"] == [{"source": anchor_id, "target": called_node_id, "depth": 1}]
+
+    # Traceable: the fact's evidence_id resolves to a real evidence record.
+    cited_evidence = [e for e in state.ledger.evidence if e.evidence_id == fact.evidence_id]
+    assert len(cited_evidence) == 1
+    assert cited_evidence[0].action == "build_call_chains"
+    assert cited_evidence[0].outcome == "success"
+
+    # get_neighborhood's own single evidence record is unaffected.
+    neighborhood_evidence = [e for e in state.ledger.evidence if e.action == "get_neighborhood"]
+    assert len(neighborhood_evidence) == 1
+
+
+@pytest.mark.asyncio
+async def test_no_calls_edges_still_records_an_honest_empty_call_edge_fact():
+    anchor_id, state = _anchor_state()
+
+    graph_repo = AsyncMock()
+    seed_node = GraphNode(id=anchor_id, labels=["Component"], properties={"hop_distance": 0})
+    graph_repo.get_neighborhood = AsyncMock(return_value=GraphPayload(nodes=[seed_node]))
+
+    await curate_evidence(state, _session_with_graph_repo(graph_repo))
+
+    call_edge_facts = state.ledger.facts_of("call_edge")
+    assert len(call_edge_facts) == 1
+    assert call_edge_facts[0].value["steps"] == []
+
+    build_evidence = [e for e in state.ledger.evidence if e.action == "build_call_chains"]
+    assert len(build_evidence) == 1
+    assert build_evidence[0].outcome == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_evidence_package_is_byte_identical_regardless_of_calls_edges():
+    """The regression guarantee: `CALLS` edges change only the `call_edge`
+    facts recorded in the ledger, never `EvidencePackage` construction —
+    same nodes, differing edges, must produce an identical package."""
+    anchor_id, state_without_calls = _anchor_state()
+    _, state_with_calls = _anchor_state()
+
+    seed_node = GraphNode(id=anchor_id, labels=["Component"], properties={"hop_distance": 0})
+
+    graph_repo_without_calls = AsyncMock()
+    graph_repo_without_calls.get_neighborhood = AsyncMock(
+        return_value=GraphPayload(nodes=[seed_node])
+    )
+    await curate_evidence(state_without_calls, _session_with_graph_repo(graph_repo_without_calls))
+
+    graph_repo_with_calls = AsyncMock()
+    graph_repo_with_calls.get_neighborhood = AsyncMock(
+        return_value=GraphPayload(
+            nodes=[seed_node],
+            edges=[
+                GraphEdge(
+                    source_id=anchor_id, target_id="etl-core:function:_detect_changes", type="CALLS"
+                )
+            ],
+        )
+    )
+    await curate_evidence(state_with_calls, _session_with_graph_repo(graph_repo_with_calls))
+
+    assert (
+        state_without_calls.derived["evidence_package"]
+        == state_with_calls.derived["evidence_package"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_empty_graph_produces_no_call_edge_facts_and_no_crash():
+    graph_repo = AsyncMock()
+    state = _state_with_components([])
+
+    await curate_evidence(state, _session_with_graph_repo(graph_repo))
+
+    assert state.ledger.facts_of("call_edge") == []
+    graph_repo.get_neighborhood.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_multiple_anchors_produce_no_duplicate_call_edge_facts():
+    anchor_a = "etl-core:class:SCDType2Merger"
+    anchor_b = "etl-core:class:ExactDeduplicator"
+    components = [
+        {
+            "id": anchor_a,
+            "name": "SCDType2Merger",
+            "repository": "etl-core",
+            "file_path": "src/etl_core/merge/scd2_merger.py",
+        },
+        {
+            "id": anchor_b,
+            "name": "ExactDeduplicator",
+            "repository": "etl-core",
+            "file_path": "src/etl_core/dedup/exact_dedup.py",
+        },
+    ]
+    state = _state_with_components(components)
+    state.derived["enriched_text"] = (
+        "Fix SCDType2Merger and ExactDeduplicator in the etl-core deduplication path."
+    )
+
+    graph_repo = AsyncMock()
+    graph_repo.get_neighborhood = AsyncMock(
+        return_value=GraphPayload(
+            nodes=[
+                GraphNode(id=anchor_a, labels=["Component"], properties={"hop_distance": 0}),
+                GraphNode(id=anchor_b, labels=["Component"], properties={"hop_distance": 0}),
+            ],
+            edges=[GraphEdge(source_id=anchor_a, target_id=anchor_b, type="CALLS")],
+        )
+    )
+
+    await curate_evidence(state, _session_with_graph_repo(graph_repo))
+
+    call_edge_facts = state.ledger.facts_of("call_edge")
+    subjects = [f.subject for f in call_edge_facts]
+    assert sorted(subjects) == sorted({anchor_a, anchor_b})
+    assert len(subjects) == len(set(subjects)), "one call_edge fact per anchor, never duplicated"
+
+
+@pytest.mark.asyncio
+async def test_call_edge_fact_ordering_is_deterministic_across_repeated_runs():
+    anchor_id, _ = _anchor_state()
+
+    def _make_payload() -> GraphPayload:
+        seed_node = GraphNode(id=anchor_id, labels=["Component"], properties={"hop_distance": 0})
+        return GraphPayload(
+            nodes=[seed_node],
+            edges=[
+                GraphEdge(source_id=anchor_id, target_id="z_target", type="CALLS"),
+                GraphEdge(source_id=anchor_id, target_id="a_target", type="CALLS"),
+            ],
+        )
+
+    results = []
+    for _ in range(2):
+        _, state = _anchor_state()
+        graph_repo = AsyncMock()
+        graph_repo.get_neighborhood = AsyncMock(return_value=_make_payload())
+        await curate_evidence(state, _session_with_graph_repo(graph_repo))
+        fact = state.ledger.facts_of("call_edge")[0]
+        results.append([step["target"] for step in fact.value["steps"]])
+
+    assert results[0] == results[1] == ["z_target", "a_target"]
 
 
 @pytest.mark.asyncio

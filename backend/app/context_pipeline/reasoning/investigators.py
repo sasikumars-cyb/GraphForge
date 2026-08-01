@@ -801,8 +801,7 @@ class GoogleDriveInvestigator:
             text=artifact.text,
         )
         return InvestigationOutcome(
-            observation=f"I read '{artifact.title}' from Google Drive for the surrounding "
-            "context.",
+            observation=f"I read '{artifact.title}' from Google Drive for the surrounding context.",
             yielded=True,
         )
 
@@ -1487,8 +1486,15 @@ async def curate_evidence(state: WorkingContext, session: SessionContext) -> Non
     value. An empty anchor set is a real, honest outcome (see
     `select_anchor_ids`'s own docstring) — nothing here manufactures a
     neighborhood to compensate for one not being found.
+
+    Also records Runtime Execution Discovery's `call_edge` facts (RFC-004
+    Capability 1, shadow mode) from this same neighborhood fetch — see the
+    inline comment at that call site. This is additive and read by nothing
+    yet: `EvidencePackage`'s construction below is unaffected regardless of
+    whether any `CALLS` edge was found.
     """
     from app.context_pipeline.reasoning.curation import EvidencePackage, curate, select_anchor_ids
+    from app.context_pipeline.reasoning.runtime_execution import build_call_chains
     from app.graph.neo4j_repository import Neo4jGraphRepository
     from app.graph.session import get_driver
 
@@ -1529,6 +1535,40 @@ async def curate_evidence(state: WorkingContext, session: SessionContext) -> Non
                     ),
                     iteration=state.metadata.iteration,
                 )
+
+                # Runtime Execution Discovery (RFC-004 Capability 1, shadow
+                # mode — see the Phase 1a Execution Plan). Reuses the exact
+                # same neighborhood `payload` already fetched above: no
+                # second query, no new GraphPayload, no new traversal
+                # algorithm — `build_call_chains` is Commit 3's frozen
+                # library, called here unchanged. Output is Ledger facts
+                # only; nothing below reads `state.derived["evidence_
+                # package"]`, no capability is registered, and nothing
+                # downstream (Planning, Engineering Understanding, capability
+                # scoring, readiness) consumes a "call_edge" fact yet.
+                call_chains = build_call_chains(
+                    payload, anchor_ids, max_depth=_NEIGHBORHOOD_MAX_HOPS
+                )
+                chains_with_steps = [c for c in call_chains if c.steps]
+                call_edge_evidence = state.ledger.add_evidence(
+                    provider="graph",
+                    action="build_call_chains",
+                    outcome="success" if chains_with_steps else "not_found",
+                    summary=(
+                        f"Reconstructed call chains from {len(anchor_ids)} component(s) — "
+                        f"{len(chains_with_steps)} produced at least one CALLS edge."
+                    ),
+                    iteration=state.metadata.iteration,
+                )
+                for chain in call_chains:
+                    state.ledger.add_fact(
+                        kind="call_edge",
+                        subject=chain.entry_point,
+                        provider="graph",
+                        evidence_id=call_edge_evidence.evidence_id,
+                        value=chain.model_dump(mode="json"),
+                        iteration=state.metadata.iteration,
+                    )
             except Exception:
                 logger.exception(
                     "context_discovery_curation_neighborhood_failed repository=%s",
