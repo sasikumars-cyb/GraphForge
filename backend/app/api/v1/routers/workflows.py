@@ -34,6 +34,7 @@ from app.core.rate_limit import check_rate_limit
 from app.core.request_context import set_workflow_context
 from app.database.session import get_db_session
 from app.mappers.engineering_understanding_mapper import map_to_dto
+from app.models.agent_step import AgentStep
 from app.models.run import Run
 from app.models.user import User
 from app.models.workflow import Workflow
@@ -456,7 +457,19 @@ def _report_finalizer(report_id: uuid.UUID) -> OnComplete:
             report.completed_at = datetime.now(UTC)
             return
 
-        step = run.steps[0] if run.steps else None
+        # Queried directly rather than via run.steps: `run` here is the bare
+        # object RunCoordinator itself constructed/fetched for this one run,
+        # never eagerly loaded with `.steps` (unlike a Workflow fetched
+        # through get_workflow_for_update's selectinload chain, which is
+        # what every other .steps access in this codebase relies on) — an
+        # un-eager-loaded relationship access on an AsyncSession object
+        # raises MissingGreenlet from exactly this call stack (inside an
+        # on_pre_commit hook, past the point SQLAlchemy can bridge an
+        # implicit lazy-load), not a normal awaited query.
+        step_result = await db.execute(
+            select(AgentStep).where(AgentStep.run_id == run.id).limit(1)
+        )
+        step = step_result.scalar_one_or_none()
         result = step.result if step else {}
         html = result.get("html")
         if not html:
