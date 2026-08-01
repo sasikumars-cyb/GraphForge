@@ -103,6 +103,24 @@ class GetIndexedRepositoriesTool:
                 for repo in all_repos
                 if health_by_repo_id[repo.id].status == GraphHealthStatus.HEALTHY
             ]
+            # Every tracked repository that ISN'T healthy, with the health
+            # signals that explain why — carried through so a caller (see
+            # `GraphInvestigator.run`) can tell a user *why* a repository
+            # can't be used instead of just silently omitting it, the same
+            # way NOT_INDEXED/INDEXING/GRAPH_MISSING used to be
+            # indistinguishable from each other by being equally absent
+            # from `indexed_repositories`.
+            unhealthy: list[dict[str, Any]] = [
+                {
+                    "id": str(repo.id),
+                    "name": repo.name,
+                    "owner": repo.owner,
+                    "status": health_by_repo_id[repo.id].status.value,
+                    "latest_job_status": health_by_repo_id[repo.id].latest_job_status,
+                }
+                for repo in all_repos
+                if health_by_repo_id[repo.id].status != GraphHealthStatus.HEALTHY
+            ]
 
             summary = (
                 f"Found {len(indexed)} indexed repositor{'y' if len(indexed) == 1 else 'ies'} "
@@ -121,7 +139,11 @@ class GetIndexedRepositoriesTool:
             return PlanningObservation(
                 tool_name=self.name,
                 summary=summary,
-                data={"indexed_repositories": indexed, "total_tracked": len(all_repos)},
+                data={
+                    "indexed_repositories": indexed,
+                    "unhealthy_repositories": unhealthy,
+                    "total_tracked": len(all_repos),
+                },
             )
         except Exception as exc:
             logger.warning("planning_tool_get_indexed_repos_failed error=%s", str(exc))

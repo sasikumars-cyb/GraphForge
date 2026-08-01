@@ -146,9 +146,14 @@ async def test_repository_discovery_none_indexed() -> None:
     mock_repo.name = "order-service"
     mock_repo.owner = "acme"
 
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = [mock_repo]
-    mock_db.execute.return_value = mock_result
+    mock_repo_result = MagicMock()
+    mock_repo_result.scalars.return_value.all.return_value = [mock_repo]
+    # GraphHealthService issues a second query — for the latest
+    # IndexingJob.status of repositories with no graph — only when
+    # `has_graph` comes back False, which it does below.
+    mock_jobs_result = MagicMock()
+    mock_jobs_result.all.return_value = []
+    mock_db.execute.side_effect = [mock_repo_result, mock_jobs_result]
 
     mock_graph_repo = AsyncMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=False)
@@ -595,9 +600,14 @@ async def test_development_agent_no_indexed_repos() -> None:
     mock_repo.id = "repo-uuid-1"
     mock_repo.name = "order-service"
     mock_repo.owner = "acme"
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = [mock_repo]
-    mock_db.execute.return_value = mock_result
+    mock_repo_result = MagicMock()
+    mock_repo_result.scalars.return_value.all.return_value = [mock_repo]
+    # GraphHealthService issues a second query — for the latest
+    # IndexingJob.status of repositories with no graph — only when
+    # `has_graph` comes back False, which it does above.
+    mock_jobs_result = MagicMock()
+    mock_jobs_result.all.return_value = []
+    mock_db.execute.side_effect = [mock_repo_result, mock_jobs_result]
 
     with (
         patch("app.agents.development.agent.get_driver", return_value=MagicMock()),

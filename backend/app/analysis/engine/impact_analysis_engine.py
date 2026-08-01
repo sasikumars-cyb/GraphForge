@@ -17,6 +17,7 @@ from app.analysis.models.impact import ImpactAnalysisResult, impacted_node_from_
 from app.analysis.services.dependency_path_builder import build_dependency_paths
 from app.analysis.services.risk_classifier import classify_risk
 from app.core.exceptions import AppError, NotFoundError
+from app.graph.health import GraphHealthService, GraphHealthStatus
 from app.graph.interfaces import IGraphRepository
 from app.graph.models import GraphNode
 from app.integrations.interfaces import IVersionControlProvider
@@ -55,6 +56,7 @@ class ImpactAnalysisEngine:
         self._graph_repository = graph_repository
         self._impact_graph_reader = impact_graph_reader
         self._version_control_provider = version_control_provider
+        self._health_service = GraphHealthService(db, graph_repository)
 
     async def analyze_pull_request(self, pull_request_id: uuid.UUID) -> PullRequestAnalysis:
         pull_request = await self._db.get(PullRequest, pull_request_id)
@@ -66,7 +68,8 @@ class ImpactAnalysisEngine:
             raise NotFoundError("Repository not found.")
 
         repository_id = str(repository.id)
-        if not await self._graph_repository.has_graph(repository_id):
+        health = await self._health_service.for_repository(repository)
+        if health.status != GraphHealthStatus.HEALTHY:
             raise RepositoryNotIndexedError(
                 "This repository has not been indexed yet - run POST "
                 "/repositories/{id}/index before analyzing a pull request."

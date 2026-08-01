@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import Evidence
 from app.agents.text_relevance import relevance, term_weights
+from app.graph.health import GraphHealthService, GraphHealthStatus
 from app.graph.interfaces import IGraphRepository
 from app.graph.test_case_repository import ITestCaseGraphRepository
 from app.models.repository import Repository
@@ -51,6 +52,10 @@ class TestingObservation:
 class TestRepositoryDiscoveryTool:
     """Discover all indexed repositories for test scope determination.
 
+    "Indexed" here means `GraphHealthService` reports the repository as
+    HEALTHY — see `app.graph.health` for why that isn't the same thing as
+    a Postgres `IndexingJob` saying "completed".
+
     Evidence kind: tool_call
     """
 
@@ -59,22 +64,22 @@ class TestRepositoryDiscoveryTool:
     def __init__(self, db: AsyncSession, graph_repository: IGraphRepository) -> None:
         self._db = db
         self._graph_repository = graph_repository
+        self._health_service = GraphHealthService(db, graph_repository)
 
     async def execute(self) -> TestingObservation:
         try:
             result = await self._db.execute(select(Repository))
             all_repos: list[Repository] = list(result.scalars().all())
 
-            indexed: list[dict[str, str]] = []
-            for repo in all_repos:
-                if await self._graph_repository.has_graph(str(repo.id)):
-                    indexed.append(
-                        {
-                            "id": str(repo.id),
-                            "name": repo.name,
-                            "owner": repo.owner,
-                        }
-                    )
+            health_by_repo_id = {
+                health.repository_id: health
+                for health in await self._health_service.for_repositories(all_repos)
+            }
+            indexed: list[dict[str, str]] = [
+                {"id": str(repo.id), "name": repo.name, "owner": repo.owner}
+                for repo in all_repos
+                if health_by_repo_id[repo.id].status == GraphHealthStatus.HEALTHY
+            ]
 
             summary = (
                 f"Discovered {len(indexed)} indexed repositor{'y' if len(indexed) == 1 else 'ies'} "

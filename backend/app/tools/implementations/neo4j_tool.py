@@ -109,6 +109,13 @@ class Neo4jGraphTool:
             repos_obs = await repos_tool.execute()
 
             indexed_repos: list[dict[str, Any]] = repos_obs.data.get("indexed_repositories", [])
+            # Tracked repositories that aren't HEALTHY, with the specific
+            # reason (see `GraphHealthStatus`) — forwarded so callers (e.g.
+            # `GraphInvestigator`) can explain *why* a repository can't be
+            # used instead of it just silently not appearing above.
+            unhealthy_repos: list[dict[str, Any]] = repos_obs.data.get(
+                "unhealthy_repositories", []
+            )
 
             traverse_tool = TraverseArchitectureGraphTool(graph_repository=graph_repo)
             traverse_obs = await traverse_tool.execute(
@@ -183,6 +190,7 @@ class Neo4jGraphTool:
                 data={
                     "context_text": context_text,
                     "indexed_repositories": indexed_repos,
+                    "unhealthy_repositories": unhealthy_repos,
                     "ranked_repositories": ranked_repositories,
                     "components": traverse_obs.data.get("components", []),
                     "kafka_topics": traverse_obs.data.get("kafka_topics", []),

@@ -810,6 +810,32 @@ class GoogleDriveInvestigator:
 # Knowledge graph
 # ---------------------------------------------------------------------------
 
+# Deterministic, template-based explanations for a tracked repository that
+# `GraphHealthService` (app.graph.health) did NOT report as HEALTHY —
+# "GraphHealthStatus.value" -> "why", so a repository that can't be used
+# says why instead of just silently not appearing in `indexed_repositories`,
+# the same way NOT_INDEXED, INDEXING, and GRAPH_MISSING all used to be
+# indistinguishable from each other and from "never tracked at all".
+_UNHEALTHY_EXPLANATIONS: dict[str, str] = {
+    "graph_missing": (
+        "'{name}' is tracked and its latest indexing job completed, but no graph "
+        "currently exists for it in the knowledge graph — re-index required before "
+        "it can be used."
+    ),
+    "indexing": "'{name}' is currently being indexed — no graph is available yet.",
+    "not_indexed": (
+        "'{name}' is tracked but has never been successfully indexed — run "
+        "indexing before it can be used."
+    ),
+}
+
+
+def _describe_unhealthy(repo: dict[str, Any]) -> str:
+    template = _UNHEALTHY_EXPLANATIONS.get(
+        repo.get("status", ""), "'{name}' is tracked but its graph isn't currently usable."
+    )
+    return template.format(name=repo.get("name", ""))
+
 
 class GraphInvestigator:
     """Repository metadata and architecture. The only investigator that
@@ -981,6 +1007,7 @@ class GraphInvestigator:
             )
 
         indexed: list[dict[str, Any]] = result.data.get("indexed_repositories", [])
+        unhealthy: list[dict[str, Any]] = result.data.get("unhealthy_repositories", [])
         components: list[dict[str, Any]] = result.data.get("components", [])
         topics: list[dict[str, Any]] = result.data.get("kafka_topics", [])
 
@@ -1003,6 +1030,18 @@ class GraphInvestigator:
             + (f", scoped to '{focus}'." if focus else "."),
         )
 
+        if focus is None and unhealthy:
+            # A genuine survey (no repository named yet) — explain every
+            # tracked-but-unusable repository once, deterministically, so
+            # "0 indexed repositories" doesn't read as "nothing is tracked"
+            # when the real, actionable story is "tracked, but re-index
+            # required" (GRAPH_MISSING), "still indexing" (INDEXING), or
+            # "never indexed" (NOT_INDEXED). A focused verify/scope action
+            # gives the same explanation only for its own target — see
+            # `_record_observations` — so this branch doesn't repeat it.
+            for repo in unhealthy[:5]:
+                recorder.evidence("unavailable", _describe_unhealthy(repo))
+
         repo_facts = [
             recorder.fact_once(
                 "repository",
@@ -1020,7 +1059,7 @@ class GraphInvestigator:
             derived["graph_context_text"] = ContextBuilder().build([result]).context_text
 
         observation, ranked = self._record_observations(
-            recorder, repo_facts, components, terms, focus
+            recorder, repo_facts, components, terms, focus, unhealthy
         )
         recorded_relationships = self._record_relationships(
             recorder, result.data.get("cross_repository_edges", []), repo_facts, repos_evidence
@@ -1149,6 +1188,7 @@ class GraphInvestigator:
         components: list[dict[str, Any]],
         terms: list[str],
         focus: str | None,
+        unhealthy: list[dict[str, Any]],
     ) -> tuple[str, list[str]]:
         """Record what this query observed about repository ranking —
         nothing more. Interpretation of what these observations mean for
@@ -1158,13 +1198,29 @@ class GraphInvestigator:
         which has no way to write an `Inference` at all) and returns
         human-readable narration.
 
+        `unhealthy` is only used to explain *why* nothing/no match was
+        found (see `_describe_unhealthy`) — it never turns into a `Fact`
+        here, so a GRAPH_MISSING/INDEXING/NOT_INDEXED repository can never
+        become a repository candidate through this path.
+
         Returns `(observation, ranked_names)` — `ranked_names` is the full
         relevance ordering of every indexed repository, best first (or, for
         a focused query, the focused repository first and the rest stably
         ordered); Planning consumes this positionally regardless of what
         became a candidate.
         """
+        unhealthy_by_name = {r.get("name", ""): r for r in unhealthy}
+
         if not repo_facts:
+            if unhealthy_by_name:
+                count = len(unhealthy_by_name)
+                return (
+                    "No repositories are indexed in the knowledge graph, so I can't tell "
+                    f"which service this request belongs to. {count} repositor"
+                    f"{'y is' if count == 1 else 'ies are'} tracked but not currently "
+                    f"usable: {', '.join(sorted(unhealthy_by_name))}.",
+                    [],
+                )
             return (
                 "No repositories are indexed in the knowledge graph, so I can't tell which "
                 "service this request belongs to.",
@@ -1182,6 +1238,14 @@ class GraphInvestigator:
         if focus is not None:
             match = by_name.get(focus)
             if match is None:
+                unhealthy_match = unhealthy_by_name.get(focus)
+                if unhealthy_match is not None:
+                    # The claimed repository IS tracked — say exactly why it
+                    # can't be used yet instead of the generic "isn't among
+                    # the indexed repositories", which used to read
+                    # identically whether the repository never existed at
+                    # all or was one re-index away from working.
+                    return _describe_unhealthy(unhealthy_match), []
                 return (
                     f"'{focus}' isn't among the indexed repositories, so I can't confirm it — "
                     f"what I do have is: {', '.join(sorted(by_name))}.",
