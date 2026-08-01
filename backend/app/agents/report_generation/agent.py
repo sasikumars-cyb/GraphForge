@@ -84,6 +84,11 @@ class ReportGenerationLLMError(AppError):
     error_code = "report_generation_llm_error"
 
 
+class ReportGenerationExecutionError(AppError):
+    status_code = 400
+    error_code = "report_generation_requires_workflow"
+
+
 _SYSTEM_PROMPT = (
     "You are a Principal Engineer preparing a stakeholder-facing report. "
     "Respond ONLY with valid JSON matching the requested schema. "
@@ -157,6 +162,17 @@ class ReportGenerationAgent:
     async def run(self, context: AgentContext) -> AgentOutput:
         subject_id: str = context.subject.subject_id
         workflow = context.extras.get("workflow")
+
+        # This agent exists purely to synthesize a workflow's own stages —
+        # dispatched only from approve_workflow (see api/v1/routers/
+        # workflows.py). It has nothing to synthesize without one, so a
+        # standalone run (POST /agent-runs with goal=generate_report and no
+        # workflow context) fails loudly here rather than burning an LLM
+        # call on an empty report — same guard style as create_branch_agent.
+        if workflow is None:
+            raise ReportGenerationExecutionError(
+                "report_generation requires a workflow context — it is not a standalone goal."
+            )
 
         stage_results: dict[str, Any] = {
             stage: (get_stage_result(workflow, stage) if workflow else None)
