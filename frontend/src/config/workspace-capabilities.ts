@@ -96,11 +96,12 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
   {
     slug: "documentation",
     name: "Documentation",
-    description: "Generate and update technical documentation from code and architecture analysis.",
+    description: "Review a repository's Markdown docs against its indexed architecture and propose updates.",
     icon: FileText,
     color: "teal",
     category: "build",
-    available: false,
+    available: true,
+    goal: "review_documentation",
   },
   {
     slug: "migration-assistant",

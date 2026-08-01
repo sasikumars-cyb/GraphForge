@@ -107,6 +107,12 @@ STAGE_REVIEW = "review"
 STAGE_DOCUMENTATION_PLANNING = "documentation_planning"
 STAGE_ENGINEERING_REVIEW = "engineering_review"
 STAGE_GENERATE_CODE = "generate_code"
+# Standalone AI Workspace capability (goal=review_documentation) — distinct
+# from STAGE_DOCUMENTATION_PLANNING (a Workflow stage). Only an AI-provider-
+# config resolution key, unrelated to `app.services.workflow_service.
+# STAGE_GOALS` (the actual Workflow pipeline), which this is deliberately
+# not added to.
+STAGE_DOCUMENTATION_REVIEW = "documentation_review"
 
 
 # agent_id -> the stage key that agent resolves under when a run carries no
@@ -125,6 +131,7 @@ _AGENT_DEFAULT_STAGE: dict[str, str] = {
     "documentation_planning": STAGE_DOCUMENTATION_PLANNING,
     "engineering_review": STAGE_ENGINEERING_REVIEW,
     "code_generation": STAGE_GENERATE_CODE,
+    "documentation_review": STAGE_DOCUMENTATION_REVIEW,
 }
 
 
