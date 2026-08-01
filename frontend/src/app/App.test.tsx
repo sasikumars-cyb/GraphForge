@@ -97,7 +97,12 @@ describe("App navigation (authenticated)", () => {
       ai_provider: { name: "openai", configured: true, active: true, model: "gpt-4o" },
       ai_providers: [{ name: "openai", configured: true, active: true, model: "gpt-4o" }],
       connections: [{ name: "PostgreSQL", status: "connected", detail: null }],
-      knowledge_base: { repositories_tracked: 0, repositories_indexed: 0, repositories_pending: 0 },
+      knowledge_base: {
+        repositories_tracked: 0,
+        repositories_indexed: 0,
+        repositories_pending: 0,
+        repositories_graph_missing: 0,
+      },
     });
     vi.spyOn(githubApi, "getConnectionStatus").mockResolvedValue({
       connected: false,
