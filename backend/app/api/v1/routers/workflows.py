@@ -446,6 +446,12 @@ def _report_finalizer(report_id: uuid.UUID) -> OnComplete:
     """
 
     async def _finalize(db: AsyncSession, run: Run) -> None:
+        # `on_pre_commit` is expected to commit itself (see run_coordinator.
+        # RunCoordinator._commit_with_hook's docstring — it only falls back
+        # to its own commit when the hook raises); every branch below that
+        # mutates `report` must therefore commit before returning, exactly
+        # as workflow_service.finalize_stage_run already does for the stage
+        # finalizer above.
         report = await db.get(WorkflowReport, report_id)
         if report is None:
             logger.error("workflow_report_vanished report_id=%s", str(report_id))
@@ -455,6 +461,7 @@ def _report_finalizer(report_id: uuid.UUID) -> OnComplete:
             report.status = "failed"
             report.error_message = run.error_message or "Report generation run did not complete."
             report.completed_at = datetime.now(UTC)
+            await db.commit()
             return
 
         # Queried directly rather than via run.steps: `run` here is the bare
@@ -476,12 +483,14 @@ def _report_finalizer(report_id: uuid.UUID) -> OnComplete:
             report.status = "failed"
             report.error_message = "Report generation completed with no HTML content."
             report.completed_at = datetime.now(UTC)
+            await db.commit()
             return
 
         report.title = result.get("title") or report.title
         report.html_content = html
         report.status = "completed"
         report.completed_at = datetime.now(UTC)
+        await db.commit()
 
     return _finalize
 
