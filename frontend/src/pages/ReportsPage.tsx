@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { FileBarChart, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+import { FileBarChart, Loader2, ChevronDown, ChevronUp, LayoutDashboard } from "lucide-react";
 import { Card } from "../components/Card";
 import { StatusBadge, type StatusTone } from "../components/StatusBadge";
+import { WorkflowReportDashboard } from "../components/executive-report";
 import { formatRelativeTime } from "../lib/formatDate";
 import { useAuth } from "../app/auth-context";
 import { listReports, getReport, type ReportSummary } from "../lib/api/reports";
@@ -77,6 +78,7 @@ function ReportHtmlViewer({ reportId }: { reportId: string }) {
 
 function ReportRow({ report, onStatusSettled }: { report: ReportSummary; onStatusSettled: () => void }) {
   const [expanded, setExpanded] = useState(false);
+  const [viewMode, setViewMode] = useState<"dashboard" | "html">("dashboard");
   const canView = report.status === "completed";
   // A pending report that just turned completed/failed while collapsed
   // should re-poll the parent list rather than sit stale — the parent's
@@ -106,21 +108,51 @@ function ReportRow({ report, onStatusSettled }: { report: ReportSummary; onStatu
           )}
         </div>
         {canView && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="flex shrink-0 items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
-          >
-            {expanded ? "Hide" : "View report"}
-            {expanded ? (
-              <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
-            ) : (
-              <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
-            )}
-          </button>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode("dashboard");
+                setExpanded((v) => !v || viewMode !== "dashboard");
+              }}
+              className={`flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                expanded && viewMode === "dashboard"
+                  ? "border-accent-solid bg-accent-light text-accent-solid"
+                  : "border-line text-fg-secondary hover:bg-surface-raised"
+              }`}
+              title="View executive dashboard"
+            >
+              <LayoutDashboard className="h-3.5 w-3.5" aria-hidden="true" />
+              Dashboard
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode("html");
+                setExpanded((v) => !v || viewMode !== "html");
+              }}
+              className={`flex items-center gap-1 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors ${
+                expanded && viewMode === "html"
+                  ? "border-accent-solid bg-accent-light text-accent-solid"
+                  : "border-line text-fg-secondary hover:bg-surface-raised"
+              }`}
+            >
+              {expanded && viewMode === "html" ? "Hide" : "HTML Report"}
+              {expanded && viewMode === "html" ? (
+                <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+            </button>
+          </div>
         )}
       </div>
-      {expanded && canView && (
+      {expanded && canView && viewMode === "dashboard" && (
+        <div className="mt-3">
+          <WorkflowReportDashboard reportId={report.id} />
+        </div>
+      )}
+      {expanded && canView && viewMode === "html" && (
         <div className="mt-3 overflow-hidden rounded-lg border border-line">
           <ReportHtmlViewer reportId={report.id} />
         </div>
