@@ -5,9 +5,10 @@ import {
   Check,
   Database,
   FileText,
-  Lightbulb,
+  GitBranch,
   ListChecks,
   Loader2,
+  ShieldAlert,
   Waypoints,
   X,
 } from "lucide-react";
@@ -18,14 +19,27 @@ import type {
   FindingGroup,
   PlanningFactorDTO,
 } from "../../types/agent";
-import { BulletList, Prose, SectionHeading } from "./EngineeringUnderstandingPanel";
+import {
+  BulletList,
+  MissingInformation,
+  Prose,
+  RelevantAreas,
+  SectionHeading,
+} from "./EngineeringUnderstandingPanel";
 
 // ---------------------------------------------------------------------------
-// Level 2 — Advanced Details. Useful to an engineer deciding whether to trust
-// the Level 1 verdict, without the implementation-only internals that stay
-// in Debug (raw reasoning, graph traversal, retrieval data, transcripts,
-// raw payloads). Most fields here arrive on the same (non-debug)
-// EngineeringUnderstandingDTO response the default view uses; Capability
+// Level 2 — Advanced Details. The detail behind the first screen
+// (`InvestigationSummary`) for an engineer deciding whether to trust its
+// verdict — the full per-area component breakdown and missing-information
+// list the first screen only shows a name/count for, plus everything the
+// first screen doesn't surface at all (capability readiness, unknowns,
+// evidence summary, documentation status, architecture relationships).
+// Confidence Explanation and Recommendations moved to the first screen
+// itself and are deliberately not repeated here. Implementation-only
+// internals (raw reasoning, graph traversal, retrieval data, transcripts,
+// raw payloads) stay in Debug. Most fields here arrive on the same
+// (non-debug) EngineeringUnderstandingDTO response the default view uses;
+// Capability
 // Signals and Evidence Details are the exception — they live on
 // `debug_bundle`, so opening this section for the first time makes the same
 // `?debug=true` request Debug does (no new backend contract, just reusing
@@ -51,16 +65,6 @@ function CapabilityReadiness({ reasons }: { reasons: PlanningFactorDTO[] }) {
           </li>
         ))}
       </ul>
-    </section>
-  );
-}
-
-function ConfidenceExplanation({ text }: { text: string }) {
-  if (!text) return null;
-  return (
-    <section className="flex flex-col gap-1">
-      <SectionHeading icon={ListChecks}>Confidence Explanation</SectionHeading>
-      <Prose text={text} />
     </section>
   );
 }
@@ -101,22 +105,55 @@ function EvidenceSummary({ items }: { items: string[] }) {
   );
 }
 
-function Recommendations({ items }: { items: string[] }) {
-  if (items.length === 0) return null;
-  return (
-    <section className="flex flex-col gap-1">
-      <SectionHeading icon={Lightbulb}>Recommendations</SectionHeading>
-      <BulletList items={items} />
-    </section>
-  );
-}
-
 function DocumentationStatus({ text }: { text: string }) {
   if (!text) return null;
   return (
     <section className="flex flex-col gap-1">
       <SectionHeading icon={FileText}>Documentation Status</SectionHeading>
       <Prose text={text} />
+    </section>
+  );
+}
+
+function KnownConstraints({ items }: { items: string[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-1">
+      <SectionHeading icon={ShieldAlert}>Known Constraints</SectionHeading>
+      <BulletList items={items} />
+    </section>
+  );
+}
+
+function RepositoryInfo({
+  primary,
+  supporting,
+  ownership,
+}: {
+  primary: string;
+  supporting: string[];
+  ownership: string[];
+}) {
+  if (!primary && supporting.length === 0) return null;
+  return (
+    <section className="flex flex-col gap-1">
+      <SectionHeading icon={GitBranch}>Repository</SectionHeading>
+      {primary && (
+        <p className="text-xs text-fg-secondary">
+          <span className="font-medium">Primary:</span> {primary}
+        </p>
+      )}
+      {supporting.length > 0 && (
+        <p className="text-xs text-fg-muted">
+          <span className="font-medium text-fg-secondary">Supporting:</span>{" "}
+          {supporting.join(", ")}
+        </p>
+      )}
+      {ownership.length > 0 && (
+        <p className="text-xs text-fg-muted">
+          <span className="font-medium text-fg-secondary">Owners:</span> {ownership.join(", ")}
+        </p>
+      )}
     </section>
   );
 }
@@ -263,11 +300,17 @@ export function AdvancedDetailsSection({
         Advanced Details
       </summary>
       <div className="mt-3 flex flex-col gap-4">
-        <ConfidenceExplanation text={dto.confidence_explanation} />
+        <RepositoryInfo
+          primary={dto.repository_summary.primary}
+          supporting={dto.repository_summary.supporting}
+          ownership={dto.repository_summary.ownership}
+        />
+        <KnownConstraints items={dto.known_constraints} />
         <CapabilityReadiness reasons={dto.planning_assessment.reasons} />
+        <RelevantAreas areas={dto.relevant_areas} />
+        <MissingInformation items={dto.missing_information} />
         <Unknowns items={dto.unknowns} />
         <EvidenceSummary items={dto.evidence_summary} />
-        <Recommendations items={dto.recommendations} />
         <DocumentationStatus text={dto.documentation_status} />
         {dto.architecture_summary && (
           <section className="flex flex-col gap-1">

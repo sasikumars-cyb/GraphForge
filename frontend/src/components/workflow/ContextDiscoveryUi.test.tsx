@@ -459,23 +459,29 @@ describe("ContextExplorerPanel", () => {
     expect(workflowsApi.fetchUnderstanding).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps capability readiness, evidence summary, and recommendations inside Advanced Details, not the default view", async () => {
+  it("keeps capability readiness and known constraints inside Advanced Details, not the default view", async () => {
     renderWithAuth(
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
 
-    // Present in the DOM (Advanced Details isn't fetched separately — it's
-    // the same already-loaded DTO), but not visible until expanded.
-    expect(screen.getByText(/Completed: Code understanding/)).not.toBeVisible();
-    expect(screen.getByText(/Reuse the existing backoff utility/)).not.toBeVisible();
+    // Recommendations are now visible on the first screen as "Proposed Change".
+    expect(screen.getByText(/Reuse the existing backoff utility/)).toBeVisible();
+
+    // Confidence explanation is visible on the first screen in
+    // "Why GraphForge believes this".
+    expect(screen.getByText(/Completed: Code understanding/)).toBeVisible();
+
+    // Capability readiness items, constraints, and documentation status are
+    // in Advanced Details — present in the DOM but not visible until expanded.
+    expect(screen.getByText("Documentation requirements not yet satisfied.")).not.toBeVisible();
+    expect(screen.getByText(/Must not exceed 3 retries/)).not.toBeVisible();
 
     await userEvent.click(screen.getByText("Advanced Details"));
 
-    expect(screen.getByText(/Completed: Code understanding/)).toBeInTheDocument();
-    expect(screen.getByText(/Reuse the existing backoff utility/)).toBeInTheDocument();
+    expect(screen.getByText("Documentation requirements not yet satisfied.")).toBeVisible();
+    expect(screen.getByText(/Must not exceed 3 retries/)).toBeVisible();
     expect(screen.getByText(/Must-modify \(1\): RetryHandler/)).toBeInTheDocument();
-    expect(screen.getByText("Documentation requirements not yet satisfied.")).toBeInTheDocument();
     expect(screen.getByText("Code understanding")).toBeInTheDocument();
   });
 

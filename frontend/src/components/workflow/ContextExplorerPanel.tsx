@@ -16,7 +16,8 @@ import type {
 import { fetchUnderstanding, overrideStageResult } from "../../lib/api/workflows";
 import { useAuth } from "../../app/auth-context";
 import { RepositorySelector } from "./RepositorySelector";
-import { EngineeringUnderstandingPanel, SectionHeading } from "./EngineeringUnderstandingPanel";
+import { SectionHeading } from "./EngineeringUnderstandingPanel";
+import { InvestigationSummary } from "./InvestigationSummary";
 import { AdvancedDetailsSection } from "./AdvancedDetailsSection";
 import { DebugPanel } from "./DebugPanel";
 
@@ -198,7 +199,7 @@ export function ContextExplorerPanel({
 
         {understanding && (
           <>
-            <EngineeringUnderstandingPanel dto={understanding} />
+            <InvestigationSummary result={result} understanding={understanding} />
 
             {/* Repository Selector — an adjustment to the narrative above,
                 not the first thing an engineer sees. */}
