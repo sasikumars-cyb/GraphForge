@@ -23,10 +23,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import Evidence
-from app.agents.planning.confluence_context import (
-    gather_confluence_context,
-    get_confluence_mcp_config,
-)
+from app.agents.planning.confluence_context import gather_confluence_context
 from app.agents.planning.tools import PlanningObservation, to_evidence
 from app.agents.prompt_utils import wrap_untrusted_content
 from app.agents.text_relevance import relevance, term_weights
@@ -38,6 +35,7 @@ from app.context_pipeline.models import (
 )
 from app.core.redact import redact_secrets
 from app.graph.test_case_repository import ITestCaseGraphRepository
+from app.knowledge.access_resolver import resolve_knowledge_access
 from app.tools import ToolExecutor, ToolInput
 from app.tools.implementations.github_tool import GitHubTool
 from app.tools.implementations.google_drive_tool import GoogleDriveTool
@@ -128,12 +126,15 @@ class ConfluenceProvider:
         Confluence URL/reference was itself detected (this mirrors the
         Planning Agent's original behavior — Confluence enrichment always
         followed a successful Jira fetch)."""
-        mcp_config = await get_confluence_mcp_config(self._db)
-        if mcp_config is None:
-            # Confluence isn't configured as an MCP-transport Knowledge
-            # Connection at all — distinct from "we looked and found
-            # nothing" (status="not_found" below): nothing was looked up
-            # here because there's nowhere to look.
+        access = await resolve_knowledge_access(self._db, "confluence", self.capability)
+        method = access.preferred()
+        if method is None:
+            # Confluence has no currently-available way to reach the
+            # DOCUMENTATION capability (no connection, or one exists but
+            # can't provide MCP access even via auto-wire — see
+            # `access_resolver.derive_access_methods`) — distinct from "we
+            # looked and found nothing" (status="not_found" below): nothing
+            # was looked up here because there's nowhere to look.
             return ResolvedArtifact(
                 provider="confluence",
                 capability=self.capability,
@@ -148,7 +149,14 @@ class ConfluenceProvider:
                 ),
                 raw={},
             )
-        server_url, auth_token, cloud_id = mcp_config
+        server_url = method.fields["server_url"]
+        auth_token = method.fields.get("api_key", "")
+        # cloudId: Atlassian's own tool schema documents it as accepting "a
+        # UUID or site URL" directly — the connection's own `base_url` is
+        # exactly that, when present; falling back to the MCP server_url
+        # itself only matters for the rare case of a connection configured
+        # for MCP directly with no REST-shaped base_url ever recorded.
+        cloud_id = access.config.get("base_url") or server_url
         text, evidence_entries = await gather_confluence_context(
             mcp_server_url=server_url,
             mcp_auth_token=auth_token,
@@ -166,7 +174,17 @@ class ConfluenceProvider:
             # LLM call itself failing, or the provider not supporting
             # tool-calling — see that function's own docstring), without
             # parsing anything provider-specific out of free text.
-            status = "not_found" if evidence_entries else "unavailable"
+            #
+            # Within "reached Confluence", every tool call recorded may
+            # still have failed (e.g. the API token lacks Teamwork Graph
+            # permission — an access/infra gap, not a real search that
+            # came up empty). Treat that the same as "unavailable" so it's
+            # retried once the access issue is fixed (see
+            # ConfluenceInvestigator.propose's retry-on-"unavailable"
+            # logic), rather than being permanently written off as
+            # "not_found".
+            any_call_succeeded = any(e.status == "success" for e in evidence_entries)
+            status = "not_found" if any_call_succeeded else "unavailable"
             summary = (
                 "No relevant Confluence content found."
                 if status == "not_found"

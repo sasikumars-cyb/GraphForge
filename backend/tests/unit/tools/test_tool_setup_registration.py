@@ -55,15 +55,21 @@ def test_build_tool_config_jira_mcp() -> None:
     }
 
 
-def test_build_tool_config_confluence_rest() -> None:
-    tool_id, config = _build_tool_config(
-        "confluence",
-        "rest",
-        {"base_url": "https://example.atlassian.net"},
-        {"email": "a@b.com", "api_token": "secret"},
+def test_build_tool_config_confluence_returns_none() -> None:
+    """Confluence has no ITool anymore (ConfluenceTool — REST CQL search —
+    was audited, found to have zero production call sites, and removed;
+    see app.knowledge.access_resolver's module docstring). Its
+    TransportSpecs correctly have no tool_id, so this must be a clean
+    no-op, same as neo4j/filesystem/github."""
+    assert (
+        _build_tool_config(
+            "confluence",
+            "rest",
+            {"base_url": "https://example.atlassian.net"},
+            {"email": "a@b.com", "api_token": "secret"},
+        )
+        is None
     )
-    assert tool_id == "confluence"
-    assert config["confluence_base_url"] == "https://example.atlassian.net"
 
 
 def test_build_tool_config_incomplete_fields_returns_none() -> None:

@@ -131,38 +131,17 @@ def register_all_tools() -> None:
         )
     )
 
-    from app.tools.implementations.confluence_tool import ConfluenceTool
-
-    registry.register(
-        ToolSpec(
-            tool_id="confluence",
-            display_name="Confluence",
-            description=("Fetches design documents, ADRs, and runbooks from Confluence."),
-            category=ToolCategory.DOCUMENTATION,
-            capabilities=["design_documents", "adrs", "runbooks", "documentation"],
-            factory=lambda cfg: ConfluenceTool(cfg),
-            requires_auth=True,
-            # Both transports are fully functional: REST searches via CQL
-            # (Confluence Query Language) against /wiki/rest/api/search;
-            # MCP is attempted first when configured, falling back to REST
-            # on a recoverable failure (see ConfluenceTool.execute).
-            auth_fields=[
-                "confluence_base_url",
-                "confluence_email",
-                "confluence_api_token",
-                "confluence_mcp_server_url",
-                "confluence_mcp_api_key",
-            ],
-            default_enabled=False,
-            icon="📚",
-            notes=(
-                "REST: Confluence base URL + email + API token (CQL search). Or "
-                "MCP: a Confluence MCP server URL (+ optional API key) — set "
-                "confluence_mcp_server_url to try it first, with automatic "
-                "fallback to REST."
-            ),
-        )
-    )
+    # Confluence has no ITool registration here anymore: the REST-transport
+    # tool that used to exist (ConfluenceTool, CQL search via
+    # /wiki/rest/api/search) was audited and found to have zero production
+    # call sites — nothing ever called `executor.execute("confluence", ...)`.
+    # Confluence document discovery goes through
+    # `app.knowledge.access_resolver.resolve_knowledge_access` directly
+    # instead (see that module's docstring for the full history of why).
+    # `app.knowledge.registry`'s confluence TransportSpecs correctly have no
+    # `tool_id` as of this change, so `_build_tool_config` below is already
+    # a clean no-op for `source_type="confluence"` — nothing here needs a
+    # confluence-specific branch to skip it.
 
     from app.tools.implementations.testrail_tool import TestRailTool
 
@@ -228,29 +207,30 @@ def _build_tool_config(
     present yet. Shared by the registry-sync path and the ad-hoc
     per-connection path below — the two differ only in what they do with
     the resulting (tool_id, config).
+
+    All actual transport/protocol/auto-wire resolution lives in
+    `app.knowledge.access_resolver.derive_access_methods` — this function's
+    only remaining job is reshaping that resolver's generic
+    `AccessMethod`s into the tool-specific, prefixed config-key shape each
+    `ITool` constructor expects (`jira_base_url`, not `base_url`). Passing
+    `capability=None` asks the resolver for every method regardless of
+    what capability it would satisfy — a Tool Registry entry serves
+    whatever its `ITool` implements, not one specific capability, so
+    there's nothing to filter on here.
     """
-    from app.knowledge.registry import Transport, get_source
+    from app.knowledge.access_resolver import derive_access_methods
+    from app.knowledge.registry import get_source
 
     source_spec = get_source(source_type)
     if source_spec is None:
         return None
-    transport_spec = next((t for t in source_spec.transports if t.transport == transport), None)
-    if (
-        transport_spec is None
-        or transport_spec.tool_id is None
-        or not transport_spec.credential_field_map
-    ):
+    own_spec = next((t for t in source_spec.transports if t.transport == transport), None)
+    if own_spec is None or own_spec.tool_id is None or not own_spec.credential_field_map:
         return None
-    tool_id = transport_spec.tool_id
-    field_map = transport_spec.credential_field_map
+    tool_id = own_spec.tool_id
 
-    merged = {**config, **credentials}
-    tool_config = {
-        tool_key: merged[conn_key]
-        for conn_key, tool_key in field_map.items()
-        if merged.get(conn_key)
-    }
-    if len(tool_config) != len(field_map):
+    methods = derive_access_methods(source_type, transport, None, config, credentials)
+    if not methods:
         logger.info(
             "tool_sync_incomplete_config tool=%s source_type=%s transport=%s",
             tool_id,
@@ -259,25 +239,24 @@ def _build_tool_config(
         )
         return None
 
-    # Auto-wire: reuse this REST connection's own credential as the MCP
-    # bearer token against the sibling MCP TransportSpec's known endpoint —
-    # no second connection, no extra field in the Integrations UI. Declared
-    # per-source via `auto_wire_credential`/`known_mcp_endpoint` rather than
-    # a second hardcoded map (see knowledge/registry.py's TransportSpec).
-    if transport == Transport.REST and transport_spec.auto_wire_credential:
-        mcp_spec = next((t for t in source_spec.transports if t.transport == Transport.MCP), None)
-        if mcp_spec is not None and mcp_spec.known_mcp_endpoint:
-            token = merged.get(transport_spec.auto_wire_credential)
-            server_url_key = mcp_spec.credential_field_map.get("server_url")
-            api_key_key = mcp_spec.credential_field_map.get("api_key")
-            if token and server_url_key and api_key_key:
-                tool_config[server_url_key] = mcp_spec.known_mcp_endpoint
-                tool_config[api_key_key] = token
-                logger.info(
-                    "tool_sync_mcp_auto_wired tool=%s endpoint=%s",
-                    tool_id,
-                    mcp_spec.known_mcp_endpoint,
-                )
+    tool_config: dict[str, Any] = {}
+    for method in methods:
+        method_spec = (
+            own_spec
+            if method.transport == own_spec.transport and not method.synthesized
+            else next((t for t in source_spec.transports if t.transport == method.transport), None)
+        )
+        if method_spec is None:
+            continue
+        for conn_key, tool_key in method_spec.credential_field_map.items():
+            if conn_key in method.fields:
+                tool_config[tool_key] = method.fields[conn_key]
+        if method.synthesized:
+            logger.info(
+                "tool_sync_mcp_auto_wired tool=%s endpoint=%s",
+                tool_id,
+                method.fields.get("server_url"),
+            )
 
     return tool_id, tool_config
 

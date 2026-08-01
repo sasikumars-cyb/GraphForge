@@ -237,6 +237,26 @@ async def test_github_provider_reports_failure_for_a_malformed_repository_refere
     assert artifact.evidence.status == "failed"
 
 
+def _access(methods=(), config=None):
+    from app.knowledge.access_resolver import ResolvedKnowledgeAccess
+
+    return ResolvedKnowledgeAccess(
+        source_type="confluence",
+        capability=ProviderCapability.DOCUMENTATION,
+        methods=tuple(methods),
+        config=config or {},
+    )
+
+
+def _mcp_method(server_url="https://mcp.example", api_key="token"):
+    from app.knowledge.access_resolver import AccessMethod
+    from app.knowledge.registry import Transport
+
+    return AccessMethod(
+        transport=Transport.MCP, fields={"server_url": server_url, "api_key": api_key}
+    )
+
+
 @pytest.mark.asyncio
 async def test_confluence_provider_reports_unavailable_without_mcp_config() -> None:
     """Not configured at all — distinct from "searched, found nothing"
@@ -244,7 +264,8 @@ async def test_confluence_provider_reports_unavailable_without_mcp_config() -> N
     there's nowhere to look."""
     db = AsyncMock()
     with patch(
-        "app.context_pipeline.providers.get_confluence_mcp_config", new=AsyncMock(return_value=None)
+        "app.context_pipeline.providers.resolve_knowledge_access",
+        new=AsyncMock(return_value=_access()),
     ):
         artifact = await ConfluenceProvider(db).resolve_for_issue(
             jira_issue_key="NPT-6", task_description="fix it", model=None, stage="planning"
@@ -262,15 +283,22 @@ async def test_confluence_provider_reports_not_found_when_nothing_relevant_but_t
     db = AsyncMock()
     with (
         patch(
-            "app.context_pipeline.providers.get_confluence_mcp_config",
-            new=AsyncMock(return_value=("https://mcp.example", "token", "cloud-1")),
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})),
         ),
         patch(
             "app.context_pipeline.providers.gather_confluence_context",
             new=AsyncMock(
                 return_value=(
                     None,
-                    [Evidence(kind="tool_call", reference="getTeamworkGraphContext", summary="ok")],
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="getTeamworkGraphContext",
+                            summary="ok",
+                            status="success",
+                        )
+                    ],
                 )
             ),
         ),
@@ -285,6 +313,47 @@ async def test_confluence_provider_reports_not_found_when_nothing_relevant_but_t
 
 
 @pytest.mark.asyncio
+async def test_confluence_provider_reports_unavailable_when_every_tool_call_failed() -> None:
+    """A tool call that errors (e.g. the Confluence API token lacks
+    Teamwork Graph permission) is an access/infra gap, not a real search
+    that came up empty — regression for the bug where an LLM synthesized
+    an answer from ticket text alone after every tool call failed, and
+    that got recorded as if real documentation had been found."""
+    from app.agents._contract import Evidence
+
+    db = AsyncMock()
+    with (
+        patch(
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context",
+            new=AsyncMock(
+                return_value=(
+                    None,
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="getTeamworkGraphContext",
+                            summary="Confluence graph call failed: permission denied",
+                            status="failed",
+                        )
+                    ],
+                )
+            ),
+        ),
+    ):
+        artifact = await ConfluenceProvider(db).resolve_for_issue(
+            jira_issue_key="NPT-6", task_description="fix it", model=None, stage="planning"
+        )
+
+    assert artifact is not None
+    assert artifact.text == ""
+    assert artifact.evidence.status == "unavailable"
+
+
+@pytest.mark.asyncio
 async def test_confluence_provider_reports_unavailable_when_no_turns_ran_at_all() -> None:
     """No MCP turns ran at all (LLM call itself failed, or the active
     provider doesn't support tool-calling — see gather_confluence_context's
@@ -293,8 +362,8 @@ async def test_confluence_provider_reports_unavailable_when_no_turns_ran_at_all(
     db = AsyncMock()
     with (
         patch(
-            "app.context_pipeline.providers.get_confluence_mcp_config",
-            new=AsyncMock(return_value=("https://mcp.example", "token", "cloud-1")),
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})),
         ),
         patch(
             "app.context_pipeline.providers.gather_confluence_context",
@@ -316,8 +385,8 @@ async def test_confluence_provider_normalizes_gathered_context_into_an_artifact(
     db = AsyncMock()
     with (
         patch(
-            "app.context_pipeline.providers.get_confluence_mcp_config",
-            new=AsyncMock(return_value=("https://mcp.example", "token", "cloud-1")),
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})),
         ),
         patch(
             "app.context_pipeline.providers.gather_confluence_context",
@@ -337,6 +406,75 @@ async def test_confluence_provider_normalizes_gathered_context_into_an_artifact(
     assert artifact.capability == ProviderCapability.DOCUMENTATION
     assert artifact.text == "Design doc content"
     assert artifact.evidence.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_gather_confluence_context_discards_a_synthesized_answer_after_every_tool_call_fails() -> (
+    None
+):
+    """Regression: an Atlassian API token without Teamwork Graph permission
+    makes every `getTeamworkGraphContext` call fail. The LLM was observed
+    (against its own system prompt, which only covers "nothing relevant
+    found") synthesizing a plausible-sounding answer from the ticket text
+    alone rather than saying exactly "No relevant Confluence content
+    found". Trusting that text would silently record a fabrication as if
+    it were real retrieved documentation (status="success", full
+    confidence) instead of the access failure it actually was. This must
+    return no text — regardless of what the model says — whenever no tool
+    call in the conversation ever actually succeeded.
+    """
+    from app.agents.planning import confluence_context as ctx_module
+    from app.ai.providers.base import ToolTurnResult, ToolUseRequest
+    from app.tools.mcp_support import MCPToolError
+
+    turn_1 = ToolTurnResult(
+        content_blocks=[{"text": "Let me check Confluence."}],
+        tool_uses=[
+            ToolUseRequest(
+                id="call_1",
+                name="getTeamworkGraphContext",
+                input={"objectType": "JiraWorkItem", "objectIdentifier": "NPT-30"},
+            )
+        ],
+        text="",
+    )
+    turn_2 = ToolTurnResult(
+        content_blocks=[{"text": "synthesized"}],
+        tool_uses=[],
+        text=(
+            "I'm unable to access the Confluence/Jira knowledge graph due to API "
+            "permissions. However, based on the ticket, here is my own analysis..."
+        ),
+    )
+
+    mock_provider = MagicMock()
+    mock_provider.preview = MagicMock()
+    mock_provider.complete_with_tools = AsyncMock(side_effect=[turn_1, turn_2])
+
+    with (
+        patch.object(ctx_module, "StageAwareLLMProvider", return_value=mock_provider),
+        patch.object(
+            ctx_module,
+            "call_mcp_tool",
+            new=AsyncMock(
+                side_effect=MCPToolError(
+                    "You don't have permission to connect via API token."
+                )
+            ),
+        ),
+    ):
+        text, evidence = await ctx_module.gather_confluence_context(
+            mcp_server_url="https://mcp.example",
+            mcp_auth_token="token",
+            cloud_id="cloud-1",
+            jira_issue_key="NPT-30",
+            task_description="fix it",
+            model=None,
+            stage="planning",
+        )
+
+    assert text is None, "a synthesized answer with no successful tool call must not be trusted"
+    assert evidence and evidence[0].status == "failed"
 
 
 def test_graph_provider_derives_observations_preserving_evidence_kinds() -> None:

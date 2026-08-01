@@ -162,14 +162,16 @@ class Settings(BaseSettings):
     # empirically (see the session that added this default) that it also
     # accepts a plain bearer-token API key for authentication; the only
     # real-world failure hit was an org-level "API token access" toggle an
-    # Atlassian admin controls, unrelated to the transport itself. Both
-    # tools already prefer MCP but fall back to REST on failure (see
-    # JiraTool.execute()/ConfluenceTool — Confluence's REST path is a
-    # permanent stub, so this default is the only way Confluence search
-    # ever actually works), so defaulting this on is safe: an org that
-    # hasn't granted API token access just falls back to (Jira's working)
-    # REST, or (for Confluence) stays exactly as non-functional as before.
-    # Override via env if you have a self-hosted/compatible MCP server.
+    # Atlassian admin controls, unrelated to the transport itself. Jira
+    # already prefers MCP but falls back to REST on failure (see
+    # JiraTool.execute()); Confluence document discovery has no REST path
+    # at all — it's MCP-only (Teamwork Graph — see
+    # app.agents.planning.confluence_context's module docstring for why),
+    # so this default is the only way it ever actually works. Defaulting
+    # this on is safe: an org that hasn't granted API token access just
+    # falls back to (Jira's working) REST, or (for Confluence) stays
+    # exactly as non-functional as before. Override via env if you have a
+    # self-hosted/compatible MCP server.
     github_mcp_default_server_url: str = Field(default="https://api.githubcopilot.com/mcp/")
     jira_mcp_default_server_url: str | None = Field(
         default="https://mcp.atlassian.com/v1/mcp/authv2"

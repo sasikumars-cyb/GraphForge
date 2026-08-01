@@ -26,59 +26,27 @@ behind the reflection pass and the rate limiter.
 
 from __future__ import annotations
 
-import json
 import logging
 from typing import Any
-
-from sqlalchemy import select
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import Evidence
 from app.agents.llm import STAGE_PLANNING, StageAwareLLMProvider
 from app.ai.providers.base import ToolSpec, ToolTurnResult
-from app.core.crypto import decrypt_secret
 from app.core.exceptions import AppError
-from app.models.knowledge_connection import KnowledgeConnection
 from app.tools.mcp_support import MCPToolError, call_mcp_tool
 
 logger = logging.getLogger(__name__)
 
-
-async def get_confluence_mcp_config(db: AsyncSession) -> tuple[str, str, str] | None:
-    """Look up the first enabled, MCP-transport Confluence Knowledge
-    Connection and return (server_url, auth_token, cloud_id), or None if
-    none is configured that way — the REST-only stub path (see
-    ConfluenceTool's module docstring) can't be used for graph traversal.
-
-    `cloud_id` uses the connection's `base_url` — Atlassian's own tool
-    schema documents cloudId as accepting "a UUID or site URL" directly,
-    so no separate cloud-ID resolution call is needed.
-    """
-    result = await db.execute(
-        select(KnowledgeConnection).where(
-            KnowledgeConnection.source_type == "confluence",
-            KnowledgeConnection.transport == "mcp",
-            KnowledgeConnection.enabled.is_(True),
-        )
-    )
-    row = result.scalars().first()
-    if row is None:
-        return None
-
-    server_url = (row.config or {}).get("server_url")
-    cloud_id = (row.config or {}).get("base_url") or (row.config or {}).get("server_url")
-    if not server_url or not cloud_id or not row.encrypted_credentials:
-        return None
-
-    try:
-        credentials = json.loads(decrypt_secret(row.encrypted_credentials))
-    except Exception:
-        logger.warning("confluence_mcp_config_decrypt_failed connection_id=%s", row.id)
-        return None
-
-    auth_token = credentials.get("api_key", "")
-    return server_url, auth_token, cloud_id
-
+# How to resolve *which* server_url/auth_token/cloud_id to call this with:
+# see `app.knowledge.access_resolver.resolve_knowledge_access` — this
+# module no longer looks that up itself (it used to, via a now-removed
+# `get_confluence_mcp_config`, which queried `KnowledgeConnection` directly
+# and required `transport == "mcp"` literally; that was one of several
+# independent, disagreeing resolution implementations this codebase used
+# to have — see the resolver's own module docstring for the full history).
+# `gather_confluence_context` below is a pure "given an anchor and working
+# MCP access, gather context" function; it has no opinion on how that
+# access was obtained.
 
 _MAX_TOOL_TURNS = 4
 
@@ -224,7 +192,26 @@ async def gather_confluence_context(
 
         if not result.tool_uses:
             text = result.text.strip()
-            if not text or text.lower().startswith("no relevant"):
+            # A model can be "helpful" and synthesize an answer from the
+            # anchor's own ticket text even when every tool call it made
+            # failed (e.g. the Confluence API token lacks Teamwork Graph
+            # permission) — see the session that found this: the model
+            # prefaced its answer with an admission it couldn't reach
+            # Confluence, then wrote a plausible-sounding summary anyway,
+            # which doesn't match the "say exactly 'no relevant...'"
+            # instruction it was given. Trusting that free-text framing
+            # would silently record a fabricated "success" as if it were
+            # retrieved documentation. Guarding on whether a tool call
+            # actually succeeded is structural, not dependent on the model
+            # following instructions — consistent with how the rest of
+            # this codebase avoids trusting free text where a hard signal
+            # is available.
+            no_real_content = (
+                not text
+                or text.lower().startswith("no relevant")
+                or not any(e.status == "success" for e in evidence)
+            )
+            if no_real_content:
                 return None, evidence
             return text, evidence
 
@@ -244,6 +231,7 @@ async def gather_confluence_context(
                             f"Confluence graph: {call.name}({call.input}) → "
                             f"{_summarize_mcp_result(mcp_result)}"
                         ),
+                        status="success",
                     )
                 )
                 tool_result_blocks.append(
@@ -263,6 +251,7 @@ async def gather_confluence_context(
                         kind="tool_call",
                         reference=call.name,
                         summary=f"Confluence graph call failed: {exc}",
+                        status="failed",
                     )
                 )
                 tool_result_blocks.append(
