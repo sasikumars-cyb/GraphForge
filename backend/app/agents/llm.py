@@ -113,6 +113,10 @@ STAGE_GENERATE_CODE = "generate_code"
 # STAGE_GOALS` (the actual Workflow pipeline), which this is deliberately
 # not added to.
 STAGE_DOCUMENTATION_REVIEW = "documentation_review"
+# Standalone AI Workspace capability (goal=analyze_documentation_health),
+# read-only. Same note as STAGE_DOCUMENTATION_REVIEW above: an AI-provider
+# config resolution key only, not a Workflow stage.
+STAGE_DOCUMENTATION_HEALTH = "documentation_health"
 
 
 # agent_id -> the stage key that agent resolves under when a run carries no
@@ -132,6 +136,7 @@ _AGENT_DEFAULT_STAGE: dict[str, str] = {
     "engineering_review": STAGE_ENGINEERING_REVIEW,
     "code_generation": STAGE_GENERATE_CODE,
     "documentation_review": STAGE_DOCUMENTATION_REVIEW,
+    "documentation_health": STAGE_DOCUMENTATION_HEALTH,
 }
 
 

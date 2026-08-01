@@ -15,6 +15,7 @@ import {
   FileText,
   ArrowRightLeft,
   Compass,
+  HeartPulse,
   type LucideIcon,
 } from "lucide-react";
 
@@ -83,6 +84,20 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     category: "review",
     available: true,
     goal: "review_pr",
+  },
+  {
+    slug: "documentation-health",
+    name: "Documentation Health",
+    description:
+      "Score a repository's Markdown documentation and get a health report — read-only, no changes made.",
+    icon: HeartPulse,
+    color: "teal",
+    category: "review",
+    // Backend agent (documentation_health) is registered and functional;
+    // the Workspace page for it is not built yet, so this renders as
+    // "Coming Soon" rather than linking to a route that does not exist.
+    available: false,
+    goal: "analyze_documentation_health",
   },
   {
     slug: "security-review",
