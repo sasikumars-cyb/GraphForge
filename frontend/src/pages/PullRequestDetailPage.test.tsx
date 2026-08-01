@@ -194,4 +194,42 @@ describe("PullRequestDetailPage - Publish Review", () => {
     expect(screen.getByRole("button", { name: "Publish Review" })).toBeEnabled();
     expect(screen.queryByText("View published comment on GitHub →")).not.toBeInTheDocument();
   });
+
+  it("disables View Visual Report until an AI analysis exists", async () => {
+    vi.spyOn(analysisApi, "getAiAnalysis").mockRejectedValue(NOT_FOUND);
+
+    renderPage();
+
+    const button = await screen.findByRole(
+      "button",
+      { name: "View Visual Report" },
+      { timeout: 3000 },
+    );
+    expect(button).toBeDisabled();
+  });
+
+  it("fetches the HTML report and opens it in a new tab once an AI analysis exists", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(analysisApi, "getAiAnalysis").mockResolvedValue(FAKE_AI_ANALYSIS);
+    vi.spyOn(analysisApi, "getReviewReportHtml").mockResolvedValue("<html>report</html>");
+    const fakeWindow = { location: { href: "" }, close: vi.fn() } as unknown as Window;
+    const openSpy = vi.spyOn(window, "open").mockReturnValue(fakeWindow);
+
+    renderPage();
+
+    const button = await screen.findByRole(
+      "button",
+      { name: "View Visual Report" },
+      { timeout: 3000 },
+    );
+    expect(button).toBeEnabled();
+
+    await user.click(button);
+
+    expect(openSpy).toHaveBeenCalledWith("", "_blank");
+    await waitFor(() =>
+      expect(analysisApi.getReviewReportHtml).toHaveBeenCalledWith("fake-token", "pr-1"),
+    );
+    await waitFor(() => expect(fakeWindow.location.href).toMatch(/^blob:/));
+  });
 });

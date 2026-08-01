@@ -20,7 +20,7 @@ from app.models.repository import Repository
 
 
 async def main() -> None:
-    full_name = sys.argv[1] if len(sys.argv) > 1 else "sasikumars-cyb/etl-core"
+    full_name = sys.argv[1] if len(sys.argv) > 1 else "CybHackathon-2026/Hi-Tech_GraphForge"
 
     async with AsyncSessionLocal() as db:
         row = (

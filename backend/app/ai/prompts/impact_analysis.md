@@ -1,5 +1,5 @@
 ---
-version: "1.6"
+version: "1.7"
 name: impact_analysis
 ---
 
@@ -65,9 +65,12 @@ provide:
 1. A list of breaking changes with severity and confidence.
 2. Migration advice for each breaking change.
 3. A concise summary of the overall impact.
-4. A release coordination plan — follow the rules in "Release Coordination
+4. An overall `confidence` score for this analysis as a whole (distinct
+   from the per-item confidence scores below) — how complete and clear the
+   evidence in the sections above was, not how good the code is.
+5. A release coordination plan — follow the rules in "Release Coordination
    Plan Rules" below exactly.
-5. A general code review — findings, observations, scores, and a merge
+6. A general code review — findings, observations, scores, and a merge
    recommendation — follow "General Review Rules" below exactly.
 
 Use exactly these field names and shapes — do not rename, omit, or flatten
@@ -91,6 +94,7 @@ any field, and do not substitute a plain string where an object is shown:
       "priority": "high | medium | low"
     }
   ],
+  "confidence": {"score": 0.85, "reasoning": "Why this confidence level, citing how complete/clear the evidence above was"},
   "suggested_reviewers": [
     {
       "reviewer": "A name from Recent File Authors above, or a role if none was gathered",
@@ -145,9 +149,16 @@ any field, and do not substitute a plain string where an object is shown:
 ```
 
 `confidence` is always a `{"score": <0.0-1.0>, "reasoning": "..."}` object,
-never a bare string or number — this applies everywhere it appears, in
-`breaking_changes`, `suggested_reviewers`, and `findings` alike. Every
-object in every list above must include every field shown, even if the
+never a bare string or number — this applies everywhere it appears: the
+top-level field (required — never omit it) and inside every
+`breaking_changes`, `suggested_reviewers`, and `findings` entry alike. The
+top-level `confidence` reflects your confidence in the analysis as a whole
+given the evidence available (e.g. lower if `diff_content` or
+`recent_file_authors` above read "Not gathered for this analysis" and you
+had to reason with less than full information); it is independent of
+`merge_recommendation` — a low-risk change can still get a low confidence
+score if the evidence behind that judgment was thin. Every object in every
+list above must include every field shown, even if the
 value is a short placeholder — an omitted field is a validation failure,
 not an acceptable shortcut. Empty lists (e.g. `"breaking_changes": []`)
 are fine when nothing qualifies; a list containing an incomplete object is

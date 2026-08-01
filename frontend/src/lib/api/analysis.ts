@@ -1,3 +1,4 @@
+import { API_BASE_URL, ApiError, UNAUTHORIZED_EVENT } from "./client";
 import { apiFetch } from "./client";
 import type {
   AIAnalysis,
@@ -68,4 +69,32 @@ export function publishReview(token: string, pullRequestId: string): Promise<Pub
     method: "POST",
     token,
   });
+}
+
+/**
+ * Fetches the standalone HTML executive dashboard for a PR's most recently
+ * persisted AI analysis. Returns raw HTML text rather than JSON, so this
+ * bypasses `apiFetch` (which always parses the body as JSON) and does its
+ * own auth-header/error handling instead.
+ */
+export async function getReviewReportHtml(token: string, pullRequestId: string): Promise<string> {
+  const response = await fetch(
+    `${API_BASE_URL}/pull-requests/${pullRequestId}/review-report?format=html`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
+
+  if (!response.ok) {
+    const parsed = await response.json().catch(() => null);
+    const code = parsed?.error?.code ?? "unknown_error";
+    if (code === "invalid_token") {
+      window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+    }
+    throw new ApiError(
+      response.status,
+      code,
+      parsed?.error?.message ?? `Request to fetch the review report failed with status ${response.status}.`,
+    );
+  }
+
+  return response.text();
 }

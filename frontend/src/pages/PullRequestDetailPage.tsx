@@ -11,6 +11,7 @@ import { ApiError } from "../lib/api/client";
 import {
   getAiAnalysis,
   getDeterministicAnalysis,
+  getReviewReportHtml,
   investigatePullRequest,
   publishReview,
   runAiAnalysis,
@@ -325,6 +326,7 @@ export function PullRequestDetailPage() {
   const [isRunningAi, setIsRunningAi] = useState(false);
   const [isInvestigating, setIsInvestigating] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isOpeningReport, setIsOpeningReport] = useState(false);
   const [publishedCommentUrl, setPublishedCommentUrl] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [generatedWithModelId, setGeneratedWithModelId] = useState<AiModelId | null>(null);
@@ -409,6 +411,29 @@ export function PullRequestDetailPage() {
       setError(err instanceof Error ? err.message : "Failed to publish review to GitHub.");
     } finally {
       setIsPublishing(false);
+    }
+  }
+
+  async function handleOpenReport() {
+    if (!token || !id) return;
+    // Open the tab synchronously on the click so popup blockers don't
+    // treat it as an unsolicited window.open() once the fetch resolves.
+    const reportWindow = window.open("", "_blank");
+    setIsOpeningReport(true);
+    setError(null);
+    try {
+      const html = await getReviewReportHtml(token, id);
+      const blobUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+      if (reportWindow) {
+        reportWindow.location.href = blobUrl;
+      } else {
+        setError("Pop-up blocked - allow pop-ups for this site to view the report.");
+      }
+    } catch (err) {
+      reportWindow?.close();
+      setError(err instanceof Error ? err.message : "Failed to load the visual report.");
+    } finally {
+      setIsOpeningReport(false);
     }
   }
 
@@ -542,6 +567,15 @@ export function PullRequestDetailPage() {
                 : publishedCommentUrl
                   ? "✓ Review published"
                   : "Publish Review"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleOpenReport()}
+              disabled={!aiAnalysis || isOpeningReport}
+              title="Opens the full executive dashboard - score bars, filterable findings, per-file review cards"
+              className="rounded-md border border-line-muted bg-surface-raised px-3 py-1.5 text-sm font-medium text-fg-secondary hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isOpeningReport ? "Opening…" : "View Visual Report"}
             </button>
           </div>
         }

@@ -1,12 +1,14 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { Search, Send, RotateCcw, History } from "lucide-react";
+import { Search, Send, RotateCcw, History, ExternalLink } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
 import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { useAgentRun } from "../hooks/useAgentRun";
+import { useAuth } from "../app/auth-context";
+import { getReviewReportHtml } from "../lib/api/analysis";
 
 const PR_URL_PATTERN = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+\/?$/;
 
@@ -145,9 +147,40 @@ export function ReviewPage() {
 // ---------------------------------------------------------------------------
 
 function ReviewResultView({ run, onNewReview }: { run: NonNullable<ReturnType<typeof useAgentRun>["run"]>; onNewReview: () => void }) {
+  const { token } = useAuth();
+  const [isOpeningReport, setIsOpeningReport] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
   const step = run.steps[0];
   const result = step?.result as Record<string, unknown> | undefined;
   const evidence = step?.evidence ?? [];
+
+  // subject_id is "pr:<uuid>" for pull_request subjects (see
+  // resolve_pr_subject in app/agents/review_adapter.py) - the visual
+  // report endpoint keys off that same pull request id.
+  const pullRequestId = run.subject.subject_id.startsWith("pr:")
+    ? run.subject.subject_id.slice(3)
+    : null;
+
+  async function handleOpenReport() {
+    if (!token || !pullRequestId) return;
+    const reportWindow = window.open("", "_blank");
+    setIsOpeningReport(true);
+    setReportError(null);
+    try {
+      const html = await getReviewReportHtml(token, pullRequestId);
+      const blobUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+      if (reportWindow) {
+        reportWindow.location.href = blobUrl;
+      } else {
+        setReportError("Pop-up blocked - allow pop-ups for this site to view the report.");
+      }
+    } catch (err) {
+      reportWindow?.close();
+      setReportError(err instanceof Error ? err.message : "Failed to load the visual report.");
+    } finally {
+      setIsOpeningReport(false);
+    }
+  }
 
   const summary = (result?.executive_summary as string) ?? "";
   const breakingChanges = (result?.breaking_changes as Array<Record<string, unknown>>) ?? [];
@@ -185,15 +218,35 @@ function ReviewResultView({ run, onNewReview }: { run: NonNullable<ReturnType<ty
             <ConfidenceBadge confidence={step.confidence} />
           )}
         </div>
-        <button
-          type="button"
-          onClick={onNewReview}
-          className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-raised hover:text-fg-secondary"
-        >
-          <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-          New Review
-        </button>
+        <div className="flex items-center gap-2">
+          {result && pullRequestId && (
+            <button
+              type="button"
+              onClick={() => void handleOpenReport()}
+              disabled={isOpeningReport}
+              title="Opens the full executive dashboard - score bars, filterable findings, per-file review cards"
+              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-raised hover:text-fg-secondary disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+              {isOpeningReport ? "Opening…" : "View Visual Report"}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onNewReview}
+            className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-raised hover:text-fg-secondary"
+          >
+            <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
+            New Review
+          </button>
+        </div>
       </div>
+
+      {reportError && (
+        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
+          {reportError}
+        </div>
+      )}
 
       {/* Run metadata */}
       <Card title="Run Details">
