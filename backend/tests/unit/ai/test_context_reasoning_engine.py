@@ -29,6 +29,7 @@ import pytest
 from app.context_pipeline.reasoning import capabilities
 from app.context_pipeline.reasoning.capabilities import (
     CapabilityAssessment,
+    ConfidenceSignal,
     assess,
     overall_confidence,
     unmet,
@@ -1645,3 +1646,70 @@ def test_parse_retrieved_content_known_repositories_is_empty_before_any_reposito
         a for a in RequestParseInvestigator().propose(state) if a.key == "parse_retrieved_content"
     )
     assert action.params["known_repositories"] == frozenset()
+
+
+def _documentation_state(ledger: Ledger) -> WorkingContext:
+    """A WorkingContext whose 'documentation' capability is applicable and
+    unsatisfied, matching what `ConfluenceInvestigator.propose` requires
+    before it will consider proposing anything."""
+    assessment = CapabilityAssessment.from_signals(
+        capability="documentation",
+        label="Documentation",
+        necessity="recommended",
+        signals=[
+            ConfidenceSignal(label="Design documentation retrieved", satisfied=False, weight=1.0)
+        ],
+    )
+    state = WorkingContext(ledger=ledger)
+    state.assessments = [assessment]
+    work_item_ev = ledger.add_evidence(
+        provider="jira", action="fetch_work_item", outcome="success", summary="s"
+    )
+    ledger.add_fact(
+        kind="work_item",
+        subject="NPT-30",
+        provider="jira",
+        evidence_id=work_item_ev.evidence_id,
+    )
+    return state
+
+
+def test_confluence_investigator_does_not_retry_after_a_real_answer() -> None:
+    """Once Confluence was actually searched — found something, or found
+    nothing relevant — re-proposing the same fetch would waste a turn
+    re-asking a question that's already been answered."""
+    from app.context_pipeline.reasoning.investigators import ConfluenceInvestigator
+
+    for outcome in ("success", "not_found"):
+        ledger = Ledger()
+        state = _documentation_state(ledger)
+        ledger.add_evidence(
+            provider="confluence",
+            action="fetch_documentation:NPT-30",
+            outcome=outcome,
+            summary="s",
+        )
+        assert ConfluenceInvestigator().propose(state) == [], (
+            f"outcome={outcome!r} should not be retried"
+        )
+
+
+def test_confluence_investigator_retries_after_an_unavailable_connection() -> None:
+    """'unavailable' means Confluence wasn't reachable at all (e.g. the
+    Knowledge Connection wasn't configured for MCP transport) — an
+    infrastructure gap, not a real answer. On resume, the connection may
+    have been fixed since the first attempt, so this must be retried rather
+    than permanently silenced like a genuine `not_found`/`success` outcome."""
+    from app.context_pipeline.reasoning.investigators import ConfluenceInvestigator
+
+    ledger = Ledger()
+    state = _documentation_state(ledger)
+    ledger.add_evidence(
+        provider="confluence",
+        action="fetch_documentation:NPT-30",
+        outcome="unavailable",
+        summary="Confluence is not connected, so no documentation could be searched.",
+    )
+    actions = ConfluenceInvestigator().propose(state)
+    assert len(actions) == 1
+    assert actions[0].key == "fetch_documentation:NPT-30"

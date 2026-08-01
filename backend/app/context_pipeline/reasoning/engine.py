@@ -575,14 +575,26 @@ def _verdict_line(state: WorkingContext) -> str:
 
 
 def _seed_explicit_repositories(state: WorkingContext, repo_names: list[str]) -> None:
-    """Pre-seed the ledger with user-selected repositories as explicit
-    candidates.
+    """Pre-seed the ledger with the user's repository selection as reference
+    facts — the same kind `RequestParseInvestigator` would produce if it
+    found a repository name in the request text.
 
-    This mirrors what the Repository Investigator would produce during a
-    normal investigation cycle (evidence → repository fact →
-    repository_candidate inference), but seeds it at iteration 0 so
-    every subsequent investigator (architecture, documentation, graph)
-    targets these repositories from the very first cycle.
+    This does NOT create `repository` facts (that's the GraphInvestigator's
+    job after validating the repo exists in the graph) or
+    `repository_candidate` inferences (that's exclusively the resync hooks'
+    job per ADR 0010, Invariant I1). It only records "the user pointed at
+    these names" — the investigation pipeline validates and promotes them
+    through the normal evidence → fact → inference chain:
+
+      1. Reference fact seeded here (iteration 0)
+      2. GraphInvestigator surveys indexed repos → creates `repository` facts
+      3. `resync_repository_candidates` matches reference + repository fact
+         → creates `repository_candidate` inference (source: "explicit")
+      4. Architecture/documentation investigators target the explicit candidate
+
+    If a seeded repository no longer exists in the graph (un-indexed between
+    runs), no `repository` fact is created, no candidate is promoted, and
+    readiness correctly reflects the gap — fail-safe by construction.
     """
     evidence = state.ledger.add_evidence(
         provider="user",
@@ -593,26 +605,19 @@ def _seed_explicit_repositories(state: WorkingContext, repo_names: list[str]) ->
         intent="The user selected these repositories from the Context Explorer UI.",
     )
     for name in repo_names:
-        fact = state.ledger.add_fact(
-            kind="repository",
+        state.ledger.add_fact(
+            kind="reference",
             subject=name,
             provider="user",
             evidence_id=evidence.evidence_id,
-            value={"name": name, "source": "explicit_selection"},
+            value={"type": "local_repository", "source": "explicit_selection"},
             iteration=0,
             verified=True,
-        )
-        state.ledger.add_inference(
-            kind="repository_candidate",
-            statement=name,
-            supporting_fact_ids=[fact.fact_id],
-            value={"source": "explicit", "reason": "Selected by user from Context Explorer."},
-            iteration=0,
         )
     state.transcript.say(
         "repository",
         f"User pre-selected repositor{'y' if len(repo_names) == 1 else 'ies'}: "
-        f"{', '.join(repo_names)} — investigating these directly.",
+        f"{', '.join(repo_names)} — I'll validate and investigate these.",
     )
 
 

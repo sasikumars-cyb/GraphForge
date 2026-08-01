@@ -551,7 +551,21 @@ class ConfluenceInvestigator:
         anchor = work_items[0]
         key = f"fetch_documentation:{anchor.subject}"
         if state.ledger.attempted(self.name, key):
-            return []
+            # Allow retry if the previous attempt was "unavailable"
+            # (infrastructure: connection not configured) rather than
+            # "not_found" or "success" (a real answer was obtained).
+            # On resume, the connection may have been fixed since the
+            # initial run.
+            prev = next(
+                (
+                    e
+                    for e in state.ledger.evidence
+                    if e.provider == self.name and e.action == key
+                ),
+                None,
+            )
+            if prev is None or prev.outcome != "unavailable":
+                return []
 
         return [
             InvestigationAction(
@@ -897,6 +911,39 @@ class GraphInvestigator:
 
         if actions:
             return actions
+
+        # -- explicit references: the user pre-selected repositories (rerun).
+        # Verify each one individually instead of doing a global survey that
+        # would pull in components from every indexed repository. This
+        # guarantees graph traversal is scoped to only the selected repos.
+        if not ledger.has_fact("repository"):
+            explicit_refs = [
+                f
+                for f in ledger.facts_of("reference")
+                if f.value.get("type") == "local_repository"
+                and f.value.get("source") == "explicit_selection"
+            ]
+            if explicit_refs:
+                for ref in explicit_refs:
+                    key = f"verify_repository:{ref.subject}"
+                    if not ledger.attempted(self.name, key):
+                        actions.append(
+                            InvestigationAction(
+                                provider=self.name,
+                                key=key,
+                                intent=f"You selected '{ref.subject}' — I'll confirm it exists "
+                                "in the indexed graph and traverse it.",
+                                targets="repository",
+                                params={
+                                    "claim": ref.subject,
+                                    "query": self._query_text(state),
+                                    "search_terms": _search_terms(state),
+                                },
+                                cost=1,
+                            )
+                        )
+                if actions:
+                    return actions
 
         repository = state.assessment_for("repository")
         architecture = state.assessment_for("architecture")

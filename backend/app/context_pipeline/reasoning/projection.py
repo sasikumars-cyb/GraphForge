@@ -415,6 +415,24 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
     elif not projected_repositories["ranked_repository_names"]:
         projected_repositories["ranked_repository_names"] = ledger.subjects_of("repository")
 
+    # Scope graph_components/graph_topics to candidate repositories when
+    # candidates exist — prevents the initial unscoped survey's components
+    # from other repos bleeding into the output after a repository has been
+    # selected (via clarification answer or explicit re-run).
+    candidate_repo_names = {r.name for r in repositories}
+    all_components = [dict(f.value) for f in ledger.facts_of("component")]
+    all_topics = [dict(f.value) for f in ledger.facts_of("topic")]
+    if candidate_repo_names:
+        scoped_components = [
+            c for c in all_components if c.get("repository") in candidate_repo_names
+        ]
+        scoped_topics = [
+            t for t in all_topics if t.get("repository") in candidate_repo_names
+        ]
+    else:
+        scoped_components = all_components
+        scoped_topics = all_topics
+
     return {
         # --- what Planning reads -----------------------------------------
         "original_request": state.derived.get("original_request") or state.metadata.goal,
@@ -437,7 +455,9 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         # docstring). No agent's prompt construction should read this
         # directly anymore; see `evidence_package` below for the
         # bounded, tiered, ranked replacement every agent now uses.
-        "graph_components": [dict(f.value) for f in ledger.facts_of("component")],
+        # Scoped to candidate repositories so a global survey's components
+        # from non-selected repos don't leak into the output.
+        "graph_components": scoped_components,
         # The curated Evidence Package (see reasoning.curation) — computed
         # once, after the investigation loop exits
         # (investigators.curate_evidence, called from engine.investigate),
@@ -453,7 +473,7 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         # `{}` for a run that predates this field or produced no evidence
         # to synthesize over.
         "engineering_understanding": state.derived.get("engineering_understanding") or {},
-        "graph_topics": [dict(f.value) for f in ledger.facts_of("topic")],
+        "graph_topics": scoped_topics,
         "repositories": [r.model_dump() for r in repositories],
         **projected_repositories,
         "graph_context_text": state.derived.get("graph_context_text", ""),
