@@ -1,7 +1,7 @@
 """System status endpoint: aggregates platform health for the Control Center."""
 
 from fastapi import APIRouter, Depends
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ai.config.resolver import env_credentials_for
@@ -9,7 +9,9 @@ from app.ai.providers.registry import all_providers, get_provider_spec
 from app.api.v1.dependencies import get_current_user
 from app.core.config import get_settings
 from app.database.session import get_db_session
-from app.models.indexing_job import IndexingJob
+from app.graph.health import GraphHealthService, GraphHealthStatus
+from app.graph.neo4j_repository import Neo4jGraphRepository
+from app.graph.session import get_driver
 from app.models.repository import Repository
 from app.models.user import User
 from app.schemas.system import (
@@ -121,43 +123,38 @@ async def system_status(
     )
 
     # ── Knowledge Base ──────────────────────────────────────────────
-    repo_count_result = await db.execute(
-        select(func.count()).select_from(Repository).where(Repository.user_id == current_user.id)
+    # Health is computed once, per repository, by the same GraphHealthService
+    # Context Discovery reads (app.graph.health) — this used to run its own
+    # independent Postgres-only query ("repos with a completed IndexingJob"),
+    # which is exactly how it ended up disagreeing with Context Discovery's
+    # Neo4j-only answer for the same repository (see the Graph Health
+    # investigation): a completed job whose graph had since gone missing in
+    # Neo4j still counted as "indexed" here. Reading the shared service
+    # instead of re-deriving the count means there is only one definition of
+    # "indexed" for this endpoint to be wrong about.
+    tracked_result = await db.execute(
+        select(Repository).where(Repository.user_id == current_user.id)
     )
-    repos_tracked = repo_count_result.scalar() or 0
+    tracked_repos = list(tracked_result.scalars().all())
 
-    # Count repos with at least one completed indexing job — joined through
-    # to Repository.user_id, same as repos_tracked above. Without this join,
-    # this counted every user's indexing jobs: user A's dashboard showed
-    # progress that included user B's repositories, both an incorrect
-    # figure and a minor cross-tenant data leak (counts only, not content).
-    indexed_result = await db.execute(
-        select(func.count(func.distinct(IndexingJob.repository_id)))
-        .select_from(IndexingJob)
-        .join(Repository, IndexingJob.repository_id == Repository.id)
-        .where(
-            IndexingJob.status == "completed",
-            Repository.user_id == current_user.id,
-        )
-    )
-    repos_indexed = indexed_result.scalar() or 0
+    health_service = GraphHealthService(db, Neo4jGraphRepository(get_driver()))
+    repo_health = await health_service.for_repositories(tracked_repos)
 
-    # Count repos with pending/running indexing — same per-user scoping.
-    pending_result = await db.execute(
-        select(func.count(func.distinct(IndexingJob.repository_id)))
-        .select_from(IndexingJob)
-        .join(Repository, IndexingJob.repository_id == Repository.id)
-        .where(
-            IndexingJob.status.in_(["pending", "running"]),
-            Repository.user_id == current_user.id,
-        )
+    repos_tracked = len(tracked_repos)
+    repos_indexed = sum(1 for h in repo_health if h.status == GraphHealthStatus.HEALTHY)
+    repos_pending = sum(1 for h in repo_health if h.status == GraphHealthStatus.INDEXING)
+    # Repositories with a completed indexing job but no graph Neo4j can
+    # currently produce — previously invisible to this endpoint entirely
+    # (indistinguishable from "healthy", since both had a completed job).
+    repos_graph_missing = sum(
+        1 for h in repo_health if h.status == GraphHealthStatus.GRAPH_MISSING
     )
-    repos_pending = pending_result.scalar() or 0
 
     knowledge_base = KnowledgeBaseStatus(
         repositories_tracked=repos_tracked,
         repositories_indexed=repos_indexed,
         repositories_pending=repos_pending,
+        repositories_graph_missing=repos_graph_missing,
     )
 
     # ── Overall status ──────────────────────────────────────────────

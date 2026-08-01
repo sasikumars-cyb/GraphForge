@@ -17,6 +17,9 @@ export interface KnowledgeBaseStatus {
   repositories_tracked: number;
   repositories_indexed: number;
   repositories_pending: number;
+  // Completed an indexing job at some point, but no graph currently exists
+  // for it in Neo4j — see GraphHealthStatus.GRAPH_MISSING on the backend.
+  repositories_graph_missing: number;
 }
 
 export interface SystemStatusResponse {

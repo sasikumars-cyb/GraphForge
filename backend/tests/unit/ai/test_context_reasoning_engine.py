@@ -33,6 +33,7 @@ from app.context_pipeline.reasoning.capabilities import (
     overall_confidence,
     unmet,
 )
+from app.context_pipeline.reasoning.curation import EvidencePackage
 from app.context_pipeline.reasoning.engine import (
     MAX_CLARIFICATION_ROUNDS,
     MAX_MID_LOOP_SYNTHESIS_CALLS,
@@ -54,6 +55,7 @@ from app.context_pipeline.reasoning.investigators import (
 from app.context_pipeline.reasoning.ledger import FactKind, Ledger
 from app.context_pipeline.reasoning.memory import KnowledgeGap, WorkingContext
 from app.context_pipeline.reasoning.projection import build_result, to_contract_evidence
+from app.context_pipeline.reasoning.understanding import _build_grounding_text
 from app.tools.interfaces import ToolResult
 
 
@@ -263,14 +265,222 @@ def test_satisfied_signals_cite_evidence_and_unsatisfied_ones_explain() -> None:
 def test_inapplicable_capabilities_are_excluded_from_overall_confidence() -> None:
     """A request with no ticket and no doc anchor must not be scored on
     work_item/documentation — the old design defaulted them to 1.0 and
-    inflated the total with capabilities it never examined."""
+    inflated the total with capabilities it never examined. `runtime_
+    execution` is always `not_applicable` too, but for a different reason:
+    RFC-004 Phase 1a shadow mode (see `_runtime_execution_necessity`'s own
+    docstring) — it must never factor into this number regardless of
+    ledger state, which this test's zero-score assertion below also covers."""
     assessments = assess(Ledger())
     assert {a.capability for a in assessments if a.necessity == "not_applicable"} == {
         "work_item",
         "documentation",
+        "runtime_execution",
     }
     # An empty ledger knows nothing, so the honest overall score is zero.
     assert overall_confidence(assessments) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# runtime_execution (RFC-004 Capability 1, Commit 5 — shadow mode)
+# ---------------------------------------------------------------------------
+
+
+def _ledger_with_call_edge(*, with_steps: bool) -> Ledger:
+    ledger = Ledger()
+    ev = ledger.add_evidence(
+        provider="graph", action="build_call_chains", outcome="success", summary="s"
+    )
+    ledger.add_fact(
+        kind="call_edge",
+        subject="etl-core:class:SCDType2Merger",
+        provider="graph",
+        evidence_id=ev.evidence_id,
+        value={
+            "entry_point": "etl-core:class:SCDType2Merger",
+            "steps": (
+                [
+                    {
+                        "source": "etl-core:class:SCDType2Merger",
+                        "target": "detect_changes",
+                        "depth": 1,
+                    }
+                ]
+                if with_steps
+                else []
+            ),
+            "terminal_operations": [],
+            "truncated": False,
+            "cycle_detected": False,
+        },
+    )
+    return ledger
+
+
+def _non_shadow_capability_snapshot(
+    assessments: list[CapabilityAssessment],
+) -> dict[str, tuple[str, float]]:
+    """Every registered capability except `runtime_execution` itself,
+    reduced to (necessity, score) — what shadow mode must never change."""
+    return {
+        a.capability: (a.necessity, a.score)
+        for a in assessments
+        if a.capability != "runtime_execution"
+    }
+
+
+def test_runtime_execution_capability_registers_successfully() -> None:
+    assessments = assess(Ledger())
+    runtime_execution = next(a for a in assessments if a.capability == "runtime_execution")
+    assert runtime_execution.label == "Runtime Execution"
+    assert runtime_execution.necessity == "not_applicable"
+    assert 0.0 <= runtime_execution.score <= 1.0
+
+
+def test_runtime_execution_capability_detects_runtime_evidence() -> None:
+    ledger = _ledger_with_call_edge(with_steps=True)
+    runtime_execution = next(a for a in assess(ledger) if a.capability == "runtime_execution")
+    assert runtime_execution.satisfied is True
+    assert runtime_execution.score == 1.0
+
+
+def test_runtime_execution_capability_reports_unmet_with_no_runtime_evidence() -> None:
+    """ "Unmet" at the assessment level (`.satisfied is False`, `.missing`
+    explains why) — not the same thing as appearing in the aggregate
+    `unmet()` work-queue, which `runtime_execution` never does (see the
+    next test). Both an empty ledger and a ledger with an honest, empty
+    call chain (evidence was gathered, nothing was found) count as unmet."""
+    for ledger in (Ledger(), _ledger_with_call_edge(with_steps=False)):
+        runtime_execution = next(a for a in assess(ledger) if a.capability == "runtime_execution")
+        assert runtime_execution.satisfied is False
+        assert runtime_execution.missing
+        assert runtime_execution.missing[0].detail
+
+
+def test_runtime_execution_never_appears_in_the_unmet_work_queue() -> None:
+    """The structural half of shadow mode: `not_applicable` capabilities are
+    excluded from `unmet()` regardless of their own signals' outcome — this
+    is what keeps `runtime_execution` from ever being something the engine
+    tries to go satisfy."""
+    for ledger in (
+        Ledger(),
+        _ledger_with_call_edge(with_steps=False),
+        _ledger_with_call_edge(with_steps=True),
+    ):
+        pending = unmet(assess(ledger))
+        assert "runtime_execution" not in {a.capability for a in pending}
+
+
+def test_shadow_mode_does_not_change_any_existing_capability_score() -> None:
+    def _base_ledger() -> Ledger:
+        ledger = Ledger()
+        ev = ledger.add_evidence(provider="graph", action="survey", outcome="success", summary="s")
+        fact = ledger.add_fact(
+            kind="repository", subject="etl-core", provider="graph", evidence_id=ev.evidence_id
+        )
+        ledger.add_inference(
+            kind="repository_candidate", statement="etl-core", supporting_fact_ids=[fact.fact_id]
+        )
+        return ledger
+
+    without_call_edge = _base_ledger()
+    with_call_edge = _base_ledger()
+    call_edge_ev = with_call_edge.add_evidence(
+        provider="graph", action="build_call_chains", outcome="success", summary="s"
+    )
+    with_call_edge.add_fact(
+        kind="call_edge",
+        subject="etl-core:class:SCDType2Merger",
+        provider="graph",
+        evidence_id=call_edge_ev.evidence_id,
+        value={
+            "entry_point": "etl-core:class:SCDType2Merger",
+            "steps": [{"source": "a", "target": "b", "depth": 1}],
+        },
+    )
+
+    before = _non_shadow_capability_snapshot(assess(without_call_edge))
+    after = _non_shadow_capability_snapshot(assess(with_call_edge))
+    assert before == after
+    assert overall_confidence(assess(without_call_edge)) == overall_confidence(
+        assess(with_call_edge)
+    )
+
+
+def test_shadow_mode_does_not_change_planning_readiness() -> None:
+    for expected_readiness, build in (
+        ("BLOCKED", lambda: Ledger()),
+        (
+            "READY",
+            lambda: _fully_satisfied_ledger(),
+        ),
+    ):
+        without_call_edge = build()
+        with_call_edge = build()
+        ev = with_call_edge.add_evidence(
+            provider="graph", action="build_call_chains", outcome="success", summary="s"
+        )
+        with_call_edge.add_fact(
+            kind="call_edge",
+            subject="x",
+            provider="graph",
+            evidence_id=ev.evidence_id,
+            value={"entry_point": "x", "steps": [{"source": "a", "target": "b", "depth": 1}]},
+        )
+
+        state_without = WorkingContext()
+        state_without.ledger = without_call_edge
+        state_without.refresh_assessments()
+
+        state_with = WorkingContext()
+        state_with.ledger = with_call_edge
+        state_with.refresh_assessments()
+
+        assert state_without.readiness == state_with.readiness == expected_readiness
+
+
+def _fully_satisfied_ledger() -> Ledger:
+    ledger = Ledger()
+    ev = ledger.add_evidence(provider="graph", action="survey", outcome="success", summary="s")
+    repo_fact = ledger.add_fact(
+        kind="repository", subject="etl-core", provider="graph", evidence_id=ev.evidence_id
+    )
+    ledger.add_inference(
+        kind="repository_candidate", statement="etl-core", supporting_fact_ids=[repo_fact.fact_id]
+    )
+    ledger.add_fact(
+        kind="component",
+        subject="Foo",
+        provider="graph",
+        evidence_id=ev.evidence_id,
+        value={"repository": "etl-core"},
+    )
+    return ledger
+
+
+def test_shadow_mode_does_not_change_engineering_understanding_grounding_text() -> None:
+    """`_build_grounding_text` is exactly what the synthesis LLM call is
+    allowed to see — proving it is byte-identical with and without a
+    `call_edge` fact is the strongest available evidence that Engineering
+    Understanding synthesis is unaffected, short of mocking the LLM call
+    itself."""
+    package = EvidencePackage()
+
+    state_without = WorkingContext()
+    state_without.ledger = Ledger()
+    text_without = _build_grounding_text(state_without, package, {}, None)
+
+    state_with = WorkingContext()
+    state_with.ledger = _ledger_with_call_edge(with_steps=True)
+    text_with = _build_grounding_text(state_with, package, {}, None)
+
+    assert text_without == text_with
+
+
+def test_runtime_execution_assessment_is_deterministic_across_repeated_calls() -> None:
+    ledger = _ledger_with_call_edge(with_steps=True)
+    first = next(a for a in assess(ledger) if a.capability == "runtime_execution")
+    second = next(a for a in assess(ledger) if a.capability == "runtime_execution")
+    assert first == second
 
 
 def test_ambiguity_needs_no_special_case_just_two_live_candidates() -> None:

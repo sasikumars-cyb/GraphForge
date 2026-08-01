@@ -20,6 +20,11 @@ class KnowledgeBaseStatus(BaseModel):
     repositories_tracked: int
     repositories_indexed: int
     repositories_pending: int
+    # Completed an indexing job at some point, but GraphHealthService
+    # (app.graph.health) currently finds no graph for it in Neo4j — the
+    # drift a completed job used to silently count as "indexed" for. See
+    # GraphHealthStatus.GRAPH_MISSING.
+    repositories_graph_missing: int = 0
 
 
 class SystemStatusResponse(BaseModel):

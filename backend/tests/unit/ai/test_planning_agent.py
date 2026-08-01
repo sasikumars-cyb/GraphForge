@@ -573,9 +573,15 @@ async def test_get_indexed_repos_none_indexed() -> None:
     mock_repo1.name = "order-service"
     mock_repo1.owner = "acme"
 
-    mock_result = MagicMock()
-    mock_result.scalars.return_value.all.return_value = [mock_repo1]
-    mock_db.execute.return_value = mock_result
+    mock_repo_result = MagicMock()
+    mock_repo_result.scalars.return_value.all.return_value = [mock_repo1]
+    # GraphHealthService issues a second query — for the latest
+    # IndexingJob.status of repositories with no graph — only when
+    # `has_graph` comes back False, which it does below. No jobs at all
+    # (empty `.all()`) is a legitimate history: never successfully indexed.
+    mock_jobs_result = MagicMock()
+    mock_jobs_result.all.return_value = []
+    mock_db.execute.side_effect = [mock_repo_result, mock_jobs_result]
 
     mock_graph_repo = AsyncMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=False)

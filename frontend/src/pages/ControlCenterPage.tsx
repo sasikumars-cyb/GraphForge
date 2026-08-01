@@ -252,6 +252,13 @@ export function ControlCenterPage() {
                   highlight
                 />
               )}
+              {system.knowledge_base.repositories_graph_missing > 0 && (
+                <MetricRow
+                  label="Graph missing (needs re-index)"
+                  value={system.knowledge_base.repositories_graph_missing}
+                  highlight
+                />
+              )}
             </div>
           </div>
         </section>

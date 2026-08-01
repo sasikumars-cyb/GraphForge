@@ -61,6 +61,7 @@ const healthyStatus: SystemStatusResponse = {
     repositories_tracked: 5,
     repositories_indexed: 3,
     repositories_pending: 1,
+    repositories_graph_missing: 0,
   },
 };
 
@@ -102,6 +103,32 @@ describe("ControlCenterPage", () => {
     renderWithAuth();
 
     expect(await screen.findByText(/Degraded/)).toBeInTheDocument();
+  });
+
+  it("hides the graph-missing row when no repositories are affected", async () => {
+    vi.mocked(systemApi.getSystemStatus).mockResolvedValue(healthyStatus);
+    vi.mocked(githubApi.getConnectionStatus).mockResolvedValue(githubConnected);
+
+    renderWithAuth();
+
+    await screen.findByText("Repositories indexed");
+    expect(screen.queryByText(/Graph missing/)).not.toBeInTheDocument();
+  });
+
+  it("surfaces repositories whose indexing job completed but whose graph is missing", async () => {
+    vi.mocked(systemApi.getSystemStatus).mockResolvedValue({
+      ...healthyStatus,
+      knowledge_base: {
+        ...healthyStatus.knowledge_base,
+        repositories_graph_missing: 2,
+      },
+    });
+    vi.mocked(githubApi.getConnectionStatus).mockResolvedValue(githubConnected);
+
+    renderWithAuth();
+
+    expect(await screen.findByText(/Graph missing/)).toBeInTheDocument();
+    expect(screen.getByText("2")).toBeInTheDocument();
   });
 
   it("displays AI providers with their configuration state", async () => {

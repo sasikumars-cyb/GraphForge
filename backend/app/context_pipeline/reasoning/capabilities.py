@@ -904,6 +904,48 @@ def _documentation_signals(ledger: Ledger) -> list[ConfidenceSignal]:
 
 
 # ---------------------------------------------------------------------------
+# runtime_execution (RFC-004 Capability 1 — shadow mode, Phase 1a)
+# ---------------------------------------------------------------------------
+
+
+def _runtime_execution_necessity(_ledger: Ledger) -> Necessity:
+    """Deliberately always `"not_applicable"` for the whole of Phase 1a —
+    not a placeholder, the actual shadow-mode mechanism. `overall_confidence`
+    and `unmet` both exclude every `not_applicable` assessment, which is the
+    same exclusion the framework already applies to a genuinely inapplicable
+    capability; reused here, unchanged, to keep this capability assessed and
+    visible on its own (see `_runtime_execution_signals`) while structurally
+    incapable of moving the aggregate confidence number, the investigation
+    work-queue (`unmet`), or `engine._select`'s action prioritization. This
+    is not conditioned on evidence — it must hold even once `call_edge`
+    facts exist, which is exactly the case shadow mode exists to observe
+    without acting on."""
+    return "not_applicable"
+
+
+def _runtime_execution_signals(ledger: Ledger) -> list[ConfidenceSignal]:
+    """Evidence-only: reads `call_edge` facts already recorded by
+    `curate_evidence` (RFC-004 Commit 4) and nothing else — no LLM, no
+    inference beyond what a fact literally states. A `call_edge` fact with
+    an empty `steps` list is `curate_evidence`'s own honest "no CALLS edge
+    found" outcome (see `runtime_execution.build_call_chains`'s docstring)
+    — real evidence that nothing was reconstructed, not the same as no
+    attempt having been made, and not treated as satisfying this signal."""
+    call_edge_facts = ledger.facts_of("call_edge")
+    with_steps = [f for f in call_edge_facts if f.value.get("steps")]
+    return [
+        signal(
+            "Call chain reconstructed from CALLS edges",
+            bool(with_steps),
+            LOAD_BEARING_WEIGHT,
+            detail="no call_edge fact recorded at least one traversed CALLS edge",
+            evidence_ids=[f.evidence_id for f in with_steps],
+            fact_ids=[f.fact_id for f in with_steps],
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # The registry
 # ---------------------------------------------------------------------------
 
@@ -962,6 +1004,23 @@ CAPABILITIES: tuple[Capability, ...] = (
         necessity=_documentation_necessity,
         signals=_documentation_signals,
         remediation=lambda _l: ["Connect Confluence", "Link a design page to the ticket"],
+    ),
+    Capability(
+        key="runtime_execution",
+        label="Runtime Execution",
+        gap_summary="No call chain has been reconstructed for this request.",
+        gap_why=(
+            "Shadow mode (RFC-004 Phase 1a): observational only. Never required or "
+            "recommended, so it never blocks readiness or factors into overall confidence — "
+            "see `_runtime_execution_necessity`."
+        ),
+        necessity=_runtime_execution_necessity,
+        signals=_runtime_execution_signals,
+        remediation=lambda _l: [
+            "No action required — Runtime Execution Discovery is observational in this phase."
+        ],
+        # No question/verify: shadow mode never asks the human anything, and
+        # nothing a human could answer would help reconstruct a call chain.
     ),
 )
 
