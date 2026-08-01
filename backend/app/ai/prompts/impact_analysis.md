@@ -1,5 +1,5 @@
 ---
-version: "1.4"
+version: "1.5"
 name: impact_analysis
 ---
 
@@ -67,6 +67,8 @@ provide:
 3. A concise summary of the overall impact.
 4. A release coordination plan — follow the rules in "Release Coordination
    Plan Rules" below exactly.
+5. A general code review — findings, observations, scores, and a merge
+   recommendation — follow "General Review Rules" below exactly.
 
 Use exactly these field names and shapes — do not rename, omit, or flatten
 any field, and do not substitute a plain string where an object is shown:
@@ -103,17 +105,78 @@ any field, and do not substitute a plain string where an object is shown:
       "priority": "high | medium | low",
       "confidence": {"score": 0.8, "reasoning": "Why this confidence level"}
     }
-  ]
+  ],
+  "quality_score": 78,
+  "risk_score": 35,
+  "merge_recommendation": "approve | approve_with_comments | request_changes | block",
+  "findings": [
+    {
+      "category": "architecture | maintainability | reliability | testing | documentation | other",
+      "severity": "critical | high | medium | low",
+      "title": "Short, specific label",
+      "description": "What was observed and why it matters, one or two sentences, citing the specific file/section from above",
+      "confidence": {"score": 0.8, "reasoning": "Why this confidence level"}
+    }
+  ],
+  "architecture_observations": ["One sentence per observation, citing a specific component"],
+  "maintainability_observations": ["One sentence per observation, citing a specific file or pattern"],
+  "reliability_observations": ["One sentence per observation, citing a specific failure mode or missing safeguard"],
+  "testing_review": "1-3 sentences on whether the change's testing (existing or missing) is adequate for its risk.",
+  "documentation_review": "1-3 sentences on whether docs/comments/API contracts were updated to match the change.",
+  "positive_findings": ["One sentence per thing done well, citing something specific"],
+  "suggested_improvements": ["One sentence per concrete, actionable improvement, not a restatement of a finding"]
 }
 ```
 
 `confidence` is always a `{"score": <0.0-1.0>, "reasoning": "..."}` object,
 never a bare string or number — this applies everywhere it appears, in
-`breaking_changes` and `suggested_reviewers` alike. Every object in every
-list above must include every field shown, even if the value is a short
-placeholder — an omitted field is a validation failure, not an
-acceptable shortcut. Empty lists (e.g. `"breaking_changes": []`) are fine
-when nothing qualifies; a list containing an incomplete object is not.
+`breaking_changes`, `suggested_reviewers`, and `findings` alike. Every
+object in every list above must include every field shown, even if the
+value is a short placeholder — an omitted field is a validation failure,
+not an acceptable shortcut. Empty lists (e.g. `"breaking_changes": []`)
+are fine when nothing qualifies; a list containing an incomplete object is
+not.
+
+## General Review Rules
+
+These fields turn the impact analysis above into a general code review.
+Ground every claim in the sections above (diff, changed files, deterministic
+analysis) exactly like "Grounding" requires for the release coordination
+plan — never invent a file, pattern, or issue that isn't visible in the
+context provided.
+
+**Scores.** `quality_score` and `risk_score` are 0-100. `quality_score`
+reflects overall code quality of the change (100 = exemplary, 0 = severely
+flawed); `risk_score` reflects the risk of merging it (0 = negligible risk,
+100 = severe risk — this is independent from `quality_score`: a
+well-written change can still be high-risk, e.g. touching payment logic).
+Base both on the specific findings and breaking changes you identified, not
+a generic impression.
+
+**Merge recommendation.** Exactly one of `approve` (no issues worth
+blocking on), `approve_with_comments` (safe to merge, but has findings
+worth addressing — now or as follow-up), `request_changes` (at least one
+`high` or `critical` finding, or a `high`/`medium` severity breaking change,
+that should be fixed before merge), or `block` (a `critical` finding, or
+severe breaking changes with no adequate migration path). Never pick
+`approve` when any `findings` entry has `severity: "critical"` or
+`"high"`.
+
+**Findings vs. observations.** `findings` is for concrete, specific issues
+worth a reviewer's attention — each must be actionable and tied to
+`severity`. `architecture_observations` / `maintainability_observations` /
+`reliability_observations` are lighter-weight notes (patterns, structural
+choices, notable design decisions) that don't rise to the level of a
+`findings` entry needing its own severity — don't duplicate a `findings`
+entry as an observation too.
+
+**No generic filler.** Every observation, finding, and improvement must
+name something specific from the diff/changed files/deterministic analysis
+above. Banned unless immediately followed by the specific thing named:
+"consider improving code quality," "add more tests," "follow best
+practices," "could be refactored." If there is genuinely nothing to say for
+a category (e.g. no documentation was touched), leave that list/field empty
+or say so explicitly in `documentation_review` — do not pad it.
 
 ## Release Coordination Plan Rules
 

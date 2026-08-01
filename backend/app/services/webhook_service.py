@@ -60,6 +60,32 @@ def _pull_request_state(pr_payload: dict[str, Any]) -> str:
     return str(_require(pr_payload, "state"))
 
 
+def pull_request_fields_from_api_payload(pr_payload: dict[str, Any]) -> dict[str, Any]:
+    """Map a GitHub `pull_request` object (identical shape whether it comes
+    from a webhook event's `payload["pull_request"]` or a direct
+    `GET /repos/{owner}/{repo}/pulls/{number}` call) to `PullRequest`
+    column values. Shared so the standalone AI Workspace PR-URL resolver
+    (`app.api.v1.routers.agent_runs`) doesn't reimplement this mapping.
+    """
+    return {
+        "number": _require(pr_payload, "number"),
+        "title": _require(pr_payload, "title"),
+        "state": _pull_request_state(pr_payload),
+        "is_draft": pr_payload.get("draft", False),
+        "author_login": _require(pr_payload, "user", "login"),
+        "html_url": _require(pr_payload, "html_url"),
+        "head_ref": _require(pr_payload, "head", "ref"),
+        "head_sha": _require(pr_payload, "head", "sha"),
+        "base_ref": _require(pr_payload, "base", "ref"),
+        "github_created_at": datetime.fromisoformat(
+            _require(pr_payload, "created_at").replace("Z", "+00:00")
+        ),
+        "github_updated_at": datetime.fromisoformat(
+            _require(pr_payload, "updated_at").replace("Z", "+00:00")
+        ),
+    }
+
+
 async def handle_pull_request_event(db: AsyncSession, payload: dict[str, Any]) -> list[PullRequest]:
     """Upserts a PullRequest row for every locally-tracked Repository that
     matches the webhook's repository — there's one Repository row per user
@@ -85,23 +111,7 @@ async def handle_pull_request_event(db: AsyncSession, payload: dict[str, Any]) -
         )
         pull_request = existing_result.scalar_one_or_none()
 
-        fields = {
-            "number": _require(pr_payload, "number"),
-            "title": _require(pr_payload, "title"),
-            "state": _pull_request_state(pr_payload),
-            "is_draft": pr_payload.get("draft", False),
-            "author_login": _require(pr_payload, "user", "login"),
-            "html_url": _require(pr_payload, "html_url"),
-            "head_ref": _require(pr_payload, "head", "ref"),
-            "head_sha": _require(pr_payload, "head", "sha"),
-            "base_ref": _require(pr_payload, "base", "ref"),
-            "github_created_at": datetime.fromisoformat(
-                _require(pr_payload, "created_at").replace("Z", "+00:00")
-            ),
-            "github_updated_at": datetime.fromisoformat(
-                _require(pr_payload, "updated_at").replace("Z", "+00:00")
-            ),
-        }
+        fields = pull_request_fields_from_api_payload(pr_payload)
 
         if pull_request is None:
             pull_request = PullRequest(

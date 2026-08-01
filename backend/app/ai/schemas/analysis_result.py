@@ -51,6 +51,23 @@ class RegressionTest(BaseModel):
     confidence: ConfidenceScore
 
 
+class Finding(BaseModel):
+    """A single review observation outside the change-impact categories
+    above (architecture/maintainability/reliability/testing/documentation).
+
+    One shape for every severity rather than four near-identical list
+    fields (``critical_findings``, ``high_findings``, ...) — the UI groups
+    by ``severity`` for display, the schema doesn't need to duplicate
+    itself to support that.
+    """
+
+    category: Literal["architecture", "maintainability", "reliability", "testing", "documentation", "other"]
+    severity: Literal["critical", "high", "medium", "low"]
+    title: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    confidence: ConfidenceScore
+
+
 class DeploymentStep(BaseModel):
     """One step in a cross-repository deployment sequence."""
 
@@ -144,6 +161,15 @@ class AIAnalysisResult(BaseModel):
 
     Returned by a single :meth:`ILLMProvider.analyze` call — contains all
     AI-enriched insights for a pull request in one structured response.
+
+    Fields below ``prompt_version`` (quality/risk score through
+    ``suggested_improvements``) were added to turn this from a
+    breaking-change/migration-focused report into a general-purpose PR
+    review. All are additive with safe defaults, so existing persisted
+    rows (`PullRequestAIAnalysis`) and the non-agent single-shot path
+    (`AIAnalysisService`, which shares this exact schema and prompt) keep
+    validating unchanged — a review generated before this change simply
+    has empty/unset values for the new fields.
     """
 
     executive_summary: str = Field(default="")
@@ -156,3 +182,18 @@ class AIAnalysisResult(BaseModel):
     )
     confidence: ConfidenceScore = Field(default_factory=lambda: ConfidenceScore(score=0.0))
     prompt_version: str = Field(default="")
+
+    # -- General-purpose review fields (additive) --------------------------
+    quality_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    risk_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    merge_recommendation: (
+        Literal["approve", "approve_with_comments", "request_changes", "block"] | None
+    ) = Field(default=None)
+    findings: list[Finding] = Field(default_factory=list)
+    architecture_observations: list[str] = Field(default_factory=list)
+    maintainability_observations: list[str] = Field(default_factory=list)
+    reliability_observations: list[str] = Field(default_factory=list)
+    testing_review: str = Field(default="")
+    documentation_review: str = Field(default="")
+    positive_findings: list[str] = Field(default_factory=list)
+    suggested_improvements: list[str] = Field(default_factory=list)

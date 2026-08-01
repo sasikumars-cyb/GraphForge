@@ -9,6 +9,7 @@ import { DevelopmentPage } from "../pages/DevelopmentPage";
 import { TestingPage } from "../pages/TestingPage";
 import { ReviewPage } from "../pages/ReviewPage";
 import { DocumentationPage } from "../pages/DocumentationPage";
+import { DocumentationHealthPage } from "../pages/DocumentationHealthPage";
 import { RunHistoryPage } from "../pages/RunHistoryPage";
 import { RunDetailPage } from "../pages/RunDetailPage";
 import { PullRequestsPage } from "../pages/PullRequestsPage";
@@ -47,6 +48,7 @@ export const routes: RouteObject[] = [
           { path: "/workspace/testing", element: <TestingPage /> },
           { path: "/workspace/pr-review", element: <ReviewPage /> },
           { path: "/workspace/documentation", element: <DocumentationPage /> },
+          { path: "/workspace/documentation-health", element: <DocumentationHealthPage /> },
 
           // ── Build: Workflows ─────────────────────────────────────
           { path: "/workflows/new", element: <NewWorkflowPage /> },

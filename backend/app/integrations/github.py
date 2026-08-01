@@ -578,6 +578,36 @@ class GitHubVersionControlProvider(IVersionControlProvider, IGitWriteProvider):
             )
         return dict(response.json())
 
+    async def get_pull_request(
+        self,
+        owner: str,
+        repo: str,
+        pull_number: int,
+        access_token: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Fetch a single pull request's metadata by number, or None if it
+        doesn't exist. Not part of `IVersionControlProvider` (same reasoning
+        as `post_pull_request_comment` above) — used to resolve a
+        user-pasted PR URL into a locally tracked `PullRequest` row for the
+        standalone AI Workspace review flow, where no webhook event has
+        necessarily arrived yet for this PR."""
+        headers = dict(_API_HEADERS)
+        if access_token:
+            headers["Authorization"] = f"Bearer {access_token}"
+
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"{_API_BASE}/repos/{owner}/{repo}/pulls/{pull_number}", headers=headers
+            )
+        if response.status_code == 404:
+            return None
+        if response.is_error:
+            raise GitHubApiError(
+                f"GitHub PR request for {owner}/{repo}#{pull_number} failed with status "
+                f"{response.status_code}: {response.text}"
+            )
+        return cast(dict[str, Any], response.json())
+
     async def get_pull_request_by_head(
         self,
         owner: str,

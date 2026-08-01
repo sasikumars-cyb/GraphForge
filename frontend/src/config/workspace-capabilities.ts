@@ -93,10 +93,7 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     icon: HeartPulse,
     color: "teal",
     category: "review",
-    // Backend agent (documentation_health) is registered and functional;
-    // the Workspace page for it is not built yet, so this renders as
-    // "Coming Soon" rather than linking to a route that does not exist.
-    available: false,
+    available: true,
     goal: "analyze_documentation_health",
   },
   {
