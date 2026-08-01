@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import logging
 
+from app.agents.api_intelligence.agent import ApiIntelligenceAgent
+from app.agents.api_intelligence.manifest import API_INTELLIGENCE_MANIFEST
 from app.agents.code_generation.agent import CodeGenerationAgent
 from app.agents.code_generation.manifest import CODE_GENERATION_MANIFEST
 from app.agents.context_discovery.agent import ContextDiscoveryAgent
@@ -94,6 +96,13 @@ def register_agents() -> None:
     if "documentation_health" not in existing_ids:
         global_registry.register(DOCUMENTATION_HEALTH_MANIFEST, DocumentationHealthAgent())
         logger.info("registered_documentation_health_agent")
+
+    # Standalone, Markdown-only AI Workspace capability
+    # (goal=analyze_api_intelligence) — see its manifest for why it has no
+    # Neo4j dependency, unlike documentation_review above.
+    if "api_intelligence" not in existing_ids:
+        global_registry.register(API_INTELLIGENCE_MANIFEST, ApiIntelligenceAgent())
+        logger.info("registered_api_intelligence_agent")
 
     if "engineering_review" not in existing_ids:
         global_registry.register(ENGINEERING_REVIEW_MANIFEST, EngineeringReviewAgent())

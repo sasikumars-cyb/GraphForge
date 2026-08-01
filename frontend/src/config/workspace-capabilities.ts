@@ -16,6 +16,7 @@ import {
   ArrowRightLeft,
   Compass,
   HeartPulse,
+  Network,
   type LucideIcon,
 } from "lucide-react";
 
@@ -95,6 +96,17 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     category: "review",
     available: true,
     goal: "analyze_documentation_health",
+  },
+  {
+    slug: "api-intelligence",
+    name: "API Intelligence",
+    description:
+      "Generate a visual API catalog and security review from Markdown documentation only — endpoints, OpenAPI, Postman, OWASP coverage.",
+    icon: Network,
+    color: "violet",
+    category: "review",
+    available: true,
+    goal: "analyze_api_intelligence",
   },
   {
     slug: "security-review",

@@ -117,6 +117,10 @@ STAGE_DOCUMENTATION_REVIEW = "documentation_review"
 # read-only. Same note as STAGE_DOCUMENTATION_REVIEW above: an AI-provider
 # config resolution key only, not a Workflow stage.
 STAGE_DOCUMENTATION_HEALTH = "documentation_health"
+# Standalone AI Workspace capability (goal=analyze_api_intelligence),
+# Markdown-only. Same note as STAGE_DOCUMENTATION_REVIEW above: an
+# AI-provider config resolution key only, not a Workflow stage.
+STAGE_API_INTELLIGENCE = "api_intelligence"
 
 
 # agent_id -> the stage key that agent resolves under when a run carries no
@@ -137,6 +141,7 @@ _AGENT_DEFAULT_STAGE: dict[str, str] = {
     "code_generation": STAGE_GENERATE_CODE,
     "documentation_review": STAGE_DOCUMENTATION_REVIEW,
     "documentation_health": STAGE_DOCUMENTATION_HEALTH,
+    "api_intelligence": STAGE_API_INTELLIGENCE,
 }
 
 
