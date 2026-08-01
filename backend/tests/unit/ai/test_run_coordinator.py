@@ -162,7 +162,10 @@ async def test_successful_execution_commits_once() -> None:
 
     await coordinator.execute(subject, "plan_freeform")
 
-    mock_db.commit.assert_called_once()
+    # Two commits: the running-transition commit (so a poller on a
+    # different DB session can observe it before the agent finishes) and
+    # the terminal completed/failed commit.
+    assert mock_db.commit.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -330,7 +333,8 @@ async def test_agent_exception_commits_before_raising() -> None:
     with pytest.raises(RuntimeError):
         await coordinator.execute(subject, "plan_freeform")
 
-    mock_db.commit.assert_called_once()
+    # Running-transition commit, then the failure commit.
+    assert mock_db.commit.call_count == 2
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +382,8 @@ async def test_preflight_failure_marks_run_and_step_failed() -> None:
     assert "No API key is configured" in run.error_message
     assert step.status == "failed"
     assert step.error_message == run.error_message
-    mock_db.commit.assert_called_once()
+    # Running-transition commit, then the preflight-failure commit.
+    assert mock_db.commit.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -450,7 +455,8 @@ async def test_preflight_check_raising_still_fails_the_run_cleanly() -> None:
     assert "deprecated-vendor" in run.error_message
     assert step.status == "failed"
     assert step.error_message == run.error_message
-    mock_db.commit.assert_called_once()
+    # Running-transition commit, then the preflight-failure commit.
+    assert mock_db.commit.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -663,8 +669,8 @@ async def test_blocking_pass_and_warning_present_together() -> None:
 @pytest.mark.asyncio
 async def test_warning_persistence_does_not_add_an_extra_commit() -> None:
     """Transaction ownership: recording a warning must not introduce any
-    new commit — RunCoordinator still commits exactly once, the warning
-    rides along in that same commit."""
+    new commit beyond RunCoordinator's normal two (running-transition,
+    terminal) — the warning rides along in the terminal commit."""
     from app.orchestrator.preflight import PreflightWarning
 
     coordinator, mock_db, mock_agent = _build_coordinator(
@@ -682,7 +688,7 @@ async def test_warning_persistence_does_not_add_an_extra_commit() -> None:
     ):
         await coordinator.execute(subject, "create_branch")
 
-    mock_db.commit.assert_called_once()
+    assert mock_db.commit.call_count == 2
 
 
 @pytest.mark.asyncio
@@ -817,7 +823,8 @@ async def test_execute_run_awaiting_input_does_not_complete() -> None:
     assert step.status == "awaiting_input"
     assert step.completed_at is None
     assert step.result["readiness"] == "BLOCKED"
-    mock_db.commit.assert_called_once()
+    # Running-transition commit, then the awaiting_input commit.
+    assert mock_db.commit.call_count == 2
 
 
 @pytest.mark.asyncio

@@ -207,7 +207,16 @@ class RunCoordinator:
 
         run.status = "running"
         run.started_at = datetime.now(UTC)
-        await self._db.flush()
+        # Commit (not just flush) so this transition is visible to the
+        # polling GET /agent-runs/{id} request, which runs in its own DB
+        # session/connection. A flush alone is only visible inside this
+        # same transaction — under READ COMMITTED, a poller reading from a
+        # different connection kept seeing status="queued" for the agent's
+        # entire execution (which can exceed the frontend's 2-minute poll
+        # window), because nothing committed until execute_run's final
+        # commit at completion. Confirmed live: runs sat at "queued" in
+        # Postgres the whole time despite this line having already run.
+        await self._db.commit()
 
         logger.info(
             "agent_run_started run_id=%s agent_id=%s subject_id=%s goal=%s",
@@ -368,7 +377,11 @@ class RunCoordinator:
         """
         step.status = "running"
         run.status = "running"
-        await self._db.flush()
+        # See execute_run's identical commit for why this must be a commit,
+        # not just a flush — otherwise a poller reading from a different
+        # DB session never observes this transition until the whole run
+        # finishes.
+        await self._db.commit()
 
         ctx_extras: dict[str, Any] = {
             "db": self._db,

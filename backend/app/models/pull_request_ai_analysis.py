@@ -50,6 +50,37 @@ class PullRequestAIAnalysis(Base):
     confidence_reasoning: Mapped[str] = mapped_column(Text, nullable=False, default="")
     prompt_version: Mapped[str] = mapped_column(String(50), nullable=False, default="")
 
+    # -- General-purpose review fields (nullable: rows written before these
+    # columns existed have no review to show for them) -----------------
+    quality_score: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    risk_score: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    merge_recommendation: Mapped[str | None] = mapped_column(
+        String(30), nullable=True, default=None
+    )
+    findings: Mapped[list[dict[str, object]]] = mapped_column(JSON, nullable=False, default=list)
+    architecture_observations: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    maintainability_observations: Mapped[list[str]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+    reliability_observations: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    testing_review: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    documentation_review: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    positive_findings: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    suggested_improvements: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+
+    # -- Per-category scores (additive) ----------------------------------
+    security_score: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    testing_score: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    documentation_score: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    architecture_score: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    performance_score: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    maintainability_score: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+
+    # -- Per-file review cards (additive) ---------------------------------
+    file_reviews: Mapped[list[dict[str, object]]] = mapped_column(
+        JSON, nullable=False, default=list
+    )
+
     analyzed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

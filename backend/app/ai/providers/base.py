@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
+from app.agents.prompt_utils import strip_markdown_fence
 from app.ai.interfaces.llm_provider import ILLMProvider
 from app.ai.providers.errors import AIProviderResponseError
 from app.ai.schemas.analysis_result import AIAnalysisResult
@@ -189,7 +190,7 @@ class BaseAnalysisProvider(ILLMProvider):
 
     def _parse_response(self, raw: str) -> AIAnalysisResult:
         try:
-            data = json.loads(raw)
+            data = json.loads(strip_markdown_fence(raw))
         except json.JSONDecodeError as exc:
             raise AIProviderResponseError("AI provider returned invalid JSON.") from exc
 

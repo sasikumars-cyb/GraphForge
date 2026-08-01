@@ -76,7 +76,52 @@ class ReleaseCoordinationPlanResponse(BaseModel):
     rollout_risks: list[str]
 
 
-class AIAnalysisResponse(BaseModel):
+class FindingResponse(BaseModel):
+    category: str
+    severity: str
+    title: str
+    description: str
+    confidence: ConfidenceScoreResponse
+
+
+class FileReviewResponse(BaseModel):
+    file: str
+    complexity: str
+    risk: str
+    issues: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+
+class GeneralReviewFieldsMixin(BaseModel):
+    """Shared general-purpose review fields, mixed into every response
+    shape that carries a full ``AIAnalysisResult`` (POST .../ai-analysis,
+    GET .../ai-analysis, POST .../investigate) so they stay in lockstep
+    instead of drifting across three hand-copied field lists."""
+
+    quality_score: float | None = None
+    risk_score: float | None = None
+    merge_recommendation: (
+        Literal["approve", "approve_with_comments", "request_changes", "block"] | None
+    ) = None
+    findings: list[FindingResponse] = Field(default_factory=list)
+    architecture_observations: list[str] = Field(default_factory=list)
+    maintainability_observations: list[str] = Field(default_factory=list)
+    reliability_observations: list[str] = Field(default_factory=list)
+    testing_review: str = ""
+    documentation_review: str = ""
+    positive_findings: list[str] = Field(default_factory=list)
+    suggested_improvements: list[str] = Field(default_factory=list)
+    security_score: float | None = None
+    testing_score: float | None = None
+    documentation_score: float | None = None
+    architecture_score: float | None = None
+    performance_score: float | None = None
+    maintainability_score: float | None = None
+    file_reviews: list[FileReviewResponse] = Field(default_factory=list)
+
+
+class AIAnalysisResponse(GeneralReviewFieldsMixin):
     """Response returned by GET /pull-requests/{id}/ai-analysis."""
 
     model_config = ConfigDict(from_attributes=True)
@@ -94,7 +139,7 @@ class AIAnalysisResponse(BaseModel):
     analyzed_at: datetime
 
 
-class AIAnalysisResultResponse(BaseModel):
+class AIAnalysisResultResponse(GeneralReviewFieldsMixin):
     """Response returned by POST /pull-requests/{id}/ai-analysis.
 
     Mirrors ``AIAnalysisResult`` from the schemas package.
@@ -132,7 +177,7 @@ class ReasoningStepResponse(BaseModel):
     decision: str
 
 
-class InvestigationResponse(BaseModel):
+class InvestigationResponse(GeneralReviewFieldsMixin):
     """Response returned by POST /pull-requests/{id}/investigate.
 
     Mirrors ``AIAnalysisResultResponse`` plus the agent's full,

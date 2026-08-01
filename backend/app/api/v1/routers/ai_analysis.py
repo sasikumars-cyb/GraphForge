@@ -1,8 +1,9 @@
 """AI-enriched pull request analysis endpoints."""
 
 import uuid
+from typing import Any, Literal
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -12,6 +13,8 @@ from app.ai.schemas.analysis_result import (
     AIAnalysisResult,
     BreakingChange,
     ConfidenceScore,
+    FileReview,
+    Finding,
     MigrationAdvice,
     RegressionTest,
     ReleaseCoordinationPlan,
@@ -19,6 +22,12 @@ from app.ai.schemas.analysis_result import (
 )
 from app.ai.services.ai_analysis_service import AIAnalysisService
 from app.ai.services.github_comment_formatter import format_review_comment
+from app.ai.services.pr_review_report import (
+    ReviewReportContext,
+    render_html_report,
+    render_json_report,
+    render_markdown_report,
+)
 from app.analysis.engine.impact_analysis_engine import ImpactAnalysisEngine
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
 from app.api.v1.dependencies import get_current_user
@@ -59,6 +68,34 @@ async def _get_owned_pull_request(
     if pull_request is None:
         raise NotFoundError("Pull request not found.")
     return pull_request
+
+
+def _general_review_fields(result: AIAnalysisResult) -> dict[str, Any]:
+    """Shared kwargs for the general-purpose review fields every
+    ``AIAnalysisResult``-mirroring response carries (see
+    ``GeneralReviewFieldsMixin``) — kept in one place so the two call
+    sites below (POST .../ai-analysis and POST .../investigate) can't
+    drift out of sync with each other or with the schema."""
+    return {
+        "quality_score": result.quality_score,
+        "risk_score": result.risk_score,
+        "merge_recommendation": result.merge_recommendation,
+        "findings": [f.model_dump() for f in result.findings],
+        "architecture_observations": result.architecture_observations,
+        "maintainability_observations": result.maintainability_observations,
+        "reliability_observations": result.reliability_observations,
+        "testing_review": result.testing_review,
+        "documentation_review": result.documentation_review,
+        "positive_findings": result.positive_findings,
+        "suggested_improvements": result.suggested_improvements,
+        "security_score": result.security_score,
+        "testing_score": result.testing_score,
+        "documentation_score": result.documentation_score,
+        "architecture_score": result.architecture_score,
+        "performance_score": result.performance_score,
+        "maintainability_score": result.maintainability_score,
+        "file_reviews": [fr.model_dump() for fr in result.file_reviews],
+    }
 
 
 def _build_ai_service(db: AsyncSession, model: str | None = None) -> AIAnalysisService:
@@ -117,6 +154,7 @@ async def run_ai_analysis(
         release_coordination_plan=result.release_coordination_plan.model_dump(),
         confidence=result.confidence.model_dump(),
         prompt_version=result.prompt_version,
+        **_general_review_fields(result),
     )
 
 
@@ -182,6 +220,7 @@ async def investigate_pull_request(
         release_coordination_plan=result.release_coordination_plan.model_dump(),
         confidence=result.confidence.model_dump(),
         prompt_version=result.prompt_version,
+        **_general_review_fields(result),
         reasoning_log=[
             ReasoningStepResponse(
                 step_number=step.step_number,
@@ -295,3 +334,112 @@ async def publish_review(
     )
 
     return PublishReviewResponse(comment_id=posted.id, comment_url=posted.html_url)
+
+
+_REPORT_MEDIA_TYPES = {
+    "html": "text/html; charset=utf-8",
+    "markdown": "text/markdown; charset=utf-8",
+    "json": "application/json",
+}
+
+
+def _ai_analysis_row_to_result(ai_analysis: PullRequestAIAnalysis) -> AIAnalysisResult:
+    """Rehydrate the full `AIAnalysisResult` (general-review fields
+    included) from the persisted row, the same reconstruction
+    `publish_review` already does for the breaking-change fields, extended
+    to the fields that route added."""
+    return AIAnalysisResult(
+        executive_summary=ai_analysis.executive_summary,
+        breaking_changes=[BreakingChange.model_validate(bc) for bc in ai_analysis.breaking_changes],
+        migration_advice=[
+            MigrationAdvice.model_validate(ma) for ma in ai_analysis.migration_advice
+        ],
+        suggested_reviewers=[
+            SuggestedReviewer.model_validate(sr) for sr in ai_analysis.suggested_reviewers
+        ],
+        regression_tests=[RegressionTest.model_validate(rt) for rt in ai_analysis.regression_tests],
+        release_coordination_plan=ReleaseCoordinationPlan.model_validate(
+            ai_analysis.release_coordination_plan or {}
+        ),
+        confidence=ConfidenceScore(
+            score=ai_analysis.confidence_score, reasoning=ai_analysis.confidence_reasoning
+        ),
+        prompt_version=ai_analysis.prompt_version,
+        quality_score=ai_analysis.quality_score,
+        risk_score=ai_analysis.risk_score,
+        merge_recommendation=ai_analysis.merge_recommendation,
+        findings=[Finding.model_validate(f) for f in ai_analysis.findings],
+        architecture_observations=ai_analysis.architecture_observations,
+        maintainability_observations=ai_analysis.maintainability_observations,
+        reliability_observations=ai_analysis.reliability_observations,
+        testing_review=ai_analysis.testing_review,
+        documentation_review=ai_analysis.documentation_review,
+        positive_findings=ai_analysis.positive_findings,
+        suggested_improvements=ai_analysis.suggested_improvements,
+        security_score=ai_analysis.security_score,
+        testing_score=ai_analysis.testing_score,
+        documentation_score=ai_analysis.documentation_score,
+        architecture_score=ai_analysis.architecture_score,
+        performance_score=ai_analysis.performance_score,
+        maintainability_score=ai_analysis.maintainability_score,
+        file_reviews=[FileReview.model_validate(fr) for fr in ai_analysis.file_reviews],
+    )
+
+
+@router.get(
+    "/{pull_request_id}/review-report",
+    summary="Get the PR Review executive report (HTML/Markdown/JSON)",
+    description=(
+        "Renders the most recently persisted AI analysis for this pull request "
+        "as a standalone executive report. `format=html` (default) returns a "
+        "self-contained dark-theme dashboard with no external dependencies; "
+        "`format=markdown` returns a Markdown report; `format=json` returns "
+        "the structured report. Never invokes an LLM - the analysis must "
+        "already have been run via .../ai-analysis or .../investigate."
+    ),
+)
+async def get_review_report(
+    pull_request_id: uuid.UUID,
+    report_format: Literal["html", "markdown", "json"] = Query("html", alias="format"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> Response:
+    pull_request = await _get_owned_pull_request(db, pull_request_id, current_user)
+
+    ai_result = await db.execute(
+        select(PullRequestAIAnalysis).where(
+            PullRequestAIAnalysis.pull_request_id == pull_request.id
+        )
+    )
+    ai_analysis = ai_result.scalar_one_or_none()
+    if ai_analysis is None:
+        raise NotFoundError("No AI analysis has been run for this pull request yet.")
+
+    repository = await db.get(Repository, pull_request.repository_id)
+    if repository is None:
+        raise AppError(
+            f"Repository '{pull_request.repository_id}' referenced by pull request "
+            f"'{pull_request.id}' no longer exists.",
+            status_code=500,
+            error_code="repository_not_found",
+        )
+
+    ctx = ReviewReportContext(
+        repository=f"{repository.owner}/{repository.name}",
+        pull_request_number=pull_request.number,
+        pull_request_title=pull_request.title,
+        head_ref=pull_request.head_ref,
+        base_ref=pull_request.base_ref,
+        analyzed_at=ai_analysis.analyzed_at,
+        model_used="",
+        result=_ai_analysis_row_to_result(ai_analysis),
+    )
+
+    if report_format == "html":
+        body = render_html_report(ctx)
+    elif report_format == "markdown":
+        body = render_markdown_report(ctx)
+    else:
+        body = render_json_report(ctx)
+
+    return Response(content=body, media_type=_REPORT_MEDIA_TYPES[report_format])

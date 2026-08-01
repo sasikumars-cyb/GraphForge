@@ -1,5 +1,5 @@
 ---
-version: "1.5"
+version: "1.6"
 name: impact_analysis
 ---
 
@@ -111,7 +111,7 @@ any field, and do not substitute a plain string where an object is shown:
   "merge_recommendation": "approve | approve_with_comments | request_changes | block",
   "findings": [
     {
-      "category": "architecture | maintainability | reliability | testing | documentation | other",
+      "category": "architecture | maintainability | reliability | testing | documentation | security | performance | other",
       "severity": "critical | high | medium | low",
       "title": "Short, specific label",
       "description": "What was observed and why it matters, one or two sentences, citing the specific file/section from above",
@@ -124,7 +124,23 @@ any field, and do not substitute a plain string where an object is shown:
   "testing_review": "1-3 sentences on whether the change's testing (existing or missing) is adequate for its risk.",
   "documentation_review": "1-3 sentences on whether docs/comments/API contracts were updated to match the change.",
   "positive_findings": ["One sentence per thing done well, citing something specific"],
-  "suggested_improvements": ["One sentence per concrete, actionable improvement, not a restatement of a finding"]
+  "suggested_improvements": ["One sentence per concrete, actionable improvement, not a restatement of a finding"],
+  "security_score": 90,
+  "testing_score": 60,
+  "documentation_score": 70,
+  "architecture_score": 80,
+  "performance_score": 85,
+  "maintainability_score": 75,
+  "file_reviews": [
+    {
+      "file": "The exact path from Changed Files above",
+      "complexity": "low | medium | high",
+      "risk": "low | medium | high",
+      "issues": ["One sentence per issue found in this file"],
+      "suggestions": ["One sentence per concrete suggestion for this file"],
+      "summary": "1-2 sentences on what changed in this file and why it matters"
+    }
+  ]
 }
 ```
 
@@ -177,6 +193,22 @@ above. Banned unless immediately followed by the specific thing named:
 practices," "could be refactored." If there is genuinely nothing to say for
 a category (e.g. no documentation was touched), leave that list/field empty
 or say so explicitly in `documentation_review` — do not pad it.
+
+**Category scores.** Each of `security_score`, `testing_score`,
+`documentation_score`, `architecture_score`, `performance_score`, and
+`maintainability_score` is 0-100 (higher is better), independently scored —
+a change can be architecturally excellent and poorly tested at once. Base
+each on findings/observations actually tied to that category; if the change
+genuinely touches nothing relevant to a category (e.g. no security-sensitive
+code), set that score to `null` rather than guessing a number.
+
+**File reviews.** Produce one `file_reviews` entry per path listed in
+"Changed Files" above — never a file that isn't in that list, and never
+more than one entry per file. `complexity` reflects how intricate the
+change to that file is to review; `risk` reflects how likely that file's
+change is to cause a defect if wrong. Leave `issues`/`suggestions` empty
+when there is genuinely nothing file-specific to add beyond what's already
+in `findings`.
 
 ## Release Coordination Plan Rules
 

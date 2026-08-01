@@ -236,6 +236,105 @@ async def test_post_ai_analysis_then_get(
     assert "release_coordination_plan" not in get_body
 
 
+async def test_review_report_404_before_ai_analysis_exists(
+    client: AsyncClient, ai_test_setup: tuple[dict[str, str], str, str]
+) -> None:
+    headers, _, pull_request_id = ai_test_setup
+
+    response = await client.get(
+        f"/api/v1/pull-requests/{pull_request_id}/review-report", headers=headers
+    )
+    assert response.status_code == 404
+
+
+async def test_review_report_renders_html_markdown_and_json(
+    client: AsyncClient, ai_test_setup: tuple[dict[str, str], str, str]
+) -> None:
+    """After AI analysis runs, GET .../review-report renders each of the
+    three supported formats from the persisted result, without invoking
+    the LLM again."""
+    headers, _, pull_request_id = ai_test_setup
+
+    mock_provider = AsyncMock()
+    mock_provider.analyze = AsyncMock(return_value=_FAKE_AI_RESULT)
+
+    with (
+        patch.object(
+            GitHubVersionControlProvider,
+            "list_changed_files",
+            AsyncMock(
+                return_value=[
+                    ChangedFile(
+                        path="src/main/java/com/example/orders/OrderEventProducer.java",
+                        status="modified",
+                    )
+                ]
+            ),
+        ),
+        patch(
+            "app.api.v1.routers.ai_analysis.StageAwareLLMProvider",
+            return_value=mock_provider,
+        ),
+    ):
+        post_response = await client.post(
+            f"/api/v1/pull-requests/{pull_request_id}/ai-analysis", headers=headers
+        )
+    assert post_response.status_code == 200
+
+    html_response = await client.get(
+        f"/api/v1/pull-requests/{pull_request_id}/review-report", headers=headers
+    )
+    assert html_response.status_code == 200
+    assert html_response.headers["content-type"].startswith("text/html")
+    assert "This PR modifies the order event producer." in html_response.text
+    assert "PR #42" in html_response.text
+    assert "Not assessed" in html_response.text  # this fixture sets no merge_recommendation
+    assert "<script>" in html_response.text
+
+    md_response = await client.get(
+        f"/api/v1/pull-requests/{pull_request_id}/review-report?format=markdown",
+        headers=headers,
+    )
+    assert md_response.status_code == 200
+    assert md_response.headers["content-type"].startswith("text/markdown")
+    assert "# PR Review Report" in md_response.text
+
+    json_response = await client.get(
+        f"/api/v1/pull-requests/{pull_request_id}/review-report?format=json",
+        headers=headers,
+    )
+    assert json_response.status_code == 200
+    assert json_response.headers["content-type"].startswith("application/json")
+    json_body = json_response.json()
+    assert (
+        json_body["executive_summary"]["summary"]
+        == "This PR modifies the order event producer."
+    )
+    assert json_body["executive_summary"]["pull_request_number"] == 42
+
+
+async def test_review_report_404s_for_another_users_pr(
+    client: AsyncClient, ai_test_setup: tuple[dict[str, str], str, str]
+) -> None:
+    _, _, pull_request_id = ai_test_setup
+    other_email = f"ai-report-other-{uuid.uuid4().hex[:8]}@example.com"
+    password = "correct-horse-battery-staple"  # noqa: S105
+
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": other_email, "password": password, "full_name": "Other User"},
+    )
+    login = await client.post(
+        "/api/v1/auth/login", json={"email": other_email, "password": password}
+    )
+    other_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    response = await client.get(
+        f"/api/v1/pull-requests/{pull_request_id}/review-report", headers=other_headers
+    )
+    assert response.status_code == 404
+
+
 async def test_ai_analysis_endpoint_404s_for_another_users_pr(
     client: AsyncClient, ai_test_setup: tuple[dict[str, str], str, str]
 ) -> None:

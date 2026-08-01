@@ -53,7 +53,8 @@ class RegressionTest(BaseModel):
 
 class Finding(BaseModel):
     """A single review observation outside the change-impact categories
-    above (architecture/maintainability/reliability/testing/documentation).
+    above (architecture/maintainability/reliability/testing/documentation/
+    security/performance).
 
     One shape for every severity rather than four near-identical list
     fields (``critical_findings``, ``high_findings``, ...) — the UI groups
@@ -61,11 +62,36 @@ class Finding(BaseModel):
     itself to support that.
     """
 
-    category: Literal["architecture", "maintainability", "reliability", "testing", "documentation", "other"]
+    category: Literal[
+        "architecture",
+        "maintainability",
+        "reliability",
+        "testing",
+        "documentation",
+        "security",
+        "performance",
+        "other",
+    ]
     severity: Literal["critical", "high", "medium", "low"]
     title: str = Field(min_length=1)
     description: str = Field(min_length=1)
     confidence: ConfidenceScore
+
+
+class FileReview(BaseModel):
+    """Per-file review card for one changed file.
+
+    Grounded to a path from the "Changed Files" prompt section — never a
+    file the model invented — the same grounding discipline every other
+    list in this schema already requires.
+    """
+
+    file: str = Field(min_length=1)
+    complexity: Literal["low", "medium", "high"]
+    risk: Literal["low", "medium", "high"]
+    issues: list[str] = Field(default_factory=list)
+    suggestions: list[str] = Field(default_factory=list)
+    summary: str = Field(default="")
 
 
 class DeploymentStep(BaseModel):
@@ -197,3 +223,17 @@ class AIAnalysisResult(BaseModel):
     documentation_review: str = Field(default="")
     positive_findings: list[str] = Field(default_factory=list)
     suggested_improvements: list[str] = Field(default_factory=list)
+
+    # -- Per-category scores (additive) -------------------------------------
+    # 0-100, same scale/direction as quality_score (higher is better) -
+    # None when the category wasn't assessed (e.g. no security-relevant
+    # code was touched), distinct from a real 0.
+    security_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    testing_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    documentation_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    architecture_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    performance_score: float | None = Field(default=None, ge=0.0, le=100.0)
+    maintainability_score: float | None = Field(default=None, ge=0.0, le=100.0)
+
+    # -- Per-file review cards (additive) ------------------------------------
+    file_reviews: list[FileReview] = Field(default_factory=list)
