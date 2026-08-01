@@ -16,6 +16,7 @@ from app.api.v1.routers.knowledge import router as knowledge_router
 from app.api.v1.routers.oauth import router as oauth_router
 from app.api.v1.routers.oauth_apps import router as oauth_apps_router
 from app.api.v1.routers.pull_requests import router as pull_requests_router
+from app.api.v1.routers.reports import router as reports_router
 from app.api.v1.routers.repositories import router as repositories_router
 from app.api.v1.routers.system import router as system_router
 from app.api.v1.routers.test_case_uploads import router as test_case_uploads_router
@@ -46,5 +47,6 @@ api_router.include_router(jira_router)
 api_router.include_router(testrail_router)
 api_router.include_router(test_case_uploads_router)
 api_router.include_router(engineering_sessions_router)
+api_router.include_router(reports_router)
 
 __all__ = ["api_router"]

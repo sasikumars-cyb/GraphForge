@@ -34,6 +34,8 @@ from app.agents.git_ops.manifests import (
 from app.agents.git_ops.run_tests_agent import TestRunnerAgent
 from app.agents.planning.agent import PlanningAgent
 from app.agents.planning.manifest import PLANNING_MANIFEST
+from app.agents.report_generation.agent import ReportGenerationAgent
+from app.agents.report_generation.manifest import REPORT_GENERATION_MANIFEST
 from app.agents.review_adapter import REVIEW_MANIFEST, ReviewAgentAdapter
 from app.agents.testing.agent import TestPlanningAgent
 from app.agents.testing.manifest import TESTING_MANIFEST
@@ -98,3 +100,7 @@ def register_agents() -> None:
     if "create_pull_request" not in existing_ids:
         global_registry.register(CREATE_PULL_REQUEST_MANIFEST, CreatePullRequestAgent())
         logger.info("registered_create_pull_request_agent")
+
+    if "report_generation" not in existing_ids:
+        global_registry.register(REPORT_GENERATION_MANIFEST, ReportGenerationAgent())
+        logger.info("registered_report_generation_agent")

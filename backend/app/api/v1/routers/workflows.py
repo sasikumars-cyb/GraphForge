@@ -37,6 +37,7 @@ from app.mappers.engineering_understanding_mapper import map_to_dto
 from app.models.run import Run
 from app.models.user import User
 from app.models.workflow import Workflow
+from app.models.workflow_report import WorkflowReport
 from app.orchestrator.registry import global_registry
 from app.orchestrator.selector import AgentSelector
 from app.schemas.engineering_understanding import (
@@ -431,6 +432,43 @@ def _workflow_stage_finalizer(workflow_id: uuid.UUID) -> OnComplete:
 
     async def _finalize(db: AsyncSession, run: Run) -> None:
         await workflow_service.finalize_stage_run(db, workflow_id, run)
+
+    return _finalize
+
+
+def _report_finalizer(report_id: uuid.UUID) -> OnComplete:
+    """Build the on_complete callback for the report_generation agent's
+    run — persists {"title", "html"} from the completed AgentStep's result
+    into the WorkflowReport row this run was dispatched for. Runs in the
+    background task's own DB session, same pattern as
+    _workflow_stage_finalizer above.
+    """
+
+    async def _finalize(db: AsyncSession, run: Run) -> None:
+        report = await db.get(WorkflowReport, report_id)
+        if report is None:
+            logger.error("workflow_report_vanished report_id=%s", str(report_id))
+            return
+
+        if run.status != "completed":
+            report.status = "failed"
+            report.error_message = run.error_message or "Report generation run did not complete."
+            report.completed_at = datetime.now(UTC)
+            return
+
+        step = run.steps[0] if run.steps else None
+        result = step.result if step else {}
+        html = result.get("html")
+        if not html:
+            report.status = "failed"
+            report.error_message = "Report generation completed with no HTML content."
+            report.completed_at = datetime.now(UTC)
+            return
+
+        report.title = result.get("title") or report.title
+        report.html_content = html
+        report.status = "completed"
+        report.completed_at = datetime.now(UTC)
 
     return _finalize
 
@@ -1431,7 +1469,47 @@ async def approve_workflow(
         )
 
     await workflow_service.approve_workflow(db, workflow, user.id)
-    await db.commit()
+
+    # Kick off the high-level HTML report — see app.agents.report_generation.
+    # Best-effort: a failure here must never block the approval itself
+    # (already flushed above in the same transaction), so it's logged,
+    # not raised, and the report row is marked "failed" rather than left
+    # "pending" forever if run creation itself never succeeds.
+    report = WorkflowReport(workflow_id=workflow.id, title=workflow.title, status="pending")
+    db.add(report)
+    try:
+        from app.orchestrator.background_execution import schedule_run_execution
+        from app.orchestrator.run_coordinator import RunCoordinator
+
+        subject = resolve_freetext(workflow.title)
+        selector = AgentSelector(global_registry)
+        coordinator = RunCoordinator(db=db, registry=global_registry, selector=selector)
+        run, agent_id, _agent = await coordinator.create_pending_run(
+            subject=subject, goal="generate_report"
+        )
+        run.workflow_id = workflow.id
+        report.run_id = run.id
+        await db.commit()
+
+        schedule_run_execution(
+            run_id=run.id,
+            subject=subject,
+            goal="generate_report",
+            model=None,
+            extras={"workflow": workflow, "user_id": user.id},
+            agent_id=agent_id,
+            registry=global_registry,
+            on_complete=_report_finalizer(report.id),
+        )
+    except Exception as exc:
+        logger.exception(
+            "workflow_report_dispatch_failed workflow_id=%s — approval itself is unaffected",
+            str(workflow.id),
+        )
+        report.status = "failed"
+        report.error_message = str(exc)
+        await db.commit()
+
     return WorkflowApprovalResponse(workflow_id=str(workflow.id), status=workflow.status)
 
 

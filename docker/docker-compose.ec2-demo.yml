@@ -66,6 +66,14 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       # Only used if you also test the merged DeepSeek provider - harmless blank otherwise.
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      # Google Drive OAuth callback - config.py's own default
+      # (http://localhost:8000/...) only works for local dev. Client
+      # ID/secret are admin-configured via Settings -> Integrations (stored
+      # in Postgres, see app.services.oauth_app_config_service) and don't
+      # need an env var here, but the redirect_uri has no such UI path yet -
+      # it must match, byte-for-byte, an "Authorized redirect URI" the admin
+      # registers on the Google Cloud OAuth Client itself.
+      GOOGLE_OAUTH_REDIRECT_URI: https://${DOMAIN:?Set DOMAIN in docker/.env}/api/v1/google-drive/callback
     depends_on:
       db:
         condition: service_healthy

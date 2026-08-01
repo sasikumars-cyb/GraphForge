@@ -39,6 +39,7 @@ from app.models.test_case_upload import TestCaseUpload  # noqa: F401
 from app.models.testrail_sync_job import TestRailSyncJob  # noqa: F401
 from app.models.user import User  # noqa: F401
 from app.models.workflow import Workflow  # noqa: F401 - all eleven register with Base.metadata
+from app.models.workflow_report import WorkflowReport  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:
