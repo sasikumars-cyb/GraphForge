@@ -54,6 +54,9 @@ export function mergeGraphs(graphs: Graph[]): Graph {
 export interface RepositoryDependencyEdge {
   source: string;
   target: string;
+  /** Human-readable labels describing why this edge exists - shared Kafka
+   * topic names from `buildRepositoryDependencyEdges`, or relationship
+   * types (e.g. "CALLS_SERVICE") from `buildStructuralDependencyEdges`. */
   topics: string[];
 }
 
@@ -107,6 +110,63 @@ export function buildRepositoryDependencyEdges(
     }
   }
 
+  return Array.from(edgeByPair.values());
+}
+
+const REPOSITORY_NODE_SUFFIX = ":repository";
+
+/**
+ * Converts the structural repository-to-repository edges from
+ * `getAllCrossRepositoryEdges` (CALLS_SERVICE/SHARES_TOPIC/
+ * DEPENDS_ON_REPOSITORY, computed by the backend's cross-repository linker)
+ * into the same `RepositoryDependencyEdge` shape the overview graph already
+ * renders for Kafka topic overlap - see `buildRepositoryDependencyEdges`.
+ *
+ * `source_id`/`target_id` on these edges are `"{repository_id}:repository"`
+ * (see `cross_repo_linker._repository_node_id`), not a bare repository id,
+ * so that suffix is stripped to match `RepositorySummary.id`.
+ */
+export function buildStructuralDependencyEdges(edges: GraphEdge[]): RepositoryDependencyEdge[] {
+  const edgeByPair = new Map<string, RepositoryDependencyEdge>();
+  for (const e of edges) {
+    if (!e.source_id.endsWith(REPOSITORY_NODE_SUFFIX) || !e.target_id.endsWith(REPOSITORY_NODE_SUFFIX)) {
+      continue;
+    }
+    const source = e.source_id.slice(0, -REPOSITORY_NODE_SUFFIX.length);
+    const target = e.target_id.slice(0, -REPOSITORY_NODE_SUFFIX.length);
+    const key = `${source}->${target}`;
+    const edge = edgeByPair.get(key) ?? { source, target, topics: [] };
+    if (!edge.topics.includes(e.type)) {
+      edge.topics.push(e.type);
+    }
+    edgeByPair.set(key, edge);
+  }
+  return Array.from(edgeByPair.values());
+}
+
+/**
+ * Combines the Kafka-overlap edges and the structural edges above into one
+ * list for the overview graph, merging labels for any repository pair that
+ * both sources independently connect (e.g. a pair sharing a Kafka topic
+ * `AND` having a Feign call between them shows as one edge with both
+ * labels, not two overlapping arrows).
+ */
+export function mergeRepositoryDependencyEdges(
+  ...edgeLists: RepositoryDependencyEdge[][]
+): RepositoryDependencyEdge[] {
+  const edgeByPair = new Map<string, RepositoryDependencyEdge>();
+  for (const edges of edgeLists) {
+    for (const e of edges) {
+      const key = `${e.source}->${e.target}`;
+      const edge = edgeByPair.get(key) ?? { source: e.source, target: e.target, topics: [] };
+      for (const topic of e.topics) {
+        if (!edge.topics.includes(topic)) {
+          edge.topics.push(topic);
+        }
+      }
+      edgeByPair.set(key, edge);
+    }
+  }
   return Array.from(edgeByPair.values());
 }
 

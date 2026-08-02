@@ -15,9 +15,11 @@ from app.api.v1.routers.google_drive import router as google_drive_router
 from app.api.v1.routers.health import router as health_router
 from app.api.v1.routers.jira import router as jira_router
 from app.api.v1.routers.knowledge import router as knowledge_router
+from app.api.v1.routers.learning import router as learning_router
 from app.api.v1.routers.metrics import router as metrics_router
 from app.api.v1.routers.oauth import router as oauth_router
 from app.api.v1.routers.oauth_apps import router as oauth_apps_router
+from app.api.v1.routers.parity import router as parity_router
 from app.api.v1.routers.pull_requests import router as pull_requests_router
 from app.api.v1.routers.reports import router as reports_router
 from app.api.v1.routers.repositories import router as repositories_router
@@ -45,6 +47,8 @@ api_router.include_router(system_router)
 api_router.include_router(webhooks_router)
 api_router.include_router(tools_router)
 api_router.include_router(knowledge_router)
+api_router.include_router(learning_router)
+api_router.include_router(parity_router)
 api_router.include_router(calibration_router)
 api_router.include_router(jira_router)
 api_router.include_router(testrail_router)

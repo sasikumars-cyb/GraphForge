@@ -1,5 +1,5 @@
 import { apiFetch } from "./client";
-import type { CrossRepositoryLink, Graph, IndexingJob } from "../../types/graph";
+import type { CrossRepositoryLink, Graph, GraphEdge, IndexingJob } from "../../types/graph";
 import type { PullRequest } from "../../types/pullRequest";
 import type { LocalRepositoryCreateRequest, TrackedRepository } from "../../types/github";
 
@@ -32,6 +32,14 @@ export function getCrossRepositoryLinks(
  * by the Architecture overview instead of one call per repository. */
 export function getAllCrossRepositoryLinks(token: string): Promise<CrossRepositoryLink[]> {
   return apiFetch<CrossRepositoryLink[]>(`/repositories/cross-repository-links`, { token });
+}
+
+/** Structural repository-to-repository edges (CALLS_SERVICE/SHARES_TOPIC/
+ * DEPENDS_ON_REPOSITORY) computed by the cross-repository linker - distinct
+ * from `getAllCrossRepositoryLinks` above, which only covers Kafka topic
+ * overlap. `source_id`/`target_id` are `"{repository_id}:repository"`. */
+export function getAllCrossRepositoryEdges(token: string): Promise<GraphEdge[]> {
+  return apiFetch<GraphEdge[]>(`/repositories/cross-repository-edges`, { token });
 }
 
 export function getRepositoryServices(token: string, repositoryId: string): Promise<Graph> {

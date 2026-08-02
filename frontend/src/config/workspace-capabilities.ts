@@ -17,6 +17,7 @@ import {
   Compass,
   HeartPulse,
   Network,
+  GitCompare,
   type LucideIcon,
 } from "lucide-react";
 
@@ -109,6 +110,16 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     goal: "analyze_api_intelligence",
   },
   {
+    slug: "graph-parity",
+    name: "Graph Parity",
+    description:
+      "Compare the live Neo4j graph against the Engineering Memory projection — node/edge statistics, mismatches, and similarity — read-only, no writes to Neo4j.",
+    icon: GitCompare,
+    color: "indigo",
+    category: "explore",
+    available: true,
+  },
+  {
     slug: "security-review",
     name: "Security Review",
     description: "Identify security vulnerabilities, dependency risks, and compliance gaps.",
@@ -120,7 +131,8 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
   {
     slug: "documentation",
     name: "Documentation",
-    description: "Review a repository's Markdown docs against its indexed architecture and propose updates.",
+    description:
+      "Review a repository's Markdown docs against its indexed architecture and propose updates.",
     icon: FileText,
     color: "teal",
     category: "build",

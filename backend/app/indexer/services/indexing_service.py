@@ -14,6 +14,8 @@ from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
 from app.indexer.graph.builder import build_graph
 from app.indexer.graph.cross_repo_linker import relink_account
+from app.indexer.hypotheses.repository_evidence import extract_repository_evidence
+from app.indexer.hypotheses.shadow_runner import run_shadow_hypothesis_generation
 from app.indexer.models.architecture import ArchitectureModel
 from app.indexer.parsers.registry import get_parser
 from app.indexer.scanner.language_detector import DetectedLanguage, detect_language
@@ -60,11 +62,19 @@ async def index_repository(
     html_url: str,
     ref: str,
     access_token: str | None = None,
+    db: AsyncSession | None = None,
 ) -> IndexingSummary:
     """The DB-independent core of the pipeline — clone, detect, parse,
     build, persist. Takes plain values rather than ORM objects specifically
     so it's testable without a database at all (see
     tests/integration/test_indexing_pipeline.py).
+
+    `db` (added in ADR 0018 RFC-04) is optional and touches nothing except
+    the shadow reasoning pipeline's Engineering Memory persistence step —
+    every existing call site (including every test predating RFC-04) omits
+    it and gets byte-identical behavior to before. See
+    `app.indexer.hypotheses.shadow_runner`'s module docstring for the full
+    reasoning.
     """
     async with clone_repository(html_url, ref, access_token) as repo_path:
         language = detect_language(repo_path)
@@ -77,10 +87,29 @@ async def index_repository(
             )
 
         model = parser.parse(repo_path)
+        # Frontier Hypothesis Generator (ADR 0018) Finding 1: README/
+        # manifest/config content isn't recoverable from `ArchitectureModel`
+        # and the clone won't exist past this block — read it now, while
+        # `repo_path` is still valid, language-agnostic and generator-
+        # agnostic (see repository_evidence.py's own docstring).
+        repository_evidence_facts = extract_repository_evidence(repo_path)
 
     graph = build_graph(repository_id, model)
     graph_repository = Neo4jGraphRepository(get_driver())
     await graph_repository.replace_repository_graph(repository_id, graph)
+
+    # ADR 0018 RFC-02B/RFC-04: shadow-mode only, after the real graph is
+    # already committed — never raises, never affects `graph` or this
+    # function's return value. See `run_shadow_hypothesis_generation`'s own
+    # docstring for why `ref` stands in for a commit SHA here, and why `db`
+    # is optional.
+    await run_shadow_hypothesis_generation(
+        repository_id=repository_id,
+        commit_sha=ref,
+        model=model,
+        db=db,
+        repository_evidence_facts=repository_evidence_facts,
+    )
 
     return _summarize(model)
 
@@ -109,6 +138,7 @@ async def run_indexing(db: AsyncSession, repository: Repository) -> IndexingSumm
         html_url=repository.html_url,
         ref=repository.default_branch,
         access_token=access_token,
+        db=db,
     )
 
     graph_repository = Neo4jGraphRepository(get_driver())

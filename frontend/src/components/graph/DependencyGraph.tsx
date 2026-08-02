@@ -305,10 +305,11 @@ function overviewNode(repo: RepositorySummary, x: number, y: number): Node {
  * repositories the user hasn't asked to look at yet. Clicking a card is how
  * the user "expands" that repository into its detailed graph.
  *
- * Directed edges between cards (producer -> consumer, per shared Kafka
- * topics) are drawn from `edges`, aggregated once from the same
- * `/cross-repository-links` data each expand already fetches - no extra
- * calls here, and none at all on hover.
+ * Directed edges between cards are drawn from `edges` - both Kafka topic
+ * overlap (from `/cross-repository-links`) and structural relationships
+ * like Feign service calls or shared internal dependencies (from
+ * `/cross-repository-edges`), merged once by the caller - no extra calls
+ * here, and none at all on hover.
  */
 export function RepositoryOverviewGraph({
   repositories,
@@ -359,7 +360,7 @@ export function RepositoryOverviewGraph({
       source: edge.source,
       target: edge.target,
       label: (
-        <span title={`Shared topics:\n${edge.topics.join("\n")}`}>{edge.topics.length}</span>
+        <span title={`Relationships:\n${edge.topics.join("\n")}`}>{edge.topics.length}</span>
       ),
       markerEnd: { type: MarkerType.ArrowClosed, color: "var(--gf-graph-edge)" },
       style: { stroke: "var(--gf-graph-edge)", strokeWidth: 1.5 },

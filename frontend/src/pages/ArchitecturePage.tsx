@@ -10,15 +10,21 @@ import { legendLabelsFor, resolveLabelColors } from "../components/graph/graphLa
 import { useAuth } from "../app/auth-context";
 import { listTrackedRepositories } from "../lib/api/github";
 import {
+  getAllCrossRepositoryEdges,
   getAllCrossRepositoryLinks,
   getCrossRepositoryLinks,
   getLatestIndexingJob,
   getRepositoryGraph,
 } from "../lib/api/repositories";
-import { buildRepositoryDependencyEdges, mergeCrossRepositoryLinks } from "../lib/graph/mergeGraphs";
+import {
+  buildRepositoryDependencyEdges,
+  buildStructuralDependencyEdges,
+  mergeCrossRepositoryLinks,
+  mergeRepositoryDependencyEdges,
+} from "../lib/graph/mergeGraphs";
 import { summarizeRepositoryCounts } from "../lib/indexingSummary";
 import type { TrackedRepository } from "../types/github";
-import type { CrossRepositoryLink, Graph } from "../types/graph";
+import type { CrossRepositoryLink, Graph, GraphEdge } from "../types/graph";
 
 /**
  * Descriptions for every relationship the indexer can write (see backend
@@ -71,6 +77,10 @@ export function ArchitecturePage() {
   const [error, setError] = useState<string | null>(null);
   // Cached once for the overview - never refetched on hover.
   const [allLinks, setAllLinks] = useState<CrossRepositoryLink[] | null>(null);
+  // Structural repo-to-repo edges (CALLS_SERVICE/SHARES_TOPIC/
+  // DEPENDS_ON_REPOSITORY) - a separate source from `allLinks` above (which
+  // only covers Kafka topic overlap), merged together below.
+  const [structuralEdges, setStructuralEdges] = useState<GraphEdge[] | null>(null);
 
   // Cheap initial load: repository list + each repository's lightweight
   // indexing summary counts (not its full graph) - enough to render one
@@ -121,9 +131,13 @@ export function ArchitecturePage() {
     let cancelled = false;
 
     async function loadLinks() {
-      const links = await getAllCrossRepositoryLinks(token!).catch(() => []);
+      const [links, edges] = await Promise.all([
+        getAllCrossRepositoryLinks(token!).catch(() => []),
+        getAllCrossRepositoryEdges(token!).catch(() => []),
+      ]);
       if (!cancelled) {
         setAllLinks(links);
+        setStructuralEdges(edges);
       }
     }
 
@@ -170,7 +184,10 @@ export function ArchitecturePage() {
     name: r.full_name,
     ...summarizeRepositoryCounts(summariesByRepoId[r.id]),
   }));
-  const repositoryDependencyEdges = allLinks ? buildRepositoryDependencyEdges(allLinks) : [];
+  const repositoryDependencyEdges = mergeRepositoryDependencyEdges(
+    allLinks ? buildRepositoryDependencyEdges(allLinks) : [],
+    structuralEdges ? buildStructuralDependencyEdges(structuralEdges) : [],
+  );
   const legendNodeLabels = graph ? legendLabelsFor(graph.nodes) : [];
   const legendEdges = graph ? edgeLegendFor(graph.edges) : [];
 

@@ -382,6 +382,20 @@ async def relink_account(
     for repo_id, edges in edges_by_repo.items():
         await graph_repository.replace_cross_repository_edges(repo_id, edges)
 
+    # ADR 0018 RFC-05: also persist every cross-repository relationship
+    # into Engineering Memory, via the existing, parity-tested
+    # Hypothesis -> Validator -> ConfidenceEngine pipeline. Deliberately
+    # after the Neo4j write loop above (which this leaves byte-for-byte
+    # unchanged) and on its own independent session — never `db`, which is
+    # still holding this function's advisory lock — see
+    # `cross_repo_memory`'s module docstring for why. Imported here, not at
+    # module load time, to avoid a cycle: `cross_repo_memory` imports
+    # `app.knowledge_engine.validators.cross_repo`, which itself imports
+    # this module at runtime.
+    from app.indexer.graph.cross_repo_memory import persist_cross_repo_relationships
+
+    await persist_cross_repo_relationships(nodes_by_repo)
+
     logger.info(
         "cross_repo_relink_computed user_id=%s repositories=%d edges=%d",
         user_id,

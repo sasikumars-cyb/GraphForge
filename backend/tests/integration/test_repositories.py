@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from httpx import AsyncClient
 
+from app.graph.models import GraphEdge, GraphNode, GraphPayload
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
 from app.indexer.services.indexing_service import index_repository
@@ -186,6 +187,59 @@ async def test_remove_repository_404s_for_another_users_repository(
         "/api/v1/repositories", headers={"Authorization": f"Bearer {token_a}"}
     )
     assert len(still_listed.json()) == 1
+
+
+async def test_cross_repository_edges_endpoint_returns_structural_edges(
+    db_client: AsyncClient,
+) -> None:
+    """Regression test for the Architecture page's missing dependency
+    graph: `cross_repo_linker.relink_account` computes real CALLS_SERVICE/
+    SHARES_TOPIC/DEPENDS_ON_REPOSITORY edges between Repository nodes
+    (`replace_cross_repository_edges`), but no endpoint ever read them back
+    - `GET /repositories/cross-repository-edges` is that endpoint."""
+    token = await _register_and_get_token(db_client, USER_A)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    select_response = await db_client.post(
+        "/api/v1/repositories",
+        headers=headers,
+        json={"repositories": [REPO_ENGINE, REPO_NOTES]},
+    )
+    repos = {r["full_name"]: r["id"] for r in select_response.json()}
+    engine_id, notes_id = repos["ada/engine"], repos["ada/notes"]
+
+    graph_repository = Neo4jGraphRepository(get_driver())
+    # `_write_edges` MATCHes both endpoints rather than MERGE-ing them, so
+    # each repository's own Repository node must exist first - normally
+    # written by `replace_repository_graph` during indexing.
+    await graph_repository.replace_repository_graph(
+        engine_id,
+        GraphPayload(nodes=[GraphNode(id=f"{engine_id}:repository", labels=["Repository"])], edges=[]),
+    )
+    await graph_repository.replace_repository_graph(
+        notes_id,
+        GraphPayload(nodes=[GraphNode(id=f"{notes_id}:repository", labels=["Repository"])], edges=[]),
+    )
+    await graph_repository.replace_cross_repository_edges(
+        engine_id,
+        [
+            GraphEdge(
+                source_id=f"{engine_id}:repository",
+                target_id=f"{notes_id}:repository",
+                type="CALLS_SERVICE",
+                properties={"confidence": "structural"},
+            )
+        ],
+    )
+
+    response = await db_client.get("/api/v1/repositories/cross-repository-edges", headers=headers)
+
+    assert response.status_code == 200
+    edges = response.json()
+    assert len(edges) == 1
+    assert edges[0]["source_id"] == f"{engine_id}:repository"
+    assert edges[0]["target_id"] == f"{notes_id}:repository"
+    assert edges[0]["type"] == "CALLS_SERVICE"
 
 
 async def test_remove_repository_requires_authentication(db_client: AsyncClient) -> None:

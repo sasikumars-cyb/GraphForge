@@ -11,6 +11,7 @@ import { ReviewPage } from "../pages/ReviewPage";
 import { DocumentationPage } from "../pages/DocumentationPage";
 import { DocumentationHealthPage } from "../pages/DocumentationHealthPage";
 import { ApiIntelligencePage } from "../pages/ApiIntelligencePage";
+import { GraphParityPage } from "../pages/GraphParityPage";
 import { RunHistoryPage } from "../pages/RunHistoryPage";
 import { RunDetailPage } from "../pages/RunDetailPage";
 import { PullRequestsPage } from "../pages/PullRequestsPage";
@@ -51,6 +52,7 @@ export const routes: RouteObject[] = [
           { path: "/workspace/documentation", element: <DocumentationPage /> },
           { path: "/workspace/documentation-health", element: <DocumentationHealthPage /> },
           { path: "/workspace/api-intelligence", element: <ApiIntelligencePage /> },
+          { path: "/workspace/graph-parity", element: <GraphParityPage /> },
 
           // ── Build: Workflows ─────────────────────────────────────
           { path: "/workflows/new", element: <NewWorkflowPage /> },

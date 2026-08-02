@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { mergeGraphs } from "./mergeGraphs";
-import type { Graph } from "../../types/graph";
+import {
+  buildStructuralDependencyEdges,
+  mergeGraphs,
+  mergeRepositoryDependencyEdges,
+} from "./mergeGraphs";
+import type { Graph, GraphEdge } from "../../types/graph";
 
 const orderServiceGraph: Graph = {
   nodes: [
@@ -94,5 +98,72 @@ describe("mergeGraphs", () => {
 
   it("returns an empty graph for an empty input list", () => {
     expect(mergeGraphs([])).toEqual({ nodes: [], edges: [] });
+  });
+});
+
+describe("buildStructuralDependencyEdges", () => {
+  it("converts repository-node edges into overview edges, stripping the ':repository' suffix", () => {
+    const edges: GraphEdge[] = [
+      {
+        source_id: "engine-id:repository",
+        target_id: "notes-id:repository",
+        type: "CALLS_SERVICE",
+        properties: {},
+      },
+    ];
+
+    const result = buildStructuralDependencyEdges(edges);
+
+    expect(result).toEqual([{ source: "engine-id", target: "notes-id", topics: ["CALLS_SERVICE"] }]);
+  });
+
+  it("merges multiple relationship types between the same repository pair into one edge", () => {
+    const edges: GraphEdge[] = [
+      {
+        source_id: "engine-id:repository",
+        target_id: "notes-id:repository",
+        type: "CALLS_SERVICE",
+        properties: {},
+      },
+      {
+        source_id: "engine-id:repository",
+        target_id: "notes-id:repository",
+        type: "SHARES_TOPIC",
+        properties: {},
+      },
+    ];
+
+    const result = buildStructuralDependencyEdges(edges);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].topics).toEqual(["CALLS_SERVICE", "SHARES_TOPIC"]);
+  });
+
+  it("ignores an edge whose endpoints aren't repository nodes", () => {
+    const edges: GraphEdge[] = [
+      { source_id: "engine-id:svc:Foo", target_id: "notes-id:repository", type: "CALLS", properties: {} },
+    ];
+
+    expect(buildStructuralDependencyEdges(edges)).toEqual([]);
+  });
+});
+
+describe("mergeRepositoryDependencyEdges", () => {
+  it("combines edge lists, merging labels for the same repository pair", () => {
+    const kafkaEdges = [{ source: "a", target: "b", topics: ["order.created"] }];
+    const structuralEdges = [{ source: "a", target: "b", topics: ["CALLS_SERVICE"] }];
+
+    const result = mergeRepositoryDependencyEdges(kafkaEdges, structuralEdges);
+
+    expect(result).toEqual([{ source: "a", target: "b", topics: ["order.created", "CALLS_SERVICE"] }]);
+  });
+
+  it("keeps distinct repository pairs as separate edges", () => {
+    const kafkaEdges = [{ source: "a", target: "b", topics: ["order.created"] }];
+    const structuralEdges = [{ source: "c", target: "d", topics: ["CALLS_SERVICE"] }];
+
+    const result = mergeRepositoryDependencyEdges(kafkaEdges, structuralEdges);
+
+    expect(result).toHaveLength(2);
   });
 });

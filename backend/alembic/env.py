@@ -22,11 +22,13 @@ from app.models.confidence_calibration import ConfidenceCalibration  # noqa: F40
 from app.models.contradiction import Contradiction, ContradictionParty  # noqa: F401
 from app.models.decision import Decision, Recommendation  # noqa: F401
 from app.models.engineering_artifact import EngineeringArtifact  # noqa: F401
+from app.models.engineering_evidence_pack import EngineeringEvidencePackRecord  # noqa: F401
 from app.models.engineering_session import EngineeringSession, TimelineEntry  # noqa: F401
 from app.models.evidence import Evidence  # noqa: F401
 from app.models.github_connection import GitHubConnection  # noqa: F401
 from app.models.google_drive_connection import GoogleDriveConnection  # noqa: F401
 from app.models.indexing_job import IndexingJob  # noqa: F401
+from app.models.knowledge_relationship import KnowledgeRelationshipRecord  # noqa: F401
 from app.models.llm_invocation import LLMInvocation  # noqa: F401
 from app.models.oauth_app_credential import OAuthAppCredential  # noqa: F401
 from app.models.participant import Participant  # noqa: F401
@@ -38,6 +40,7 @@ from app.models.run import Run  # noqa: F401
 from app.models.test_case_upload import TestCaseUpload  # noqa: F401
 from app.models.testrail_sync_job import TestRailSyncJob  # noqa: F401
 from app.models.user import User  # noqa: F401
+from app.models.user_correction import UserCorrectionRecord  # noqa: F401
 from app.models.workflow import Workflow  # noqa: F401 - all eleven register with Base.metadata
 from app.models.workflow_report import WorkflowReport  # noqa: F401
 

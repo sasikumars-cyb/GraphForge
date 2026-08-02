@@ -188,6 +188,16 @@ class Settings(BaseSettings):
     # benefit. Turn on once the recommendation quality has been evaluated.
     enable_context_discovery: bool = Field(default=False)
 
+    # Off by default: enabling this adds a real LLM call (cost, latency, a
+    # new external-dependency failure mode) to every real indexing run —
+    # see ADR 0018's Frontier Hypothesis Generator entry for why this must
+    # never be on by default until precision/cost are evaluated. Read only
+    # by `LLMEnabledGeneratorPolicy`
+    # (app.knowledge_engine.contracts.generator_policy), never by the
+    # generator itself — the generator has no opinion on whether it should
+    # run.
+    enable_frontier_llm_generator: bool = Field(default=False)
+
     @model_validator(mode="after")
     def _reject_insecure_defaults_in_production(self) -> "Settings":
         """Fail fast rather than run production on a publicly-known secret.

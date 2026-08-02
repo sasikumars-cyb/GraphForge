@@ -27,7 +27,12 @@ from app.schemas.github import (
     RepositoryResponse,
     RepositorySelectionRequest,
 )
-from app.schemas.indexing import CrossRepositoryLinkResponse, GraphResponse, IndexingJobResponse
+from app.schemas.indexing import (
+    CrossRepositoryLinkResponse,
+    GraphEdgeResponse,
+    GraphResponse,
+    IndexingJobResponse,
+)
 from app.services.github_service import list_tracked_repositories, set_selected_repositories
 from app.services.local_repository_service import create_local_repository
 
@@ -130,6 +135,52 @@ async def get_all_cross_repository_links(
             topic_name=str(hop.to_node.properties.get("name", "")),
         )
         for hop in hops
+    ]
+
+
+@router.get("/cross-repository-edges", response_model=list[GraphEdgeResponse])
+async def get_all_cross_repository_edges(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> list[GraphEdgeResponse]:
+    """Every structural repository-to-repository edge
+    (`CALLS_SERVICE`/`SHARES_TOPIC`/`DEPENDS_ON_REPOSITORY`) computed by
+    `app.indexer.graph.cross_repo_linker.relink_account` for this user's
+    tracked repositories.
+
+    Distinct from `/cross-repository-links` above: that endpoint only
+    surfaces component-level Kafka producer/consumer overlap
+    (`find_cross_repository_topic_peers`) and returns nothing for a Feign
+    service call or a shared internal dependency. This endpoint reads the
+    edges `cross_repo_linker` actually writes onto each repository's own
+    `Repository` node (`get_outgoing_cross_repository_edges`) - previously
+    computed and persisted on every indexing run but never read back by any
+    API route, so the Architecture page could never render them.
+
+    `source_id`/`target_id` are `"{repository_id}:repository"` - the same
+    id `cross_repo_linker._repository_node_id` uses - so the frontend can
+    match them against tracked repository ids directly.
+    """
+    repositories = await list_tracked_repositories(db, current_user)
+    if not repositories:
+        return []
+
+    graph_repository = Neo4jGraphRepository(get_driver())
+    edge_lists = await asyncio.gather(
+        *(
+            graph_repository.get_outgoing_cross_repository_edges(str(repo.id))
+            for repo in repositories
+        )
+    )
+    return [
+        GraphEdgeResponse(
+            source_id=edge.source_id,
+            target_id=edge.target_id,
+            type=edge.type,
+            properties=edge.properties,
+        )
+        for edges in edge_lists
+        for edge in edges
     ]
 
 
