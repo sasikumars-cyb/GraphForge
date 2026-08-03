@@ -190,6 +190,7 @@ function DependencyReportView({
   const directDependenciesSummary = (result?.direct_dependencies_summary as string) ?? "";
   const downstreamConsumers = (result?.downstream_consumers as string[]) ?? [];
   const downstreamConsumersSummary = (result?.downstream_consumers_summary as string) ?? "";
+  const downstreamConsumersCaveat = (result?.downstream_consumers_caveat as string) ?? "";
   const verifiedRelationships = (result?.verified_relationships as string[]) ?? [];
   const candidateRelationships = (result?.candidate_relationships as string[]) ?? [];
   const confidenceBreakdown = (result?.confidence_breakdown as Record<string, number>) ?? {
@@ -254,6 +255,11 @@ function DependencyReportView({
               </li>
             ))}
           </ul>
+        )}
+        {downstreamConsumersCaveat && (
+          <p className="mt-3 border-t border-line pt-3 text-xs text-fg-muted">
+            {downstreamConsumersCaveat}
+          </p>
         )}
       </Card>
 

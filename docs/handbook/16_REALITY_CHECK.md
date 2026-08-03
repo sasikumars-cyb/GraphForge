@@ -32,9 +32,9 @@ is invented. Every row cites its source.
 | Capability | What works | What doesn't (yet) |
 |---|---|---|
 | Neo4j as "derived projection" | Materializer exists and passes a real replay test | The materializer is **not called by any production write path** — `replace_repository_graph`/`replace_cross_repository_edges` are still what actually writes Neo4j today. The architectural inversion is proven possible, not yet cut over. |
-| Cross-repository knowledge in Engineering Memory | RFC-05 persists cross-repo relationships from the `cross_repo_linker` rules | Feign-based `CALLS_SERVICE` detection has a real naming-convention gap (suite Known Gap 2) that makes this 0 edges for a realistic naming scheme; Kafka `SHARES_TOPIC` detection has a similar literal-only gap (Known Gap 1) |
-| Impact Analysis / blast radius | Computes correctly within one repository | Structurally cannot cross repositories today — the traversal filter requires both edge endpoints in the same `repository_id` (suite Known Gap 3) |
-| Dependency Query | Confidence-aware, evidence-backed search works | "Direct dependencies" and "downstream consumers" counts are not meaningful yet — see Known Gap 4 |
+| Cross-repository knowledge in Engineering Memory | RFC-05 persists cross-repo relationships from the `cross_repo_linker` rules; Feign naming-convention matching (Gap 2) and Kafka topic detection (Gap 1) are both now closed | — |
+| Impact Analysis / blast radius | Computes correctly within one repository **and now correctly crosses repository boundaries** in both the Engineering Intelligence Service Layer and the legacy PR-analysis pipeline (Gap 3 closed, KAN-19) | — |
+| Dependency Query | Confidence-aware, evidence-backed search works; `direct_dependencies` is accurate | `downstream_consumers` is still intra-repository-only (Known Gap 4, a distinct partition-scoping limitation) — now explicitly labeled as such in the API/UI (KAN-22) rather than presented as an authoritative count |
 | Frontier LLM Generator | Mechanism proven end-to-end (generation → shadow persistence → validator promotion) | Off by default; precision/recall/cost has never been measured against real repositories — explicitly deferred by the RFC that shipped it |
 | Context Discovery hypothesis-driven investigation | Generates and challenges competing hypotheses in one post-hoc pass; one bounded mid-loop checkpoint can redirect the rest of a run | No full feedback loop where a hypothesis's own unknowns trigger fresh retrieval every cycle — named directly in ADR 0015's self-review as "the single biggest gap between this implementation and the brief's full ambition" |
 | Confidence calibration (prompt-version vs. human-agreement tracking) | The Learning Engine now captures the raw feedback data this needs | Calibration itself, prompt evolution, health scoring, org-wide learning — none implemented; explicitly named as reading-ready, not built (RFC-06D) |
@@ -89,18 +89,33 @@ is invented. Every row cites its source.
 
 ## Known gaps (current, numbered, root-caused — not hypothetical)
 
-All four from the validation suite's own findings, detailed in
-[09_VALIDATION_FRAMEWORK.md](09_VALIDATION_FRAMEWORK.md):
+Status as of the KAN-7 gap-closure work (2026-08-03). Full technical
+detail in [09_VALIDATION_FRAMEWORK.md](09_VALIDATION_FRAMEWORK.md) and
+`graphforge-validation/docs/validation-guide.md`.
 
-1. Kafka topic detection — literal-string-only, no shared-SDK-wrapper
-   support, no Python extractor at all.
-2. Feign cross-repository name matching — suffix-only normalization can't
-   bridge a `<domain>-service-<language>` naming convention.
-3. Impact Analysis structurally cannot leave the seed repository (traversal
-   filter bug, not a missing feature).
-4. Dependency Query's direct/downstream counts are intra-repository noise
-   today (same root cause surfaces as Validation 7 Parity failures on
-   affected repos).
+1. ~~Kafka topic detection~~ — **closed.** Constant/wrapper-delegation
+   resolution added to the Java extractor; a Python extractor now exists.
+2. ~~Feign cross-repository name matching~~ — **closed.** Normalization now
+   strips a trailing language/runtime tag before the existing suffix
+   strip, bridging `<domain>-service-<language>` naming.
+3. ~~Impact Analysis structurally cannot leave the seed repository~~ —
+   **closed in both impact-analysis pipelines.** The Engineering
+   Intelligence Service Layer's `get_neighborhood` no longer filters the
+   far endpoint of a cross-repository edge to the seed's own
+   `repository_id`. Separately, the legacy Phase 7 pipeline
+   (`ImpactAnalysisEngine`, what actually backs `POST
+   /pull-requests/{id}/analyze`) had never had `CALLS_SERVICE` traversal
+   at all — closed via `find_cross_repository_service_callers` (KAN-19).
+4. Dependency Query's `downstream_consumers` count is still intra-repository
+   only — a distinct, still-open partition-scoping limitation (not the
+   traversal-filter bug Gap 3 was). Mitigated, not yet closed: the API and
+   UI now explicitly label this as single-repository-scoped
+   (`downstream_consumers_scope`/`downstream_consumers_caveat`, KAN-22)
+   rather than presenting an undercounted number as authoritative. Closing
+   it for real needs a cross-partition search or reverse index — tracked
+   as follow-up work, deliberately not attempted alongside the incremental
+   fixes above to avoid guessing at multi-tenancy/account-scoping
+   semantics.
 
 ## Known technical debt
 
@@ -139,11 +154,15 @@ choice in this codebase is written down with its rejected alternatives,
 every RFC states its own test evidence and rollback plan, and the
 validation suite documents its own findings against itself rather than
 hiding them. Its actual, current weakness is coverage: the deterministic
-core (Java/Spring Boot, Python) is solid, but cross-repository reasoning —
+core (Java/Spring Boot, Python) is solid, and cross-repository reasoning —
 the specific capability the product's positioning leans on hardest
 ("cross-system reasoning... code ↔ tickets ↔ docs ↔ releases," per
-`PRODUCT_VISION.md`'s competitive table) — has four concrete, numbered
-holes today, and the materializer that proves Neo4j is truly derivable
-from history has not yet been made the live write path. A judge or
-reviewer who asks to see the Graph Parity dashboard or the validation
+`PRODUCT_VISION.md`'s competitive table) — had four concrete, numbered
+holes; three are now closed (Kafka, Feign naming, and Impact Analysis
+crossing repository boundaries in both pipelines), leaving one narrower,
+explicitly-labeled gap (Dependency Query's downstream-consumer count). The
+Jira/Confluence half of "code ↔ tickets ↔ docs" and the materializer that
+proves Neo4j is truly derivable from history has not yet been made the
+live write path both remain open. A judge or reviewer who asks to see the
+Graph Parity dashboard or the validation
 suite's own gap list is asking exactly the right question.

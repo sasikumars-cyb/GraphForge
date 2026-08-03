@@ -48,73 +48,92 @@ unrelated to correctness. Keyword presence checks that the LLM said
 named as the same "compare semantic content, not exact ids" principle
 applied elsewhere to node ids, now extended to narrative text.
 
-## Known Gaps — the four the framework itself surfaced
+## Known Gaps — status as of the 2026-08-03 gap-closure sprint (KAN-7)
 
 These were found *by building this framework against a realistic,
-intentionally polyglot, intentionally well-abstracted suite*, and are
-"asserted as the current baseline in the fixtures (not worked around) — the
-most valuable output of this exercise."
+intentionally polyglot, intentionally well-abstracted suite*. Three of the
+original four are now closed; see
+`graphforge-validation/docs/validation-guide.md`'s "Closed Gaps" section
+for the full technical detail on each fix (kept there, not deleted, as the
+historical record of what this framework caught).
 
-### Gap 1 — Kafka topic detection
+### Gap 1 — Kafka topic detection (closed)
 
-`app/indexer/extractors/kafka.py` only recognizes: consumers via
-`@KafkaListener(topics = "literal-string")` (a named constant is not
-resolved), and producers via a field declared `KafkaTemplate<...>` **and**
-a `.send("topic", ...)` call **in the same class**. Every repo in the
-validation suite publishes through a shared-SDK wrapper — a realistic,
-good abstraction the heuristic can't see through. **There is no Python
-Kafka extractor at all yet.** Net effect: 0 `KafkaTopic` nodes across all
-14 supported repos, despite a fully wired Kafka producer/consumer
-architecture across 5 of them.
+`app/indexer/extractors/kafka.py` now resolves a same-class constant
+reference and a shared-SDK wrapper delegation pattern; a new
+`app/indexer/extractors/python/kafka.py` gives Python repos the same
+constant-resolution behavior Java always had. Net effect: real
+`KafkaTopic` nodes and `PRODUCES_TO`/`CONSUMES_FROM` edges now exist for
+every repo in the suite that actually publishes/consumes.
 
-### Gap 2 — Feign cross-repository name matching
+### Gap 2 — Feign cross-repository name matching (closed)
 
-`cross_repo_linker.py::_identifier_match` strips only a trailing
-`-service`/`-client`/`-api` suffix before comparing a `@FeignClient(name =
-"...")` value against another repository's name. The suite's repos follow
-a `<domain>-service-<language>` convention (`inventory-service-python`) —
-a realistic polyglot naming scheme the suffix-only regex can't bridge
-(`normalize("inventory-service-python")` returns itself unchanged, since
-the suffix pattern only matches at the very end). Net effect: 0
-`CALLS_SERVICE` cross-repository edges, despite a real, working
-`@FeignClient` pointed at a real, tracked, indexed target repository.
+`cross_repo_linker.py::_normalize` now also strips a trailing
+language/runtime tag (`-python`/`-java`/`-go`/`-node`) before the existing
+`-service`/`-client`/`-api` suffix strip, so a `<domain>-service-<language>`
+polyglot naming convention (`inventory-service-python`) correctly matches
+a `@FeignClient(name = "inventory-service")`. Still full equality after
+stripping, never a substring match.
 
-### Gap 3 — Impact Analysis never leaves the seed repository
+### Gap 3 — Impact Analysis never leaves the seed repository (closed, two pipelines)
 
-See [07_ENGINEERING_INTELLIGENCE.md](07_ENGINEERING_INTELLIGENCE.md) —
-`ImpactAnalysisService._IMPACT_EDGE_TYPES` includes cross-repository edge
-types, but the underlying Cypher filters both endpoints of every candidate
-edge to the same `repository_id`, which a cross-repository edge can never
-satisfy by definition. Blast radius is `[itself]` for every repository in
-the suite regardless of real `DEPENDS_ON_REPOSITORY` edges in Neo4j.
+Two independent impact-analysis code paths existed and needed two
+independent fixes:
 
-### Gap 4 — Dependency Query's "direct dependencies" is intra-repository noise
+- **`ImpactAnalysisService`** (Engineering Intelligence Service Layer, the
+  one this framework's Validation 5 exercises) — `IGraphRepository
+  .get_neighborhood`'s Cypher filtered *both* endpoints of every traversed
+  edge to the seed's own `repository_id`, which a cross-repository edge
+  can never satisfy by definition. Fixed by dropping the redundant filter
+  on the far endpoint; the edge *type* already enforces the repository
+  boundary correctly, since a cross-repository relationship type only ever
+  connects two `Repository` nodes.
+- **`ImpactAnalysisEngine`** (the legacy Phase 7 pipeline actually behind
+  `POST /pull-requests/{id}/analyze`, not covered by this framework at
+  all) had a *different* gap: `IImpactGraphReader` had no traversal method
+  for `CALLS_SERVICE` edges whatsoever, so a PR touching a component in a
+  repository other repositories call via Feign never showed those callers
+  as indirectly impacted. Closed in KAN-19 by adding
+  `find_cross_repository_service_callers` and wiring it into
+  `ImpactAnalysisEngine.analyze_pull_request` — see
+  `tests/integration/test_impact_analysis_engine.py::test_feign_caller_repository_is_indirectly_impacted`.
 
-See [07_ENGINEERING_INTELLIGENCE.md](07_ENGINEERING_INTELLIGENCE.md).
-Because Engineering Memory currently persists only intra-repository
-structural relationships, `direct_dependencies_count` equals a
-repository's total relationship count, and `downstream_consumers_count` is
-provably always 0.
+### Gap 4 — Dependency Query's "downstream consumers" is intra-repository noise (still open, now explicitly surfaced)
 
-**Gaps 4 and 7 (Parity) are one root cause surfacing twice, not two
-separate findings.** The Parity Engine compares live Neo4j against a graph
-materialized from Engineering Memory; since cross-repository edges were
-never persisted to Engineering Memory (only to Neo4j directly), the
-materializer can't reproduce them, and Parity correctly reports each as an
-"unexpected edge" on the live-graph side — every affected repo lands at
-1–2 unexpected edges out of 35–51 total, dropping just under the 99%
-threshold (95–99% observed). Closing Gap 4 (persisting cross-repository
-relationships into `KnowledgeRelationship`, which RFC-05 already partially
-addressed at the linking layer but not yet at the query layer) should
-resolve both symptoms.
+`DependencyQueryAgent.build_service_requests` still scopes `search()` to
+exactly one repository (`repository_ids=(repository_id,)`), and every
+relationship a repository persists is stored under its own
+`repository_id` partition with itself as `source_entity` — never
+`target_entity` — so another repository's outgoing edge into this one is
+never read from here, regardless of how it's actually stored. This is a
+distinct root cause from Gap 3 (a partition-scoping limitation, not a
+traversal-filter bug) and closing it properly requires either a
+cross-partition search or a materialized reverse index — real scope,
+deliberately not attempted as part of KAN-7's incremental fixes to avoid
+guessing at the account-scoping/multi-tenancy semantics such a change
+would need to get right.
 
-**None of the four are asserted as bugs in the fixture files** — they are
-"the honest current baseline," so the framework does its actual job (catch
-*changes*, i.e. regressions) instead of either silently passing on
-inflated expectations or perpetually failing on gaps nobody has scheduled
-to fix. When any gap closes, the fixture file(s) and the guide update in
-the same change — a stated discipline for keeping fixtures from drifting
-into either fiction.
+**KAN-22 interim mitigation (shipped):** rather than present an
+under-counted number as if it were authoritative, `render_dependency_query`
+now always returns `downstream_consumers_scope: "single_repository"` and
+an explicit `downstream_consumers_caveat` string, surfaced in the
+Dependency Query UI directly under the Downstream Consumers list — see
+`app/agents/dependency_query/renderer.py` and
+`frontend/src/pages/DependencyQueryPage.tsx`. `direct_dependencies` is
+unaffected by this gap (a repository's own outgoing edges live in its own
+partition) and needs no caveat.
+
+**Gap 4 and Validation 7 (Parity) are related but not identical anymore.**
+The specific Parity FAILs Gap 4 used to cause (cross-repository edges
+missing from the materialized side) were resolved as part of closing Gaps
+1–3, once there were real cross-repository edges for the materializer to
+reproduce. The remaining Gap 4 (downstream-consumer undercounting) is a
+query-layer limitation on live data, not a legacy-vs-materialized
+disagreement — it does not currently cause a Parity FAIL.
+
+**Update discipline unchanged:** when Gap 4 fully closes, this section and
+`validation/expected_dependency_queries.yaml` update in the same change —
+the same rule that applied to Gaps 1–3.
 
 ## How parity mechanics actually work (tying back to the Knowledge Engine)
 

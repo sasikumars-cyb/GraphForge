@@ -20,6 +20,26 @@ _HIGH_CONFIDENCE_STATES = frozenset({"verified", "highly_likely"})
 _MEDIUM_CONFIDENCE_STATES = frozenset({"likely", "candidate"})
 _LOW_CONFIDENCE_STATES = frozenset({"rejected", "conflicting"})
 
+# KAN-22: `DependencyQueryAgent.build_service_requests` only ever queries
+# this one repository's own Engineering Memory partition
+# (`repository_ids=(repository_id,)`), and a relationship is always stored
+# under its *source* repository's partition (see
+# `EngineeringMemoryRepository`/`relationship_lookup.fetch_with_confidence`)
+# - so a caller repository's own outgoing edge into this one is never read
+# from here, no matter how it's actually stored. `direct_dependencies` is
+# unaffected (this repository's own outgoing edges live in its own
+# partition), but `downstream_consumers` is structurally undercounted
+# until a cross-repository search exists. Surfaced explicitly rather than
+# silently, per the same "evidence over assertion" principle the rest of
+# the platform holds itself to - see `docs/handbook/16_REALITY_CHECK.md`.
+DOWNSTREAM_CONSUMERS_SCOPE = "single_repository"
+_DOWNSTREAM_CONSUMERS_CAVEAT = (
+    "Scoped to this repository's own indexed relationships only. A repository "
+    "that calls into this one via a relationship recorded under its own "
+    "account is not yet included here - cross-repository downstream-consumer "
+    "search is tracked as a follow-up (KAN-22), not yet implemented."
+)
+
 
 def _str_field(narrative: dict[str, Any], key: str, fallback: str) -> str:
     value = narrative.get(key)
@@ -100,6 +120,8 @@ def render_dependency_query(
         "direct_dependencies_summary": direct_dependencies_summary,
         "downstream_consumers": consumers,
         "downstream_consumers_summary": downstream_consumers_summary,
+        "downstream_consumers_scope": DOWNSTREAM_CONSUMERS_SCOPE,
+        "downstream_consumers_caveat": _DOWNSTREAM_CONSUMERS_CAVEAT,
         "verified_relationships": verified_relationships,
         "verified_relationships_summary": verified_summary,
         "candidate_relationships": candidate_relationships,

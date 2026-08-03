@@ -64,3 +64,18 @@ class IImpactGraphReader(ABC):
     async def get_dependencies(self, repository_id: str) -> list[GraphNode]:
         """Every `MavenDependency` node declared by `repository_id`."""
         raise NotImplementedError
+
+    @abstractmethod
+    async def find_cross_repository_service_callers(self, repository_id: str) -> list[TraversalHop]:
+        """Other indexed repositories whose `Repository` node has a
+        `CALLS_SERVICE` edge (a Feign client, see
+        `app.indexer.graph.cross_repo_linker`) targeting `repository_id`'s
+        own `Repository` node - the callers that would be impacted if this
+        repository's exposed contract changes.
+
+        Repository-granularity, not component-granularity, because
+        `CALLS_SERVICE` edges only ever connect two `Repository` nodes -
+        the same limitation `find_cross_repository_topic_peers` already
+        works within for Kafka. `hop.from_node` is the caller (the
+        indirectly-impacted side); `hop.to_node` is this repository."""
+        raise NotImplementedError
