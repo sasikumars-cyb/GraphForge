@@ -41,33 +41,33 @@ repositories:
     downstream_consumers_count: 0
     confidence_breakdown: { high: 40, medium: 1, low: 0 }
   - name: inventory-service-python
-    direct_dependencies_count: 49
+    direct_dependencies_count: 48
     downstream_consumers_count: 0
-    confidence_breakdown: { high: 48, medium: 1, low: 0 }
+    confidence_breakdown: { high: 47, medium: 1, low: 0 }
   - name: notification-service-python
     direct_dependencies_count: 26
     downstream_consumers_count: 0
     confidence_breakdown: { high: 25, medium: 1, low: 0 }
   - name: payment-service-java
-    direct_dependencies_count: 18
-    downstream_consumers_count: 0
-    confidence_breakdown: { high: 17, medium: 1, low: 0 }
-  - name: shipping-service-java
     direct_dependencies_count: 17
     downstream_consumers_count: 0
     confidence_breakdown: { high: 16, medium: 1, low: 0 }
-  - name: shared-python-sdk
-    direct_dependencies_count: 57
+  - name: shipping-service-java
+    direct_dependencies_count: 16
     downstream_consumers_count: 0
-    confidence_breakdown: { high: 57, medium: 0, low: 0 }
+    confidence_breakdown: { high: 15, medium: 1, low: 0 }
+  - name: shared-python-sdk
+    direct_dependencies_count: 53
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 53, medium: 0, low: 0 }
   - name: shared-java-sdk
     direct_dependencies_count: 5
     downstream_consumers_count: 0
     confidence_breakdown: { high: 5, medium: 0, low: 0 }
   - name: analytics-pipeline-python
-    direct_dependencies_count: 32
+    direct_dependencies_count: 31
     downstream_consumers_count: 0
-    confidence_breakdown: { high: 31, medium: 1, low: 0 }
+    confidence_breakdown: { high: 30, medium: 1, low: 0 }
   - name: warehouse-jobs
     direct_dependencies_count: 18
     downstream_consumers_count: 0

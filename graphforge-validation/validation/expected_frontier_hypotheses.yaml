@@ -44,9 +44,9 @@ repositories:
     rejected: 0
     conflicting: 0
   - name: inventory-service-python
-    generated: 49
+    generated: 48
     verified: 9
-    highly_likely: 39
+    highly_likely: 38
     likely: 1
     candidate: 0
     rejected: 0
@@ -60,25 +60,25 @@ repositories:
     rejected: 0
     conflicting: 0
   - name: payment-service-java
-    generated: 18
+    generated: 17
     verified: 9
-    highly_likely: 8
+    highly_likely: 7
     likely: 1
     candidate: 0
     rejected: 0
     conflicting: 0
   - name: shipping-service-java
-    generated: 17
+    generated: 16
     verified: 7
-    highly_likely: 9
+    highly_likely: 8
     likely: 1
     candidate: 0
     rejected: 0
     conflicting: 0
   - name: shared-python-sdk
-    generated: 57
+    generated: 53
     verified: 7
-    highly_likely: 50
+    highly_likely: 46
     likely: 0
     candidate: 0
     rejected: 0
@@ -92,9 +92,9 @@ repositories:
     rejected: 0
     conflicting: 0
   - name: analytics-pipeline-python
-    generated: 32
+    generated: 31
     verified: 5
-    highly_likely: 26
+    highly_likely: 25
     likely: 1
     candidate: 0
     rejected: 0

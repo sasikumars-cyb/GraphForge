@@ -49,8 +49,8 @@ repositories:
     impacted_apis_count: 0
     impacted_databases_count: 0
     impacted_queues_count: 0
-    relationship_count: 245
-    confidence_summary: { high: 239, medium: 6, low: 0 }
+    relationship_count: 237
+    confidence_summary: { high: 231, medium: 6, low: 0 }
 
   - name: order-service-python
     direction: downstream
@@ -59,8 +59,8 @@ repositories:
     impacted_apis_count: 0
     impacted_databases_count: 0
     impacted_queues_count: 0
-    relationship_count: 326
-    confidence_summary: { high: 315, medium: 11, low: 0 }
+    relationship_count: 318
+    confidence_summary: { high: 307, medium: 11, low: 0 }
 
   - name: inventory-service-python
     direction: downstream
@@ -69,8 +69,8 @@ repositories:
     impacted_apis_count: 0
     impacted_databases_count: 0
     impacted_queues_count: 0
-    relationship_count: 331
-    confidence_summary: { high: 320, medium: 11, low: 0 }
+    relationship_count: 323
+    confidence_summary: { high: 312, medium: 11, low: 0 }
 
   - name: customer-service-python
     direction: downstream
@@ -79,5 +79,5 @@ repositories:
     impacted_apis_count: 0
     impacted_databases_count: 0
     impacted_queues_count: 0
-    relationship_count: 291
-    confidence_summary: { high: 282, medium: 9, low: 0 }
+    relationship_count: 285
+    confidence_summary: { high: 276, medium: 9, low: 0 }

@@ -1,0 +1,972 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GraphForge — AI Engineering Intelligence Platform</title>
+<meta name="description" content="GraphForge: an evidence-gated Engineering Knowledge Graph platform.">
+
+<!-- Reveal.js core -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css" id="theme">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css">
+
+<!-- Fonts -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+<!-- Font Awesome -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+
+<!-- GraphForge theme -->
+<link rel="stylesheet" href="css/style.css">
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+</head>
+<body>
+<div class="reveal">
+<div class="slides">
+
+<!-- ============================================================ -->
+<!-- 1. TITLE -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="title-slide">
+    <img src="assets/logo.svg" class="logo-mark" alt="GraphForge logo">
+    <h1>GraphForge</h1>
+    <p class="tagline">The AI Engineering Intelligence Platform — a persistent Knowledge Graph where every claim is evidence-gated before it's trusted.</p>
+    <div class="badge-row">
+      <span class="badge primary"><i class="fa-solid fa-diagram-project"></i> Knowledge Graph</span>
+      <span class="badge neo4j"><i class="fa-solid fa-circle-nodes"></i> Neo4j</span>
+      <span class="badge aws"><i class="fa-brands fa-aws"></i> AWS</span>
+      <span class="badge ai"><i class="fa-solid fa-brain"></i> Bedrock / Claude</span>
+    </div>
+  </div>
+  <div class="slide-footer">GRAPHFORGE // HACKATHON 2026</div>
+  <aside class="notes">
+    <strong>Say:</strong> "GraphForge indexes your organization's repositories into a knowledge graph — but the whole point is that nothing gets trusted just because an LLM said so. Every fact survives independent verification first."<br>
+    <strong>Key points:</strong> Set the tone immediately — this is not "another AI code review demo." Confidence, not chat.<br>
+    <strong>Transition:</strong> "Here's how the next 13 minutes are going to go."<br>
+    <strong>Expect:</strong> "Is this built on an existing product?" → Yes, evolved from ChangeGuard, a deterministic PR-impact tool.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 2. AGENDA -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker"><i class="fa-solid fa-list-ul"></i> Agenda</div>
+  <h2>What we'll cover</h2>
+  <div class="card-grid cols-3">
+    <div class="card fragment fade-up"><div class="icon"><i class="fa-solid fa-lightbulb"></i></div><h4>1. The Problem</h4><p>Why this exists, why other tools fall short</p></div>
+    <div class="card fragment fade-up"><div class="icon"><i class="fa-solid fa-sitemap"></i></div><h4>2. Architecture</h4><p>Engineering Memory, Knowledge Engine, Neo4j</p></div>
+    <div class="card accent-ai fragment fade-up"><div class="icon"><i class="fa-solid fa-robot"></i></div><h4>3. AI & Agents</h4><p>Validators, confidence, hallucination defense</p></div>
+    <div class="card accent-success fragment fade-up"><div class="icon"><i class="fa-solid fa-vial"></i></div><h4>4. Quality</h4><p>24-repo validation suite, engineering rigor</p></div>
+    <div class="card accent-aws fragment fade-up"><div class="icon"><i class="fa-brands fa-aws"></i></div><h4>5. Cloud + Demo</h4><p>AWS deployment, live walkthrough</p></div>
+    <div class="card accent-warning fragment fade-up"><div class="icon"><i class="fa-solid fa-scale-balanced"></i></div><h4>6. The Honest Part</h4><p>What's real, what's next, what isn't done</p></div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "Six parts, thirteen minutes. We'll end with what's honestly not built yet — that's deliberate, not a footnote."<br>
+    <strong>Transition:</strong> "Let's start with why this needed to exist at all."<br>
+    <strong>Expect:</strong> Nothing hard here — this is a pacing slide.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 3. DIVIDER: THE PROBLEM -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="divider">
+    <div class="icon-badge"><i class="fa-solid fa-triangle-exclamation"></i></div>
+    <div class="num">01</div>
+    <h2>The Problem</h2>
+    <p>Engineering knowledge lives in people's heads — and evaporates the moment they're unavailable.</p>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> One line, let it land, don't over-explain a divider slide.<br>
+    <strong>Transition:</strong> "Here's what that actually looks like day to day."
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 4. PROBLEM STATEMENT -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker warn"><i class="fa-solid fa-comment-dots"></i> The question asked ten times a week</div>
+  <h2>"Does this PR break anything?"</h2>
+  <div class="two-col wide-left">
+    <div>
+      <ul>
+        <li class="fragment fade-up">Asked of the <strong>same senior engineer</strong>, repeatedly</li>
+        <li class="fragment fade-up">Answer lives in <strong>one person's memory</strong>, not a system</li>
+        <li class="fragment fade-up">Evaporates when they're OOO — or leave</li>
+        <li class="fragment fade-up">Every new engineer <strong>re-derives it from scratch</strong></li>
+      </ul>
+    </div>
+    <div class="card accent-danger glow-primary fragment grow-in">
+      <div class="icon"><i class="fa-solid fa-user-clock"></i></div>
+      <h4>Ana — Staff Architect</h4>
+      <p>"I want the graph to know what I know — so it survives me being on vacation. Or leaving."</p>
+    </div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> Open with the persona quote — it's the single most human framing device we have.<br>
+    <strong>Key points:</strong> This isn't abstract — it's a named, felt pain (PRODUCT_VISION.md personas).<br>
+    <strong>Transition:</strong> "And today's tools don't actually solve this."<br>
+    <strong>Expect:</strong> "Isn't this just documentation?" → No — documentation goes stale; a graph is re-derived from live code every index.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 5. CURRENT CHALLENGES -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker warn"><i class="fa-solid fa-bolt"></i> Current Challenges</div>
+  <h2>Where this pain shows up</h2>
+  <div class="card-grid cols-2">
+    <div class="card accent-danger fragment fade-up"><div class="icon"><i class="fa-solid fa-code-branch"></i></div><h4>Cross-repo blast radius</h4><p>A schema change silently breaks two other services — no one connects the dots until CI fails.</p></div>
+    <div class="card accent-danger fragment fade-up"><div class="icon"><i class="fa-solid fa-people-arrows"></i></div><h4>Tribal ownership</h4><p>"Who owns this" is a Slack question, not a query.</p></div>
+    <div class="card accent-danger fragment fade-up"><div class="icon"><i class="fa-solid fa-clock-rotate-left"></i></div><h4>No institutional memory</h4><p>Every incident's lesson is re-learned by the next engineer who hits it.</p></div>
+    <div class="card accent-danger fragment fade-up"><div class="icon"><i class="fa-solid fa-comments"></i></div><h4>Context reconstruction tax</h4><p>Fifteen minutes across four tools just to start a ticket.</p></div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> Walk through 2 of the 4 cards max out loud, let the others speak visually.<br>
+    <strong>Transition:</strong> "So why doesn't existing tooling fix this?"<br>
+    <strong>Expect:</strong> "Isn't this what Slack/Confluence search is for?" → Search finds documents; it doesn't compute blast radius or ownership from live code.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 6. WHY EXISTING TOOLS FAIL -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker warn"><i class="fa-solid fa-xmark"></i> Why Existing Tools Fail</div>
+  <h2>Nobody keeps the memory</h2>
+  <table class="cmp-table">
+    <tr><th></th><th>Chatbot AI</th><th>PR-bot point solutions</th><th>Jira AI add-ons</th><th class="highlight">GraphForge</th></tr>
+    <tr><td>Memory across sessions</td><td class="no">No</td><td class="partial-cell">Per-PR only</td><td class="partial-cell">Per-ticket only</td><td class="highlight yes">Persistent, org-wide</td></tr>
+    <tr><td>Cross-system reasoning</td><td class="no">No</td><td class="no">No</td><td class="no">No</td><td class="highlight yes">Code ↔ tickets ↔ docs</td></tr>
+    <tr><td>Deterministic grounding</td><td class="no">No</td><td class="partial-cell">Diff-only</td><td class="no">No</td><td class="highlight yes">Graph-verified</td></tr>
+    <tr><td>Extensible to new agents</td><td>N/A</td><td class="no">No</td><td class="no">No</td><td class="highlight yes">Typed agent framework</td></tr>
+  </table>
+  <div class="callout info fragment fade-up">
+    <i class="fa-solid fa-quote-left"></i>
+    <p><strong>We don't compete on "better prompts."</strong>We compete on having a graph the others don't — and a framework where every new agent makes the existing ones smarter.</p>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> Read the callout verbatim — it's our sharpest line.<br>
+    <strong>Transition:</strong> "So what did we actually build?"<br>
+    <strong>Expect:</strong> "How is this different from GraphRAG / Copilot?" → Deferred to the AI section — flag it's coming.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 7. VISION -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker"><i class="fa-solid fa-eye"></i> Vision</div>
+  <h2>The graph is the product.<br><span class="accent">The agents are features of it.</span></h2>
+  <div class="callout win fragment fade-up">
+    <i class="fa-solid fa-circle-check"></i>
+    <p>If a feature isn't a graph read or a graph write, it's a plugin bolted on — not part of the product.</p>
+  </div>
+  <div class="stat-card fragment grow-in" style="max-width:520px;margin-top:26px;">
+    <div class="stat-num">1 graph</div>
+    <div class="stat-label">every agent reads from and writes to — no silos</div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> This is the mission statement — deliver it with conviction, it's short by design.<br>
+    <strong>Transition:</strong> "Let's meet the product."<br>
+    <strong>Expect:</strong> "What if a feature genuinely doesn't fit the graph model?" → It gets scoped out or rejected — a real, enforced product discipline (PRODUCT_VISION.md).
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 8. DIVIDER: INTRODUCING GRAPHFORGE -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="divider">
+    <div class="icon-badge"><i class="fa-solid fa-cube"></i></div>
+    <div class="num">02</div>
+    <h2>Introducing GraphForge</h2>
+    <p>Deterministic core. Evidence-gated AI layer. One graph.</p>
+  </div>
+  <aside class="notes"><strong>Transition:</strong> "Five pillars — here's what actually ships today."</aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 9. GRAPHFORGE OVERVIEW -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker"><i class="fa-solid fa-layer-group"></i> Product Pillars</div>
+  <h2>What GraphForge actually is</h2>
+  <div class="card-grid cols-5">
+    <div class="card glow-primary fragment fade-up"><div class="icon"><i class="fa-solid fa-diagram-project"></i></div><h4>Unified Graph</h4><p>Code, docs, tickets, tests — one schema</p></div>
+    <div class="card accent-ai fragment fade-up"><div class="icon"><i class="fa-solid fa-people-group"></i></div><h4>Multi-Agent</h4><p>Specialized agents, shared context</p></div>
+    <div class="card accent-success fragment fade-up"><div class="icon"><i class="fa-solid fa-shield-halved"></i></div><h4>Deterministic Grounding</h4><p>AI anchored to computed fact</p></div>
+    <div class="card accent-aws fragment fade-up"><div class="icon"><i class="fa-solid fa-diagram-successor"></i></div><h4>SDLC-Continuous</h4><p>Idea → build → review → release</p></div>
+    <div class="card accent-warning fragment fade-up"><div class="icon"><i class="fa-solid fa-terminal"></i></div><h4>Dev-Native UX</h4><p>Dense, fast, evidence-linked</p></div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> Name each pillar in ~5 seconds, don't linger.<br>
+    <strong>Transition:</strong> "Now — the part judges actually want to see. How is it built?"<br>
+    <strong>Expect:</strong> "Which of these is most mature?" → Deterministic Grounding, by a wide margin — it's the ChangeGuard-inherited core.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 10. DIVIDER: ARCHITECTURE -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="divider">
+    <div class="icon-badge" style="color:#818CF8"><i class="fa-solid fa-sitemap"></i></div>
+    <div class="num">03</div>
+    <h2>Architecture</h2>
+    <p>Evidence → Hypothesis → Validation → Confidence → Knowledge.</p>
+  </div>
+  <aside class="notes"><strong>Transition:</strong> "Here's the whole pipeline, end to end, before we zoom into each stage."</aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 11. ARCHITECTURE OVERVIEW -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker"><i class="fa-solid fa-route"></i> End-to-End Flow</div>
+  <h2>One pipeline, five stages</h2>
+  <div class="diagram-frame">
+    <img src="diagrams/pipeline.svg" alt="Evidence to Knowledge pipeline">
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "Everything left of 'Knowledge' can be produced by a deterministic parser or an LLM — it doesn't matter which, because nothing gets trusted until it survives independent validation."<br>
+    <strong>Key points:</strong> Point at the dashed Neo4j rail — "derived, not source of truth" is the single most defensible claim in the whole architecture.<br>
+    <strong>Transition:</strong> "Let's start at the bottom — where does knowledge actually live?"<br>
+    <strong>Expect:</strong> "What happens if Neo4j goes down?" → Nothing is lost — it's rebuildable from the Postgres log (materializer, proven by a replay test).
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 12. ENGINEERING MEMORY -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker"><i class="fa-solid fa-database"></i> Engineering Memory</div>
+  <h2>Append-only. Never edited. Never lost.</h2>
+  <div class="two-col">
+    <ul>
+      <li class="fragment fade-up">Every hypothesis, validation, correction <strong>permanently retained</strong></li>
+      <li class="fragment fade-up">"Current" state = <strong>latest version</strong>, computed at read time</li>
+      <li class="fragment fade-up">A repeat run appends a <strong>new row</strong> — never overwrites</li>
+      <li class="fragment fade-up">Postgres, not Neo4j — this is the <strong>real</strong> source of truth</li>
+    </ul>
+    <div class="card glow-primary fragment grow-in">
+      <div class="code-label"><i class="fa-solid fa-database"></i> Postgres — knowledge_relationships</div>
+      <pre><code class="language-sql" data-trim>
+-- append-only: no UPDATE path exists
+-- on this table, anywhere in the codebase
+SELECT relationship_key, confidence_state,
+       sequence, created_at
+FROM knowledge_relationships
+WHERE relationship_key = 'order-service:CALLS:payment-service'
+ORDER BY sequence DESC
+LIMIT 1;   -- "current" = latest, not stored
+      </code></pre>
+    </div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "Nothing here is ever UPDATEd. That single fact is what makes real confidence history possible."<br>
+    <strong>Key points:</strong> The `sequence` column exists because Postgres timestamps in the same transaction can collide — a real bug this caught.<br>
+    <strong>Transition:</strong> "But how do we decide what's worth remembering in the first place?"<br>
+    <strong>Expect:</strong> "Doesn't this grow forever?" → Yes, by design — only raw evidence blobs are archivable; hypothesis/validation/confidence history never is.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 13. KNOWLEDGE ENGINE -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker ai"><i class="fa-solid fa-brain"></i> Knowledge Engine</div>
+  <h2>Where a claim earns trust</h2>
+  <div class="mermaid-wrap">
+    <div class="mermaid">
+flowchart LR
+  A["📄 Evidence<br/>immutable, content-addressed"] --> B["💡 Hypothesis<br/>deterministic · rule · LLM"]
+  B --> C{"🔍 Validator<br/>always deterministic"}
+  C -->|confirms| D["📈 Confidence Engine<br/>monotonic, incremental"]
+  C -->|contradicts| D
+  D --> E["✅ Knowledge<br/>Engineering Memory"]
+  style A fill:#4F46E522,stroke:#4F46E5,color:#F4F6FB
+  style B fill:#8B5CF622,stroke:#8B5CF6,color:#F4F6FB
+  style C fill:#00A86B22,stroke:#00A86B,color:#F4F6FB
+  style D fill:#F59E0B22,stroke:#F59E0B,color:#F4F6FB
+  style E fill:#22C55E22,stroke:#22C55E,color:#F4F6FB
+    </div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "A cheap, boring, deterministic hypothesis and an expensive LLM guess go through the exact same gate."<br>
+    <strong>Key points:</strong> One mental model, one code path — cheap cases stay cheap by clearing validators in O(1), never by forking the pipeline.<br>
+    <strong>Transition:</strong> "So who's actually allowed to propose something?"<br>
+    <strong>Expect:</strong> "Isn't this just a fancy if-statement?" → No — it's a typed, registry-driven pipeline with real contracts (ADR 0018) and a parity test proving it reproduces hand-assigned trust labels exactly.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 14. VALIDATORS -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker neo4j"><i class="fa-solid fa-check-double"></i> Validators</div>
+  <h2>Deterministic. Never an LLM.</h2>
+  <div class="callout danger fragment fade-up">
+    <i class="fa-solid fa-ban"></i>
+    <p><strong>The hard rule</strong>"A validator that asks an LLM 'does this seem right' isn't validating — it's generating a second, uncoordinated guess."</p>
+  </div>
+  <div class="card-grid cols-3" style="margin-top:24px;">
+    <div class="card accent-neo4j fragment fade-up"><div class="icon"><i class="fa-solid fa-code-compare"></i></div><h4>Structural</h4><p>Literal annotation / topic matches</p></div>
+    <div class="card accent-neo4j fragment fade-up"><div class="icon"><i class="fa-solid fa-arrows-left-right"></i></div><h4>Cross-Repository</h4><p>Feign / Kafka / dependency-coordinate rules</p></div>
+    <div class="card accent-neo4j fragment fade-up"><div class="icon"><i class="fa-solid fa-key"></i></div><h4>Evidence-Keyword</h4><p>One class, four keyword tables — new tech = new row, never new code</p></div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "This is the actual anti-hallucination mechanism — not a prompt instruction, an interface constraint."<br>
+    <strong>Key points:</strong> A validator's signature has no LLM provider to reach for — it structurally cannot cheat.<br>
+    <strong>Transition:</strong> "Once something's validated, how do we score how much to trust it?"<br>
+    <strong>Expect:</strong> "What if the keyword match is wrong?" → Real, acknowledged limitation — substring matching isn't semantic understanding; named honestly in our own docs.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 15. CONFIDENCE ENGINE -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker warn"><i class="fa-solid fa-gauge-high"></i> Confidence Engine</div>
+  <h2>Six states. Never a bare float.</h2>
+  <div class="confidence-row">
+    <span class="chip verified fragment grow-in">VERIFIED</span>
+    <span class="chip highly_likely fragment grow-in">HIGHLY LIKELY</span>
+    <span class="chip likely fragment grow-in">LIKELY</span>
+    <span class="chip candidate fragment grow-in">CANDIDATE</span>
+    <span class="chip conflicting fragment grow-in">CONFLICTING</span>
+    <span class="chip rejected fragment grow-in">REJECTED</span>
+  </div>
+  <div class="two-col" style="margin-top:10px;">
+    <ul>
+      <li class="fragment fade-up"><strong>Incremental</strong> — folds one result at a time, never re-scans history</li>
+      <li class="fragment fade-up"><strong>Monotonic</strong> — confirmation only strengthens, contradiction only weakens</li>
+      <li class="fragment fade-up"><strong>Verified needs ≥2</strong> independent confirming sources — never one LLM alone</li>
+    </ul>
+    <div class="callout win fragment fade-up">
+      <i class="fa-solid fa-flask"></i>
+      <p><strong>Proven, not asserted</strong>Parity-tested to reproduce our pre-existing hand-assigned trust labels exactly.</p>
+    </div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "An LLM's own self-reported confidence never enters this formula — ever. Confidence comes only from independent confirmation."<br>
+    <strong>Key points:</strong> Two real contract bugs were found and fixed mid-implementation — a good "we test our own trust math" story if pushed.<br>
+    <strong>Transition:</strong> "All of this lives in Postgres — how does Neo4j, the actual graph, stay in sync?"<br>
+    <strong>Expect:</strong> "Can confidence ever go back down?" → Yes — CONFLICTING/REJECTED exist exactly for that, and it's tested in both directions.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 16. MATERIALIZER -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker neo4j"><i class="fa-solid fa-arrows-rotate"></i> Materializer</div>
+  <h2>Neo4j is rebuilt. Not maintained.</h2>
+  <div class="two-col wide-right">
+    <div class="stat-card glow-neo4j fragment grow-in">
+      <div class="stat-num"><i class="fa-solid fa-check" style="font-size:0.6em;"></i></div>
+      <div class="stat-label">Replay-tested: delete Neo4j, rebuild from Postgres alone, diff node/edge/property equality</div>
+    </div>
+    <div class="mermaid-wrap fragment fade-up">
+      <div class="mermaid">
+sequenceDiagram
+  participant PG as Postgres (truth)
+  participant M as Materializer
+  participant N as Neo4j (projection)
+  PG->>M: Engineering Memory + Evidence Packs
+  M->>M: pure projection — zero LLM, zero I/O
+  M->>N: rebuilt GraphPayload
+  Note over N: proven identical<br/>to the original graph
+      </div>
+    </div>
+  </div>
+  <div class="callout honest fragment fade-up">
+    <i class="fa-solid fa-scale-balanced"></i>
+    <p><strong>Honest caveat</strong>Proven correct — but not yet the <em>live</em> write path. Today's writes still go direct to Neo4j; this is shadow-mode, proven, ready for cutover.</p>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "We don't just claim the graph is rebuildable — we ship a dashboard that proves it, continuously." Then immediately give the honest caveat — don't wait to be asked.<br>
+    <strong>Transition:</strong> "Now — what about relationships that span repositories?"<br>
+    <strong>Expect:</strong> "Why not cut it over already?" → Shadow-mode discipline — prove correctness before betting production writes on a new path. Every RFC in this codebase ships this way.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 17. CROSS-REPOSITORY REASONING -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker warn"><i class="fa-solid fa-diagram-project"></i> Cross-Repository Reasoning</div>
+  <h2>The hardest, most honest slide</h2>
+  <div class="card-grid cols-3">
+    <div class="card accent-success fragment fade-up"><div class="icon"><i class="fa-solid fa-network-wired"></i></div><h4>CALLS_SERVICE</h4><p>Feign-client relationships, persisted to Engineering Memory</p></div>
+    <div class="card accent-success fragment fade-up"><div class="icon"><i class="fa-solid fa-tower-broadcast"></i></div><h4>SHARES_TOPIC</h4><p>Kafka producer/consumer topic overlap</p></div>
+    <div class="card accent-success fragment fade-up"><div class="icon"><i class="fa-solid fa-boxes-stacked"></i></div><h4>DEPENDS_ON_REPOSITORY</h4><p>Dependency-coordinate matches</p></div>
+  </div>
+  <div class="callout honest fragment fade-up">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <p><strong>Known, numbered, root-caused</strong>Feign matching breaks on <code>&lt;domain&gt;-service-&lt;language&gt;</code> naming; Kafka detection is literal-string-only. Found by our own 24-repo validation suite — not by a judge.</p>
+  </div>
+  <aside class="notes">
+    <strong>Say this proactively, don't wait to be caught.</strong> "This is real, and it's exactly why we built a validation suite — to find gaps like this ourselves."<br>
+    <strong>Key points:</strong> This is the single highest-value honesty moment in the deck — own it with confidence, not apology.<br>
+    <strong>Transition:</strong> "On top of all this sits a layer that never touches an LLM at all."<br>
+    <strong>Expect:</strong> "So does cross-repo impact analysis actually work?" → Persistence works; blast-radius traversal has a related, separate, also-documented gap — covered later.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 18. DIVIDER: AI & AGENTS -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="divider">
+    <div class="icon-badge" style="color:#A78BFA"><i class="fa-solid fa-robot"></i></div>
+    <div class="num">04</div>
+    <h2>AI &amp; Agents</h2>
+    <p>The LLM proposes and narrates. It never decides what's true.</p>
+  </div>
+  <aside class="notes"><strong>Transition:</strong> "First — the layer underneath every agent that never calls an LLM at all."</aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 19. ENGINEERING INTELLIGENCE SERVICE LAYER -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker"><i class="fa-solid fa-server"></i> Engineering Intelligence Service Layer</div>
+  <h2>Six services. Zero LLM calls.</h2>
+  <div class="card-grid cols-3">
+    <div class="card fragment fade-up"><div class="icon"><i class="fa-solid fa-id-card"></i></div><h4>Repository Profile</h4><p>APIs, DBs, queues, dependencies</p></div>
+    <div class="card fragment fade-up"><div class="icon"><i class="fa-solid fa-bullseye"></i></div><h4>Impact Analysis</h4><p>Blast-radius computation</p></div>
+    <div class="card fragment fade-up"><div class="icon"><i class="fa-solid fa-magnifying-glass-chart"></i></div><h4>Dependency Query</h4><p>Filtered, confidence-aware search</p></div>
+    <div class="card fragment fade-up"><div class="icon"><i class="fa-solid fa-diagram-predecessor"></i></div><h4>Architecture Insights</h4><p>Cycles, shared DBs, ownership gaps</p></div>
+    <div class="card fragment fade-up"><div class="icon"><i class="fa-solid fa-flask-vial"></i></div><h4>Change Simulation</h4><p>"What breaks if I remove this"</p></div>
+    <div class="card fragment fade-up"><div class="icon"><i class="fa-solid fa-object-group"></i></div><h4>Organization Knowledge</h4><p>Composes the above, no NL parsing</p></div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "None of these six services call an LLM or parse natural language — by explicit design rule."<br>
+    <strong>Key points:</strong> This is what keeps every fact reproducible — the same question always computes the same answer.<br>
+    <strong>Transition:</strong> "So where does AI actually enter the graph?"<br>
+    <strong>Expect:</strong> "Then what's the point of the AI layer?" → Narration and hypothesis generation — never fact computation.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 20. FRONTIER AI -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker ai"><i class="fa-solid fa-wand-magic-sparkles"></i> Frontier AI</div>
+  <h2>An LLM that proposes — and nothing else</h2>
+  <div class="timeline">
+    <div class="step fragment fade-up"><div class="dot">1</div><h5>Fixed vocabulary</h5><p>13 capability types, closed</p></div>
+    <div class="step fragment fade-up"><div class="dot">2</div><h5>No direct write</h5><p>Returns hypotheses only</p></div>
+    <div class="step fragment fade-up"><div class="dot">3</div><h5>CANDIDATE default</h5><p>Lowest trust, until confirmed</p></div>
+    <div class="step fragment fade-up"><div class="dot">4</div><h5>Keyword promotion</h5><p>Only from its own cited evidence</p></div>
+    <div class="step fragment fade-up"><div class="dot">5</div><h5>Verified needs 2+</h5><p>Never one model alone</p></div>
+  </div>
+  <div class="callout warn fragment fade-up" style="margin-top:28px;">
+    <i class="fa-solid fa-toggle-off"></i>
+    <p><strong>Off by default.</strong> <code>enable_frontier_llm_generator = False</code> — real precision hasn't been measured yet, so it doesn't ship live by accident.</p>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> Walk the five-step chain left to right — this IS the hallucination-defense answer, said out loud.<br>
+    <strong>Key points:</strong> Gated off by default is a strength to state proudly, not hide — it shows judgment over hype.<br>
+    <strong>Transition:</strong> "This generator is one input into a much bigger agent framework."<br>
+    <strong>Expect:</strong> "How is this different from GraphRAG?" → GraphRAG typically writes LLM extractions directly; we gate everything behind independent validation first.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 21. AGENTS -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker ai"><i class="fa-solid fa-people-group"></i> Agents</div>
+  <h2>Almost no business logic of their own</h2>
+  <div class="mermaid-wrap">
+    <div class="mermaid">
+flowchart TD
+  M["AgentManifest<br/>id · goals · cost_class"] --> R["Orchestrator Registry"]
+  R --> P["Preflight Check<br/>LLM + Neo4j configured?"]
+  P --> BSR["build_service_requests()<br/>pure"]
+  BSR --> SVC["Engineering Intelligence<br/>Service Layer"]
+  SVC --> BP["build_prompt()<br/>may skip LLM entirely"]
+  BP --> LLM["LLM narration"]
+  LLM --> RR["render_response()<br/>pure"]
+  RR --> OUT["AgentOutput<br/>confidence + evidence"]
+  style M fill:#4F46E522,stroke:#4F46E5,color:#fff
+  style LLM fill:#8B5CF622,stroke:#8B5CF6,color:#fff
+  style OUT fill:#22C55E22,stroke:#22C55E,color:#fff
+    </div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "Three pure functions per agent. Everything with side effects lives once, in a shared base class."<br>
+    <strong>Key points:</strong> Adding agent #13 touches its own module and one registry line — never the orchestrator core.<br>
+    <strong>Transition:</strong> "Let's meet three of these agents directly."<br>
+    <strong>Expect:</strong> "How many agents are registered today?" → 12+, confirmed directly against the codebase.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 22. REPOSITORY UNDERSTANDING AGENT -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker ai"><i class="fa-solid fa-book-open"></i> Repository Understanding Agent</div>
+  <h2>"What does this repo actually do?"</h2>
+  <div class="two-col">
+    <ul>
+      <li class="fragment fade-up">Reads an already-materialized <strong>Repository Profile</strong></li>
+      <li class="fragment fade-up">APIs, databases, queues, integrations, dependencies</li>
+      <li class="fragment fade-up"><span class="badge success"><i class="fa-solid fa-dollar-sign"></i> cost_class = cheap</span></li>
+      <li class="fragment fade-up">LLM only <strong>narrates</strong> — never computes the facts</li>
+    </ul>
+    <div class="card glow-ai fragment grow-in">
+      <div class="icon"><i class="fa-solid fa-eye"></i></div>
+      <h4>Read-only, by design</h4>
+      <p>Never writes to Neo4j, Postgres, or the repository — a pure narration layer over deterministic facts.</p>
+    </div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "This is the cheapest, fastest agent — good live-demo candidate if time allows."<br>
+    <strong>Transition:</strong> "Next — a question with a real, honest limitation behind it."<br>
+    <strong>Expect:</strong> "cost_class=cheap — what does that control?" → Signals budget tier to the orchestrator; not yet enforced by an automatic budget cap (that's Phase 3 roadmap).
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 23. DEPENDENCY QUERY AGENT -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker ai"><i class="fa-solid fa-magnifying-glass"></i> Dependency Query Agent</div>
+  <h2>"What depends on this?"</h2>
+  <div class="two-col">
+    <ul>
+      <li class="fragment fade-up">Confidence-aware relationship search</li>
+      <li class="fragment fade-up">Reuses one shared lookup — no duplicate logic across agents</li>
+      <li class="fragment fade-up">Never touches Neo4j directly — pure Engineering Memory filter</li>
+    </ul>
+    <div class="card accent-warning fragment grow-in">
+      <div class="icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+      <h4>Known gap #4</h4>
+      <p>Direct/downstream counts are intra-repository noise today — cross-repo edges aren't yet queryable here. Documented, not hidden.</p>
+    </div>
+  </div>
+  <aside class="notes">
+    <strong>Say this gap proactively</strong> — don't let it surface as a "gotcha" during Q&A.<br>
+    <strong>Key points:</strong> Same root cause as a Parity validation failure elsewhere — one fix closes both.<br>
+    <strong>Transition:</strong> "One more agent, one more honest limitation."<br>
+    <strong>Expect:</strong> "When will this be fixed?" → Roadmap-scoped, root-caused, not vague — see the Roadmap slide.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 24. IMPACT ANALYSIS AGENT -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker ai"><i class="fa-solid fa-bullseye"></i> Impact Analysis Agent</div>
+  <h2>Blast radius — grounded, not guessed</h2>
+  <div class="two-col">
+    <ul>
+      <li class="fragment fade-up">Computes <strong>BlastRadius</strong> via bounded graph traversal</li>
+      <li class="fragment fade-up">Every relationship carries its own confidence state</li>
+      <li class="fragment fade-up">Read-only — narrates, never decides</li>
+    </ul>
+    <div class="card accent-warning fragment grow-in">
+      <div class="icon"><i class="fa-solid fa-triangle-exclamation"></i></div>
+      <h4>Known gap #3</h4>
+      <p>Cannot cross repositories today — a traversal-filter bug, not a missing feature. Blast radius = itself, until fixed.</p>
+    </div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "This is a bug, not a missing capability — the fix is understood, just not shipped."<br>
+    <strong>Transition:</strong> "Let's talk about how we caught all of this ourselves."<br>
+    <strong>Expect:</strong> "How did you find this bug?" → Our own 24-repository validation suite, covered next.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 25. DIVIDER: QUALITY & VALIDATION -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="divider">
+    <div class="icon-badge" style="color:#22C55E"><i class="fa-solid fa-vial-circle-check"></i></div>
+    <div class="num">05</div>
+    <h2>Quality &amp; Validation</h2>
+    <p>We built a black-box test suite to catch our own mistakes.</p>
+  </div>
+  <aside class="notes"><strong>Transition:</strong> "24 repositories, 10 validations, real APIs."</aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 26. VALIDATION FRAMEWORK -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker success"><i class="fa-solid fa-vial"></i> Validation Framework</div>
+  <h2>24 repos. 10 validations. Real APIs.</h2>
+  <div class="card-grid cols-4">
+    <div class="stat-card success fragment grow-in"><div class="stat-num">24</div><div class="stat-label">real repositories</div></div>
+    <div class="stat-card success fragment grow-in"><div class="stat-num">10</div><div class="stat-label">validations run</div></div>
+    <div class="stat-card success fragment grow-in"><div class="stat-num">0</div><div class="stat-label">reimplemented logic</div></div>
+    <div class="stat-card warning fragment grow-in"><div class="stat-num">4</div><div class="stat-label">known gaps, self-found</div></div>
+  </div>
+  <div class="callout win fragment fade-up" style="margin-top:24px;">
+    <i class="fa-solid fa-quote-left"></i>
+    <p>"Does not reimplement any GraphForge logic — every fact comes from GraphForge's own REST API, called exactly the way the app itself calls it."</p>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "This is a black box test — it never cheats by checking internal state directly."<br>
+    <strong>Key points:</strong> Exit code is designed as a CI gate — PASS iff every gating validation passes.<br>
+    <strong>Transition:</strong> "Now, where does this actually run in the cloud?"<br>
+    <strong>Expect:</strong> "Is it wired into CI today?" → Designed to be; not independently confirmed as an active CI step in our own audit.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 27. DIVIDER: CLOUD & DEPLOYMENT -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="divider">
+    <div class="icon-badge" style="color:#FFB84D"><i class="fa-brands fa-aws"></i></div>
+    <div class="num">06</div>
+    <h2>Cloud &amp; Deployment</h2>
+    <p>Zero static AWS keys. Anywhere.</p>
+  </div>
+  <aside class="notes"><strong>Transition:</strong> "Here's the deployment blueprint — specified, code-verified, ready to stand up."</aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 28. AWS ARCHITECTURE -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker aws"><i class="fa-brands fa-aws"></i> AWS Architecture</div>
+  <h2>ECS Fargate · RDS · Neo4j · Bedrock</h2>
+  <div class="diagram-frame">
+    <img src="diagrams/aws-architecture.svg" alt="AWS deployment architecture">
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "Two Fargate services behind one ALB. Bedrock reached through an IAM Task Role — never a stored access key, confirmed directly in our provider code's own docstring."<br>
+    <strong>Key points:</strong> Backend fixed at desiredCount=1 — name the real reason if asked: in-process background execution doesn't yet survive a restart or scale across replicas.<br>
+    <strong>Transition:</strong> "Enough architecture — let's see it work."<br>
+    <strong>Expect:</strong> "Why not EKS?" → Two lightweight services doesn't earn Kubernetes' complexity budget — a considered rejection, not a knowledge gap.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 29. DIVIDER: SEE IT LIVE -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="divider">
+    <div class="icon-badge" style="color:#4F46E5"><i class="fa-solid fa-play"></i></div>
+    <div class="num">07</div>
+    <h2>See It Live</h2>
+    <p>Real repositories. Real git history. Same pipeline as production.</p>
+  </div>
+  <aside class="notes"><strong>Transition to Presenter 5:</strong> hand off cleanly, no re-explaining what's about to happen.</aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 30. DEMO FLOW -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker"><i class="fa-solid fa-display"></i> Demo Flow</div>
+  <h2>Breaking Kafka schema change</h2>
+  <div class="timeline">
+    <div class="step fragment fade-up"><div class="dot"><i class="fa-solid fa-code-compare"></i></div><h5>Show the diff</h5><p><code>total</code> → <code>totalCents</code></p></div>
+    <div class="step fragment fade-up"><div class="dot"><i class="fa-solid fa-gauge"></i></div><h5>Deterministic risk</h5><p>HIGH — zero LLM calls</p></div>
+    <div class="step fragment fade-up"><div class="dot"><i class="fa-solid fa-sitemap"></i></div><h5>Blast radius</h5><p>All 4 downstream listeners</p></div>
+    <div class="step fragment fade-up"><div class="dot"><i class="fa-solid fa-list-check"></i></div><h5>Rollout plan</h5><p>Deploy order, generated</p></div>
+  </div>
+  <div class="callout info fragment fade-up" style="margin-top:26px;">
+    <i class="fa-solid fa-circle-info"></i>
+    <p>Every listener across <em>both</em> Kafka topics is correctly flagged — impact analysis is file-level, not field-level. Not a bug.</p>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "Watch the risk badge appear before the AI tab even loads — that's the deterministic layer, zero LLM cost."<br>
+    <strong>Key points:</strong> If asked why all 4 listeners appear, give the file-level-not-field-level explanation confidently — it's correct behavior.<br>
+    <strong>Transition:</strong> "That's the product. Now — why we think this is worth your attention."<br>
+    <strong>Expect:</strong> "Is this the full product or a cut-down demo?" → Same code path as production; only the git transport is swapped (local branches, not GitHub PRs).
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 31. DIVIDER: WHY WE WIN -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="divider">
+    <div class="icon-badge" style="color:#22C55E"><i class="fa-solid fa-trophy"></i></div>
+    <div class="num">08</div>
+    <h2>Why We Win</h2>
+    <p>Engineering rigor as the actual differentiator.</p>
+  </div>
+  <aside class="notes"><strong>Transition:</strong> "Five fast slides — innovation, excellence, scale, security, performance."</aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 32. INNOVATION -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker ai"><i class="fa-solid fa-star"></i> Innovation</div>
+  <h2>Not "AI code review." Structural trust.</h2>
+  <div class="callout win fragment fade-up">
+    <i class="fa-solid fa-lightbulb"></i>
+    <p>An LLM claim cannot become trusted knowledge without independent, deterministic corroboration — <strong>enforced by interface design</strong>, not convention.</p>
+  </div>
+  <div class="card-grid cols-3" style="margin-top:22px;">
+    <div class="card accent-ai fragment fade-up"><div class="icon"><i class="fa-solid fa-database"></i></div><h4>Postgres/Neo4j inversion</h4><p>Proven by a real replay test</p></div>
+    <div class="card accent-ai fragment fade-up"><div class="icon"><i class="fa-solid fa-key"></i></div><h4>One reusable validator class</h4><p>New tech = keyword row, never new code</p></div>
+    <div class="card accent-ai fragment fade-up"><div class="icon"><i class="fa-solid fa-shield"></i></div><h4>Structural, not policy</h4><p>A validator's signature has no LLM to reach for</p></div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "Table-stakes now is 'AI reviews your code.' Our claim is narrower and harder: nothing gets trusted without independent proof."<br>
+    <strong>Transition:</strong> "Here's the engineering discipline behind that claim."<br>
+    <strong>Expect:</strong> "Is any of this patentable?" → Not evaluated — an honest non-answer.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 33. ENGINEERING EXCELLENCE -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker success"><i class="fa-solid fa-award"></i> Engineering Excellence</div>
+  <h2>Shadow mode, every time</h2>
+  <div class="icon-list">
+    <li class="fragment fade-up"><i class="fa-solid fa-ghost"></i><div><strong>Every RFC ships in shadow mode</strong> — proven correct before any cutover, one-line rollback always available</div></li>
+    <li class="fragment fade-up"><i class="fa-solid fa-flask"></i><div><strong>Real Postgres/Neo4j in tests</strong> — no mocked databases, ever</div></li>
+    <li class="fragment fade-up"><i class="fa-solid fa-bug-slash"></i><div><strong>A real contract bug</strong> found and fixed mid-implementation, rejected alternatives documented — not silently patched</div></li>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "Shadow mode is why the materializer is fully built and tested but not yet the live path — and why that's a strength, not a delay."<br>
+    <strong>Transition:</strong> "Can this actually scale?"<br>
+    <strong>Expect:</strong> "What's your CI/CD story?" → CI is real and running; CD is a specification, not yet implemented — say this precisely.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 34. SCALABILITY -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker aws"><i class="fa-solid fa-arrows-up-down-left-right"></i> Scalability</div>
+  <h2>Honest ceilings, named directly</h2>
+  <div class="card-grid cols-2">
+    <div class="card accent-success fragment fade-up"><div class="icon"><i class="fa-solid fa-gauge-high"></i></div><h4>Hop-bounded traversal</h4><p>Predictable latency as the graph grows</p></div>
+    <div class="card accent-success fragment fade-up"><div class="icon"><i class="fa-solid fa-bolt"></i></div><h4>O(1) confidence updates</h4><p>Incremental, never re-scans history</p></div>
+    <div class="card accent-warning fragment fade-up"><div class="icon"><i class="fa-solid fa-clone"></i></div><h4>desiredCount = 1</h4><p>Until durable background execution ships</p></div>
+    <div class="card accent-warning fragment fade-up"><div class="icon"><i class="fa-solid fa-hard-drive"></i></div><h4>Full-clone indexing</h4><p>Doesn't scale past a handful of repos yet</p></div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "Two real strengths, two real ceilings — both named in our own roadmap before anyone asked."<br>
+    <strong>Transition:</strong> "What about security?"<br>
+    <strong>Expect:</strong> "How does GraphForge scale to a 1000-repo org?" → It doesn't yet — full-clone-per-index is the honest, named limit.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 35. SECURITY -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker aws"><i class="fa-solid fa-shield-halved"></i> Security</div>
+  <h2>Zero static AWS keys. Anywhere.</h2>
+  <div class="card-grid cols-3">
+    <div class="card accent-aws fragment fade-up"><div class="icon"><i class="fa-solid fa-key"></i></div><h4>IAM Task Roles</h4><p>Bedrock via boto3's default credential chain</p></div>
+    <div class="card accent-aws fragment fade-up"><div class="icon"><i class="fa-solid fa-lock"></i></div><h4>Encrypted at rest</h4><p>Tokens/API keys via Fernet before they touch Postgres</p></div>
+    <div class="card accent-aws fragment fade-up"><div class="icon"><i class="fa-solid fa-triangle-exclamation"></i></div><h4>Fail-loud secrets</h4><p>Production refuses to boot on a dev-default secret</p></div>
+  </div>
+  <div class="callout warn fragment fade-up">
+    <i class="fa-solid fa-flag"></i>
+    <p>Honest gap: no application-level rate limiting yet — WAF at the edge is the recommended, not-yet-implemented mitigation.</p>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "The dev-default secret guard turning into a hard startup failure in production — that's the system working correctly, not a bug."<br>
+    <strong>Transition:</strong> "How do we know all of this actually works?"<br>
+    <strong>Expect:</strong> "What's your riskiest secret?" → None stored insecurely — AWS credentials for Bedrock are the one category that never touches Secrets Manager at all.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 36. TESTING -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker success"><i class="fa-solid fa-flask-vial"></i> Testing</div>
+  <h2>236 test files. Zero mocked databases.</h2>
+  <div class="card-grid cols-4">
+    <div class="stat-card success fragment grow-in"><div class="stat-num">236</div><div class="stat-label">backend test files</div></div>
+    <div class="stat-card success fragment grow-in"><div class="stat-num">68</div><div class="stat-label">tests added for Engineering Session alone</div></div>
+    <div class="stat-card fragment grow-in"><div class="stat-num">0</div><div class="stat-label">mocked databases</div></div>
+    <div class="stat-card warning fragment grow-in"><div class="stat-num">1</div><div class="stat-label">real concurrency bug caught pre-ship</div></div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "Real Postgres, real Neo4j, in every integration test — mocks stop at the external HTTP boundary."<br>
+    <strong>Transition:</strong> "And where it actually matters — performance."<br>
+    <strong>Expect:</strong> "What's NOT tested that should worry us?" → Real-world LLM-generator precision, and full browser-level rendering of some newer fields — named honestly, not hidden.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 37. PERFORMANCE -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker warn"><i class="fa-solid fa-gauge-high"></i> Performance</div>
+  <h2>Measured, not assumed</h2>
+  <div class="two-col">
+    <div class="card glow-primary fragment fade-up">
+      <div class="icon"><i class="fa-solid fa-chart-line"></i></div>
+      <h4>Bounded traversal fix</h4>
+      <p>Unbounded full-graph read → hop-bounded neighborhood: <strong>O(every repo) → O(1)</strong> once a repository is known.</p>
+    </div>
+    <div class="card glow-primary fragment fade-up">
+      <div class="icon"><i class="fa-solid fa-stopwatch"></i></div>
+      <h4>LLM cost, capped by measurement</h4>
+      <p>Mid-loop synthesis capped at 1 call after observing a real <strong>92s → 165s</strong> test-suite regression at a budget of 2.</p>
+    </div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "That second number is a real benchmark, not a guess — we measured the cost before deciding the cap."<br>
+    <strong>Transition:</strong> "Now — the part most teams skip. What isn't done yet."<br>
+    <strong>Expect:</strong> "What's your biggest unaddressed performance risk?" → Full-clone-per-index — already named on the Scalability slide.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 38. KNOWN LIMITATIONS -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker warn"><i class="fa-solid fa-scale-balanced"></i> Known Limitations</div>
+  <h2>We found these. We're telling you first.</h2>
+  <div class="gap-card fragment fade-up">
+    <div class="gap-num">01</div>
+    <div><h5>Kafka topic detection</h5><p>Literal-string-only — no shared-SDK-wrapper support, no Python extractor yet.</p></div>
+  </div>
+  <div class="gap-card fragment fade-up">
+    <div class="gap-num">02</div>
+    <div><h5>Feign cross-repo matching</h5><p>Suffix-only normalization breaks on <code>&lt;domain&gt;-service-&lt;language&gt;</code> naming.</p></div>
+  </div>
+  <div class="gap-card fragment fade-up">
+    <div class="gap-num">03</div>
+    <div><h5>Impact Analysis can't cross repos</h5><p>A traversal-filter bug — root-caused, not a missing feature.</p></div>
+  </div>
+  <div class="gap-card fragment fade-up">
+    <div class="gap-num">04</div>
+    <div><h5>Dependency counts are intra-repo noise</h5><p>Same root cause as our own Parity validation failures — one fix, two symptoms closed.</p></div>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "All four were found by our own validation suite, running against realistic, polyglot fixtures — not discovered by a judge."<br>
+    <strong>Key points:</strong> This slide is a credibility asset. Deliver it with confidence, not apology.<br>
+    <strong>Transition:</strong> "And here's exactly what closes each of them."<br>
+    <strong>Expect:</strong> Any judge probing for weakness — this slide should already have answered them.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 39. FUTURE ROADMAP -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker"><i class="fa-solid fa-road"></i> Future Roadmap</div>
+  <h2>Every RFC plugs into the same pipeline</h2>
+  <div class="timeline">
+    <div class="step fragment fade-up"><div class="dot">07</div><h5>New Language</h5><p>First non-parser language via the generic path</p></div>
+    <div class="step fragment fade-up"><div class="dot">08</div><h5>Multi-Provider Consensus</h5><p>Anti-correlation cap already designed in</p></div>
+    <div class="step fragment fade-up"><div class="dot">09</div><h5>Incremental Evidence</h5><p>Infra manifests first, runtime telemetry last</p></div>
+  </div>
+  <div class="callout info fragment fade-up" style="margin-top:26px;">
+    <i class="fa-solid fa-puzzle-piece"></i>
+    <p>No rearchitecture required — every future RFC is an additive plug into the same five-stage pipeline you already saw.</p>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "None of this needs a redesign — that's the actual payoff of the architecture we showed earlier."<br>
+    <strong>Transition:</strong> "So — what's the business case for all of this?"<br>
+    <strong>Expect:</strong> "What would you build first with more time?" → Closing the Feign/Kafka cross-repo gaps — highest product-visible leverage.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 40. BUSINESS VALUE -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker"><i class="fa-solid fa-sack-dollar"></i> Business Value</div>
+  <h2>Time-to-context, not vague productivity</h2>
+  <div class="two-col">
+    <div class="card glow-primary fragment fade-up">
+      <div class="icon"><i class="fa-solid fa-hourglass-half"></i></div>
+      <h4>Before</h4>
+      <p>"Ask a senior engineer" — minutes to hours, blocked on availability.</p>
+    </div>
+    <div class="card accent-success glow-neo4j fragment fade-up">
+      <div class="icon"><i class="fa-solid fa-bolt"></i></div>
+      <h4>After</h4>
+      <p>Assembled before you finish reading the ticket — self-serve, evidence-linked.</p>
+    </div>
+  </div>
+  <div class="callout honest fragment fade-up" style="margin-top:22px;">
+    <i class="fa-solid fa-circle-info"></i>
+    <p>Not yet measured with real users — this is a defensible framing, not a validated ROI number. We say so directly.</p>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> "We're not going to give you a fake ROI percentage — here's the honest framing instead."<br>
+    <strong>Transition:</strong> "Let's bring it all together."<br>
+    <strong>Expect:</strong> "What's the pricing model?" → Not defined — hackathon scope, don't invent one.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 41. SUMMARY -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="kicker"><i class="fa-solid fa-flag-checkered"></i> Summary</div>
+  <h2>The graph is the product.</h2>
+  <div class="card-grid cols-3">
+    <div class="card glow-primary fragment fade-up"><div class="icon"><i class="fa-solid fa-shield-halved"></i></div><h4>Evidence-gated</h4><p>No claim trusted without independent proof</p></div>
+    <div class="card accent-neo4j glow-neo4j fragment fade-up"><div class="icon"><i class="fa-solid fa-database"></i></div><h4>Append-only truth</h4><p>Postgres source, Neo4j projection</p></div>
+    <div class="card accent-warning fragment fade-up"><div class="icon"><i class="fa-solid fa-scale-balanced"></i></div><h4>Honest about gaps</h4><p>Four known limitations, self-found, root-caused</p></div>
+  </div>
+  <div class="callout win fragment fade-up" style="margin-top:24px;">
+    <i class="fa-solid fa-quote-left"></i>
+    <p>Every claim this system makes can be traced to real evidence. Every gap in it can be traced to a real, named, already-diagnosed reason.</p>
+  </div>
+  <aside class="notes">
+    <strong>Say:</strong> Deliver the closing callout verbatim, then pause before "questions."<br>
+    <strong>Transition:</strong> "We'd love your questions."<br>
+    <strong>Expect:</strong> This is the moment to look confident and stop talking.
+  </aside>
+</section>
+
+<!-- ============================================================ -->
+<!-- 42. Q&A -->
+<!-- ============================================================ -->
+<section data-background-color="#0B1020">
+  <div class="title-slide">
+    <div class="icon-badge" style="font-size:3em;margin-bottom:0.2em;"><i class="fa-solid fa-comments"></i></div>
+    <h1 style="font-size:2.6em;">Questions?</h1>
+    <p class="tagline">Ask us anything — architecture, AI, AWS, engineering, or the gaps we haven't closed yet.</p>
+    <div class="badge-row">
+      <span class="badge primary"><i class="fa-solid fa-sitemap"></i> Architecture</span>
+      <span class="badge ai"><i class="fa-solid fa-brain"></i> AI</span>
+      <span class="badge aws"><i class="fa-brands fa-aws"></i> AWS</span>
+      <span class="badge success"><i class="fa-solid fa-vial"></i> Engineering</span>
+      <span class="badge warning"><i class="fa-solid fa-scale-balanced"></i> Honest Gaps</span>
+    </div>
+  </div>
+  <aside class="notes">
+    <strong>Floor rules:</strong> route by topic, not turn order — whoever owns it in the team responsibilities matrix answers first.<br>
+    <strong>Unknown-answer protocol:</strong> "Not measured yet — here's what we do know: [nearest grounded fact]." Never invent a number.<br>
+    <strong>90-second cap per answer</strong> unless the judge explicitly asks for more.
+  </aside>
+</section>
+
+</div>
+</div>
+
+<!-- Reveal.js core + plugins (CDN, no build step) -->
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/markdown/markdown.js"></script>
+<!-- Mermaid (CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.min.js"></script>
+<!-- GraphForge init -->
+<script src="js/custom.js"></script>
+</body>
+</html>

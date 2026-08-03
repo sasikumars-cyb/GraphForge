@@ -1,0 +1,71 @@
+<svg width="1180" height="360" viewBox="0 0 1180 360" xmlns="http://www.w3.org/2000/svg" font-family="Inter, sans-serif">
+  <defs>
+    <linearGradient id="arrow" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#4F46E5"/>
+      <stop offset="100%" stop-color="#8B5CF6"/>
+    </linearGradient>
+    <filter id="soft" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="6" stdDeviation="10" flood-color="#000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- connecting line -->
+  <line x1="90" y1="120" x2="1090" y2="120" stroke="url(#arrow)" stroke-width="3" opacity="0.55"/>
+
+  <!-- Stage boxes -->
+  <!-- 1 Evidence -->
+  <g filter="url(#soft)">
+    <rect x="30" y="70" width="180" height="100" rx="18" fill="#10172B" stroke="#4F46E5" stroke-width="2"/>
+  </g>
+  <text x="120" y="112" fill="#F4F6FB" font-size="19" font-weight="700" text-anchor="middle">Evidence</text>
+  <text x="120" y="136" fill="#A6AFC3" font-size="12" text-anchor="middle">tree-sitter · immutable</text>
+  <text x="120" y="153" fill="#A6AFC3" font-size="12" text-anchor="middle">content-addressed</text>
+
+  <!-- 2 Hypothesis -->
+  <g filter="url(#soft)">
+    <rect x="245" y="70" width="180" height="100" rx="18" fill="#10172B" stroke="#8B5CF6" stroke-width="2"/>
+  </g>
+  <text x="335" y="112" fill="#F4F6FB" font-size="19" font-weight="700" text-anchor="middle">Hypothesis</text>
+  <text x="335" y="136" fill="#A6AFC3" font-size="12" text-anchor="middle">deterministic · rule · LLM</text>
+  <text x="335" y="153" fill="#A6AFC3" font-size="12" text-anchor="middle">proposes only, never writes</text>
+
+  <!-- 3 Validation -->
+  <g filter="url(#soft)">
+    <rect x="460" y="70" width="180" height="100" rx="18" fill="#10172B" stroke="#00A86B" stroke-width="2"/>
+  </g>
+  <text x="550" y="112" fill="#F4F6FB" font-size="19" font-weight="700" text-anchor="middle">Validation</text>
+  <text x="550" y="136" fill="#A6AFC3" font-size="12" text-anchor="middle">always deterministic</text>
+  <text x="550" y="153" fill="#A6AFC3" font-size="12" text-anchor="middle">never calls an LLM</text>
+
+  <!-- 4 Confidence -->
+  <g filter="url(#soft)">
+    <rect x="675" y="70" width="180" height="100" rx="18" fill="#10172B" stroke="#F59E0B" stroke-width="2"/>
+  </g>
+  <text x="765" y="112" fill="#F4F6FB" font-size="19" font-weight="700" text-anchor="middle">Confidence</text>
+  <text x="765" y="136" fill="#A6AFC3" font-size="12" text-anchor="middle">6-state · monotonic</text>
+  <text x="765" y="153" fill="#A6AFC3" font-size="12" text-anchor="middle">incremental aggregation</text>
+
+  <!-- 5 Knowledge -->
+  <g filter="url(#soft)">
+    <rect x="890" y="70" width="180" height="100" rx="18" fill="#10172B" stroke="#22C55E" stroke-width="2"/>
+  </g>
+  <text x="980" y="112" fill="#F4F6FB" font-size="19" font-weight="700" text-anchor="middle">Knowledge</text>
+  <text x="980" y="136" fill="#A6AFC3" font-size="12" text-anchor="middle">Engineering Memory</text>
+  <text x="980" y="153" fill="#A6AFC3" font-size="12" text-anchor="middle">append-only · Postgres</text>
+
+  <!-- Arrow heads -->
+  <g fill="#8B5CF6">
+    <polygon points="215,120 230,113 230,127"/>
+    <polygon points="430,120 445,113 445,127"/>
+    <polygon points="645,120 660,113 660,127"/>
+    <polygon points="860,120 875,113 875,127"/>
+  </g>
+
+  <!-- Bottom rail: Neo4j projection -->
+  <rect x="30" y="240" width="1040" height="80" rx="18" fill="#00A86B0F" stroke="#00A86B" stroke-width="1.5" stroke-dasharray="6 6"/>
+  <text x="60" y="270" fill="#34D399" font-size="15" font-weight="700">Neo4j</text>
+  <text x="60" y="292" fill="#A6AFC3" font-size="12.5">Rebuildable projection — derived FROM Engineering Memory, not the source of truth</text>
+  <line x1="980" y1="170" x2="550" y2="240" stroke="#00A86B" stroke-width="2" stroke-dasharray="4 5" opacity="0.7"/>
+  <polygon points="550,240 566,232 560,247" fill="#00A86B"/>
+  <text x="600" y="228" fill="#6B7488" font-size="11" font-style="italic">materializer (replay-tested)</text>
+</svg>

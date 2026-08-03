@@ -118,89 +118,188 @@ about the right topic, without pinning down its wording — the same
 "compare semantic content, not exact ids" principle the RFC applied to
 node ids, extended to narrative text.
 
-## Known Gaps
+## Closed Gaps (2026-08-03 gap-closure sprint)
 
-These were discovered *by* building this framework against a realistic,
-intentionally polyglot, intentionally well-abstracted 24-repository
-suite. They are asserted as the current baseline in the fixtures (not
-worked around), and are the most valuable output of this exercise —
-each is a real, verified gap in GraphForge's current indexing/reasoning
-pipeline, not a suite defect.
+These four were discovered by building this framework against a
+realistic, intentionally polyglot, intentionally well-abstracted
+24-repository suite, and were closed in a follow-up sprint once the
+framework proved they were real. Kept here (not deleted) as the
+historical record of what this framework is *for*: it caught real,
+verified gaps in GraphForge's own indexing/reasoning pipeline, not suite
+bugs, and the fixtures below reflect the closed state.
 
-### 1. Kafka topic detection
+### 1. Kafka topic detection (closed)
 
-`app/indexer/extractors/kafka.py` only recognizes:
+`app/indexer/extractors/kafka.py` (Java) now resolves a same-class
+`static final String TOPIC = "..."` constant, and a producer delegated
+through the shared SDK's `EventPublisher` (not just a raw
+`KafkaTemplate`). A new Python extractor,
+`app/indexer/extractors/python/kafka.py`, detects the same delegation
+pattern through `shared_python_sdk.kafka_client.EventProducer`/
+`EventConsumer`, with the same one-level constant resolution. Both skip
+test files (`classify_is_test`'s path signal) — an early version without
+that check fabricated a `SHARES_TOPIC` relationship from
+`shared-python-sdk` to every real topic user, sourced entirely from
+`shared-python-sdk/tests/test_kafka_client.py`'s own unit test.
 
-- Consumers: `@KafkaListener(topics = "literal-string")` — a named
-  constant (`topics = TOPIC`) is not resolved.
-- Producers: a field declared `KafkaTemplate<...>` **and** a
-  `.send("topic", ...)` call **in the same class**. Every repo in this
-  suite publishes through a shared-SDK wrapper
-  (`shared-java-sdk`'s `EventPublisher`, `shared-python-sdk`'s
-  `EventProducer`) — a realistic, good abstraction that this heuristic
-  can't see through.
-- There is no Python Kafka extractor at all yet — `extract_kafka_*` is
-  only wired into the Java parser.
+`payment.completed`, `inventory.updated`, and `order.created` are all
+now real `KafkaTopic` nodes with real `PRODUCES_TO`/`CONSUMES_FROM`
+edges. See `validation/expected_repository_profiles.yaml`.
 
-Net effect: 0 `KafkaTopic` nodes across all 14 supported repos, despite
-a fully wired Kafka producer/consumer architecture across 5 of them.
+### 2. Feign cross-repository name matching (closed)
 
-### 2. Feign cross-repository name matching
+`app/indexer/graph/cross_repo_linker.py::_normalize` now also strips a
+trailing language/runtime tag (`-python`/`-java`/`-go`/`-node`/etc.)
+before the existing `-service`/`-client`/`-api` suffix strip — so a
+`@FeignClient(name = "inventory-service")` correctly matches a
+repository literally named `inventory-service-python`. Still full
+equality after stripping, never a substring match; verified against
+every repository name in the suite with no false-collision.
+`shipping-service-java -CALLS_SERVICE-> inventory-service-python` is now
+a real edge. See `validation/expected_relationships.yaml`.
 
-`app/indexer/graph/cross_repo_linker.py::_identifier_match` strips only
-a trailing `-service`/`-client`/`-api` suffix before comparing a
-`@FeignClient(name = "...")` value against another tracked repository's
-name. This suite's repos follow a `<domain>-service-<language>`
-convention (`inventory-service-python`) — a completely realistic
-polyglot naming scheme — which this heuristic can't bridge:
-`normalize("inventory-service")` → `"inventory"`,
-`normalize("inventory-service-python")` → itself (the suffix regex only
-matches at the very end). Net effect: 0 `CALLS_SERVICE` cross-repository
-edges, despite a real, working `@FeignClient` pointed at a real,
-tracked, indexed target repository.
+### 3. Impact Analysis never actually left the seed repository (closed)
 
-### 3. Impact Analysis never actually leaves the seed repository
+`IGraphRepository.get_neighborhood`'s Cypher (`app/graph/
+neo4j_repository.py`) filtered **both** endpoints of every traversed
+edge to the seed's own `repository_id` — a cross-repository edge, by
+definition, has a target node in a different repository, so it could
+never satisfy that filter regardless of which edge types
+`ImpactAnalysisService._IMPACT_EDGE_TYPES` nominally listed. Fixed by
+dropping the redundant property filter on the far endpoint in both the
+node-discovery and induced-subgraph passes — the edge *type* already
+enforces the repository boundary correctly, since a cross-repository rel
+type only ever connects two Repository nodes, by construction of
+`cross_repo_linker.py`. `SHARES_TOPIC` was also added to
+`_IMPACT_EDGE_TYPES`, since that's the edge type the RFC's own
+validation target is actually reached through.
+`payment-service-java` now correctly impacts `inventory-service-python`,
+`shipping-service-java`, and `notification-service-python` (plus other
+real, 2-hop-reachable repositories). See
+`validation/expected_impact_analysis.yaml`.
 
-`ImpactAnalysisService._IMPACT_EDGE_TYPES` includes `CALLS_SERVICE` and
-`DEPENDS_ON_REPOSITORY`, but the traversal underneath
-(`graph_traversal.traverse` → `IGraphRepository.get_neighborhood`) takes
-a single `repository_id` and its Cypher query filters **both** endpoints
-of every candidate edge to that same `repository_id`. A cross-repository
-edge, by definition, has a target node in a different repository, so it
-can never satisfy that filter. Blast radius for every repository in this
-suite is currently `impacted_repositories = [itself]`, regardless of how
-many real `DEPENDS_ON_REPOSITORY` edges exist in Neo4j.
+### 4. Cross-repository edges "never persisted to Engineering Memory" — partially misdiagnosed, two real bugs found instead (closed)
 
-### 4. Dependency Query's "direct dependencies" is intra-repository noise today
+The original framing (see git history) was that `cross_repo_linker`'s
+edges were written to Neo4j only, never to `KnowledgeRelationship`.
+Investigation found this was **already false** — `cross_repo_memory.py`
+(ADR 0018 RFC-05) already persisted every cross-repository hypothesis
+correctly; it simply had nothing to persist while Gaps 1 and 2 above
+were open (zero Kafka topics, zero Feign matches → zero candidate
+hypotheses). Two different, real bugs were actually causing the
+observed symptom (Validation 7 Parity FAILs):
 
-`app/agents/dependency_query/renderer.py::_split_by_direction` buckets a
-relationship into `direct_dependencies` whenever its `source_entity`
-starts with the queried repository's own id prefix. Because
-Engineering Memory currently only persists intra-repository structural
-relationships (`CONTAINS`/`CALLS`/`DEPENDS_ON`-to-own-manifest-entry —
-`cross_repo_linker`'s cross-repository edges are written to Neo4j only,
-never to `KnowledgeRelationship`), **every** current relationship's
-source matches that prefix. Net effect: `direct_dependencies_count`
-equals a repository's *total* relationship count today, and
-`downstream_consumers_count` is provably always 0 (see the fixture
-file's header comment for why this is a structural certainty, not just
-an observation).
+- **`get_full_graph`'s Cypher excluded cross-repository edges from the
+  "legacy" side of every parity comparison.** Same shape as Gap 3: the
+  `OPTIONAL MATCH`'s target required `m.repository_id = $repository_id`.
+  Fixed the same way — the edge type already enforces the boundary; the
+  extra node-property filter only blocked the real case. (`m` itself is
+  deliberately still excluded from the returned *node* set for a
+  cross-repository edge — only its id is needed for `target_id`, and the
+  Materializer doesn't materialize a foreign Repository node either;
+  including it would have manufactured a node-parity mismatch instead of
+  closing one.)
+- **Evidence-pack staleness under repeated relinking.** Every account
+  relink (`relink_account`, called once per `run_indexing`) re-persists
+  a fresh cross-repository evidence pack for every repository pair with
+  a hypothesis — by design, so each pack reflects current state. But
+  `Materializer._latest_single_repo_pack` and
+  `RepositoryProfileService.get_profile`'s narrative lookup both found
+  "the latest pack" by fetching the top-N most-recent packs
+  (`list_evidence_packs`, default `limit=50`) and filtering out
+  cross-repo packs *client-side* — so after enough relinks, a
+  repository's own single-repo pack could be pushed entirely outside
+  that window, starving both reads of the row they actually wanted (in
+  the worst case, `materialize_repository_graph` returned an
+  all-but-empty payload for a repository with dozens of real
+  Neo4j nodes). Fixed by adding `exclude_commit_sha` to
+  `EngineeringMemoryRepository.list_evidence_packs`/
+  `EngineeringMemoryService.list_evidence_packs`, filtering the
+  `"n/a-cross-repo"` sentinel at the SQL level in both call sites,
+  instead of truncate-then-filter.
 
-**This same root cause also produces the Validation 7 (Parity) FAILs**
-for every repo that has an outgoing `DEPENDS_ON_REPOSITORY` edge in
-Neo4j: the Parity Engine compares the live Neo4j graph against a graph
-*materialized from Engineering Memory* — since that edge was never
-persisted to Engineering Memory, materialization can't reproduce it, and
-the Parity Engine correctly reports it as an "unexpected edge" on the
-live-graph side. Every affected repo lands at 1–2 unexpected edges out
-of 35–51 total, which is enough to drop just under the RFC's 99%
-threshold (95–99%). This isn't a second, unrelated finding — it's the
-same gap surfacing in two different subsystems, and closing gap 4 should
-resolve both.
+**Still open, deliberately not touched by this sprint** (see next
+section): Engineering Memory has no mechanism to *retract* a
+relationship once its evidence disappears, and the Materializer doesn't
+dedupe two evidence-pack items sharing an identical
+`(source, type, target, properties)` triple the way Neo4j's `MERGE`
+does. Both are real, but neither is "cross-repo edges never persisted" —
+that specific claim is now false.
 
-None of these four are asserted as bugs in this document — they're
+### 5. Parity (raised from 4/14 to 13/14 supported repos at 100%, 1 at 98.94%)
+
+A direct consequence of closing gaps 1–4: every repo whose only parity
+difference was a Kafka/Feign/dependency-driven cross-repository edge is
+now at 100%. The one remaining repo (`shared-python-sdk`, 98.94%) fails
+for a genuinely separate, pre-existing reason — see "Duplicate-edge
+materialization fidelity" below, not touched by this sprint's five named
+gaps.
+
+## Known Gaps (still open)
+
+### Evidence retraction
+
+Engineering Memory has no way to mark a previously-confirmed
+relationship as no longer valid once its underlying evidence disappears
+— `persist_cross_repo_relationships`/`_persist_pair` only ever adds a
+new confirming version when a candidate is found; when a pair stops
+producing a hypothesis (e.g. because a false-positive detection was
+fixed in code, as happened mid-sprint with `shared-python-sdk`'s
+test-file leak — see Gap 1 above), the old "current" version simply
+never gets superseded. `apply_correction` exists but is explicitly an
+audit-trail annotation (`memory_service.py`'s own docstring: "does not
+itself mutate any `KnowledgeRelationshipRecord`"), not a retraction
+mechanism. The 90 stale rows this produced mid-sprint were cleaned up as
+one-time data hygiene (a direct `DELETE`, approved by the user before
+running), not a code fix — the underlying gap (no retraction path)
+remains open. Designing one (an explicit rejection/supersession version,
+or a periodic re-validation pass) is a real RFC on its own, out of this
+sprint's "fix only that layer" scope.
+
+### Duplicate-edge materialization fidelity
+
+`shared-python-sdk` has a `tests.test_auth.test_validate_api_key ->
+shared_python_sdk.auth.validate_api_key` `CALLS` edge that the live test
+source calls twice (two separate assertions). `graph/builder.py` never
+dedupes edges (only nodes — see `build_graph`'s own `deduped_nodes`
+comment), so this legitimately produces 2 logical edge instances; Neo4j
+`MERGE` then collapses them into 1 physical relationship on write, since
+they share an identical `(source, type, target)` triple with no
+properties to distinguish them. The Materializer's `_single_repo_edges_
+from_pack` reads directly from evidence-pack items, which were never
+deduped, and reproduces both — so `materialized_count: 2` vs.
+`legacy_count: 1` for that one triple. Genuinely pre-existing (this
+sprint didn't touch `graph/builder.py`'s Python function-call
+extraction, single-repository edges, or the Materializer's single-repo
+edge path) and orthogonal to all five named gaps above — confirmed via
+`compare_relationships.py`'s parity check, not fixed here.
+
+### Everything from before this sprint, still open
+
+- No `DataTable` node extraction for either language (no parser
+  populates `ArchitectureModel`'s table list from a SQLAlchemy
+  `__tablename__` or JPA `@Entity`) — `databases: []` everywhere is
+  real, current output.
+- No Python REST-endpoint (`@app.get`/`@app.post`) extraction —
+  `endpoint_count: 0` on every Python repo is real, current output.
+- No Python cross-repository REST-call detection at all (Feign is
+  Java-only) — `customer-service-python -CALLS_SERVICE->
+  order-service-python` is still correctly absent; see
+  `known_absent_cross_repository_edges` in `expected_relationships.yaml`.
+- `Dependency Query`'s `downstream_consumers_count` is still always 0
+  for a distinct, still-open reason (not the one gap 4 above closed):
+  `DependencyQueryAgent.build_service_requests` scopes `search()` to
+  exactly one repository (`repository_ids=(repository_id,)`), and every
+  relationship a repository persists is stored under its own
+  `repository_id` partition with itself as `source_entity` (never
+  `target_entity`) — so another repository's outgoing edge into this one
+  is never read from here, regardless of how it's stored. See
+  `expected_dependency_queries.yaml`'s header comment for the full
+  reasoning.
+
+None of the above are asserted as bugs to silently work around — they're
 asserted as the honest current baseline in `validation/expected_*.yaml`,
 so this framework does its job (catch *changes*) instead of either
-silently passing on inflated expectations or perpetually failing on
-gaps nobody chose to fix yet. When any of them closes, update the
-relevant fixture file(s) and this guide in the same change.
+silently passing on inflated expectations or perpetually failing on gaps
+nobody chose to fix yet. When any of them closes, update the relevant
+fixture file(s) and this guide in the same change.
