@@ -1,0 +1,72 @@
+# Expected Impact Analysis Agent output (Validation 5), captured by
+# calling app.services.engineering_intelligence.impact_analysis_service
+# .compute_blast_radius directly (the same deterministic call the agent
+# makes) for each of the 4 repositories named in the RFC.
+#
+# IMPORTANT — read before "fixing" a FAIL here: blast radius for every
+# repository below is scoped to ONLY that repository itself
+# (`impacted_repositories` = [seed repo], `impacted_apis`/
+# `impacted_databases`/`impacted_queues` = []), even though
+# `_IMPACT_EDGE_TYPES` in impact_analysis_service.py explicitly includes
+# CALLS_SERVICE and DEPENDS_ON_REPOSITORY. This is because the underlying
+# traversal — `graph_traversal.traverse` -> `IGraphRepository
+# .get_neighborhood(repository_id, ...)` — takes a single
+# `repository_id` and its Cypher query filters BOTH endpoints of every
+# traversed edge to `{repository_id: $repository_id}` (see
+# app/graph/neo4j_repository.py's `get_neighborhood` implementation). A
+# cross-repository edge, by definition, has a target node in a different
+# repository, so it can never satisfy that filter — the traversal simply
+# cannot leave the seed repository's own subgraph, regardless of which
+# edge types are nominally listed. This is a real, verified architectural
+# gap between "the edge types Impact Analysis claims to follow" and "what
+# the traversal primitive it's built on can actually reach" — see
+# docs/validation-guide.md "Known Gaps". Do not encode a hoped-for
+# cross-repository blast radius here; it does not exist yet.
+#
+# relationship_count / confidence_counts come from
+# relationship_lookup.fetch_with_confidence for the single involved
+# repository (the seed) — identical to that repository's total
+# Engineering Memory relationship count in
+# expected_dependency_queries.yaml, since only one repository is ever
+# involved.
+
+repositories:
+  - name: payment-service-java
+    direction: downstream
+    max_hops: 2
+    impacted_repositories: [payment-service-java] # seed only — see Known Gaps
+    impacted_apis_count: 0
+    impacted_databases_count: 0
+    impacted_queues_count: 0
+    relationship_count: 12
+    confidence_summary: { high: 11, medium: 1, low: 0 }
+
+  - name: order-service-python
+    direction: downstream
+    max_hops: 2
+    impacted_repositories: [order-service-python]
+    impacted_apis_count: 0
+    impacted_databases_count: 0
+    impacted_queues_count: 0
+    relationship_count: 38
+    confidence_summary: { high: 37, medium: 1, low: 0 }
+
+  - name: inventory-service-python
+    direction: downstream
+    max_hops: 2
+    impacted_repositories: [inventory-service-python]
+    impacted_apis_count: 0
+    impacted_databases_count: 0
+    impacted_queues_count: 0
+    relationship_count: 40
+    confidence_summary: { high: 39, medium: 1, low: 0 }
+
+  - name: customer-service-python
+    direction: downstream
+    max_hops: 2
+    impacted_repositories: [customer-service-python]
+    impacted_apis_count: 0
+    impacted_databases_count: 0
+    impacted_queues_count: 0
+    relationship_count: 36
+    confidence_summary: { high: 35, medium: 1, low: 0 }

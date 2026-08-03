@@ -18,6 +18,8 @@ from app.agents.code_generation.agent import CodeGenerationAgent
 from app.agents.code_generation.manifest import CODE_GENERATION_MANIFEST
 from app.agents.context_discovery.agent import ContextDiscoveryAgent
 from app.agents.context_discovery.manifest import CONTEXT_DISCOVERY_MANIFEST
+from app.agents.dependency_query.agent import DependencyQueryAgent
+from app.agents.dependency_query.manifest import DEPENDENCY_QUERY_MANIFEST
 from app.agents.development.agent import DevelopmentAgent
 from app.agents.development.manifest import DEVELOPMENT_MANIFEST
 from app.agents.documentation.agent import DocumentationReviewAgent
@@ -38,10 +40,14 @@ from app.agents.git_ops.manifests import (
     RUN_TESTS_MANIFEST,
 )
 from app.agents.git_ops.run_tests_agent import TestRunnerAgent
+from app.agents.impact_analysis.agent import ImpactAnalysisAgent
+from app.agents.impact_analysis.manifest import IMPACT_ANALYSIS_MANIFEST
 from app.agents.planning.agent import PlanningAgent
 from app.agents.planning.manifest import PLANNING_MANIFEST
 from app.agents.report_generation.agent import ReportGenerationAgent
 from app.agents.report_generation.manifest import REPORT_GENERATION_MANIFEST
+from app.agents.repository_understanding.agent import RepositoryUnderstandingAgent
+from app.agents.repository_understanding.manifest import REPOSITORY_UNDERSTANDING_MANIFEST
 from app.agents.review_adapter import REVIEW_MANIFEST, ReviewAgentAdapter
 from app.agents.testing.agent import TestPlanningAgent
 from app.agents.testing.manifest import TESTING_MANIFEST
@@ -103,6 +109,28 @@ def register_agents() -> None:
     if "api_intelligence" not in existing_ids:
         global_registry.register(API_INTELLIGENCE_MANIFEST, ApiIntelligenceAgent())
         logger.info("registered_api_intelligence_agent")
+
+    # Standalone, read-only AI Workspace capability
+    # (goal=analyze_repository_understanding) — the first Frontier
+    # Engineering Intelligence Agent (app.agents.frontier.BaseFrontierAgent),
+    # backed entirely by RepositoryProfileService.
+    if "repository_understanding" not in existing_ids:
+        global_registry.register(REPOSITORY_UNDERSTANDING_MANIFEST, RepositoryUnderstandingAgent())
+        logger.info("registered_repository_understanding_agent")
+
+    # Standalone, read-only AI Workspace capability
+    # (goal=analyze_impact_analysis) — the second Frontier Engineering
+    # Intelligence Agent, backed entirely by ImpactAnalysisService.
+    if "impact_analysis" not in existing_ids:
+        global_registry.register(IMPACT_ANALYSIS_MANIFEST, ImpactAnalysisAgent())
+        logger.info("registered_impact_analysis_agent")
+
+    # Standalone, read-only AI Workspace capability
+    # (goal=analyze_dependency_query) — the third Frontier Engineering
+    # Intelligence Agent, backed entirely by DependencyQueryService.
+    if "dependency_query" not in existing_ids:
+        global_registry.register(DEPENDENCY_QUERY_MANIFEST, DependencyQueryAgent())
+        logger.info("registered_dependency_query_agent")
 
     if "engineering_review" not in existing_ids:
         global_registry.register(ENGINEERING_REVIEW_MANIFEST, EngineeringReviewAgent())

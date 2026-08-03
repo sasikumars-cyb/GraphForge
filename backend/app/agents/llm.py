@@ -121,6 +121,22 @@ STAGE_DOCUMENTATION_HEALTH = "documentation_health"
 # Markdown-only. Same note as STAGE_DOCUMENTATION_REVIEW above: an
 # AI-provider config resolution key only, not a Workflow stage.
 STAGE_API_INTELLIGENCE = "api_intelligence"
+# Standalone AI Workspace capability (goal=analyze_repository_understanding),
+# read-only — the first Frontier Engineering Intelligence Agent
+# (app.agents.repository_understanding). Same note as
+# STAGE_DOCUMENTATION_REVIEW above: an AI-provider config resolution key
+# only, not a Workflow stage.
+STAGE_REPOSITORY_UNDERSTANDING = "repository_understanding"
+# Standalone AI Workspace capability (goal=analyze_impact_analysis),
+# read-only — the second Frontier Engineering Intelligence Agent
+# (app.agents.impact_analysis). Same note as STAGE_DOCUMENTATION_REVIEW
+# above: an AI-provider config resolution key only, not a Workflow stage.
+STAGE_IMPACT_ANALYSIS = "impact_analysis"
+# Standalone AI Workspace capability (goal=analyze_dependency_query),
+# read-only — the third Frontier Engineering Intelligence Agent
+# (app.agents.dependency_query). Same note as STAGE_DOCUMENTATION_REVIEW
+# above: an AI-provider config resolution key only, not a Workflow stage.
+STAGE_DEPENDENCY_QUERY = "dependency_query"
 
 
 # agent_id -> the stage key that agent resolves under when a run carries no
@@ -142,6 +158,9 @@ _AGENT_DEFAULT_STAGE: dict[str, str] = {
     "documentation_review": STAGE_DOCUMENTATION_REVIEW,
     "documentation_health": STAGE_DOCUMENTATION_HEALTH,
     "api_intelligence": STAGE_API_INTELLIGENCE,
+    "repository_understanding": STAGE_REPOSITORY_UNDERSTANDING,
+    "impact_analysis": STAGE_IMPACT_ANALYSIS,
+    "dependency_query": STAGE_DEPENDENCY_QUERY,
 }
 
 

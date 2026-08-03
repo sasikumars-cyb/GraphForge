@@ -1,0 +1,344 @@
+# Expected per-repository graph shape (Validation 1) and Repository
+# Understanding Agent output (Validation 3).
+#
+# All `supported` numbers were captured from a real indexed run against
+# the live GraphForge instance (see docs/validation-guide.md's "Ground
+# truth capture" section) — not estimated from source code. Node/edge
+# counts include the `GraphNode`/`Component`/etc. label rollups
+# GraphForge's own builder produces (app/indexer/graph/builder.py), so a
+# genuine parser change (new node type, new edge type) will move these
+# numbers — that's the point.
+#
+# `kafka_topics: []` and `databases: []` on every Python/Java repo below
+# are NOT placeholders — they are the actual, current, verified output.
+# See docs/validation-guide.md "Known Gaps" for why: GraphForge's Kafka
+# extractor only recognizes an inline string literal in
+# `@KafkaListener(topics = "...")` and a `KafkaTemplate.send(...)` call in
+# the *same* class (app/indexer/extractors/kafka.py) — every repo here
+# either uses a named constant (`TOPIC`) or delegates through a shared-SDK
+# publisher, both of which defeat that heuristic, and there is no Python
+# Kafka extractor at all yet. Likewise no repo has a detected `DataTable`
+# node — `app.indexer.graph.builder` can render one but no parser
+# currently populates `ArchitectureModel`'s table list from a SQLAlchemy
+# `__tablename__` or JPA `@Entity`. These are real GraphForge gaps, not
+# suite bugs — do not "fix" them by editing the fixture repos (frozen, per
+# the RFC) or by inflating these numbers to what the architecture
+# *should* produce.
+
+supported:
+  - name: customer-service-python
+    language: python
+    node_count: 31
+    edge_count: 35
+    endpoint_count: 0 # no @app.get/@app.post extraction for Python yet — see Known Gaps
+    dependency_count: 8
+    dependencies: [asyncpg, fastapi, pydantic, pydantic-settings, redis, shared-python-sdk, sqlalchemy, uvicorn]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: [shared-python-sdk]
+    repository_understanding:
+      purpose_keywords: [customer, checkout]
+      business_capability_keywords: [customer]
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: [] # see Known Gaps — no CALLS_SERVICE cross-repo edges detected currently
+      downstream_consumer_repos: []
+
+  - name: order-service-python
+    language: python
+    node_count: 30
+    edge_count: 37
+    endpoint_count: 0
+    dependency_count: 8
+    dependencies: [asyncpg, fastapi, pydantic, pydantic-settings, redis, shared-python-sdk, sqlalchemy, uvicorn]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: [shared-python-sdk]
+    repository_understanding:
+      purpose_keywords: [order]
+      business_capability_keywords: [order]
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: []
+
+  - name: inventory-service-python
+    language: python
+    node_count: 31
+    edge_count: 39
+    endpoint_count: 0
+    dependency_count: 9
+    dependencies: [asyncpg, confluent-kafka, fastapi, pydantic, pydantic-settings, redis, shared-python-sdk, sqlalchemy, uvicorn]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: [shared-python-sdk]
+    repository_understanding:
+      purpose_keywords: [inventory]
+      business_capability_keywords: [inventory]
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: []
+
+  - name: notification-service-python
+    language: python
+    node_count: 19
+    edge_count: 21
+    endpoint_count: 0
+    dependency_count: 8
+    dependencies: [boto3, confluent-kafka, fastapi, pydantic, pydantic-settings, redis, shared-python-sdk, uvicorn]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: [shared-python-sdk]
+    repository_understanding:
+      purpose_keywords: [notification]
+      business_capability_keywords: [notification]
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: []
+
+  - name: payment-service-java
+    language: java
+    node_count: 12
+    edge_count: 11
+    endpoint_count: 2
+    dependency_count: 7
+    dependencies: [postgresql, secretsmanager, shared-java-sdk, spring-boot-starter-data-jpa, spring-boot-starter-test, spring-boot-starter-web, spring-kafka]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: [shared-java-sdk]
+    repository_understanding:
+      purpose_keywords: [payment]
+      business_capability_keywords: [payment]
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: []
+
+  - name: shipping-service-java
+    language: java
+    node_count: 10
+    edge_count: 9
+    endpoint_count: 2 # includes the FeignClient interface's own method — see docs/validation-guide.md
+    dependency_count: 5
+    dependencies: [shared-java-sdk, spring-boot-starter-test, spring-boot-starter-web, spring-cloud-starter-openfeign, spring-kafka]
+    kafka_topics: []
+    databases: []
+    feign_clients: [InventoryServiceClient]
+    sdk_usage: [shared-java-sdk]
+    repository_understanding:
+      purpose_keywords: [shipping]
+      business_capability_keywords: [shipping]
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: []
+
+  - name: shared-python-sdk
+    language: python
+    node_count: 42
+    edge_count: 51
+    endpoint_count: 0
+    dependency_count: 7
+    dependencies: [boto3, confluent-kafka, httpx, launchdarkly-server-sdk, pydantic, pyjwt, redis]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: []
+    repository_understanding:
+      purpose_keywords: [sdk]
+      business_capability_keywords: []
+      security_keywords: [jwt]
+    dependency_query:
+      direct_dependency_repos: []
+      # Every Python service in the suite depends on this repo — see
+      # expected_relationships.yaml for the authoritative DEPENDS_ON_REPOSITORY list.
+      downstream_consumer_repos: [customer-service-python, order-service-python, inventory-service-python, notification-service-python, analytics-pipeline-python, llm-gateway, agent-runtime]
+
+  - name: shared-java-sdk
+    language: java
+    node_count: 6
+    edge_count: 5
+    endpoint_count: 0
+    dependency_count: 5
+    dependencies: [jjwt-api, spring-boot-starter-test, spring-boot-starter-web, spring-cloud-starter-openfeign, spring-kafka]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: []
+    repository_understanding:
+      purpose_keywords: [sdk]
+      business_capability_keywords: []
+      security_keywords: [jwt]
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: [payment-service-java, shipping-service-java]
+
+  - name: analytics-pipeline-python
+    language: python
+    node_count: 16
+    edge_count: 21
+    endpoint_count: 0
+    dependency_count: 5
+    dependencies: [boto3, confluent-kafka, pydantic, pydantic-settings, shared-python-sdk]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: [shared-python-sdk]
+    repository_understanding:
+      purpose_keywords: [analytics, event]
+      business_capability_keywords: [analytics]
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: []
+
+  - name: warehouse-jobs
+    language: python
+    node_count: 14
+    edge_count: 18
+    endpoint_count: 0
+    dependency_count: 5
+    dependencies: [apache-airflow, boto3, pandas, psycopg2-binary, sqlalchemy]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: [] # does not import shared-python-sdk — see architecture.md, this is correct, not a gap
+    repository_understanding:
+      purpose_keywords: [warehouse]
+      business_capability_keywords: [warehous]
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: []
+
+  - name: db-migrations
+    language: python
+    node_count: 10
+    edge_count: 9
+    endpoint_count: 0
+    dependency_count: 3
+    dependencies: [alembic, psycopg2-binary, sqlalchemy]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: []
+    repository_understanding:
+      purpose_keywords: [migration, warehouse, schema]
+      business_capability_keywords: [warehous]
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: []
+
+  - name: llm-gateway
+    language: python
+    node_count: 21
+    edge_count: 23
+    endpoint_count: 0
+    dependency_count: 8
+    dependencies: [fastapi, httpx, prompt-library, pydantic, pydantic-settings, redis, shared-python-sdk, uvicorn]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: [shared-python-sdk, prompt-library]
+    repository_understanding:
+      purpose_keywords: [llm]
+      business_capability_keywords: []
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: [agent-runtime]
+
+  - name: prompt-library
+    language: python
+    node_count: 7
+    edge_count: 8
+    endpoint_count: 0
+    dependency_count: 1
+    dependencies: [jinja2]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: []
+    repository_understanding:
+      purpose_keywords: [prompt, template]
+      business_capability_keywords: []
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: [llm-gateway, agent-runtime]
+
+  - name: agent-runtime
+    language: python
+    node_count: 19
+    edge_count: 23
+    endpoint_count: 0
+    dependency_count: 7
+    dependencies: [fastapi, httpx, prompt-library, pydantic, pydantic-settings, shared-python-sdk, uvicorn]
+    kafka_topics: []
+    databases: []
+    feign_clients: []
+    sdk_usage: [shared-python-sdk, prompt-library]
+    repository_understanding:
+      purpose_keywords: [agent]
+      business_capability_keywords: []
+      security_keywords: []
+    dependency_query:
+      direct_dependency_repos: []
+      downstream_consumer_repos: []
+
+# Repositories GraphForge is expected to still correctly reject as
+# unsupported in this phase (app/indexer/services/indexing_service.py:
+# "Java + Spring Boot (Maven) and Python are supported in this phase").
+# This is a real regression check, not a placeholder: if any of these
+# ever indexes successfully, GraphForge gained language support and this
+# file (plus a real `supported` entry for it) needs updating; if any of
+# these starts failing with a *different* error, something broke.
+unsupported:
+  - name: pricing-service-go
+    language: go
+    expected_status: failed
+    error_contains: "not supported yet"
+  - name: shared-go-sdk
+    language: go
+    expected_status: failed
+    error_contains: "not supported yet"
+  - name: catalog-service-node
+    language: node
+    expected_status: failed
+    error_contains: "not supported yet"
+  - name: shared-node-sdk
+    language: node
+    expected_status: failed
+    error_contains: "not supported yet"
+  - name: platform-config
+    language: terraform/helm
+    expected_status: failed
+    error_contains: "not supported yet"
+  - name: terraform-modules
+    language: terraform
+    expected_status: failed
+    error_contains: "not supported yet"
+  - name: helm-charts
+    language: helm
+    expected_status: failed
+    error_contains: "not supported yet"
+  - name: kubernetes-platform
+    language: yaml
+    expected_status: failed
+    error_contains: "not supported yet"
+  - name: api-gateway-config
+    language: yaml
+    expected_status: failed
+    error_contains: "not supported yet"
+  - name: event-contracts
+    language: yaml/json-schema
+    expected_status: failed
+    error_contains: "not supported yet"

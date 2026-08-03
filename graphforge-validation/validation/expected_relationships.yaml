@@ -1,0 +1,93 @@
+# Expected relationship graph (Validation 2), captured from a real run
+# against the live GraphForge instance. See docs/validation-guide.md for
+# how to recapture this after a legitimate GraphForge change.
+#
+# cross_repository_edges: every CALLS_SERVICE / SHARES_TOPIC /
+# DEPENDS_ON_REPOSITORY edge `GET /repositories/cross-repository-edges`
+# currently returns among the suite's supported repos. Note there are
+# currently ZERO CALLS_SERVICE and ZERO SHARES_TOPIC edges — see
+# docs/validation-guide.md "Known Gaps": the Feign cross-repo matcher
+# (app/indexer/graph/cross_repo_linker.py::_identifier_match) strips only
+# a trailing -service/-client/-api suffix, so a `@FeignClient(name =
+# "inventory-service")` never matches a repository literally named
+# `inventory-service-python` — every repo in this suite uses a
+# `<domain>-service-<language>` naming convention, which this heuristic
+# doesn't bridge. This is intentionally asserted as the current baseline,
+# not silently omitted — if cross_repo_linker's matching improves, this
+# section is exactly what should grow, and the compare script's
+# UNEXPECTED verdict will surface the improvement as a diff to review
+# (not a silent pass) rather than a failure.
+#
+# within_repository_edge_types: the EXPOSES/PRODUCES_TO/CONSUMES_FROM/
+# DEPENDS_ON/CONTAINS edge-type counts within each repo's own graph
+# (app/indexer/graph/builder.py). PRODUCES_TO/CONSUMES_FROM are 0
+# everywhere for the same Kafka-detection reason documented in
+# expected_repository_profiles.yaml.
+
+cross_repository_edges:
+  - type: DEPENDS_ON_REPOSITORY
+    source: agent-runtime
+    target: shared-python-sdk
+  - type: DEPENDS_ON_REPOSITORY
+    source: agent-runtime
+    target: prompt-library
+  - type: DEPENDS_ON_REPOSITORY
+    source: analytics-pipeline-python
+    target: shared-python-sdk
+  - type: DEPENDS_ON_REPOSITORY
+    source: customer-service-python
+    target: shared-python-sdk
+  - type: DEPENDS_ON_REPOSITORY
+    source: inventory-service-python
+    target: shared-python-sdk
+  - type: DEPENDS_ON_REPOSITORY
+    source: llm-gateway
+    target: shared-python-sdk
+  - type: DEPENDS_ON_REPOSITORY
+    source: llm-gateway
+    target: prompt-library
+  - type: DEPENDS_ON_REPOSITORY
+    source: notification-service-python
+    target: shared-python-sdk
+  - type: DEPENDS_ON_REPOSITORY
+    source: order-service-python
+    target: shared-python-sdk
+  - type: DEPENDS_ON_REPOSITORY
+    source: payment-service-java
+    target: shared-java-sdk
+  - type: DEPENDS_ON_REPOSITORY
+    source: shipping-service-java
+    target: shared-java-sdk
+
+# Known-absent today — see module docstring above. Listed explicitly (not
+# omitted) so the framework can distinguish "still correctly absent" from
+# "silently never checked."
+known_absent_cross_repository_edges:
+  - type: CALLS_SERVICE
+    source: shipping-service-java
+    target: inventory-service-python
+    reason: "Feign target_name 'inventory-service' doesn't match repository name 'inventory-service-python' after suffix-stripping"
+  - type: CALLS_SERVICE
+    source: customer-service-python
+    target: order-service-python
+    reason: "No Feign/service-name annotation in Python — cross_repo_linker has no REST-call detection for Python callers at all"
+  - type: SHARES_TOPIC
+    source: inventory-service-python
+    target: shipping-service-java
+    reason: "No KafkaTopic nodes exist for either repo — see Known Gaps"
+
+within_repository_edge_types:
+  customer-service-python: { CONTAINS: 22, IMPORTS: 4, DEPENDS_ON: 8, INHERITS_FROM: 1, EXPOSES: 0, PRODUCES_TO: 0, CONSUMES_FROM: 0 }
+  order-service-python: { CONTAINS: 21, IMPORTS: 6, DEPENDS_ON: 8, INHERITS_FROM: 1, CALLS: 1, EXPOSES: 0, PRODUCES_TO: 0, CONSUMES_FROM: 0 }
+  inventory-service-python: { CONTAINS: 21, IMPORTS: 6, DEPENDS_ON: 9, INHERITS_FROM: 1, CALLS: 2, EXPOSES: 0, PRODUCES_TO: 0, CONSUMES_FROM: 0 }
+  notification-service-python: { CONTAINS: 10, IMPORTS: 2, DEPENDS_ON: 8, CALLS: 1, EXPOSES: 0, PRODUCES_TO: 0, CONSUMES_FROM: 0 }
+  payment-service-java: { EXPOSES: 2, DEPENDS_ON: 7, CONTAINS: 2, PRODUCES_TO: 0, CONSUMES_FROM: 0 }
+  shipping-service-java: { EXPOSES: 1, CALLS: 1, DEPENDS_ON: 5, CONTAINS: 2, PRODUCES_TO: 0, CONSUMES_FROM: 0 }
+  shared-python-sdk: { CONTAINS: 34, CALLS: 7, IMPORTS: 3, DEPENDS_ON: 7 }
+  shared-java-sdk: { DEPENDS_ON: 5 }
+  analytics-pipeline-python: { CALLS: 2, CONTAINS: 10, IMPORTS: 4, DEPENDS_ON: 5 }
+  warehouse-jobs: { CALLS: 1, CONTAINS: 8, IMPORTS: 4, DEPENDS_ON: 5 }
+  db-migrations: { CONTAINS: 6, DEPENDS_ON: 3 }
+  llm-gateway: { CONTAINS: 12, IMPORTS: 3, DEPENDS_ON: 8 }
+  prompt-library: { CALLS: 1, IMPORTS: 1, CONTAINS: 5, DEPENDS_ON: 1 }
+  agent-runtime: { CALLS: 1, IMPORTS: 4, CONTAINS: 11, DEPENDS_ON: 7 }

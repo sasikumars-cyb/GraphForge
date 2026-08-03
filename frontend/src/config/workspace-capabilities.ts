@@ -18,6 +18,9 @@ import {
   HeartPulse,
   Network,
   GitCompare,
+  BookOpen,
+  Radar,
+  Layers,
   type LucideIcon,
 } from "lucide-react";
 
@@ -118,6 +121,39 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     color: "indigo",
     category: "explore",
     available: true,
+  },
+  {
+    slug: "repository-understanding",
+    name: "Repository Understanding",
+    description:
+      "Explain what a repository does — its APIs, databases, queues, integrations, and dependencies — computed from the indexed graph. Read-only.",
+    icon: BookOpen,
+    color: "violet",
+    category: "explore",
+    available: true,
+    goal: "analyze_repository_understanding",
+  },
+  {
+    slug: "impact-analysis",
+    name: "Impact Analysis",
+    description:
+      "Compute a repository's blast radius — impacted repositories, APIs, databases, and queues, with confidence per relationship — read-only.",
+    icon: Radar,
+    color: "orange",
+    category: "explore",
+    available: true,
+    goal: "analyze_impact_analysis",
+  },
+  {
+    slug: "dependency-query",
+    name: "Dependency Query",
+    description:
+      "What does this repository depend on, and what depends on it — with confidence per relationship. Read-only.",
+    icon: Layers,
+    color: "teal",
+    category: "explore",
+    available: true,
+    goal: "analyze_dependency_query",
   },
   {
     slug: "security-review",

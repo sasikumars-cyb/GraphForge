@@ -1,0 +1,5 @@
+reports/*.json
+reports/*.html
+!reports/.gitkeep
+__pycache__/
+*.pyc

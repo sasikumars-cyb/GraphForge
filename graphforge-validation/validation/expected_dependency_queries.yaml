@@ -1,0 +1,90 @@
+# Expected Dependency Query Agent output (Validation 4), captured from
+# real Engineering Memory state (EngineeringMemoryService.
+# get_current_relationships) — the exact data source
+# app.services.engineering_intelligence.dependency_query_service.search
+# reads from.
+#
+# IMPORTANT — read before "fixing" a FAIL here: the agent's
+# `direct_dependencies` field is currently populated from EVERY
+# relationship whose `source_entity` starts with the queried
+# repository's own id prefix — see
+# app/agents/dependency_query/renderer.py::_split_by_direction. Because
+# Engineering Memory only stores intra-repository structural
+# relationships today (CONTAINS/CALLS/DEPENDS_ON-to-own-manifest-entries
+# — cross_repo_linker's CALLS_SERVICE/SHARES_TOPIC/DEPENDS_ON_REPOSITORY
+# edges are written to Neo4j only, never to Engineering Memory), EVERY
+# current relationship's source matches that prefix. The practical
+# effect: `direct_dependencies_count` below equals the repository's
+# TOTAL relationship count, not a count of genuine cross-repository
+# package dependencies, and `downstream_consumers_count` is always 0
+# (the `elif target_entity.startswith(prefix)` branch can only fire for
+# a relationship whose source does NOT start with the prefix, which
+# never happens for intra-repo data). See docs/validation-guide.md
+# "Known Gaps" — this is a real, verified-in-code limitation of the
+# current agent/Engineering-Memory integration, not a suite defect.
+# `downstream_consumers_count: 0` is asserted as a structural certainty
+# (provable from the renderer's own logic), not just an observation.
+
+repositories:
+  - name: customer-service-python
+    direct_dependencies_count: 36
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 35, medium: 1, low: 0 }
+  - name: order-service-python
+    direct_dependencies_count: 38
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 37, medium: 1, low: 0 }
+  - name: inventory-service-python
+    direct_dependencies_count: 40
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 39, medium: 1, low: 0 }
+  - name: notification-service-python
+    direct_dependencies_count: 22
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 21, medium: 1, low: 0 }
+  - name: payment-service-java
+    direct_dependencies_count: 12
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 11, medium: 1, low: 0 }
+  - name: shipping-service-java
+    direct_dependencies_count: 10
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 9, medium: 1, low: 0 }
+  - name: shared-python-sdk
+    direct_dependencies_count: 51
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 51, medium: 0, low: 0 }
+  - name: shared-java-sdk
+    direct_dependencies_count: 5
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 5, medium: 0, low: 0 }
+  - name: analytics-pipeline-python
+    direct_dependencies_count: 22
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 21, medium: 1, low: 0 }
+  - name: warehouse-jobs
+    direct_dependencies_count: 18
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 18, medium: 0, low: 0 }
+  - name: db-migrations
+    direct_dependencies_count: 9
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 9, medium: 0, low: 0 }
+  - name: llm-gateway
+    direct_dependencies_count: 25
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 23, medium: 2, low: 0 }
+  - name: prompt-library
+    direct_dependencies_count: 8
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 8, medium: 0, low: 0 }
+  - name: agent-runtime
+    direct_dependencies_count: 25
+    downstream_consumers_count: 0
+    confidence_breakdown: { high: 23, medium: 2, low: 0 }
+
+# Tolerance applied by compare_agents.py — LLM narrative rendering can
+# reorder/re-summarize but the counts above come from a deterministic
+# service call, so they're checked for exact equality, not fuzzy match.
+tolerance:
+  count_exact_match: true

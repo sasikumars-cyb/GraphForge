@@ -1,0 +1,134 @@
+# Expected Frontier Hypothesis Generator output (Validation 8), captured
+# from Engineering Memory's `confidence_state` distribution per
+# repository — every `KnowledgeRelationship` row traces back to one or
+# more `hypothesis_ids` (ADR 0018), so this distribution IS the Frontier
+# Generator's output, not a separate concept to re-derive.
+#
+# `candidate` is 0 for every repository below: the shadow hypothesis
+# pipeline's deterministic-evidence-backed hypotheses (imports,
+# annotations, manifest entries — exactly what these small, clean
+# fixture repos consist of almost entirely) resolve straight to
+# `highly_likely`/`verified` on first pass, with no repository in this
+# suite currently producing a genuinely ambiguous, low-corroboration
+# hypothesis. This is expected for hand-authored fixture repos with
+# unambiguous structure — it does not mean candidate-tier hypotheses are
+# broken; see docs/validation-guide.md.
+#
+# `generated == verified + highly_likely + likely + candidate +
+# rejected + conflicting` always (every row is in exactly one state) —
+# `validated` is every row that isn't sitting at `candidate` (i.e. has
+# passed at least one validation pass since being generated).
+
+repositories:
+  - name: customer-service-python
+    generated: 36
+    verified: 8
+    highly_likely: 27
+    likely: 1
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: order-service-python
+    generated: 38
+    verified: 8
+    highly_likely: 29
+    likely: 1
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: inventory-service-python
+    generated: 40
+    verified: 9
+    highly_likely: 30
+    likely: 1
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: notification-service-python
+    generated: 22
+    verified: 8
+    highly_likely: 13
+    likely: 1
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: payment-service-java
+    generated: 12
+    verified: 9
+    highly_likely: 2
+    likely: 1
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: shipping-service-java
+    generated: 10
+    verified: 7
+    highly_likely: 2
+    likely: 1
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: shared-python-sdk
+    generated: 51
+    verified: 7
+    highly_likely: 44
+    likely: 0
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: shared-java-sdk
+    generated: 5
+    verified: 5
+    highly_likely: 0
+    likely: 0
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: analytics-pipeline-python
+    generated: 22
+    verified: 5
+    highly_likely: 16
+    likely: 1
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: warehouse-jobs
+    generated: 18
+    verified: 5
+    highly_likely: 13
+    likely: 0
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: db-migrations
+    generated: 9
+    verified: 3
+    highly_likely: 6
+    likely: 0
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: llm-gateway
+    generated: 25
+    verified: 8
+    highly_likely: 15
+    likely: 2
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: prompt-library
+    generated: 8
+    verified: 1
+    highly_likely: 7
+    likely: 0
+    candidate: 0
+    rejected: 0
+    conflicting: 0
+  - name: agent-runtime
+    generated: 25
+    verified: 7
+    highly_likely: 16
+    likely: 2
+    candidate: 0
+    rejected: 0
+    conflicting: 0
