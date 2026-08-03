@@ -58,6 +58,7 @@ class EngineeringMemoryRepository:
         repository_id: uuid.UUID,
         *,
         commit_sha: str | None = None,
+        exclude_commit_sha: str | None = None,
         schema_version: str | None = None,
         limit: int = 50,
         offset: int = 0,
@@ -67,6 +68,8 @@ class EngineeringMemoryRepository:
         )
         if commit_sha is not None:
             stmt = stmt.where(EngineeringEvidencePackRecord.commit_sha == commit_sha)
+        if exclude_commit_sha is not None:
+            stmt = stmt.where(EngineeringEvidencePackRecord.commit_sha != exclude_commit_sha)
         if schema_version is not None:
             stmt = stmt.where(EngineeringEvidencePackRecord.schema_version == schema_version)
         stmt = (

@@ -74,7 +74,15 @@ async def get_profile(
             dependencies.append(_dependency_summary(node.properties))
 
     memory = EngineeringMemoryService(db)
-    packs = await memory.list_evidence_packs(repository_id, limit=1)
+    # `exclude_commit_sha` skips the repository's own cross-repository
+    # evidence packs (`commit_sha="n/a-cross-repo"`) — those accumulate
+    # one new row per pair per account relink and would otherwise win
+    # `limit=1` ahead of the actual single-repo pack this narrative curation
+    # wants (see `app.knowledge_engine.materializer._latest_single_repo_pack`,
+    # the same lookup shape for the same reason).
+    packs = await memory.list_evidence_packs(
+        repository_id, exclude_commit_sha="n/a-cross-repo", limit=1
+    )
     narrative_lines: list[str] = []
     if packs:
         pack = await memory.retrieve_evidence_pack(packs[0].pack_id)

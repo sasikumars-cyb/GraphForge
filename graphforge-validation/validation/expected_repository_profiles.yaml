@@ -9,27 +9,35 @@
 # genuine parser change (new node type, new edge type) will move these
 # numbers — that's the point.
 #
-# `kafka_topics: []` and `databases: []` on every Python/Java repo below
-# are NOT placeholders — they are the actual, current, verified output.
-# See docs/validation-guide.md "Known Gaps" for why: GraphForge's Kafka
-# extractor only recognizes an inline string literal in
-# `@KafkaListener(topics = "...")` and a `KafkaTemplate.send(...)` call in
-# the *same* class (app/indexer/extractors/kafka.py) — every repo here
-# either uses a named constant (`TOPIC`) or delegates through a shared-SDK
-# publisher, both of which defeat that heuristic, and there is no Python
-# Kafka extractor at all yet. Likewise no repo has a detected `DataTable`
-# node — `app.indexer.graph.builder` can render one but no parser
-# currently populates `ArchitectureModel`'s table list from a SQLAlchemy
-# `__tablename__` or JPA `@Entity`. These are real GraphForge gaps, not
-# suite bugs — do not "fix" them by editing the fixture repos (frozen, per
-# the RFC) or by inflating these numbers to what the architecture
+# `kafka_topics` is now real, non-empty output for every repo that
+# actually produces/consumes one — GraphForge's Kafka extractor (Java:
+# app/indexer/extractors/kafka.py; Python: app/indexer/extractors/python/
+# kafka.py) resolves both a same-class/module `TOPIC = "literal"` constant
+# and delegation through the shared-SDK publisher/consumer wrapper (Gap 1
+# of the 2026-08-03 gap-closure sprint — see docs/validation-guide.md).
+#
+# `databases: []` on every repo below IS still a real, current gap, not a
+# placeholder: no repo has a detected `DataTable` node —
+# `app.indexer.graph.builder` can render one but no parser currently
+# populates `ArchitectureModel`'s table list from a SQLAlchemy
+# `__tablename__` or JPA `@Entity`. This is a real, undetected GraphForge
+# gap, not a suite bug — do not "fix" it by editing the fixture repos
+# (frozen, per the RFC) or by inflating this to what the architecture
 # *should* produce.
+#
+# `node_count`/`edge_count` below also include each repository's outgoing
+# cross-repository edges (CALLS_SERVICE/SHARES_TOPIC/DEPENDS_ON_REPOSITORY)
+# — `GET /repositories/{id}/graph` reads via `IGraphRepository.get_full_
+# graph`, whose Cypher used to filter an edge's *target* to the same
+# repository_id as the seed, structurally excluding every cross-repository
+# edge even though it existed in Neo4j (Gap 4/5 root cause, fixed
+# 2026-08-03 — see docs/validation-guide.md).
 
 supported:
   - name: customer-service-python
     language: python
     node_count: 31
-    edge_count: 35
+    edge_count: 36
     endpoint_count: 0 # no @app.get/@app.post extraction for Python yet — see Known Gaps
     dependency_count: 8
     dependencies: [asyncpg, fastapi, pydantic, pydantic-settings, redis, shared-python-sdk, sqlalchemy, uvicorn]
@@ -47,12 +55,12 @@ supported:
 
   - name: order-service-python
     language: python
-    node_count: 30
-    edge_count: 37
+    node_count: 32
+    edge_count: 41
     endpoint_count: 0
     dependency_count: 8
     dependencies: [asyncpg, fastapi, pydantic, pydantic-settings, redis, shared-python-sdk, sqlalchemy, uvicorn]
-    kafka_topics: []
+    kafka_topics: [order.created]
     databases: []
     feign_clients: []
     sdk_usage: [shared-python-sdk]
@@ -66,12 +74,12 @@ supported:
 
   - name: inventory-service-python
     language: python
-    node_count: 31
-    edge_count: 39
+    node_count: 35
+    edge_count: 48
     endpoint_count: 0
     dependency_count: 9
     dependencies: [asyncpg, confluent-kafka, fastapi, pydantic, pydantic-settings, redis, shared-python-sdk, sqlalchemy, uvicorn]
-    kafka_topics: []
+    kafka_topics: [inventory.updated, payment.completed]
     databases: []
     feign_clients: []
     sdk_usage: [shared-python-sdk]
@@ -85,12 +93,12 @@ supported:
 
   - name: notification-service-python
     language: python
-    node_count: 19
-    edge_count: 21
+    node_count: 21
+    edge_count: 26
     endpoint_count: 0
     dependency_count: 8
     dependencies: [boto3, confluent-kafka, fastapi, pydantic, pydantic-settings, redis, shared-python-sdk, uvicorn]
-    kafka_topics: []
+    kafka_topics: [inventory.updated]
     databases: []
     feign_clients: []
     sdk_usage: [shared-python-sdk]
@@ -104,12 +112,12 @@ supported:
 
   - name: payment-service-java
     language: java
-    node_count: 12
-    edge_count: 11
+    node_count: 14
+    edge_count: 17
     endpoint_count: 2
     dependency_count: 7
     dependencies: [postgresql, secretsmanager, shared-java-sdk, spring-boot-starter-data-jpa, spring-boot-starter-test, spring-boot-starter-web, spring-kafka]
-    kafka_topics: []
+    kafka_topics: [payment.completed]
     databases: []
     feign_clients: []
     sdk_usage: [shared-java-sdk]
@@ -123,12 +131,12 @@ supported:
 
   - name: shipping-service-java
     language: java
-    node_count: 10
-    edge_count: 9
+    node_count: 12
+    edge_count: 16
     endpoint_count: 2 # includes the FeignClient interface's own method — see docs/validation-guide.md
     dependency_count: 5
     dependencies: [shared-java-sdk, spring-boot-starter-test, spring-boot-starter-web, spring-cloud-starter-openfeign, spring-kafka]
-    kafka_topics: []
+    kafka_topics: [payment.completed]
     databases: []
     feign_clients: [InventoryServiceClient]
     sdk_usage: [shared-java-sdk]
@@ -182,12 +190,12 @@ supported:
 
   - name: analytics-pipeline-python
     language: python
-    node_count: 16
-    edge_count: 21
+    node_count: 20
+    edge_count: 31
     endpoint_count: 0
     dependency_count: 5
     dependencies: [boto3, confluent-kafka, pydantic, pydantic-settings, shared-python-sdk]
-    kafka_topics: []
+    kafka_topics: [inventory.updated, order.created, payment.completed]
     databases: []
     feign_clients: []
     sdk_usage: [shared-python-sdk]
@@ -240,7 +248,7 @@ supported:
   - name: llm-gateway
     language: python
     node_count: 21
-    edge_count: 23
+    edge_count: 25
     endpoint_count: 0
     dependency_count: 8
     dependencies: [fastapi, httpx, prompt-library, pydantic, pydantic-settings, redis, shared-python-sdk, uvicorn]
@@ -278,7 +286,7 @@ supported:
   - name: agent-runtime
     language: python
     node_count: 19
-    edge_count: 23
+    edge_count: 25
     endpoint_count: 0
     dependency_count: 7
     dependencies: [fastapi, httpx, prompt-library, pydantic, pydantic-settings, shared-python-sdk, uvicorn]

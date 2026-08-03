@@ -18,6 +18,13 @@
 # rejected + conflicting` always (every row is in exactly one state) —
 # `validated` is every row that isn't sitting at `candidate` (i.e. has
 # passed at least one validation pass since being generated).
+#
+# Recaptured 2026-08-03 after the gap-closure sprint: the 6 repos with a
+# real Kafka/Feign/dependency match now generate more relationships than
+# before, since cross-repository CALLS_SERVICE/SHARES_TOPIC/DEPENDS_ON_
+# REPOSITORY hypotheses (persisted via cross_repo_memory.py, which always
+# worked — see docs/validation-guide.md) now have real Gap-1/Gap-2
+# detections to persist.
 
 repositories:
   - name: customer-service-python
@@ -29,49 +36,49 @@ repositories:
     rejected: 0
     conflicting: 0
   - name: order-service-python
-    generated: 38
+    generated: 41
     verified: 8
-    highly_likely: 29
+    highly_likely: 32
     likely: 1
     candidate: 0
     rejected: 0
     conflicting: 0
   - name: inventory-service-python
-    generated: 40
+    generated: 49
     verified: 9
-    highly_likely: 30
+    highly_likely: 39
     likely: 1
     candidate: 0
     rejected: 0
     conflicting: 0
   - name: notification-service-python
-    generated: 22
+    generated: 26
     verified: 8
-    highly_likely: 13
+    highly_likely: 17
     likely: 1
     candidate: 0
     rejected: 0
     conflicting: 0
   - name: payment-service-java
-    generated: 12
+    generated: 18
     verified: 9
-    highly_likely: 2
+    highly_likely: 8
     likely: 1
     candidate: 0
     rejected: 0
     conflicting: 0
   - name: shipping-service-java
-    generated: 10
+    generated: 17
     verified: 7
-    highly_likely: 2
+    highly_likely: 9
     likely: 1
     candidate: 0
     rejected: 0
     conflicting: 0
   - name: shared-python-sdk
-    generated: 51
+    generated: 57
     verified: 7
-    highly_likely: 44
+    highly_likely: 50
     likely: 0
     candidate: 0
     rejected: 0
@@ -85,9 +92,9 @@ repositories:
     rejected: 0
     conflicting: 0
   - name: analytics-pipeline-python
-    generated: 22
+    generated: 32
     verified: 5
-    highly_likely: 16
+    highly_likely: 26
     likely: 1
     candidate: 0
     rejected: 0

@@ -17,10 +17,19 @@ level of constant resolution, no further data-flow analysis, matching
 this codebase's existing precedent (see `KafkaProducerUsage`'s docstring
 and `extractors/kafka.py`, the Java equivalent of this constant
 resolution).
+
+Test files are skipped (`classify_is_test`'s path signal, the same
+convention `app.indexer.classification` already applies elsewhere) - a
+unit test that exercises `EventProducer.publish("payment.completed", ...)`
+against a fake broker is not this repository producing to that topic in
+production, and left undetected would fabricate a cross-repository
+`SHARES_TOPIC` relationship to whichever real repositories do (found
+live: `shared-python-sdk/tests/test_kafka_client.py`'s own unit test).
 """
 
 from tree_sitter import Node
 
+from app.indexer.classification import classify_is_test
 from app.indexer.extractors.python.tree_utils import node_text, unwrap_decorated
 from app.indexer.models.architecture import KafkaConsumerUsage, KafkaProducerUsage, SourceLocation
 
@@ -141,6 +150,9 @@ def extract_kafka_producers(
     root: Node, source: bytes, file_path: str, module_name: str
 ) -> list[KafkaProducerUsage]:
     producers: list[KafkaProducerUsage] = []
+    if classify_is_test(file_path, "")[0]:
+        return producers
+
     producer_vars = _producer_variable_names(root, source)
     if not producer_vars:
         return producers
@@ -185,6 +197,9 @@ def extract_kafka_consumers(
     root: Node, source: bytes, file_path: str, module_name: str
 ) -> list[KafkaConsumerUsage]:
     consumers: list[KafkaConsumerUsage] = []
+    if classify_is_test(file_path, "")[0]:
+        return consumers
+
     strings, lists = _module_constants(root, source)
 
     def walk(node: Node, function_name: str | None) -> None:

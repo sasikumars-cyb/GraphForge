@@ -66,6 +66,11 @@ from app.models.knowledge_relationship import KnowledgeRelationshipRecord
 _NODE_KIND_PREFIX = "graph_node"
 _EDGE_KIND_PREFIX = "graph_edge"
 _CROSS_REPO_PACK_PREFIX = "pack:cross_repo:"
+# The sentinel every cross-repository evidence pack is stamped with (see
+# `validators/cross_repo.py::build_candidate_pack_and_hypotheses`) — used
+# to exclude those packs at the SQL level when looking up a repository's
+# latest single-repo pack (`_latest_single_repo_pack`).
+_CROSS_REPO_COMMIT_SHA = "n/a-cross-repo"
 
 _CROSS_REPO_RELATIONSHIP_TYPES = frozenset(
     {"CALLS_SERVICE", "SHARES_TOPIC", "DEPENDS_ON_REPOSITORY"}
@@ -121,13 +126,19 @@ def _single_repo_edges_from_pack(
 async def _latest_single_repo_pack(
     memory: EngineeringMemoryService, repository_id: uuid.UUID
 ) -> EngineeringEvidencePack | None:
-    records = await memory.list_evidence_packs(repository_id)
-    single_repo_pack_ids = [
-        r.pack_id for r in records if not r.pack_id.startswith(_CROSS_REPO_PACK_PREFIX)
-    ]
-    if not single_repo_pack_ids:
+    """`exclude_commit_sha="n/a-cross-repo"` filters out cross-repository
+    packs at the SQL level (not a client-side filter over an already
+    `limit`-truncated window) — a repository accumulates one new
+    cross-repo pack per pair per account relink, which over enough
+    relinks can outnumber its own single-repo packs within any fixed
+    `limit`, silently starving this lookup of the row it actually wants.
+    """
+    records = await memory.list_evidence_packs(
+        repository_id, exclude_commit_sha=_CROSS_REPO_COMMIT_SHA
+    )
+    if not records:
         return None
-    return await memory.retrieve_evidence_pack(single_repo_pack_ids[0])
+    return await memory.retrieve_evidence_pack(records[0].pack_id)
 
 
 def _cross_repo_pack_id(source_repository_id: str, other_repository_id: str) -> str:

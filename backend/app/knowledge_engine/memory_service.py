@@ -78,15 +78,27 @@ class EngineeringMemoryService:
         return stored
 
     async def list_evidence_packs(
-        self, repository_id: uuid.UUID, *, limit: int = 50
+        self, repository_id: uuid.UUID, *, exclude_commit_sha: str | None = None, limit: int = 50
     ) -> list[EngineeringEvidencePackRecord]:
         """Every evidence pack persisted for `repository_id`, most recent
         first — a thin passthrough to the repository layer (ADR 0018
         RFC-06), letting a caller discover which pack ids exist for a
         repository without already knowing one. Returns records, not
         decompressed contracts: callers that need the full pack still go
-        through `retrieve_evidence_pack(pack_id)` for that."""
-        return await self._repository.list_evidence_packs(repository_id, limit=limit)
+        through `retrieve_evidence_pack(pack_id)` for that.
+
+        `exclude_commit_sha`, if given, filters at the SQL level rather
+        than client-side — needed because a repository's cross-repository
+        evidence packs (`commit_sha="n/a-cross-repo"`, stamped by
+        `validators/cross_repo.py`) are re-persisted on every account
+        relink (once per `run_indexing` call, for every repository pair
+        with a hypothesis), so over enough relinks they can outnumber a
+        repository's own single-repo packs within any fixed `limit` — a
+        caller wanting "the latest single-repo pack" needs the database to
+        exclude cross-repo rows before applying `limit`, not after."""
+        return await self._repository.list_evidence_packs(
+            repository_id, exclude_commit_sha=exclude_commit_sha, limit=limit
+        )
 
     async def retrieve_evidence_pack(self, pack_id: str) -> EngineeringEvidencePack | None:
         """Replay: decompress and deserialize the most recently persisted
