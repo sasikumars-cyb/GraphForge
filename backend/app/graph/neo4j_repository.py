@@ -108,11 +108,28 @@ class Neo4jGraphRepository(IGraphRepository):
             )
 
     async def get_full_graph(self, repository_id: str) -> GraphPayload:
+        """The `OPTIONAL MATCH`'s target used to require `m.repository_id =
+        $repository_id`, which structurally excludes every cross-repository
+        edge (`replace_cross_repository_edges`'s CALLS_SERVICE/SHARES_TOPIC/
+        DEPENDS_ON_REPOSITORY) from this read, even though they genuinely
+        exist in Neo4j — `m`'s `repository_id` is always the *other*
+        repository's, by definition of a cross-repository edge. The `WHERE`
+        clause's `OR type(r) IN [...]` lets those edges through too.
+
+        `m` itself (the other repository's own Repository node) is
+        deliberately not added to the returned node set even when matched
+        this way — only its id is needed for the edge's `target_id`, and
+        `materialize_repository_graph`'s cross-repository edges are, by the
+        same RFC-06 design (see its own docstring), edges-only: it never
+        materializes a *foreign* Repository node either. Including it here
+        would manufacture a node-side parity mismatch, not close one.
+        """
         async with self._driver.session() as session:
             result = await session.run(
-                """
-                MATCH (n {repository_id: $repository_id})
-                OPTIONAL MATCH (n)-[r]->(m {repository_id: $repository_id})
+                f"""
+                MATCH (n {{repository_id: $repository_id}})
+                OPTIONAL MATCH (n)-[r]->(m)
+                WHERE m.repository_id = $repository_id OR type(r) IN {list(_CROSS_REPO_REL_TYPES)!r}
                 RETURN n, r, m
                 """,
                 repository_id=repository_id,
@@ -127,7 +144,7 @@ class Neo4jGraphRepository(IGraphRepository):
             nodes_by_id[source["id"]] = node_from_value(source)
             target = record["m"]
             relationship = record["r"]
-            if target is not None:
+            if target is not None and target.get("repository_id") == repository_id:
                 nodes_by_id[target["id"]] = node_from_value(target)
             if relationship is not None:
                 edges.append(
@@ -258,12 +275,23 @@ class Neo4jGraphRepository(IGraphRepository):
             # `hop_distance` is the minimum over every seed and every path,
             # so a node reachable both at 1 hop from one seed and 3 hops
             # from another reports 1.
+            # `b` is intentionally not filtered to `$repository_id` — a
+            # cross-repository edge type in `edge_types` (CALLS_SERVICE/
+            # SHARES_TOPIC/DEPENDS_ON_REPOSITORY) only ever connects two
+            # Repository nodes across different repositories, by
+            # construction of `cross_repo_linker.py`; every other edge
+            # type in `rel_pattern` only ever connects nodes already
+            # sharing one `repository_id` (each repository's own graph is
+            # written in one `replace_repository_graph` call). So the edge
+            # *type* is already what enforces the boundary — filtering `b`
+            # by `$repository_id` on top of that only blocked the
+            # cross-repository case, it added no real safety for the
+            # single-repository one.
             neighbor_result = await session.run(
                 f"""
                 MATCH (a:`{_BASE_LABEL}` {{repository_id: $repository_id}})
                 WHERE a.id IN $seed_ids
-                MATCH p = (a)-[:{rel_pattern}*1..{max_hops}]-
-                    (b:`{_BASE_LABEL}` {{repository_id: $repository_id}})
+                MATCH p = (a)-[:{rel_pattern}*1..{max_hops}]-(b:`{_BASE_LABEL}`)
                 WHERE NOT b.id IN $seed_ids
                 WITH b, min(length(p)) AS hop_distance
                 RETURN b, hop_distance
@@ -308,17 +336,18 @@ class Neo4jGraphRepository(IGraphRepository):
             # is what lets a caller compute real connectivity (e.g.
             # personalized PageRank) over the neighborhood, not just a
             # flat "how far away" number.
+            # Same reasoning as pass 1: `x`/`y` are scoped by `$all_ids`
+            # (exactly the nodes pass 1 already found reachable), not by a
+            # `repository_id` property — a cross-repository edge's two
+            # endpoints never share one, by definition.
             all_ids = list(nodes_by_id.keys())
             edge_result = await session.run(
                 f"""
-                MATCH (x:`{_BASE_LABEL}` {{repository_id: $repository_id}})
-                      -[r:{rel_pattern}]->
-                      (y:`{_BASE_LABEL}` {{repository_id: $repository_id}})
+                MATCH (x:`{_BASE_LABEL}`)-[r:{rel_pattern}]->(y:`{_BASE_LABEL}`)
                 WHERE x.id IN $all_ids AND y.id IN $all_ids
                 RETURN x.id AS source_id, y.id AS target_id, type(r) AS rel_type,
                        properties(r) AS props
                 """,
-                repository_id=repository_id,
                 all_ids=all_ids,
             )
             edge_records = [record async for record in edge_result]

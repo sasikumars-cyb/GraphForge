@@ -64,9 +64,28 @@ logger = logging.getLogger(__name__)
 # "etl-core-utils" is never mistaken for "etl-core".
 _SUFFIX_RE = re.compile(r"[-_](service|client|api)$", re.IGNORECASE)
 
+# A trailing language/runtime tag on a repository's own name — this
+# fleet's polyglot naming convention is `<domain>-service-<language>`
+# (`inventory-service-python`, `payment-service-java`), so a Feign
+# client's target name (`inventory-service`, no language tag: a Feign
+# client names the *service*, not the repository housing its Java/Python
+# implementation) never matches the repository name literally or after
+# only the service/client/api strip above. Treating this as a same-repo
+# naming alias — never a fuzzy/substring match, still full equality after
+# stripping both suffixes — closes that gap without weakening matching:
+# "inventory-service-python" and "inventory-service-java" still normalize
+# to different names ("inventory") only when *both* actually reduce to
+# the same domain; two distinct domains are never conflated because the
+# domain portion itself is never touched.
+_LANGUAGE_SUFFIX_RE = re.compile(
+    r"[-_](python|java|go|golang|node|nodejs|javascript|typescript|js|ts)$", re.IGNORECASE
+)
+
 
 def _normalize(name: str) -> str:
-    return _SUFFIX_RE.sub("", name.strip()).lower()
+    stripped = _LANGUAGE_SUFFIX_RE.sub("", name.strip())
+    stripped = _SUFFIX_RE.sub("", stripped)
+    return stripped.lower()
 
 
 def _identifier_match(a: str, b: str) -> bool:

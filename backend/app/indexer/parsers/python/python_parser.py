@@ -14,6 +14,7 @@ from tree_sitter import Language, Parser
 from app.indexer.extractors.python.classes import extract_module_classes
 from app.indexer.extractors.python.functions import extract_module_functions
 from app.indexer.extractors.python.imports import extract_imports
+from app.indexer.extractors.python.kafka import extract_kafka_consumers, extract_kafka_producers
 from app.indexer.extractors.python.spark import (
     extract_spark_table_reads,
     extract_spark_table_writes,
@@ -89,6 +90,12 @@ class PythonParser(ILanguageParser):
             )
             model.spark_table_writes.extend(
                 extract_spark_table_writes(root, source, str(relative_path))
+            )
+            model.kafka_producers.extend(
+                extract_kafka_producers(root, source, str(relative_path), module_name)
+            )
+            model.kafka_consumers.extend(
+                extract_kafka_consumers(root, source, str(relative_path), module_name)
             )
 
         return model

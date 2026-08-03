@@ -83,14 +83,30 @@ def annotation_args(args_node: Node | None, source: bytes) -> dict[str, str]:
     return result
 
 
-def annotation_array_values(args_node: Node | None, key: str, source: bytes) -> list[str]:
+def annotation_array_values(
+    args_node: Node | None,
+    key: str,
+    source: bytes,
+    constants: dict[str, str] | None = None,
+) -> list[str]:
     """For an argument that may be an array, e.g. `topics = {"a", "b"}` -
     returns every string-literal element. A single string-literal value
-    (not an array) is returned as a one-element list. Non-string elements
-    are silently skipped (deterministic: no partial guesses).
+    (not an array) is returned as a one-element list.
+
+    `constants`, if given, resolves a bare identifier element/value (e.g.
+    `topics = TOPIC`) against a same-class `static final String` constant
+    map - see `kafka.py::_string_constant_fields`. Without it, or for a
+    name missing from it, an identifier is skipped rather than guessed at,
+    matching this codebase's deterministic, no-guessing precedent.
     """
     if args_node is None:
         return []
+
+    def _resolve(node: Node) -> str | None:
+        value = string_literal_value(node, source)
+        if value is None and constants is not None and node.type == "identifier":
+            value = constants.get(node_text(node, source))
+        return value
 
     for child in args_node.named_children:
         value_node: Node | None = None
@@ -100,17 +116,17 @@ def annotation_array_values(args_node: Node | None, key: str, source: bytes) -> 
         elif key == "value" and child.type in (
             "string_literal",
             "element_value_array_initializer",
+            "identifier",
         ):
             value_node = child
 
         if value_node is None:
             continue
-        if value_node.type == "string_literal":
-            single = string_literal_value(value_node, source)
-            return [single] if single is not None else []
         if value_node.type == "element_value_array_initializer":
-            values = (string_literal_value(c, source) for c in value_node.named_children)
+            values = (_resolve(c) for c in value_node.named_children)
             return [v for v in values if v is not None]
+        single = _resolve(value_node)
+        return [single] if single is not None else []
 
     return []
 
