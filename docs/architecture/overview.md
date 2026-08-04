@@ -70,7 +70,7 @@ Dependency direction: `api` → `services` → (`models`, `schemas`, and the int
 | `graph/` | `IGraphRepository` | **Real, working** — `Neo4jGraphRepository` in `graph/neo4j_repository.py` |
 | `ai/` | `ILLMProvider` | **Real, working** — `OpenAIProvider` in `ai/providers/openai_provider.py`; factory supports future Claude/Gemini/Ollama providers |
 | `integrations/` | `IOAuthProvider` (+ `list_repositories`) | **Real, working** — `GitHubOAuthProvider` in `integrations/github.py` |
-| `integrations/` | `IVersionControlProvider` | **Real (partially)** — `GitHubVersionControlProvider.list_changed_files` is real; `get_diff` (full diff content) remains unimplemented |
+| `integrations/` | `IVersionControlProvider` | **Real, working** — `GitHubVersionControlProvider.list_changed_files` and `get_diff` (full diff content, via GitHub's `.diff` media type) are both real; `get_diff` is wired into `app/ai/agent/tools.py`'s `ReadGitDiffTool`, called when PR risk is non-trivial (KAN-35, corrected — this row previously and incorrectly described `get_diff` as unimplemented) |
 | `integrations/` | `IIssueTrackerProvider` | Not built — future Jira client |
 | `indexer/` | `ILanguageParser` | **Real, working** — `SpringBootJavaParser` (Java + Spring Boot/Maven only); registered in `indexer/parsers/registry.py` as the extension point for future languages |
 | `analysis/` | `IImpactGraphReader` | **Real, working** — `Neo4jImpactGraphReader` in `analysis/graph/neo4j_impact_reader.py` |
