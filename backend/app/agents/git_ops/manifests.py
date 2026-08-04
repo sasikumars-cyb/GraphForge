@@ -24,6 +24,9 @@ CREATE_BRANCH_MANIFEST = AgentManifest(
     max_graph_hops=0,
     output_schema_name="BranchInfo",
     required_dependencies=_GIT_OPS_REQUIRED_DEPENDENCIES,
+    # KAN-28 — creates a real branch on GitHub. See _authorization.py for
+    # why extras["workflow"] can only ever come from an approved auto_execution.
+    requires_external_write_authorization=True,
 )
 
 COMMIT_CHANGES_MANIFEST = AgentManifest(
@@ -38,6 +41,8 @@ COMMIT_CHANGES_MANIFEST = AgentManifest(
     max_graph_hops=0,
     output_schema_name="CommitInfo",
     required_dependencies=_GIT_OPS_REQUIRED_DEPENDENCIES,
+    # KAN-28 — writes a real commit to GitHub.
+    requires_external_write_authorization=True,
 )
 
 RUN_TESTS_MANIFEST = AgentManifest(
@@ -52,6 +57,10 @@ RUN_TESTS_MANIFEST = AgentManifest(
     max_graph_hops=0,
     output_schema_name="TestRunInfo",
     required_dependencies=_GIT_OPS_REQUIRED_DEPENDENCIES,
+    # KAN-28 — deliberately NOT flagged: this agent only reads CI status
+    # (GitHub Check Runs), it never writes. Needs a workflow context for
+    # the same data-dependency reason as the others (which commit to poll),
+    # not for write authorization.
 )
 
 CREATE_PULL_REQUEST_MANIFEST = AgentManifest(
@@ -66,4 +75,7 @@ CREATE_PULL_REQUEST_MANIFEST = AgentManifest(
     max_graph_hops=0,
     output_schema_name="PullRequestInfo",
     required_dependencies=_GIT_OPS_REQUIRED_DEPENDENCIES,
+    # KAN-28 — opens a real pull request on GitHub, the most visible write
+    # of the four.
+    requires_external_write_authorization=True,
 )

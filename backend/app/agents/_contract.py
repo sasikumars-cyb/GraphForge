@@ -175,6 +175,24 @@ class AgentManifest:
     # declared, implicitly, before this field existed.
     required_dependencies: frozenset[str] = frozenset()
 
+    # KAN-28 — declares that this agent takes an action visible outside
+    # GraphForge (posting to GitHub/Jira/etc., as opposed to reading from
+    # or reasoning about them) and therefore must only ever run with a
+    # context that traces back to an explicit human authorization, not as
+    # an implicit side effect of the agent simply being invoked (see
+    # `ARCHITECTURE.md` § Security Considerations). Purely declarative —
+    # this field does not itself enforce anything; it makes the property
+    # enumerable (`[m for m in registry.all_manifests() if m.
+    # requires_external_write_authorization]` is the "full inventory" this
+    # was introduced for) and gives
+    # `tests/unit/ai/test_manifest_dependency_integrity.py` something to
+    # check every `DEPENDENCY_GITHUB_WRITE` manifest against, so a future
+    # write-capable agent can't add the dependency without also declaring
+    # the authorization property. Default False: every agent that reads
+    # or reasons only (the overwhelming majority) declares nothing, same
+    # as before this field existed.
+    requires_external_write_authorization: bool = False
+
     def __post_init__(self) -> None:
         if not self.agent_id:
             raise ValueError("agent_id must be non-empty")

@@ -39,7 +39,7 @@ is invented. Every row cites its source.
 | Context Discovery hypothesis-driven investigation | Generates and challenges competing hypotheses in one post-hoc pass; one bounded mid-loop checkpoint can redirect the rest of a run | No full feedback loop where a hypothesis's own unknowns trigger fresh retrieval every cycle — named directly in ADR 0015's self-review as "the single biggest gap between this implementation and the brief's full ambition" |
 | Confidence calibration (prompt-version vs. human-agreement tracking) | The Learning Engine now captures the raw feedback data this needs | Calibration itself, prompt evolution, health scoring, org-wide learning — none implemented; explicitly named as reading-ready, not built (RFC-06D) |
 | Shared Memory / `RunContext` | Functions correctly for a single process | Documented as an in-memory stand-in, not the Redis-backed version the architecture calls for; "required before any multi-process/multi-replica deployment" |
-| Entry Resolvers / Context Builder generalization | A `freetext` resolver exists | `GitHubEntryResolver`/`JiraEntryResolver`/`ConfluenceEntryResolver` described in `ARCHITECTURE.md` are not present in `app/context/resolvers/` as of this audit |
+| Entry Resolvers / Context Builder generalization | `freetext` and GitHub (repository id, pull request URL) resolvers both exist and are real, working, tested (`app/context/resolvers/freetext.py`, `app/context/resolvers/github.py`, KAN-27) | Jira and Confluence resolvers remain not built — blocked on a real Jira/Confluence integration existing at all (today's Jira access is read-only) |
 
 ## Intentionally deferred (documented scope boundaries, not gaps)
 

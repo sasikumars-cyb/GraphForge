@@ -78,6 +78,23 @@ construction.
    handed to the LLM. This replaces today's single `AIContext` with a generic, agent-parameterized
    context object — see Domain Model below.
 
+**Entry Resolver status** (KAN-27, current as of the resolver audit below — update in the same
+change as any resolver work, the same discipline `docs/handbook/16_REALITY_CHECK.md` applies):
+
+| Resolver | Status | Notes |
+|---|---|---|
+| `freetext` | **Real, working** | `app/context/resolvers/freetext.py` — pure function, no I/O |
+| GitHub (repository id, pull request URL) | **Real, working** | `app/context/resolvers/github.py` — `resolve_repository_id`, `resolve_pull_request_url`; used by `POST /agent-runs` |
+| Jira | **Not built** | Blocked on a real Jira integration existing at all (today's Jira access is read-only, no `IIssueTrackerProvider` implementation — see KAN-43) |
+| Confluence | **Not built** | Same blocker as Jira |
+
+None of the resolvers above are classes implementing a shared `IEntryResolver` Protocol as
+originally sketched — each is a plain, independently-typed function returning a
+`Subject` (`app.agents._contract.Subject`), following the same lightweight-function convention
+`freetext.py` established first. Introducing a formal shared interface is worth doing once a
+third source needs one; two working resolvers with parallel signatures is not evidence a shared
+Protocol is buying anything yet.
+
 ```mermaid
 sequenceDiagram
     participant U as User Input
