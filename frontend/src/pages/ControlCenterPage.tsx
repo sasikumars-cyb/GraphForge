@@ -1,9 +1,7 @@
-import { useEffect, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../app/auth-context";
 import { getSystemStatus } from "../lib/api/system";
 import { getConnectionStatus } from "../lib/api/github";
-import type { SystemStatusResponse } from "../lib/api/system";
-import type { GitHubConnectionStatus } from "../types/github";
 import {
   Activity,
   Brain,
@@ -19,32 +17,30 @@ import {
 
 export function ControlCenterPage() {
   const { token } = useAuth();
-  const [system, setSystem] = useState<SystemStatusResponse | null>(null);
-  const [github, setGithub] = useState<GitHubConnectionStatus | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    if (!token) return;
-    const controller = new AbortController();
-    setLoading(true);
-    Promise.allSettled([
-      getSystemStatus(token, controller.signal),
-      getConnectionStatus(token, controller.signal),
-    ]).then(([sysResult, ghResult]) => {
-      if (controller.signal.aborted) return;
-      if (sysResult.status === "fulfilled") {
-        setSystem(sysResult.value);
-      } else {
-        setError("Failed to load platform status.");
-      }
-      if (ghResult.status === "fulfilled") {
-        setGithub(ghResult.value);
-      }
-      setLoading(false);
-    });
-    return () => controller.abort();
-  }, [token]);
+  // KAN-37 — first page migrated to the shared TanStack Query layer.
+  // Two independent queries, not one combined queryFn, deliberately
+  // preserves the original Promise.allSettled asymmetry: a failed
+  // system-status fetch is a real error (nothing else on this page can
+  // render without it), but a failed GitHub connection check degrades
+  // silently to "not connected" - it was never load-bearing for the
+  // rest of the page and the original code never surfaced its failure
+  // either.
+  const systemQuery = useQuery({
+    queryKey: ["system-status"],
+    queryFn: ({ signal }) => getSystemStatus(token as string, signal),
+    enabled: token !== null,
+  });
+  const githubQuery = useQuery({
+    queryKey: ["github-connection-status"],
+    queryFn: ({ signal }) => getConnectionStatus(token as string, signal),
+    enabled: token !== null,
+  });
+
+  const system = systemQuery.data ?? null;
+  const github = githubQuery.data ?? null;
+  const error = systemQuery.isError ? "Failed to load platform status." : null;
+  const loading = systemQuery.isPending || githubQuery.isPending;
 
   const platformHealthLabel =
     system?.platform_status === "healthy"
@@ -150,10 +146,7 @@ export function ControlCenterPage() {
           </h3>
           <div className="divide-y divide-line-muted rounded-lg border border-line-muted bg-surface">
             {system.ai_providers.map((provider) => (
-              <div
-                key={provider.name}
-                className="flex items-center gap-3 px-4 py-2.5"
-              >
+              <div key={provider.name} className="flex items-center gap-3 px-4 py-2.5">
                 {provider.active ? (
                   <CheckCircle2 className="h-4 w-4 shrink-0 text-success-fg" aria-hidden="true" />
                 ) : provider.configured ? (
@@ -173,7 +166,11 @@ export function ControlCenterPage() {
                   </span>
                 )}
                 <span className="shrink-0 text-xs text-fg-subtle">
-                  {provider.active ? "active" : provider.configured ? "configured" : "not configured"}
+                  {provider.active
+                    ? "active"
+                    : provider.configured
+                      ? "configured"
+                      : "not configured"}
                 </span>
               </div>
             ))}
@@ -265,9 +262,7 @@ export function ControlCenterPage() {
 
         {/* Right: Platform Info */}
         <section className="flex flex-col gap-2">
-          <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
-            Platform
-          </h3>
+          <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Platform</h3>
           <div className="rounded-lg border border-line-muted bg-surface px-4 py-3">
             <div className="space-y-2.5">
               <MetricRow label="Version" value={system.version} />
