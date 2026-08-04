@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KAN-8 — Epic Progress Report</title>
+<style>
+  :root{
+    --bg:#0a0c11; --bg-raised:#10131a; --bg-card:#151923; --line:#232838; --line-soft:#1a1f2c;
+    --ink:#eae6da; --ink-dim:#9aa0b4; --ink-faint:#5c6379;
+    --accent:#ff7a3d; --accent-soft:#ff7a3d1a; --graph:#45cfc0; --graph-soft:#45cfc01a;
+    --good:#3ecf8e; --good-soft:#3ecf8e1a; --warn:#f2b705; --warn-soft:#f2b70518;
+    --crit:#ef4444; --crit-soft:#ef444418;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","Helvetica Neue",Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"]{
+    --bg:#f4f1e9; --bg-raised:#ffffff; --bg-card:#ffffff; --line:#e2ddcd; --line-soft:#eae5d6;
+    --ink:#211f1a; --ink-dim:#5c5748; --ink-faint:#948d78;
+    --accent:#c85a1f; --accent-soft:#c85a1f14; --graph:#0f8a7a; --graph-soft:#0f8a7a14;
+    --good:#1f9d63; --good-soft:#1f9d6314; --warn:#a8790a; --warn-soft:#a8790a14;
+    --crit:#c22b2b; --crit-soft:#c22b2b14; color-scheme:light;
+  }
+  @media (prefers-color-scheme: light){
+    :root:not([data-theme="dark"]){
+      --bg:#f4f1e9; --bg-raised:#ffffff; --bg-card:#ffffff; --line:#e2ddcd; --line-soft:#eae5d6;
+      --ink:#211f1a; --ink-dim:#5c5748; --ink-faint:#948d78;
+      --accent:#c85a1f; --accent-soft:#c85a1f14; --graph:#0f8a7a; --graph-soft:#0f8a7a14;
+      --good:#1f9d63; --good-soft:#1f9d6314; --warn:#a8790a; --warn-soft:#a8790a14;
+      --crit:#c22b2b; --crit-soft:#c22b2b14; color-scheme:light;
+    }
+  }
+  *{box-sizing:border-box;}
+  @media (prefers-reduced-motion: reduce){ *{animation-duration:.001ms !important; transition-duration:.001ms !important;} }
+  body{margin:0; background:var(--bg); color:var(--ink); font-family:var(--serif); font-size:16px; line-height:1.6;}
+  h1,h2,.eyebrow,.pill{font-family:var(--sans);}
+  h1,h2{text-wrap:balance; font-weight:800; letter-spacing:-0.01em; margin:0;}
+  a{color:var(--accent);}
+  .mono{font-family:var(--mono); font-variant-numeric:tabular-nums;}
+  :focus-visible{outline:2px solid var(--graph); outline-offset:3px;}
+  .wrap{max-width:920px; margin:0 auto; padding:56px 24px 64px;}
+
+  .theme-toggle{position:fixed; top:16px; right:16px; display:flex; gap:4px; padding:4px;
+    background:var(--bg-card); border:1px solid var(--line); border-radius:9px; z-index:5;}
+  .theme-toggle button{padding:5px 9px; font-size:11px; font-weight:700; border:none; border-radius:6px;
+    background:transparent; color:var(--ink-faint); cursor:pointer; font-family:var(--sans);}
+  .theme-toggle button.is-active{background:var(--bg-raised); color:var(--ink);}
+
+  .eyebrow{display:inline-flex; align-items:center; gap:8px; font-size:11px; font-weight:700; letter-spacing:.14em;
+    text-transform:uppercase; color:var(--accent); margin-bottom:14px;}
+  .eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--accent);}
+  h1{font-size:clamp(24px,4vw,34px);}
+  .sub{font-size:16px; color:var(--ink-dim); margin-top:12px; max-width:68ch;}
+
+  .status-row{display:flex; flex-wrap:wrap; gap:10px; margin-top:22px;}
+  .chip{display:inline-flex; align-items:center; gap:8px; padding:8px 14px; border-radius:999px;
+    font-family:var(--sans); font-weight:700; font-size:12.5px; border:1px solid;}
+  .chip.good{border-color:var(--good); background:var(--good-soft); color:var(--good);}
+  .chip.warn{border-color:var(--warn); background:var(--warn-soft); color:var(--warn);}
+
+  .finding-box{margin-top:24px; padding:20px 22px; border-radius:14px; border:1px solid var(--graph); background:var(--graph-soft);}
+  .finding-box h3{font-size:14px; font-family:var(--sans); color:var(--graph); margin:0; text-transform:uppercase; letter-spacing:.04em;}
+  .finding-box p{font-size:14px; color:var(--ink-dim); margin-top:10px;}
+
+  .kpi-row{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-top:24px;}
+  @media (max-width:640px){ .kpi-row{grid-template-columns:1fr 1fr;} }
+  .kpi{background:var(--bg-card); border:1px solid var(--line); border-radius:12px; padding:16px 18px;}
+  .kpi .n{font-family:var(--mono); font-size:22px; font-weight:700; color:var(--ink); display:block;}
+  .kpi .l{font-family:var(--sans); font-size:10.5px; color:var(--ink-faint); text-transform:uppercase; letter-spacing:.06em; margin-top:4px;}
+
+  section{margin-top:40px;}
+  h2{font-size:16px; display:flex; align-items:center; gap:10px;}
+  h2 .num{font-family:var(--mono); color:var(--ink-faint); font-size:12px; font-weight:400;}
+  .ticket{background:var(--bg-card); border:1px solid var(--line); border-radius:12px; padding:16px 20px; margin-top:12px; display:flex; gap:14px;}
+  .ticket .badge{flex:0 0 auto; width:64px; height:56px; border-radius:10px; display:flex; align-items:center; justify-content:center;
+    font-family:var(--mono); font-size:10px; font-weight:700; text-align:center; line-height:1.2;}
+  .badge.done{background:var(--good-soft); color:var(--good); border:1px solid var(--good);}
+  .badge.partial{background:var(--warn-soft); color:var(--warn); border:1px solid var(--warn);}
+  .ticket h4{font-size:14px; font-family:var(--sans); display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .ticket h4 a{font-family:var(--mono); font-size:11.5px; text-decoration:none;}
+  .ticket h4 a:hover{text-decoration:underline;}
+  .ticket p{font-size:13px; color:var(--ink-dim); font-family:var(--sans); margin-top:6px;}
+
+  .card{background:var(--bg-card); border:1px solid var(--line); border-radius:12px; padding:16px 20px; margin-top:12px;}
+  .card p{margin:0; font-size:14px; color:var(--ink-dim);}
+
+  .flow{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin-top:14px; font-family:var(--mono); font-size:11.5px;}
+  .flow .step{padding:8px 12px; border-radius:8px; border:1px solid var(--line); background:var(--line-soft); color:var(--ink-dim);}
+  .flow .step.hot{border-color:var(--graph); background:var(--graph-soft); color:var(--graph);}
+  .flow .arrow{color:var(--ink-faint);}
+
+  table.stats{width:100%; border-collapse:collapse; margin-top:14px; font-size:13px;}
+  table.stats th, table.stats td{padding:8px 10px; text-align:left; border-bottom:1px solid var(--line-soft); font-family:var(--sans);}
+  table.stats th{color:var(--ink-faint); font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; font-weight:700;}
+  table.stats td.mono{font-family:var(--mono);}
+  .flag{display:inline-block; padding:2px 8px; border-radius:999px; font-size:10.5px; font-weight:700; font-family:var(--sans);}
+  .flag.on{background:var(--warn-soft); color:var(--warn); border:1px solid var(--warn);}
+  .flag.off{background:var(--line-soft); color:var(--ink-faint); border:1px solid var(--line);}
+
+  .next{padding:22px 24px; border-radius:14px; border:1px solid var(--line);
+    background:linear-gradient(155deg, var(--bg-card), var(--bg-raised)); margin-top:14px;}
+  .next h3{font-size:16px; font-family:var(--sans); margin:0;}
+  .next p{font-size:13.5px; color:var(--ink-dim); margin-top:8px; font-family:var(--sans);}
+  footer{margin-top:44px; color:var(--ink-faint); font-size:11.5px; font-family:var(--sans);}
+</style>
+</head>
+<body>
+
+<div class="theme-toggle" role="group" aria-label="Theme">
+  <button type="button" data-theme-choice="dark">Dark</button>
+  <button type="button" data-theme-choice="light">Light</button>
+  <button type="button" data-theme-choice="auto" class="is-active">Auto</button>
+</div>
+
+<div class="wrap">
+  <div class="eyebrow"><span class="dot"></span>Epic In Progress · KAN-8</div>
+  <h1>Engineering Memory &amp; Confidence Calibration</h1>
+  <p class="sub">Confidence scores were being written to a table nothing ever read. This epic closed the loop: a real endpoint that checks whether an agent's confidence actually predicts human approval — and now, whether a specific prompt version quietly broke that relationship.</p>
+
+  <div class="status-row">
+    <span class="chip good">✓ KAN-23 implemented, tested, documented</span>
+    <span class="chip warn">⏸ KAN-24 deferred — retention policy needs a product decision</span>
+    <span class="chip warn">⏸ KAN-25 deferred — threshold tuning needs real production data</span>
+  </div>
+
+  <div class="finding-box">
+    <h3>Headline finding</h3>
+    <p><code class="mono">ROADMAP.md</code>'s own risk register names this exact gap as a hard blocker past Phase 2: <i>"Confidence scores become decorative (unchecked against outcomes)."</i> The write path (<code class="mono">workflow_service._record_confidence_calibration</code>) was already real — every workflow approve/reject decision was being logged. The read path didn't exist. <b style="color:var(--ink);">There was no way, anywhere in the product, to ask "does this agent's confidence score mean anything?"</b> — until now.</p>
+  </div>
+
+  <div class="kpi-row">
+    <div class="kpi"><span class="n good">1</span><div class="l">New endpoint shipped</div></div>
+    <div class="kpi"><span class="n good">6</span><div class="l">New tests, all passing</div></div>
+    <div class="kpi"><span class="n">2</span><div class="l">Epics deferred, not guessed</div></div>
+    <div class="kpi"><span class="n good">0</span><div class="l">Regressions</div></div>
+  </div>
+
+  <section>
+    <h2><span class="num">01</span>Ticket Outcomes</h2>
+
+    <div class="ticket">
+      <div class="badge done">DONE</div>
+      <div>
+        <h4><a href="https://cybage-team-n8wdf7c7.atlassian.net/browse/KAN-23" target="_blank" rel="noopener">KAN-23</a> Confidence calibration report</h4>
+        <p>New <code class="mono">GET /api/v1/calibration/summary</code> (admin-only): per-agent approval rate, confidence-bucket curve, and a new per-<code class="mono">prompt_version</code> breakdown that flags a version whose approval rate has drifted from its agent's overall rate by more than 20 points, with at least 5 decisions behind it. 6 new integration tests, all passing.</p>
+      </div>
+    </div>
+
+    <div class="ticket">
+      <div class="badge partial">DEFERRED</div>
+      <div>
+        <h4><a href="https://cybage-team-n8wdf7c7.atlassian.net/browse/KAN-24" target="_blank" rel="noopener">KAN-24</a> Calibration data retention policy</h4>
+        <p>How long to retain <code class="mono">ConfidenceCalibration</code> rows, and whether/how to anonymize them, is a product/compliance call with no code-derivable answer. Left untouched rather than picking a default to keep moving.</p>
+      </div>
+    </div>
+
+    <div class="ticket">
+      <div class="badge partial">DEFERRED</div>
+      <div>
+        <h4><a href="https://cybage-team-n8wdf7c7.atlassian.net/browse/KAN-25" target="_blank" rel="noopener">KAN-25</a> Tune the miscalibration threshold against real data</h4>
+        <p>The 20-point / 5-decision constants shipped with KAN-23 are documented in code as starting points, explicitly not derived from a measured baseline — none exists yet. This ticket's own premise requires real multi-prompt-version production history this sandbox has no way to generate.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">02</span>How Calibration Now Flows</h2>
+    <div class="card">
+      <p style="margin-bottom:4px;">Every workflow approve/reject decision already wrote a row per agent step. The new endpoint is the first thing that reads them back.</p>
+      <div class="flow">
+        <span class="step">Human approves/rejects</span><span class="arrow">→</span>
+        <span class="step">ConfidenceCalibration row written</span><span class="arrow">→</span>
+        <span class="step hot">outer-joined against AgentStep.prompt_version</span><span class="arrow">→</span>
+        <span class="step">grouped per agent, per version</span><span class="arrow">→</span>
+        <span class="step hot">GET /calibration/summary</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">03</span>The Miscalibration Flag — Tested Both Ways</h2>
+    <div class="card">
+      <p style="margin-bottom:10px;">A version is flagged only when it has <b style="color:var(--ink);">enough decisions to mean something</b> AND its approval rate has genuinely drifted from its agent's overall rate — both conditions verified directly in <code class="mono">test_calibration_api.py</code>.</p>
+      <table class="stats">
+        <tr><th>Scenario</th><th>Decisions</th><th>Divergence from agent rate</th><th>Flagged?</th></tr>
+        <tr><td>Version diverges, meets decision floor</td><td class="mono">5</td><td class="mono">50 pts</td><td><span class="flag on">flagged</span></td></tr>
+        <tr><td>Version diverges, below decision floor</td><td class="mono">2</td><td class="mono">100 pts</td><td><span class="flag off">not flagged</span></td></tr>
+        <tr><td>Version matches agent's overall rate</td><td class="mono">4</td><td class="mono">0 pts</td><td><span class="flag off">not flagged</span></td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">04</span>Tests &amp; Verification</h2>
+    <div class="card"><p><b style="color:var(--ink);">6/6</b> new integration tests pass: admin-only gating, unauthenticated rejection, empty-state response, bucket + prompt-version aggregation correctness, and both sides of the miscalibration-flag boundary. <b style="color:var(--ink);">1883 passed</b> on the full non-integration suite (unchanged baseline — this epic added integration coverage only), same 23 pre-existing unrelated <code class="mono">test_run_coordinator.py</code> failures. Full integration suite: <b style="color:var(--ink);">250 passed</b>, remaining failures/errors are exclusively Neo4j-dependent (Docker registry blocked in this sandbox) — zero touch calibration. <code class="mono">ruff</code>/<code class="mono">black</code>/<code class="mono">mypy</code> clean throughout.</p></div>
+  </section>
+
+  <section>
+    <h2><span class="num">05</span>Risks</h2>
+    <div class="card"><p>No frontend surface consumes this endpoint yet — an admin has to call the API directly today; the response types were kept in sync in <code class="mono">frontend/src/types/calibration.ts</code> for whoever builds that next. The threshold constants are documented placeholders, not tuned values — <code class="mono">flagged_miscalibrated</code> should read as "worth a look," not a calibrated alarm, until KAN-25 can run against real data.</p></div>
+  </section>
+
+  <section>
+    <h2><span class="num">06</span>Next Recommended Work</h2>
+    <div class="next">
+      <h3>Build the admin calibration dashboard, or continue the KAN-33 router sweep</h3>
+      <p>The calibration data is now queryable but invisible in the product — a small admin page consuming the already-typed frontend contract is the natural next slice. Alternatively, KAN-11's remaining 25-router cross-user isolation sweep is fully independent and unstarted if that's the higher priority.</p>
+    </div>
+  </section>
+
+  <footer>KAN-8 epic progress report — GraphForge autonomous engineering session.</footer>
+</div>
+
+<script>
+  (function(){
+    var root = document.documentElement, stored = null;
+    try { stored = localStorage.getItem('kan8-theme'); } catch(e){}
+    function apply(mode){
+      if(mode==='dark'){ root.setAttribute('data-theme','dark'); }
+      else if(mode==='light'){ root.setAttribute('data-theme','light'); }
+      else { root.removeAttribute('data-theme'); }
+      document.querySelectorAll('[data-theme-choice]').forEach(function(b){
+        b.classList.toggle('is-active', b.getAttribute('data-theme-choice')===mode);
+      });
+    }
+    apply(stored || 'auto');
+    document.querySelectorAll('[data-theme-choice]').forEach(function(btn){
+      btn.addEventListener('click', function(){
+        var mode = btn.getAttribute('data-theme-choice');
+        apply(mode);
+        try { localStorage.setItem('kan8-theme', mode); } catch(e){}
+      });
+    });
+  })();
+</script>
+</body>
+</html>
