@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { axe } from "jest-axe";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routes } from "../app/router";
@@ -131,6 +132,15 @@ describe("PullRequestDetailPage - Publish Review", () => {
       "https://github.com/local/order-service/pull/1#issuecomment-42",
     );
     expect(link).toHaveAttribute("target", "_blank");
+  });
+
+  it("has no detectable accessibility violations once the AI analysis has loaded (KAN-38)", async () => {
+    vi.spyOn(analysisApi, "getAiAnalysis").mockResolvedValue(FAKE_AI_ANALYSIS);
+
+    const { container } = renderPage();
+    await screen.findByRole("button", { name: "Publish Review" }, { timeout: 3000 });
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("disables Publish Review while another AI action is in flight", async () => {

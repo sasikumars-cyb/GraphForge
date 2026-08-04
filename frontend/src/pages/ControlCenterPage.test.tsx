@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { axe } from "jest-axe";
 import { MemoryRouter } from "react-router-dom";
 import { AuthContext, type AuthContextValue } from "../app/auth-context";
 import { ControlCenterPage } from "./ControlCenterPage";
@@ -204,5 +205,15 @@ describe("ControlCenterPage", () => {
     expect(await screen.findByText("Neo4j")).toBeInTheDocument();
     expect(screen.getByText("PostgreSQL")).toBeInTheDocument();
     expect(screen.getByText("Jira")).toBeInTheDocument();
+  });
+
+  it("has no detectable accessibility violations (KAN-38)", async () => {
+    vi.mocked(systemApi.getSystemStatus).mockResolvedValue(healthyStatus);
+    vi.mocked(githubApi.getConnectionStatus).mockResolvedValue(githubConnected);
+
+    const { container } = renderWithAuth();
+    await screen.findByText("Control Center");
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

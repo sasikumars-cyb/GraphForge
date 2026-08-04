@@ -246,6 +246,9 @@ it should not exist yet.
   `StatusBadge` pattern) — extend this to every new badge type, including `ConfidenceBadge`.
 - Disabled states use the `disabled` attribute (existing), not a visual-only style, so screen
   readers and keyboard nav respect it.
+- These conventions now have automated regression coverage (`jest-axe` in the Vitest suite,
+  KAN-38) — see `docs/graphforge/ACCESSIBILITY_BASELINE.md` for scope, coverage, and how to add
+  an `axe(container)` assertion to a new page's test.
 
 ## Responsive Design
 

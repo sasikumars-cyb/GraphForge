@@ -1,5 +1,13 @@
 import "@testing-library/jest-dom/vitest";
-import { afterEach, beforeEach, vi } from "vitest";
+import { afterEach, beforeEach, expect, vi } from "vitest";
+import { toHaveNoViolations } from "jest-axe";
+
+// KAN-38 — makes `expect(await axe(container)).toHaveNoViolations()`
+// available in every component test file without a per-file import; see
+// src/test/axe.d.ts for the corresponding vitest Assertion type
+// augmentation (jest-axe ships its matcher's types for Jest's global
+// `expect`, not vitest's).
+expect.extend(toHaveNoViolations);
 
 // Unit tests must never reach a real network — every API call a
 // component makes is expected to go through a mocked `lib/api/*`
@@ -57,5 +65,6 @@ if (typeof globalThis.IntersectionObserver === "undefined") {
       return [];
     }
   }
-  globalThis.IntersectionObserver = MockIntersectionObserver as unknown as typeof IntersectionObserver;
+  globalThis.IntersectionObserver =
+    MockIntersectionObserver as unknown as typeof IntersectionObserver;
 }
