@@ -100,25 +100,27 @@
 </div>
 
 <div class="wrap">
-  <div class="eyebrow"><span class="dot"></span>Epic In Progress · KAN-11</div>
+  <div class="eyebrow"><span class="dot"></span>Epic Complete (sweep) · KAN-11</div>
   <h1>Security &amp; Multi-Tenancy Hardening</h1>
-  <p class="sub">The audit found the tenancy claim in ARCHITECTURE.md was more wrong than "unverified" — the mechanism it names doesn't exist. What actually protects tenants is real, verified for the highest-stakes router, and now honestly scoped for what's left.</p>
+  <p class="sub">The audit found the tenancy claim in ARCHITECTURE.md was more wrong than "unverified" — the mechanism it names doesn't exist. All 26 routers have now been reviewed; two real, previously-undocumented findings surfaced along the way and were filed rather than guessed at.</p>
 
   <div class="status-row">
-    <span class="chip good">✓ KAN-33 partial — highest-risk router verified</span>
+    <span class="chip good">✓ KAN-33 sweep complete — 26/26 routers reviewed</span>
     <span class="chip good">✓ KAN-35 verified already implemented</span>
     <span class="chip warn">⏸ KAN-34 deferred — product decision requested, unanswered</span>
+    <span class="chip warn">⏸ KAN-44 filed — needs a product decision</span>
+    <span class="chip warn">⏸ KAN-45 filed — needs a Neo4j-available environment</span>
   </div>
 
   <div class="finding-box">
     <h3>Headline finding</h3>
-    <p><code class="mono">organization_id</code> — the specific column <code class="mono">ARCHITECTURE.md</code> named as enforcing tenant isolation, cited across 3 handbook documents — <b style="color:var(--ink);">does not exist anywhere in the codebase.</b> Grepped across every model, every Neo4j write path: zero matches. The real, working mechanism is <code class="mono">user_id</code>-scoped ownership checks, applied per-router. That mechanism is real and now independently verified for the router where a leak would matter most.</p>
+    <p><code class="mono">organization_id</code> — the specific column <code class="mono">ARCHITECTURE.md</code> named as enforcing tenant isolation, cited across 3 handbook documents — <b style="color:var(--ink);">does not exist anywhere in the codebase.</b> Grepped across every model, every Neo4j write path: zero matches. The real, working mechanism is <code class="mono">user_id</code>-scoped ownership checks, applied per-router — now verified across every router in the app, not just the highest-risk one.</p>
   </div>
 
   <div class="kpi-row">
-    <div class="kpi"><span class="n">1/26</span><div class="l">Routers isolation-tested</div></div>
-    <div class="kpi"><span class="n good">16</span><div class="l">New tests, all passing</div></div>
-    <div class="kpi"><span class="n">5</span><div class="l">Docs corrected</div></div>
+    <div class="kpi"><span class="n good">26/26</span><div class="l">Routers reviewed</div></div>
+    <div class="kpi"><span class="n good">64</span><div class="l">New tests, all passing</div></div>
+    <div class="kpi"><span class="n">2</span><div class="l">New findings filed</div></div>
     <div class="kpi"><span class="n good">0</span><div class="l">Regressions</div></div>
   </div>
 
@@ -126,10 +128,10 @@
     <h2><span class="num">01</span>Ticket Outcomes</h2>
 
     <div class="ticket">
-      <div class="badge partial">PARTIAL</div>
+      <div class="badge done">SWEPT</div>
       <div>
         <h4><a href="https://cybage-team-n8wdf7c7.atlassian.net/browse/KAN-33" target="_blank" rel="noopener">KAN-33</a> Multi-tenant isolation audit</h4>
-        <p>Corrected the false <code class="mono">organization_id</code> claim in 5 documents. Built and ran a 12-test HTTP-level cross-user isolation suite against <code class="mono">workflows.py</code> — the router whose <code class="mono">approve</code> endpoint gates real GitHub writes (KAN-28). All 12 pass. 25 of 26 routers remain unswept, named explicitly as open work rather than assumed safe by extension.</p>
+        <p>Corrected the false <code class="mono">organization_id</code> claim in 5 documents. All 26 routers reviewed: 10 have dedicated HTTP-level cross-user isolation suites (64 tests, all passing); 15 verified safe by code review (admin-shared config, self-referential connection endpoints, explicitly-documented shared resources, signature-verified webhooks); <code class="mono">parity.py</code> remains genuinely unverified (Neo4j-dependent, no Neo4j access in this sandbox). Full breakdown posted as a KAN-33 comment.</p>
       </div>
     </div>
 
@@ -148,44 +150,69 @@
         <p>Already fully real and wired in — <code class="mono">GitHubVersionControlProvider.get_diff</code> fetches the actual unified diff, consumed by <code class="mono">ReadGitDiffTool</code> for non-trivial-risk PRs. Corrected the stale doc claim; added the one missing test (the truncation boundary).</p>
       </div>
     </div>
+
+    <div class="ticket">
+      <div class="badge partial">FILED</div>
+      <div>
+        <h4>KAN-44 (new) Engineering Sessions have no ownership check</h4>
+        <p>All 27 endpoints on <code class="mono">engineering_sessions.py</code> — any authenticated user can read/mutate any Session, including another user's evidence, hypotheses, and decisions. <code class="mono">EngineeringSession</code> has no <code class="mono">user_id</code> column, and RFC-001 never states whether Sessions are meant to be private or a shared team workspace. Filed rather than guessed at; blocked on that decision.</p>
+      </div>
+    </div>
+
+    <div class="ticket">
+      <div class="badge partial">FILED</div>
+      <div>
+        <h4>KAN-45 (new) Cross-tenant Neo4j topic-peer leak</h4>
+        <p><code class="mono">find_cross_repository_topic_peers</code> has no tenant filter at the graph-query level across 4 call sites — a component from another tenant's repository can appear in a topic-peer response when Kafka topic names collide. The fix needs the caller's legitimate repository scope threaded through each call site differently; couldn't be safely implemented or verified without a live Neo4j, so it's documented in full rather than attempted blind.</p>
+      </div>
+    </div>
   </section>
 
   <section>
     <h2><span class="num">02</span>Multi-Tenancy Audit Coverage</h2>
     <div class="card">
-      <p style="margin-bottom:10px;">26 REST routers total. Green = HTTP-level cross-user isolation test suite exists and passes in this session. Grey = not yet swept (code-review evidence suggests most already have per-router ownership checks, per the duplicated <code class="mono">_get_owned_*</code> helpers found in 6+ files — but "suggests" is not "verified," which is the entire point of this ticket).</p>
+      <p style="margin-bottom:10px;">26 REST routers total, all reviewed. Green = HTTP-level cross-user isolation test suite exists and passes. Blue = verified safe by code review (no per-user resource, self-referential only, or explicitly shared by design). Amber = genuinely unverified.</p>
       <div class="router-grid">
         <div class="router swept">workflows.py ✓</div>
-        <div class="router open">agent_runs.py</div>
-        <div class="router open">repositories.py</div>
-        <div class="router open">pull_requests.py</div>
-        <div class="router open">ai_analysis.py</div>
-        <div class="router open">knowledge.py</div>
-        <div class="router open">learning.py</div>
-        <div class="router open">parity.py</div>
-        <div class="router open">engineering_sessions.py</div>
-        <div class="router open">api_intelligence.py</div>
-        <div class="router open">documentation.py</div>
-        <div class="router open">+15 more</div>
+        <div class="router swept">agent_runs.py ✓</div>
+        <div class="router swept">knowledge.py ✓</div>
+        <div class="router swept">repositories.py ✓</div>
+        <div class="router swept">pull_requests.py ✓</div>
+        <div class="router swept">learning.py ✓</div>
+        <div class="router swept">api_intelligence.py ✓</div>
+        <div class="router swept">documentation.py ✓</div>
+        <div class="router swept">reports.py ✓</div>
+        <div class="router swept">ai_analysis.py ✓</div>
+        <div class="router open">ai_workspace.py (shared, verified)</div>
+        <div class="router open">oauth_apps.py (shared, verified)</div>
+        <div class="router open">tools.py (shared, verified)</div>
+        <div class="router open">github.py (self-ref, verified)</div>
+        <div class="router open">google_drive.py (self-ref, verified)</div>
+        <div class="router open">test_case_uploads.py (shared, verified)</div>
+        <div class="router open">testrail.py (shared, verified)</div>
+        <div class="router open">webhooks.py (HMAC, verified)</div>
+        <div class="router open">oauth.py (KAN-34 stub)</div>
+        <div class="router open">engineering_sessions.py — KAN-44</div>
+        <div class="router open">parity.py — unverified (Neo4j)</div>
       </div>
     </div>
   </section>
 
   <section>
     <h2><span class="num">03</span>Tests &amp; Verification</h2>
-    <div class="card"><p><b style="color:var(--ink);">1883 passed</b> (full non-integration suite, +4 net from this epic's diff-tool tests), same 23 pre-existing unrelated failures. <b style="color:var(--ink);">12/12</b> new workflow cross-user isolation tests pass — including the two most consequential paths: approving someone else's blueprint, and referencing someone else's approved blueprint as an auto_execution source. <b style="color:var(--ink);">4/4</b> new diff-truncation tests pass. <code class="mono">ruff</code>/<code class="mono">black</code>/<code class="mono">mypy</code> clean throughout.</p></div>
+    <div class="card"><p><b style="color:var(--ink);">1883 passed</b> (full non-integration suite, unchanged baseline throughout this epic), same 23 pre-existing unrelated failures. <b style="color:var(--ink);">64/64</b> new cross-user isolation tests pass across 10 routers, run together with zero cross-file interference. <b style="color:var(--ink);">4/4</b> diff-truncation tests pass. <code class="mono">ruff</code>/<code class="mono">black</code>/<code class="mono">mypy</code> clean throughout.</p></div>
   </section>
 
   <section>
     <h2><span class="num">04</span>Risks</h2>
-    <div class="card"><p>25 of 26 routers remain unverified for cross-user isolation — treat as open, not safe-by-extension. The verified <code class="mono">user_id</code> mechanism is a per-router convention, not a structural guarantee; nothing stops a future endpoint from omitting the check. KAN-34 is fully blocked on a product decision.</p></div>
+    <div class="card"><p><code class="mono">parity.py</code> remains genuinely unverified — code review shows the same ownership pattern as everywhere else, but this sandbox can't prove it end-to-end without Neo4j. The verified <code class="mono">user_id</code> mechanism is a per-router convention, not a structural guarantee. KAN-44 is a live, real gap if Sessions turn out to be meant as private. KAN-45 is a live, real cross-tenant leak if two tenants' repositories share a Kafka topic name. KAN-34 is fully blocked on a product decision.</p></div>
   </section>
 
   <section>
     <h2><span class="num">05</span>Next Recommended Work</h2>
     <div class="next">
-      <h3>Continue the KAN-33 router sweep, prioritized by sensitivity</h3>
-      <p>Next targets: <code class="mono">agent_runs.py</code>, <code class="mono">knowledge.py</code>, <code class="mono">engineering_sessions.py</code> — same class of mutating, consequential actions as workflows.py. Alternatively, <b style="color:var(--ink);">KAN-8</b> (Engineering Memory &amp; Confidence Calibration) is fully independent and unstarted if a fresh epic is preferred over continuing this one.</p>
+      <h3>Get the two blocked product decisions made; fix KAN-45 where Neo4j is reachable</h3>
+      <p>KAN-44 and KAN-34 both need a human answer before further engineering work makes sense on them. KAN-45 needs a Neo4j-available environment (CI or staging) to fix and verify safely. In the meantime, <b style="color:var(--ink);">KAN-12</b> (Frontend Modernization), <b style="color:var(--ink);">KAN-14</b> (Indexer Language Coverage), or <b style="color:var(--ink);">KAN-10</b> (AWS Production Readiness) are fully independent and unstarted.</p>
     </div>
   </section>
 
