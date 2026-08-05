@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { Card } from "../components/Card";
 import {
   DependencyGraph,
@@ -23,8 +24,7 @@ import {
   mergeRepositoryDependencyEdges,
 } from "../lib/graph/mergeGraphs";
 import { summarizeRepositoryCounts } from "../lib/indexingSummary";
-import type { TrackedRepository } from "../types/github";
-import type { CrossRepositoryLink, Graph, GraphEdge } from "../types/graph";
+import type { CrossRepositoryLink } from "../types/graph";
 
 /**
  * Descriptions for every relationship the indexer can write (see backend
@@ -57,202 +57,156 @@ function edgeLegendFor(edges: { type: string }[]): { type: string; description: 
     .map(([type]) => ({ type, description: EDGE_DESCRIPTIONS[type] ?? "Relationship" }));
 }
 
-// A single repository's graph can be large; only this many distinct
-// (repository, type-filter) graphs stay resident in memory at once,
-// evicted oldest-first — replaces what used to be an unbounded
-// `graphsByRepoId` cache that only ever grew for the life of the page (see
-// the Architecture Page Scale Redesign doc's audit, "every expanded
-// repository's full graph stays resident in memory for the session").
-const MAX_CACHED_GRAPHS = 5;
-
-/** Cache key for one (repository, type-filter) combination — a filtered
- * view of a repository caches separately from its unfiltered graph rather
- * than overwriting it, so toggling a filter off doesn't force a refetch of
- * what was already loaded. */
-function graphCacheKey(repositoryId: string, nodeTypes: string[] | null): string {
-  if (!nodeTypes || nodeTypes.length === 0) return repositoryId;
-  return `${repositoryId}::${[...nodeTypes].sort().join(",")}`;
+/** Stable key for a node-type filter combination, used as part of the
+ * TanStack Query key for a repository's graph — a filtered view caches
+ * separately from the unfiltered graph rather than overwriting it, so
+ * toggling a filter off doesn't force a refetch of what was already
+ * loaded. `null` (no filter) and the unfiltered fetch below intentionally
+ * share the same key, so they dedupe as one cached entry rather than two. */
+function nodeTypeFilterKey(nodeTypes: string[] | null): string {
+  if (!nodeTypes || nodeTypes.length === 0) return "__all__";
+  return [...nodeTypes].sort().join(",");
 }
+
+// KAN-37 — the manual `graphsByRepoId` LRU cache (capped at 5 entries,
+// evicted oldest-first — see the Architecture Page Scale Redesign doc's
+// audit, "every expanded repository's full graph stays resident in memory
+// for the session") is gone: TanStack Query now owns this cache. A
+// repository's graph query becomes inactive once another repository is
+// selected and is garbage-collected `gcTime` after that — time-based
+// rather than count-based, but the same intent (a large graph shouldn't
+// stay resident forever once it's no longer being looked at).
+const GRAPH_QUERY_GC_TIME_MS = 5 * 60_000;
 
 export function ArchitecturePage() {
   const { token } = useAuth();
   const [searchParams] = useSearchParams();
-  const [repositories, setRepositories] = useState<TrackedRepository[]>([]);
-  // Full node/edge graphs are only ever fetched lazily, per repository, the
-  // first time that repository is expanded - never eagerly for the whole
-  // org, so opening this page stays cheap regardless of how many
-  // repositories are tracked. Keyed by `graphCacheKey` (repository +
-  // active type filter, if any), capped at `MAX_CACHED_GRAPHS` via
-  // `graphCacheOrderRef` below - LRU, not unbounded.
-  const [graphsByRepoId, setGraphsByRepoId] = useState<Record<string, Graph>>({});
-  const graphCacheOrderRef = useRef<string[]>([]);
-  const [summariesByRepoId, setSummariesByRepoId] = useState<
-    Record<string, Record<string, number> | null>
-  >({});
   const [selectedRepoId, setSelectedRepoId] = useState<string>(
     searchParams.get("repository") ?? "all",
   );
-  // Reset whenever the selected repository changes (a filter chosen for
-  // one repository's node types has no meaning for another's) - see the
-  // effect below.
-  const [nodeTypeFilter, setNodeTypeFilter] = useState<string[] | null>(null);
-  // The full set of node-type filter options for each repository, captured
-  // once from that repository's first (always unfiltered - see the reset
-  // effect above) load. Deliberately not derived from the currently-loaded
-  // `graph` on every render: once a type filter is applied, `graph` only
-  // contains the selected types, so its own legend could no longer offer
-  // the *other* types back as options. Known Phase-1 limitation: if the
-  // very first load was itself truncated (`total_node_count` cut off before
-  // every type appeared), a type entirely past that cutoff won't be
-  // offered as a filter option until a dedicated types-listing endpoint
-  // exists (see the Architecture Page Scale Redesign doc, §7).
-  const [availableNodeTypesByRepo, setAvailableNodeTypesByRepo] = useState<
-    Record<string, string[]>
-  >({});
-  const [isLoading, setIsLoading] = useState(true);
-  const [isLoadingSelectedGraph, setIsLoadingSelectedGraph] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  // Cached once for the overview - never refetched on hover.
-  const [allLinks, setAllLinks] = useState<CrossRepositoryLink[] | null>(null);
-  // Structural repo-to-repo edges (CALLS_SERVICE/SHARES_TOPIC/
-  // DEPENDS_ON_REPOSITORY) - a separate source from `allLinks` above (which
-  // only covers Kafka topic overlap), merged together below.
-  const [structuralEdges, setStructuralEdges] = useState<GraphEdge[] | null>(null);
+  // A filter chosen for one repository's node types has no meaning once a
+  // different repository is selected — reset alongside `selectedRepoId`
+  // rather than in a separate effect.
+  const [nodeTypeFilter, setNodeTypeFilterState] = useState<string[] | null>(null);
+  const setSelectedRepo = (repoId: string) => {
+    setSelectedRepoId(repoId);
+    setNodeTypeFilterState(null);
+  };
 
-  // Cheap initial load: repository list + each repository's lightweight
-  // indexing summary counts (not its full graph) - enough to render one
-  // overview card per repository.
-  useEffect(() => {
-    if (!token) {
-      return;
-    }
-    let cancelled = false;
+  // Cheap initial load: repository list — enough to render one overview
+  // card per repository once each one's indexing summary (below) resolves.
+  const repositoriesQuery = useQuery({
+    queryKey: ["repositories"],
+    queryFn: ({ signal }) => listTrackedRepositories(token as string, signal),
+    enabled: token !== null,
+  });
+  const repositories = repositoriesQuery.data ?? [];
 
-    async function load() {
-      try {
-        const repos = await listTrackedRepositories(token!);
-        const summaries = await Promise.all(
-          repos.map((repo) =>
-            getLatestIndexingJob(token!, repo.id)
-              .then((job) => job.result_summary)
-              .catch(() => null),
-          ),
-        );
-        if (!cancelled) {
-          setRepositories(repos);
-          setSummariesByRepoId(Object.fromEntries(repos.map((repo, i) => [repo.id, summaries[i]])));
-          setIsLoading(false);
-        }
-      } catch (err) {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : "Failed to load repositories.");
-          setIsLoading(false);
-        }
-      }
-    }
-
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+  // One lightweight indexing-summary query per repository (not its full
+  // graph) — each repository's card can render as soon as its own summary
+  // resolves, rather than waiting for the slowest one.
+  const summaryQueries = useQueries({
+    queries: repositories.map((repo) => ({
+      queryKey: ["indexing-job", repo.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getLatestIndexingJob(token as string, repo.id, signal).then((job) => job.result_summary),
+      enabled: token !== null,
+    })),
+  });
+  const summariesByRepoId = Object.fromEntries(
+    repositories.map((repo, i) => [repo.id, summaryQueries[i]?.data ?? null]),
+  );
 
   // Overview repository-to-repository edges: one request for every tracked
   // repository's cross-repository links at once (one Neo4j relationship
   // query server-side), fetched once and cached - never per hover, and no
   // longer one HTTP request per repository.
-  useEffect(() => {
-    if (!token || repositories.length === 0 || allLinks !== null) {
-      return;
-    }
-    let cancelled = false;
+  const allLinksQuery = useQuery({
+    queryKey: ["cross-repo-links-all"],
+    queryFn: ({ signal }) => getAllCrossRepositoryLinks(token as string, signal),
+    enabled: token !== null && repositories.length > 0,
+  });
+  // Structural repo-to-repo edges (CALLS_SERVICE/SHARES_TOPIC/
+  // DEPENDS_ON_REPOSITORY) - a separate source from `allLinksQuery` above
+  // (which only covers Kafka topic overlap), merged together below.
+  const allEdgesQuery = useQuery({
+    queryKey: ["cross-repo-edges-all"],
+    queryFn: ({ signal }) => getAllCrossRepositoryEdges(token as string, signal),
+    enabled: token !== null && repositories.length > 0,
+  });
 
-    async function loadLinks() {
-      const [links, edges] = await Promise.all([
-        getAllCrossRepositoryLinks(token!).catch(() => []),
-        getAllCrossRepositoryEdges(token!).catch(() => []),
-      ]);
-      if (!cancelled) {
-        setAllLinks(links);
-        setStructuralEdges(edges);
-      }
-    }
+  // Lazy load: only fetch a repository's own graph once it's expanded -
+  // never any other repository's full graph. Keyed on the active node-type
+  // filter so a filtered view caches separately from the unfiltered one
+  // (see `nodeTypeFilterKey`).
+  const repoGraphQuery = useQuery({
+    queryKey: ["repo-graph", selectedRepoId, nodeTypeFilterKey(nodeTypeFilter)],
+    queryFn: ({ signal }) =>
+      getRepositoryGraph(
+        token as string,
+        selectedRepoId,
+        { nodeTypes: nodeTypeFilter ?? undefined },
+        signal,
+      ),
+    enabled: token !== null && selectedRepoId !== "all",
+    gcTime: GRAPH_QUERY_GC_TIME_MS,
+  });
+  // The *unfiltered* graph, fetched independently of whatever filter is
+  // currently active - this is what the filter option list itself is
+  // derived from below, so applying a filter never narrows its own set of
+  // options. Shares a query key (and therefore a cache entry) with
+  // `repoGraphQuery` above whenever no filter is active, so this adds no
+  // extra request in the common case.
+  const unfilteredGraphQuery = useQuery({
+    queryKey: ["repo-graph", selectedRepoId, nodeTypeFilterKey(null)],
+    queryFn: ({ signal }) => getRepositoryGraph(token as string, selectedRepoId, {}, signal),
+    enabled: token !== null && selectedRepoId !== "all",
+    gcTime: GRAPH_QUERY_GC_TIME_MS,
+  });
+  // One lightweight `/cross-repository-links` call per repository to
+  // discover which other repositories it's connected to - cached per
+  // repository regardless of the active node-type filter, since the filter
+  // never changes which repositories are linked.
+  const repoLinksQuery = useQuery({
+    queryKey: ["repo-cross-links", selectedRepoId],
+    queryFn: ({ signal }) => getCrossRepositoryLinks(token as string, selectedRepoId, signal),
+    enabled: token !== null && selectedRepoId !== "all",
+  });
 
-    void loadLinks();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, repositories, allLinks]);
+  const isLoading = repositoriesQuery.isPending;
+  const isLoadingSelectedGraph = repoGraphQuery.isPending || repoLinksQuery.isPending;
+  const error =
+    repositoriesQuery.error instanceof Error
+      ? repositoriesQuery.error.message
+      : repositoriesQuery.isError
+        ? "Failed to load repositories."
+        : null;
 
-  // A filter chosen for one repository's node types has no meaning once a
-  // different repository is selected.
-  useEffect(() => {
-    setNodeTypeFilter(null);
-  }, [selectedRepoId]);
+  const allLinks: CrossRepositoryLink[] = allLinksQuery.data ?? [];
+  const structuralEdges = allEdgesQuery.data ?? [];
 
-  // Lazy load: only fetch a repository's own graph once it's expanded, plus
-  // one lightweight `/cross-repository-links` call to discover which other
-  // repositories it's connected to - never any other repository's full
-  // graph. Exactly two requests per expand (three when a type filter is
-  // active and that filtered view hasn't been cached yet).
-  useEffect(() => {
-    if (!token || selectedRepoId === "all") {
-      return;
-    }
-    const cacheKey = graphCacheKey(selectedRepoId, nodeTypeFilter);
-    if (graphsByRepoId[cacheKey]) {
-      // Already cached - still bump it to most-recently-used so browsing
-      // back to it doesn't leave it looking evictable while genuinely
-      // unused entries stay resident.
-      graphCacheOrderRef.current = [
-        ...graphCacheOrderRef.current.filter((k) => k !== cacheKey),
-        cacheKey,
-      ];
-      return;
-    }
-    let cancelled = false;
+  // The full set of node-type filter options for this repository, derived
+  // from its unfiltered graph load - never from `graph` below, since once a
+  // type filter is applied `graph` only contains the selected types and its
+  // own legend could no longer offer the *other* types back as options.
+  // Known Phase-1 limitation: if the unfiltered load was itself truncated
+  // (`total_node_count` cut off before every type appeared), a type
+  // entirely past that cutoff won't be offered as a filter option until a
+  // dedicated types-listing endpoint exists (see the Architecture Page
+  // Scale Redesign doc, §7).
+  const availableNodeTypes = useMemo(
+    () => (unfilteredGraphQuery.data ? legendLabelsFor(unfilteredGraphQuery.data.nodes) : []),
+    [unfilteredGraphQuery.data],
+  );
 
-    async function loadSelected() {
-      setIsLoadingSelectedGraph(true);
-      const [ownGraph, links] = await Promise.all([
-        getRepositoryGraph(token!, selectedRepoId, {
-          nodeTypes: nodeTypeFilter ?? undefined,
-        }),
-        getCrossRepositoryLinks(token!, selectedRepoId).catch(() => []),
-      ]);
-      if (cancelled) return;
-      const merged = mergeCrossRepositoryLinks(ownGraph, links);
-      if (nodeTypeFilter === null) {
-        setAvailableNodeTypesByRepo((prev) => ({
-          ...prev,
-          [selectedRepoId]: legendLabelsFor(merged.nodes),
-        }));
-      }
-      setGraphsByRepoId((prev) => {
-        const order = [...graphCacheOrderRef.current.filter((k) => k !== cacheKey), cacheKey];
-        const next = { ...prev, [cacheKey]: merged };
-        // LRU eviction: drop the oldest entries once the cap is exceeded -
-        // replaces what used to be an unbounded cache (see MAX_CACHED_GRAPHS).
-        while (order.length > MAX_CACHED_GRAPHS) {
-          const evicted = order.shift();
-          if (evicted) delete next[evicted];
-        }
-        graphCacheOrderRef.current = order;
-        return next;
-      });
-      setIsLoadingSelectedGraph(false);
-    }
+  const graph = useMemo(
+    () =>
+      repoGraphQuery.data
+        ? mergeCrossRepositoryLinks(repoGraphQuery.data, repoLinksQuery.data ?? [])
+        : null,
+    [repoGraphQuery.data, repoLinksQuery.data],
+  );
 
-    void loadSelected();
-    return () => {
-      cancelled = true;
-    };
-  }, [token, selectedRepoId, nodeTypeFilter, graphsByRepoId]);
-
-  const graph: Graph | null =
-    selectedRepoId === "all"
-      ? null
-      : (graphsByRepoId[graphCacheKey(selectedRepoId, nodeTypeFilter)] ?? null);
   const repositoryNameById = Object.fromEntries(repositories.map((r) => [r.id, r.full_name]));
   const repositorySummaries: RepositorySummary[] = repositories.map((r) => ({
     id: r.id,
@@ -272,9 +226,9 @@ export function ArchitecturePage() {
         <div>
           <h2 className="text-xl font-semibold text-fg">Architecture</h2>
           <p className="mt-1 text-sm text-fg-muted">
-            The dependency graph generated from indexed repositories, showing relationships
-            between repositories, modules, services, APIs, data stores, messaging systems, and
-            other software components.
+            The dependency graph generated from indexed repositories, showing relationships between
+            repositories, modules, services, APIs, data stores, messaging systems, and other
+            software components.
           </p>
         </div>
         {repositories.length > 0 && (
@@ -282,7 +236,7 @@ export function ArchitecturePage() {
             Repository
             <select
               value={selectedRepoId}
-              onChange={(e) => setSelectedRepoId(e.target.value)}
+              onChange={(e) => setSelectedRepo(e.target.value)}
               className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-fg"
             >
               <option value="all">All repositories (merged)</option>
@@ -313,7 +267,7 @@ export function ArchitecturePage() {
           selectedRepoId !== "all" && (
             <button
               type="button"
-              onClick={() => setSelectedRepoId("all")}
+              onClick={() => setSelectedRepo("all")}
               className="rounded-md border border-line px-3 py-1.5 text-sm text-fg-secondary hover:border-line-strong"
             >
               ← Back to overview
@@ -333,7 +287,7 @@ export function ArchitecturePage() {
           <RepositoryOverviewGraph
             repositories={repositorySummaries}
             edges={repositoryDependencyEdges}
-            onExpand={(repoId) => setSelectedRepoId(repoId)}
+            onExpand={(repoId) => setSelectedRepo(repoId)}
           />
         ) : isLoadingSelectedGraph || !graph ? (
           <div className="flex min-h-48 items-center justify-center text-sm text-fg-muted">
@@ -354,10 +308,10 @@ export function ArchitecturePage() {
                 </span>
               </div>
             )}
-            {(availableNodeTypesByRepo[selectedRepoId]?.length ?? 0) > 1 && (
+            {availableNodeTypes.length > 1 && (
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="text-fg-muted">Filter by type:</span>
-                {availableNodeTypesByRepo[selectedRepoId].map((label) => {
+                {availableNodeTypes.map((label) => {
                   const active = nodeTypeFilter?.includes(label) ?? false;
                   return (
                     <button
@@ -365,7 +319,7 @@ export function ArchitecturePage() {
                       type="button"
                       aria-pressed={active}
                       onClick={() =>
-                        setNodeTypeFilter((current) => {
+                        setNodeTypeFilterState((current) => {
                           const next = new Set(current ?? []);
                           if (next.has(label)) next.delete(label);
                           else next.add(label);
@@ -385,7 +339,7 @@ export function ArchitecturePage() {
                 {nodeTypeFilter && nodeTypeFilter.length > 0 && (
                   <button
                     type="button"
-                    onClick={() => setNodeTypeFilter(null)}
+                    onClick={() => setNodeTypeFilterState(null)}
                     className="text-fg-muted underline hover:text-fg-secondary"
                   >
                     Clear

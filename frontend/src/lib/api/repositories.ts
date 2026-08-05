@@ -11,8 +11,12 @@ export function triggerIndexing(token: string, repositoryId: string): Promise<In
   return apiFetch<IndexingJob>(`/repositories/${repositoryId}/index`, { method: "POST", token });
 }
 
-export function getLatestIndexingJob(token: string, repositoryId: string): Promise<IndexingJob> {
-  return apiFetch<IndexingJob>(`/repositories/${repositoryId}/index`, { token });
+export function getLatestIndexingJob(
+  token: string,
+  repositoryId: string,
+  signal?: AbortSignal,
+): Promise<IndexingJob> {
+  return apiFetch<IndexingJob>(`/repositories/${repositoryId}/index`, { token, signal });
 }
 
 export interface GetRepositoryGraphParams {
@@ -27,35 +31,50 @@ export function getRepositoryGraph(
   token: string,
   repositoryId: string,
   params: GetRepositoryGraphParams = {},
+  signal?: AbortSignal,
 ): Promise<Graph> {
   const searchParams = new URLSearchParams();
   if (params.limit !== undefined) searchParams.set("limit", String(params.limit));
   for (const type of params.nodeTypes ?? []) searchParams.append("node_types", type);
   const qs = searchParams.toString();
-  return apiFetch<Graph>(`/repositories/${repositoryId}/graph${qs ? `?${qs}` : ""}`, { token });
+  return apiFetch<Graph>(`/repositories/${repositoryId}/graph${qs ? `?${qs}` : ""}`, {
+    token,
+    signal,
+  });
 }
 
 export function getCrossRepositoryLinks(
   token: string,
   repositoryId: string,
+  signal?: AbortSignal,
 ): Promise<CrossRepositoryLink[]> {
   return apiFetch<CrossRepositoryLink[]>(`/repositories/${repositoryId}/cross-repository-links`, {
     token,
+    signal,
   });
 }
 
 /** All tracked repositories' cross-repository links in one request - used
  * by the Architecture overview instead of one call per repository. */
-export function getAllCrossRepositoryLinks(token: string): Promise<CrossRepositoryLink[]> {
-  return apiFetch<CrossRepositoryLink[]>(`/repositories/cross-repository-links`, { token });
+export function getAllCrossRepositoryLinks(
+  token: string,
+  signal?: AbortSignal,
+): Promise<CrossRepositoryLink[]> {
+  return apiFetch<CrossRepositoryLink[]>(`/repositories/cross-repository-links`, {
+    token,
+    signal,
+  });
 }
 
 /** Structural repository-to-repository edges (CALLS_SERVICE/SHARES_TOPIC/
  * DEPENDS_ON_REPOSITORY) computed by the cross-repository linker - distinct
  * from `getAllCrossRepositoryLinks` above, which only covers Kafka topic
  * overlap. `source_id`/`target_id` are `"{repository_id}:repository"`. */
-export function getAllCrossRepositoryEdges(token: string): Promise<GraphEdge[]> {
-  return apiFetch<GraphEdge[]>(`/repositories/cross-repository-edges`, { token });
+export function getAllCrossRepositoryEdges(
+  token: string,
+  signal?: AbortSignal,
+): Promise<GraphEdge[]> {
+  return apiFetch<GraphEdge[]>(`/repositories/cross-repository-edges`, { token, signal });
 }
 
 export function getRepositoryServices(token: string, repositoryId: string): Promise<Graph> {

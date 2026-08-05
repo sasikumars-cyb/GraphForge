@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { Card } from "../components/Card";
 import { StatCard } from "../components/StatCard";
 import { Table, type TableColumn } from "../components/Table";
@@ -28,8 +29,27 @@ function indexingStatusOf(job: IndexingJob | null | undefined): IndexingFilter {
 
 export function RepositoriesPage() {
   const { token } = useAuth();
+  const queryClient = useQueryClient();
   const { stats, repositories, isLoading, error } = useDashboardData();
-  const [jobsByRepoId, setJobsByRepoId] = useState<Record<string, IndexingJob | null>>({});
+  // KAN-37 — one cached, deduplicated query per repository's latest
+  // indexing job, keyed identically to `RepositoryDetailPage`'s own poll of
+  // the same endpoint, so navigating between the two never refetches a job
+  // the other page just loaded. `.data` is `undefined` while in flight and
+  // `null` once resolved with no job — the `jobsByRepoId[repo.id] ===
+  // undefined` check below (rendered as "Loading…") depends on that
+  // distinction, so a rejected fetch is caught to `null` (never indexed)
+  // rather than left to throw.
+  const jobQueries = useQueries({
+    queries: repositories.map((repo) => ({
+      queryKey: ["indexing-job", repo.id],
+      queryFn: ({ signal }: { signal: AbortSignal }) =>
+        getLatestIndexingJob(token as string, repo.id, signal).catch(() => null),
+      enabled: token !== null,
+    })),
+  });
+  const jobsByRepoId: Record<string, IndexingJob | null | undefined> = Object.fromEntries(
+    repositories.map((repo, i) => [repo.id, jobQueries[i]?.data]),
+  );
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [filter, setFilter] = useState<IndexingFilter>("all");
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
@@ -45,25 +65,6 @@ export function RepositoriesPage() {
       isMountedRef.current = false;
     };
   }, []);
-
-  // Reuses the same GET .../index (latest job) endpoint the repository
-  // detail page already polls with - just once per row here, not repeatedly.
-  useEffect(() => {
-    if (!token || repositories.length === 0) return;
-    let cancelled = false;
-    void Promise.all(
-      repositories.map((repo) =>
-        getLatestIndexingJob(token, repo.id)
-          .catch(() => null)
-          .then((job) => [repo.id, job] as const),
-      ),
-    ).then((entries) => {
-      if (!cancelled) setJobsByRepoId(Object.fromEntries(entries));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [token, repositories]);
 
   const filteredRepositories =
     filter === "all"
@@ -123,7 +124,11 @@ export function RepositoriesPage() {
           pending.delete(id);
           if (job.status === "completed") success++;
           else failed++;
-          setJobsByRepoId((prev) => ({ ...prev, [id]: job }));
+          // Writes straight into the same cache entry `jobQueries` reads
+          // above, rather than a separate bit of local state — the row
+          // updates immediately without a redundant refetch of what this
+          // loop just fetched itself.
+          queryClient.setQueryData(["indexing-job", id], job);
         }
       }
       setBulkProgress({ current: ids.length - pending.size, total: ids.length });
