@@ -147,7 +147,7 @@ frontend/src/
 
 `GitHubIntegrationCard` (rendered on the Settings page) is the second real backend integration on the frontend: connection status, the "Connect" button (fetches an authorization URL, then does a top-level `window.location` navigation to it), the repository checklist, and Save/Disconnect actions. It also consumes the `?github=connected|error` query param the backend's OAuth callback redirects with.
 
-The Dashboard, Pull Requests, Architecture, and Reports pages still render from `lib/mock/*` — GitHub connect/select is real, but nothing yet reads the persisted `repositories`/`pull_requests` data back into those pages. No data-fetching library (TanStack Query, etc.) has been added — `lib/api/client.ts`'s `apiFetch` is enough for the current handful of calls; revisit once there are many more.
+**KAN-37 (done):** TanStack Query (`@tanstack/react-query`) is now the standard data-fetching pattern for pages doing more than a couple of ad hoc calls — see `app/queryClient.ts` for the shared `QueryClient` and its defaults. `ControlCenterPage`, `ArchitecturePage`, and `RepositoriesPage` are migrated as the proof point; `lib/api/client.ts`'s `apiFetch` remains the underlying fetch wrapper every query/mutation calls into, it's just no longer wrapped in hand-rolled loading/error/cache state per page. Newer pages should default to `useQuery`/`useMutation` over the page's own `useState`/`useEffect` fetch, migrating incrementally rather than all at once.
 
 ## See also
 
