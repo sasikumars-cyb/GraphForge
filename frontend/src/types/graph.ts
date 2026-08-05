@@ -19,6 +19,14 @@ export interface GraphEdge {
 export interface Graph {
   nodes: GraphNode[];
   edges: GraphEdge[];
+  // Set only when the request was bounded (a `limit`/`node_types` query
+  // param applied) and cut something off — see `getRepositoryGraph`.
+  // Optional/absent everywhere else (overview cards, merged cross-repo
+  // graphs that don't carry their own truncation state) rather than
+  // required, so every existing `Graph`-shaped object literal in this
+  // codebase stays valid without being touched.
+  truncated?: boolean;
+  total_node_count?: number | null;
 }
 
 /** Mirrors backend/app/schemas/indexing.py's `CrossRepositoryLinkResponse`. */

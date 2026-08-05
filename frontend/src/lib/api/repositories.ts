@@ -15,8 +15,24 @@ export function getLatestIndexingJob(token: string, repositoryId: string): Promi
   return apiFetch<IndexingJob>(`/repositories/${repositoryId}/index`, { token });
 }
 
-export function getRepositoryGraph(token: string, repositoryId: string): Promise<Graph> {
-  return apiFetch<Graph>(`/repositories/${repositoryId}/graph`, { token });
+export interface GetRepositoryGraphParams {
+  /** Max nodes to return — omit to use the backend's own default cap. */
+  limit?: number;
+  /** Restrict to nodes carrying at least one of these labels (e.g.
+   * "Service", "KafkaTopic") — omit to include every type. */
+  nodeTypes?: string[];
+}
+
+export function getRepositoryGraph(
+  token: string,
+  repositoryId: string,
+  params: GetRepositoryGraphParams = {},
+): Promise<Graph> {
+  const searchParams = new URLSearchParams();
+  if (params.limit !== undefined) searchParams.set("limit", String(params.limit));
+  for (const type of params.nodeTypes ?? []) searchParams.append("node_types", type);
+  const qs = searchParams.toString();
+  return apiFetch<Graph>(`/repositories/${repositoryId}/graph${qs ? `?${qs}` : ""}`, { token });
 }
 
 export function getCrossRepositoryLinks(

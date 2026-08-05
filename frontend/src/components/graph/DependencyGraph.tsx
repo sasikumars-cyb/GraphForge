@@ -379,6 +379,7 @@ export function RepositoryOverviewGraph({
         fitView
         proOptions={{ hideAttribution: true }}
         colorMode={theme.mode}
+        onlyRenderVisibleElements
         onNodeClick={(_, node) => onExpand(node.id)}
       >
         <Background />
@@ -486,6 +487,13 @@ export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphPr
         fitView
         proOptions={{ hideAttribution: true }}
         colorMode={theme.mode}
+        // Mounts only nodes/edges intersecting the viewport instead of the
+        // full loaded set — the single biggest lever available without a
+        // renderer swap (see the Architecture Page Scale Redesign doc,
+        // §3): past a few hundred nodes, React Flow's per-node DOM/
+        // ResizeObserver cost otherwise dominates regardless of how fast
+        // the layout algorithm itself was.
+        onlyRenderVisibleElements
         onNodeClick={(_, node) => {
           if (!realNodeIds.has(node.id)) return;
           setSelectedNodeId((current) => (current === node.id ? null : node.id));

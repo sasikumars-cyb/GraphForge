@@ -32,3 +32,12 @@ class GraphEdge:
 class GraphPayload:
     nodes: list[GraphNode] = field(default_factory=list)
     edges: list[GraphEdge] = field(default_factory=list)
+    # Set by `get_full_graph` when a `limit` cut the node set short — lets a
+    # caller (the API response, then the frontend) distinguish "this is the
+    # whole graph" from "this is the first `limit` nodes of a larger graph"
+    # without re-counting anything itself. Every other producer of a
+    # GraphPayload (get_neighborhood, get_kafka_topic_edges, ...) leaves
+    # these at their defaults — they were never unbounded in the first
+    # place, so there's nothing to report as truncated.
+    truncated: bool = False
+    total_node_count: int | None = None

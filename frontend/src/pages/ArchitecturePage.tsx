@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { Card } from "../components/Card";
 import {
@@ -57,6 +57,23 @@ function edgeLegendFor(edges: { type: string }[]): { type: string; description: 
     .map(([type]) => ({ type, description: EDGE_DESCRIPTIONS[type] ?? "Relationship" }));
 }
 
+// A single repository's graph can be large; only this many distinct
+// (repository, type-filter) graphs stay resident in memory at once,
+// evicted oldest-first — replaces what used to be an unbounded
+// `graphsByRepoId` cache that only ever grew for the life of the page (see
+// the Architecture Page Scale Redesign doc's audit, "every expanded
+// repository's full graph stays resident in memory for the session").
+const MAX_CACHED_GRAPHS = 5;
+
+/** Cache key for one (repository, type-filter) combination — a filtered
+ * view of a repository caches separately from its unfiltered graph rather
+ * than overwriting it, so toggling a filter off doesn't force a refetch of
+ * what was already loaded. */
+function graphCacheKey(repositoryId: string, nodeTypes: string[] | null): string {
+  if (!nodeTypes || nodeTypes.length === 0) return repositoryId;
+  return `${repositoryId}::${[...nodeTypes].sort().join(",")}`;
+}
+
 export function ArchitecturePage() {
   const { token } = useAuth();
   const [searchParams] = useSearchParams();
@@ -64,14 +81,34 @@ export function ArchitecturePage() {
   // Full node/edge graphs are only ever fetched lazily, per repository, the
   // first time that repository is expanded - never eagerly for the whole
   // org, so opening this page stays cheap regardless of how many
-  // repositories are tracked.
+  // repositories are tracked. Keyed by `graphCacheKey` (repository +
+  // active type filter, if any), capped at `MAX_CACHED_GRAPHS` via
+  // `graphCacheOrderRef` below - LRU, not unbounded.
   const [graphsByRepoId, setGraphsByRepoId] = useState<Record<string, Graph>>({});
+  const graphCacheOrderRef = useRef<string[]>([]);
   const [summariesByRepoId, setSummariesByRepoId] = useState<
     Record<string, Record<string, number> | null>
   >({});
   const [selectedRepoId, setSelectedRepoId] = useState<string>(
     searchParams.get("repository") ?? "all",
   );
+  // Reset whenever the selected repository changes (a filter chosen for
+  // one repository's node types has no meaning for another's) - see the
+  // effect below.
+  const [nodeTypeFilter, setNodeTypeFilter] = useState<string[] | null>(null);
+  // The full set of node-type filter options for each repository, captured
+  // once from that repository's first (always unfiltered - see the reset
+  // effect above) load. Deliberately not derived from the currently-loaded
+  // `graph` on every render: once a type filter is applied, `graph` only
+  // contains the selected types, so its own legend could no longer offer
+  // the *other* types back as options. Known Phase-1 limitation: if the
+  // very first load was itself truncated (`total_node_count` cut off before
+  // every type appeared), a type entirely past that cutoff won't be
+  // offered as a filter option until a dedicated types-listing endpoint
+  // exists (see the Architecture Page Scale Redesign doc, §7).
+  const [availableNodeTypesByRepo, setAvailableNodeTypesByRepo] = useState<
+    Record<string, string[]>
+  >({});
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingSelectedGraph, setIsLoadingSelectedGraph] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -147,12 +184,30 @@ export function ArchitecturePage() {
     };
   }, [token, repositories, allLinks]);
 
+  // A filter chosen for one repository's node types has no meaning once a
+  // different repository is selected.
+  useEffect(() => {
+    setNodeTypeFilter(null);
+  }, [selectedRepoId]);
+
   // Lazy load: only fetch a repository's own graph once it's expanded, plus
   // one lightweight `/cross-repository-links` call to discover which other
   // repositories it's connected to - never any other repository's full
-  // graph. Exactly two requests per expand.
+  // graph. Exactly two requests per expand (three when a type filter is
+  // active and that filtered view hasn't been cached yet).
   useEffect(() => {
-    if (!token || selectedRepoId === "all" || graphsByRepoId[selectedRepoId]) {
+    if (!token || selectedRepoId === "all") {
+      return;
+    }
+    const cacheKey = graphCacheKey(selectedRepoId, nodeTypeFilter);
+    if (graphsByRepoId[cacheKey]) {
+      // Already cached - still bump it to most-recently-used so browsing
+      // back to it doesn't leave it looking evictable while genuinely
+      // unused entries stay resident.
+      graphCacheOrderRef.current = [
+        ...graphCacheOrderRef.current.filter((k) => k !== cacheKey),
+        cacheKey,
+      ];
       return;
     }
     let cancelled = false;
@@ -160,14 +215,31 @@ export function ArchitecturePage() {
     async function loadSelected() {
       setIsLoadingSelectedGraph(true);
       const [ownGraph, links] = await Promise.all([
-        getRepositoryGraph(token!, selectedRepoId),
+        getRepositoryGraph(token!, selectedRepoId, {
+          nodeTypes: nodeTypeFilter ?? undefined,
+        }),
         getCrossRepositoryLinks(token!, selectedRepoId).catch(() => []),
       ]);
       if (cancelled) return;
-      setGraphsByRepoId((prev) => ({
-        ...prev,
-        [selectedRepoId]: mergeCrossRepositoryLinks(ownGraph, links),
-      }));
+      const merged = mergeCrossRepositoryLinks(ownGraph, links);
+      if (nodeTypeFilter === null) {
+        setAvailableNodeTypesByRepo((prev) => ({
+          ...prev,
+          [selectedRepoId]: legendLabelsFor(merged.nodes),
+        }));
+      }
+      setGraphsByRepoId((prev) => {
+        const order = [...graphCacheOrderRef.current.filter((k) => k !== cacheKey), cacheKey];
+        const next = { ...prev, [cacheKey]: merged };
+        // LRU eviction: drop the oldest entries once the cap is exceeded -
+        // replaces what used to be an unbounded cache (see MAX_CACHED_GRAPHS).
+        while (order.length > MAX_CACHED_GRAPHS) {
+          const evicted = order.shift();
+          if (evicted) delete next[evicted];
+        }
+        graphCacheOrderRef.current = order;
+        return next;
+      });
       setIsLoadingSelectedGraph(false);
     }
 
@@ -175,9 +247,12 @@ export function ArchitecturePage() {
     return () => {
       cancelled = true;
     };
-  }, [token, selectedRepoId, graphsByRepoId]);
+  }, [token, selectedRepoId, nodeTypeFilter, graphsByRepoId]);
 
-  const graph: Graph | null = selectedRepoId === "all" ? null : (graphsByRepoId[selectedRepoId] ?? null);
+  const graph: Graph | null =
+    selectedRepoId === "all"
+      ? null
+      : (graphsByRepoId[graphCacheKey(selectedRepoId, nodeTypeFilter)] ?? null);
   const repositoryNameById = Object.fromEntries(repositories.map((r) => [r.id, r.full_name]));
   const repositorySummaries: RepositorySummary[] = repositories.map((r) => ({
     id: r.id,
@@ -269,7 +344,57 @@ export function ArchitecturePage() {
             <p className="text-sm">No graph data yet - index this repository first.</p>
           </div>
         ) : (
-          <DependencyGraph graph={graph} repositoryNameById={repositoryNameById} />
+          <div className="flex flex-col gap-3">
+            {graph.truncated && (
+              <div className="flex flex-wrap items-center gap-2 rounded-lg border border-warning-line/30 bg-warning-bg px-4 py-3 text-sm text-warning-fg">
+                <span>
+                  Showing {graph.nodes.length.toLocaleString()} of{" "}
+                  {(graph.total_node_count ?? graph.nodes.length).toLocaleString()} nodes in this
+                  repository — narrow with a type filter below to bring the rest into view.
+                </span>
+              </div>
+            )}
+            {(availableNodeTypesByRepo[selectedRepoId]?.length ?? 0) > 1 && (
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-fg-muted">Filter by type:</span>
+                {availableNodeTypesByRepo[selectedRepoId].map((label) => {
+                  const active = nodeTypeFilter?.includes(label) ?? false;
+                  return (
+                    <button
+                      key={label}
+                      type="button"
+                      aria-pressed={active}
+                      onClick={() =>
+                        setNodeTypeFilter((current) => {
+                          const next = new Set(current ?? []);
+                          if (next.has(label)) next.delete(label);
+                          else next.add(label);
+                          return next.size === 0 ? null : [...next];
+                        })
+                      }
+                      className={`rounded-full border px-2.5 py-1 transition-colors ${
+                        active
+                          ? "border-info-line bg-info-bg text-info-fg"
+                          : "border-line text-fg-secondary hover:border-line-strong"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+                {nodeTypeFilter && nodeTypeFilter.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setNodeTypeFilter(null)}
+                    className="text-fg-muted underline hover:text-fg-secondary"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            )}
+            <DependencyGraph graph={graph} repositoryNameById={repositoryNameById} />
+          </div>
         )}
       </Card>
 
