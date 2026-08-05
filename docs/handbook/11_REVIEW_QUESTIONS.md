@@ -666,12 +666,16 @@ Short: explicit, fixed, internally-controlled allowlists, never derived
 from request input. Detail: § Q46.
 
 **101. Is there row-level multi-tenancy enforcement?**
-Short: designed for (`organization_id` on every node/edge/Run/AgentStep,
-per `ARCHITECTURE.md`), "enforced at the GraphWriter and repository-query
-layer — never left to individual agents to filter correctly." This audit
-verified the design intent in writing; it did not independently re-verify
-every query path's enforcement depth in code — state the documented intent,
-not a blanket guarantee.
+Short: yes, per-user, now code-verified (KAN-33) — but not via
+`organization_id`, which does not exist in the codebase (a prior version
+of this answer stated the `ARCHITECTURE.md` design intent as if it were
+built; it wasn't, and has been corrected there). The real mechanism:
+every resource row (`Repository`, `Workflow`, `Run`, `PullRequest`) is
+scoped to `user_id`, checked per-router before any read/write, and every
+graph node inherits its scope from an ownership-checked `repository_id`.
+Independently verified end-to-end for the workflow-lifecycle endpoints
+(`tests/integration/test_workflows_cross_user_isolation.py`); a full
+sweep of every remaining router is the still-open remainder of KAN-33.
 
 **102. What's the propose/commit boundary's security property, precisely?**
 Short: it's an authorization boundary, not just a workflow rule — an
@@ -890,10 +894,13 @@ depth. Say this precisely, not as a blanket N+1 guarantee.
 ## K. Scalability (137–149)
 
 **137. What's the stated multi-tenancy scaling model?**
-Short: `organization_id` scoping on every graph node/edge and every
-`Run`/`AgentStep` row. Detail: `ARCHITECTURE.md` § Scalability
-Considerations — design intent, not independently re-verified end-to-end
-in this audit.
+Short: `user_id`-scoped per-router ownership checks, not `organization_id`
+— that column was a design-intent placeholder for a future org-level
+grouping *above* today's per-user model, and never got built (corrected
+in `ARCHITECTURE.md` § Scalability Considerations by KAN-33). Detail:
+`tests/integration/test_workflows_cross_user_isolation.py` verifies it
+end-to-end for the workflow-lifecycle endpoints; a full router sweep
+remains open.
 
 **138. How does the confidence formula scale with evidence volume?**
 Short: incrementally — O(1) per new `ValidationResult`, never O(history).

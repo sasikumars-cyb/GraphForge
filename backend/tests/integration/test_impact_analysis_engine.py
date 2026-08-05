@@ -19,7 +19,7 @@ from app.analysis.engine.impact_analysis_engine import (
 )
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
 from app.core.exceptions import NotFoundError
-from app.graph.models import GraphPayload
+from app.graph.models import GraphEdge, GraphNode, GraphPayload
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
 from app.indexer.services.indexing_service import index_repository
@@ -199,6 +199,83 @@ async def test_feign_client_change_is_high_risk(
     assert analysis.risk == "HIGH"
     assert {n["name"] for n in analysis.directly_impacted_services} == {"PaymentClient"}
     assert len(analysis.impacted_apis) == 2
+
+
+async def test_feign_caller_repository_is_indirectly_impacted(
+    db_session: AsyncSession, indexed_repository_and_pr: tuple[Repository, PullRequest]
+) -> None:
+    """KAN-19: a repository that reaches this one via a Feign
+    `CALLS_SERVICE` edge - real cross-repository data `cross_repo_linker`
+    already produces - must show up as indirectly impacted when a
+    Component in this repository changes. Hand-writes the caller side
+    (a bare `Repository` node plus the cross-repo edge) directly, the same
+    pattern `test_cross_repo_linker.py` uses, rather than indexing a
+    second full repository - `cross_repo_linker` itself is already covered
+    there; this test is only about the impact-analysis read side.
+    """
+    repository, pull_request = indexed_repository_and_pr
+    graph_repository = Neo4jGraphRepository(get_driver())
+
+    caller_repository_id = f"caller-{uuid.uuid4().hex[:8]}"
+    caller_repo_node_id = f"{caller_repository_id}:repository"
+    target_repo_node_id = f"{repository.id}:repository"
+
+    await graph_repository.replace_repository_graph(
+        caller_repository_id,
+        GraphPayload(
+            nodes=[GraphNode(id=caller_repo_node_id, labels=["Repository"], properties={})]
+        ),
+    )
+    await graph_repository.replace_cross_repository_edges(
+        caller_repository_id,
+        [
+            GraphEdge(
+                source_id=caller_repo_node_id,
+                target_id=target_repo_node_id,
+                type="CALLS_SERVICE",
+                properties={
+                    "via": ["OrderClient"],
+                    "target_name": ["orders-service"],
+                    "confidence": "structural",
+                },
+            )
+        ],
+    )
+
+    try:
+        changed = [
+            ChangedFile(
+                path="src/main/java/com/example/orders/OrderController.java", status="modified"
+            )
+        ]
+        analysis = await _engine(db_session, changed).analyze_pull_request(pull_request.id)
+
+        indirect_repo_ids = {n["repository_id"] for n in analysis.indirectly_impacted_services}
+        assert caller_repository_id in indirect_repo_ids
+        assert any(
+            step["node_id"] == caller_repo_node_id
+            for path in analysis.dependency_paths
+            for step in path["steps"]
+        )
+    finally:
+        await graph_repository.replace_repository_graph(caller_repository_id, GraphPayload())
+
+
+async def test_analysis_without_component_change_skips_service_caller_lookup(
+    db_session: AsyncSession, indexed_repository_and_pr: tuple[Repository, PullRequest]
+) -> None:
+    """A DTO-only change touches no `Component`, so there's nothing for a
+    `CALLS_SERVICE` caller to be indirectly impacted *by* - the engine
+    should skip the lookup entirely rather than returning an empty result
+    from a real query, mirroring the existing `topic_ids` guard."""
+    _, pull_request = indexed_repository_and_pr
+    changed = [
+        ChangedFile(path="src/main/java/com/example/orders/OrderDto.java", status="modified")
+    ]
+
+    analysis = await _engine(db_session, changed).analyze_pull_request(pull_request.id)
+
+    assert analysis.indirectly_impacted_services == []
 
 
 async def test_analysis_is_persisted_and_replaced_on_rerun(

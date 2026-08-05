@@ -63,3 +63,16 @@ def test_render_handles_empty_query_result() -> None:
     assert rendered["direct_dependencies"] == []
     assert rendered["downstream_consumers"] == []
     assert rendered["confidence_breakdown"] == {"high": 0, "medium": 0, "low": 0}
+
+
+def test_render_always_surfaces_the_downstream_consumers_scope_caveat() -> None:
+    """KAN-22: `downstream_consumers` is structurally undercounted (only
+    this repository's own partition is searched) - the caveat must be
+    present regardless of whether any consumers were found, so a caller
+    can never mistake an incomplete count for an authoritative one."""
+    with_results = render_dependency_query(_REPO_ID, _result(), {})
+    empty = render_dependency_query(_REPO_ID, QueryResult(), {})
+
+    for rendered in (with_results, empty):
+        assert rendered["downstream_consumers_scope"] == "single_repository"
+        assert "KAN-22" in rendered["downstream_consumers_caveat"]

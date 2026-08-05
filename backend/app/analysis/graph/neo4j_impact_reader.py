@@ -103,6 +103,26 @@ class Neo4jImpactGraphReader(IImpactGraphReader):
             for record in records
         ]
 
+    async def find_cross_repository_service_callers(self, repository_id: str) -> list[TraversalHop]:
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (caller:Repository)-[r:CALLS_SERVICE]->
+                      (target:Repository {repository_id: $repository_id})
+                RETURN DISTINCT caller AS start, type(r) AS rel_type, target AS target
+                """,
+                repository_id=repository_id,
+            )
+            records = [record async for record in result]
+        return [
+            TraversalHop(
+                from_node=node_from_value(record["start"]),
+                relationship=record["rel_type"],
+                to_node=node_from_value(record["target"]),
+            )
+            for record in records
+        ]
+
     async def get_dependencies(self, repository_id: str) -> list[GraphNode]:
         async with self._driver.session() as session:
             result = await session.run(

@@ -136,9 +136,44 @@ def test_no_manifest_declares_an_empty_set_that_should_be_non_empty() -> None:
     Neo4j, or GitHub-write) — an entirely empty declaration would mean this
     field was simply forgotten for that manifest."""
     for manifest in ALL_MANIFESTS:
-        assert manifest.required_dependencies, (
-            f"{manifest.agent_id} declares no required_dependencies at all"
-        )
+        assert (
+            manifest.required_dependencies
+        ), f"{manifest.agent_id} declares no required_dependencies at all"
+
+
+# ---------------------------------------------------------------------------
+# KAN-28 — external-write authorization must track GitHub-write dependency.
+# ---------------------------------------------------------------------------
+
+
+def test_run_tests_is_the_one_git_ops_agent_that_does_not_write() -> None:
+    """`run_tests` only reads GitHub Check Runs — the one git_ops agent
+    that legitimately needs `DEPENDENCY_GITHUB_WRITE` (it authenticates
+    through the same GitHub connection) without being a write action.
+    Pinned explicitly so this exception can't silently grow to cover an
+    agent that actually does write."""
+    assert RUN_TESTS_MANIFEST.requires_external_write_authorization is False
+    for manifest in ALL_MANIFESTS:
+        if manifest.agent_id in _GIT_OPS_AGENT_IDS and manifest.agent_id != "run_tests":
+            assert manifest.requires_external_write_authorization is True, (
+                f"{manifest.agent_id} writes to GitHub but doesn't declare "
+                "requires_external_write_authorization"
+            )
+
+
+def test_no_non_git_ops_agent_declares_external_write_authorization() -> None:
+    """Every currently-registered non-git_ops agent is read/reason-only
+    (see `app.agents.git_ops._authorization`'s full inventory) — this
+    would need updating in the same change that ever makes one of them
+    write externally, which is exactly the point: it can't happen by
+    accident."""
+    for manifest in ALL_MANIFESTS:
+        if manifest.agent_id not in _GIT_OPS_AGENT_IDS:
+            assert not manifest.requires_external_write_authorization, (
+                f"{manifest.agent_id} unexpectedly declares "
+                "requires_external_write_authorization — update this test's "
+                "assumptions if that's now intentional"
+            )
 
 
 # ---------------------------------------------------------------------------

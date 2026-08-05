@@ -1,5 +1,6 @@
 """Tests for resolving a pasted GitHub PR URL into a `pull_request` Subject
-in the standalone AI Workspace flow (app.api.v1.routers.agent_runs).
+— the GitHub Entry Resolver (KAN-27), `app.context.resolvers.github`, used
+by the standalone AI Workspace flow (`app.api.v1.routers.agent_runs`).
 
 Covers the P0 bug fix: previously a URL like
 https://github.com/acme/widgets/pull/42 fell through to `resolve_freetext`,
@@ -22,9 +23,9 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.v1.routers.agent_runs import (
-    _GITHUB_PR_URL_RE,
-    _resolve_pull_request_url_subject,
+from app.context.resolvers.github import GITHUB_PR_URL_RE as _GITHUB_PR_URL_RE
+from app.context.resolvers.github import (
+    resolve_pull_request_url as _resolve_pull_request_url_subject,
 )
 from app.core.exceptions import AppError, NotFoundError
 from app.models.pull_request import PullRequest
@@ -32,7 +33,9 @@ from app.models.repository import Repository
 from app.models.user import User
 
 
-async def _make_user_and_repository(db: AsyncSession, *, owner: str = "acme", name: str = "widgets") -> Repository:
+async def _make_user_and_repository(
+    db: AsyncSession, *, owner: str = "acme", name: str = "widgets"
+) -> Repository:
     user = User(
         id=uuid.uuid4(),
         email=f"{uuid.uuid4().hex}@example.com",
@@ -74,7 +77,9 @@ def test_github_pr_url_regex_rejects_non_pr_urls() -> None:
 @pytest.mark.asyncio
 async def test_resolve_rejects_a_non_github_pr_url(db_session: AsyncSession) -> None:
     with pytest.raises(NotFoundError):
-        await _resolve_pull_request_url_subject(db_session, uuid.uuid4(), "https://example.com/not/a/pr")
+        await _resolve_pull_request_url_subject(
+            db_session, uuid.uuid4(), "https://example.com/not/a/pr"
+        )
 
 
 @pytest.mark.asyncio
@@ -108,7 +113,7 @@ async def test_resolve_reuses_an_already_tracked_pull_request(db_session: AsyncS
     db_session.add(pull_request)
     await db_session.flush()
 
-    with patch("app.api.v1.routers.agent_runs.GitHubVersionControlProvider") as mock_provider_cls:
+    with patch("app.context.resolvers.github.GitHubVersionControlProvider") as mock_provider_cls:
         subject = await _resolve_pull_request_url_subject(
             db_session, repository.user_id, "https://github.com/acme/widgets/pull/7"
         )
@@ -120,7 +125,9 @@ async def test_resolve_reuses_an_already_tracked_pull_request(db_session: AsyncS
 
 
 @pytest.mark.asyncio
-async def test_resolve_fetches_and_upserts_an_untracked_pull_request(db_session: AsyncSession) -> None:
+async def test_resolve_fetches_and_upserts_an_untracked_pull_request(
+    db_session: AsyncSession,
+) -> None:
     """No PullRequest row exists yet (no webhook has fired) — fetched from
     GitHub directly and persisted so the review agent has a `pull_request_id`
     to investigate."""
@@ -143,10 +150,10 @@ async def test_resolve_fetches_and_upserts_an_untracked_pull_request(db_session:
 
     with (
         patch(
-            "app.api.v1.routers.agent_runs.get_decrypted_access_token",
+            "app.context.resolvers.github.get_decrypted_access_token",
             new=AsyncMock(return_value="fake-token"),
         ),
-        patch("app.api.v1.routers.agent_runs.GitHubVersionControlProvider") as mock_provider_cls,
+        patch("app.context.resolvers.github.GitHubVersionControlProvider") as mock_provider_cls,
     ):
         mock_provider_cls.return_value.get_pull_request = AsyncMock(return_value=pr_payload)
         subject = await _resolve_pull_request_url_subject(
@@ -169,15 +176,17 @@ async def test_resolve_fetches_and_upserts_an_untracked_pull_request(db_session:
 
 
 @pytest.mark.asyncio
-async def test_resolve_raises_not_found_when_github_has_no_such_pr(db_session: AsyncSession) -> None:
+async def test_resolve_raises_not_found_when_github_has_no_such_pr(
+    db_session: AsyncSession,
+) -> None:
     repository = await _make_user_and_repository(db_session)
 
     with (
         patch(
-            "app.api.v1.routers.agent_runs.get_decrypted_access_token",
+            "app.context.resolvers.github.get_decrypted_access_token",
             new=AsyncMock(return_value=None),
         ),
-        patch("app.api.v1.routers.agent_runs.GitHubVersionControlProvider") as mock_provider_cls,
+        patch("app.context.resolvers.github.GitHubVersionControlProvider") as mock_provider_cls,
     ):
         mock_provider_cls.return_value.get_pull_request = AsyncMock(return_value=None)
         with pytest.raises(NotFoundError):
@@ -194,10 +203,10 @@ async def test_resolve_wraps_a_github_api_failure(db_session: AsyncSession) -> N
 
     with (
         patch(
-            "app.api.v1.routers.agent_runs.get_decrypted_access_token",
+            "app.context.resolvers.github.get_decrypted_access_token",
             new=AsyncMock(return_value=None),
         ),
-        patch("app.api.v1.routers.agent_runs.GitHubVersionControlProvider") as mock_provider_cls,
+        patch("app.context.resolvers.github.GitHubVersionControlProvider") as mock_provider_cls,
     ):
         mock_provider_cls.return_value.get_pull_request = AsyncMock(
             side_effect=GitHubApiError("boom")

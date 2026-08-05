@@ -1,5 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { axe } from "jest-axe";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MemoryRouter } from "react-router-dom";
 import { AuthContext, type AuthContextValue } from "../app/auth-context";
 import { ControlCenterPage } from "./ControlCenterPage";
@@ -32,12 +34,23 @@ function renderWithAuth() {
     logout: vi.fn(),
   };
 
+  // A fresh QueryClient per render — a shared/module-level client would
+  // leak cached responses across tests in this file, since the page's
+  // query keys don't vary per test. `retry: false` so a rejected mock
+  // response fails the query immediately instead of TanStack Query's
+  // default retry delay pushing past this file's assertions/timeouts.
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+
   return render(
-    <AuthContext.Provider value={authValue}>
-      <MemoryRouter>
-        <ControlCenterPage />
-      </MemoryRouter>
-    </AuthContext.Provider>,
+    <QueryClientProvider client={queryClient}>
+      <AuthContext.Provider value={authValue}>
+        <MemoryRouter>
+          <ControlCenterPage />
+        </MemoryRouter>
+      </AuthContext.Provider>
+    </QueryClientProvider>,
   );
 }
 
@@ -204,5 +217,21 @@ describe("ControlCenterPage", () => {
     expect(await screen.findByText("Neo4j")).toBeInTheDocument();
     expect(screen.getByText("PostgreSQL")).toBeInTheDocument();
     expect(screen.getByText("Jira")).toBeInTheDocument();
+  });
+
+  it("has no detectable accessibility violations (KAN-38)", async () => {
+    vi.mocked(systemApi.getSystemStatus).mockResolvedValue(healthyStatus);
+    vi.mocked(githubApi.getConnectionStatus).mockResolvedValue(githubConnected);
+
+    const { container } = renderWithAuth();
+    await screen.findByText("Control Center");
+    // Waiting on a value that only renders once the (independent)
+    // GitHub query has also settled, not just the system-status one -
+    // otherwise axe can run while that second query is still resolving
+    // in the background, one tick after this file's mocked promise
+    // settles.
+    await screen.findByText("@octocat");
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 });

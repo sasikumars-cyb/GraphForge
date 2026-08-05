@@ -1,5 +1,6 @@
 import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider, createMemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routes } from "./router";
@@ -28,13 +29,21 @@ const FAKE_USER: User = {
 
 function renderApp(initialPath = "/") {
   const router = createMemoryRouter(routes, { initialEntries: [initialPath] });
+  // A fresh QueryClient per render — see ControlCenterPage.test.tsx's
+  // equivalent comment for why (this file's dashboard route now renders
+  // ControlCenterPage, which uses useQuery as of KAN-37).
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
   return render(
     <ThemeProvider>
-      <AuthProvider>
-        <AiModelProvider>
-          <RouterProvider router={router} />
-        </AiModelProvider>
-      </AuthProvider>
+      <QueryClientProvider client={queryClient}>
+        <AuthProvider>
+          <AiModelProvider>
+            <RouterProvider router={router} />
+          </AiModelProvider>
+        </AuthProvider>
+      </QueryClientProvider>
     </ThemeProvider>,
   );
 }

@@ -1,6 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { axe } from "jest-axe";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
 import { AuthContext, type AuthContextValue } from "../app/auth-context";
 import { WorkflowTimeline } from "../components/workflow/WorkflowTimeline";
@@ -329,6 +330,16 @@ describe("WorkflowPage", () => {
     await userEvent.click(await screen.findByRole("tab", { name: "Evidence" }));
     await userEvent.click(await screen.findByRole("button", { name: "Expand" }));
     expect(await screen.findByText("Found 3 repositories.")).toBeInTheDocument();
+  });
+
+  it("has no detectable accessibility violations once loaded (KAN-38)", async () => {
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(makeWorkflow());
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
+
+    const { container } = renderWorkflowPage();
+    await screen.findByText("Implement JWT auth");
+
+    expect(await axe(container)).toHaveNoViolations();
   });
 
   it("shows the planning stage's artifacts in the Summary tab (active by default)", async () => {

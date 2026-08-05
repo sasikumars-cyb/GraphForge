@@ -125,6 +125,16 @@ class ImpactAnalysisEngine:
             await self._impact_graph_reader.get_dependencies(repository_id) if pom_changed else []
         )
 
+        # Repository-granularity, not component-granularity (see
+        # `find_cross_repository_service_callers`'s docstring) - only
+        # worth asking when a Component actually changed, same guard
+        # `same_repo_peer_hops`/`cross_repo_peer_hops` apply via `topic_ids`.
+        service_caller_hops = (
+            await self._impact_graph_reader.find_cross_repository_service_callers(repository_id)
+            if direct_service_nodes
+            else []
+        )
+
         risk = classify_risk(
             direct_service_nodes, pom_changed=pom_changed, topics_touched=bool(topic_hops)
         )
@@ -132,6 +142,7 @@ class ImpactAnalysisEngine:
         indirect_nodes = _dedupe_nodes(
             [hop.from_node for hop in same_repo_peer_hops]
             + [hop.from_node for hop in cross_repo_peer_hops]
+            + [hop.from_node for hop in service_caller_hops]
         )
 
         result = ImpactAnalysisResult(
@@ -152,7 +163,11 @@ class ImpactAnalysisEngine:
             ],
             impacted_libraries=[impacted_node_from_graph_node(node) for node in dependencies],
             dependency_paths=build_dependency_paths(
-                api_hops, topic_hops, same_repo_peer_hops, cross_repo_peer_hops
+                api_hops,
+                topic_hops,
+                same_repo_peer_hops,
+                cross_repo_peer_hops,
+                service_caller_hops,
             ),
         )
 

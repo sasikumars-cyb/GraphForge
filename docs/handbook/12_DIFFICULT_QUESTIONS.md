@@ -140,11 +140,18 @@ handful of repos per org" today — `ROADMAP.md` Technical Debt states this
 directly, full-clone-per-index with no incremental re-indexing (ADR 0007
 Consequences). Graph traversal is hop-bounded per agent
 (`max_graph_hops`) specifically to keep Context Assembler/service-layer
-latency predictable as the graph grows. Multi-tenancy via
-`organization_id` scoping is described in `ARCHITECTURE.md` as a
-requirement but this handbook did not independently verify its current
-implementation depth — treat as partially verified, not confirmed
-end-to-end. Run concurrency uses `asyncio.gather` with a per-run
+latency predictable as the graph grows. Multi-tenancy — **now verified,
+KAN-33** — is not `organization_id` scoping at all; grepped across the
+entire codebase, that column does not exist. The real tenancy boundary is
+`user_id`, enforced per-router via ownership checks (`Repository.user_id
+== current_user.id`, 404 not 403) before any Neo4j query ever runs. This
+is now independently confirmed end-to-end for the workflow-lifecycle
+endpoints, including the approve/reject actions that gate real GitHub
+writes (`tests/integration/test_workflows_cross_user_isolation.py`,
+12 passing tests). It remains a per-router convention, not a structural
+guarantee enforced by the query builder itself — see `ARCHITECTURE.md`'s
+corrected Security Considerations section for what that follow-up would
+look like. Run concurrency uses `asyncio.gather` with a per-run
 concurrency cap in the architecture doc's design, not independently
 re-verified here against production load.
 

@@ -2,7 +2,7 @@
 
 GraphForge turns an AI-generated development plan into a **visible, reasoned impact analysis**: a dependency graph of the affected services, a UML/sequence view of the change's call path, and an AI-grounded explanation of what breaks and why — before the change ships.
 
-> **Status:** JWT authentication, a real GitHub integration (connect an account, list/select repositories, receive pull request webhooks), a deterministic architecture discovery engine (clone a Java/Spring Boot repo, parse it with tree-sitter, persist the discovered controllers/services/Feign clients/Kafka usage/dependencies as a graph in Neo4j), and deterministic pull request impact analysis (map a PR's changed files to that graph, traverse it, and return a risk level plus every directly/indirectly impacted service, API, Kafka topic, and dependency) are implemented. The dashboard pages still run on mock data, no AI/LLM reasoning exists anywhere yet, and login-via-GitHub (as opposed to connecting one) is still just an interface + stub routes. See [`docs/architecture/overview.md`](docs/architecture/overview.md) for what's here and what's deliberately not.
+> **Status:** GraphForge has grown well beyond the description below — an Agent Orchestrator, 12+ registered agents, a five-stage Knowledge Engine, and Engineering Memory are all implemented and tested, alongside the original deterministic core (JWT auth, real GitHub integration, tree-sitter-based architecture discovery, and deterministic PR impact analysis). For an honest, evidence-cited account of what's real, what's partial, and what's still a documented gap, see [`docs/handbook/16_REALITY_CHECK.md`](docs/handbook/16_REALITY_CHECK.md) — the current source of truth. [`docs/architecture/overview.md`](docs/architecture/overview.md) documents the original deterministic backend in detail and is explicitly marked historical for anything beyond it; login-via-GitHub (as opposed to connecting one) remains just an interface + stub routes.
 
 ## Stack
 
@@ -13,14 +13,17 @@ GraphForge turns an AI-generated development plan into a **visible, reasoned imp
 | Database | PostgreSQL |
 | Graph store | Neo4j (architecture graph — repository indexer output) |
 | Integrations | GitHub (OAuth connect, repo selection, PR webhook, PR changed-file listing) |
-| Future | Jira integration, AI/LLM-backed analysis engine, login-via-GitHub |
+| AI / Agents | Agent Orchestrator, 12+ registered agents, five-stage Knowledge Engine, Engineering Memory — see [`docs/handbook/16_REALITY_CHECK.md`](docs/handbook/16_REALITY_CHECK.md) |
+| Future | Jira integration, login-via-GitHub |
 
 ## Project layout
 
 ```
 graphforge/
   frontend/   React + TypeScript SPA
-  backend/    FastAPI service (api / services / models / schemas / database / core / graph / ai / integrations / indexer / analysis)
+  backend/    FastAPI service (api / services / models / schemas / database / core / graph / ai /
+              integrations / indexer / analysis / agents / orchestrator / knowledge_engine /
+              context_pipeline / learning_engine)
   docs/       Architecture notes and Architecture Decision Records (ADRs)
   docker/     Compose orchestration, Nginx config, DB init scripts
   scripts/    Local dev convenience scripts
@@ -38,7 +41,7 @@ One command starts everything with hot reload: Postgres, Neo4j (bolt on `7687`, 
 
 There's no sign-up page yet — create a test account with `curl -X POST http://localhost:8000/api/v1/auth/register -H "Content-Type: application/json" -d '{"email": "you@example.com", "password": "a-password-at-least-8-chars", "full_name": "Your Name"}'` (or via Swagger at `/docs`), then log in at `http://localhost:5173`. See [`docs/setup.md`](docs/setup.md#logging-in) for details.
 
-Prefer running Python/Node natively instead of in containers? See [`docs/setup.md`](docs/setup.md) for that path (`scripts/setup.sh` + `scripts/dev.sh`), plus a production-style build (`scripts/docker-prod.sh`) and the fully manual, non-scripted version of each. See [`docs/architecture/overview.md`](docs/architecture/overview.md) for the backend's layering and where the remaining future integrations (Jira, AI engine) plug in.
+Prefer running Python/Node natively instead of in containers? See [`docs/setup.md`](docs/setup.md) for that path (`scripts/setup.sh` + `scripts/dev.sh`), plus a production-style build (`scripts/docker-prod.sh`) and the fully manual, non-scripted version of each. See [`docs/architecture/overview.md`](docs/architecture/overview.md) for the original deterministic backend's layering, and [`docs/graphforge/ARCHITECTURE.md`](docs/graphforge/ARCHITECTURE.md) for where the remaining future integrations (Jira, login-via-GitHub) plug in.
 
 ## Development scripts
 

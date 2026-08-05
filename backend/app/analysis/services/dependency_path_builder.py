@@ -48,8 +48,15 @@ def build_dependency_paths(
     topic_hops: list[TraversalHop],
     same_repository_peer_hops: list[TraversalHop],
     cross_repository_peer_hops: list[TraversalHop],
+    service_caller_hops: list[TraversalHop] | None = None,
 ) -> list[DependencyPath]:
     paths = [_two_step_path(hop) for hop in api_hops]
+
+    # `hop.from_node` is the caller repository, `hop.to_node` is this one -
+    # "CallerRepo -[CALLS_SERVICE]-> ThisRepo" reads accurately as-is,
+    # unlike the topic-peer hops below (see `_three_step_path`'s docstring
+    # for why those need reordering and this doesn't).
+    paths.extend(_two_step_path(hop) for hop in service_caller_hops or [])
 
     peers_by_topic_id: dict[str, list[TraversalHop]] = defaultdict(list)
     for peer_hop in same_repository_peer_hops:

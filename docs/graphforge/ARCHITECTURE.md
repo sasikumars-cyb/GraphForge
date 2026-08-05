@@ -78,6 +78,23 @@ construction.
    handed to the LLM. This replaces today's single `AIContext` with a generic, agent-parameterized
    context object — see Domain Model below.
 
+**Entry Resolver status** (KAN-27, current as of the resolver audit below — update in the same
+change as any resolver work, the same discipline `docs/handbook/16_REALITY_CHECK.md` applies):
+
+| Resolver | Status | Notes |
+|---|---|---|
+| `freetext` | **Real, working** | `app/context/resolvers/freetext.py` — pure function, no I/O |
+| GitHub (repository id, pull request URL) | **Real, working** | `app/context/resolvers/github.py` — `resolve_repository_id`, `resolve_pull_request_url`; used by `POST /agent-runs` |
+| Jira | **Not built** | Blocked on a real Jira integration existing at all (today's Jira access is read-only, no `IIssueTrackerProvider` implementation — see KAN-43) |
+| Confluence | **Not built** | Same blocker as Jira |
+
+None of the resolvers above are classes implementing a shared `IEntryResolver` Protocol as
+originally sketched — each is a plain, independently-typed function returning a
+`Subject` (`app.agents._contract.Subject`), following the same lightweight-function convention
+`freetext.py` established first. Introducing a formal shared interface is worth doing once a
+third source needs one; two working resolvers with parallel signatures is not evidence a shared
+Protocol is buying anything yet.
+
 ```mermaid
 sequenceDiagram
     participant U as User Input
@@ -394,9 +411,17 @@ no core architecture change required, only new agent + integration modules.
 - **Run concurrency**: Run Coordinator uses the existing async SQLAlchemy session-per-request
   model; parallel agent execution within a run uses `asyncio.gather`, bounded by a per-run
   concurrency limit to avoid thundering-herd LLM provider calls.
-- **Multi-tenancy**: every graph node/edge and every `Run`/`AgentStep` row carries an
-  `organization_id` (new column, additive), enforced at the GraphWriter and repository-query
-  layer — never left to individual agents to filter correctly.
+- **Multi-tenancy** (KAN-33 status check, current as of this audit): **no `organization_id`
+  column exists anywhere in the codebase today** — grepped across every model and every Neo4j
+  write path, zero matches. The tenancy boundary that actually exists is `user_id`: every
+  Repository, Workflow, Run, and PullRequest row is scoped to the single user who owns it, and
+  every graph node inherits its owning `Repository`'s scope via `repository_id`, which every
+  router-level ownership check resolves *before* any Neo4j query runs (see `docs/handbook/
+  16_REALITY_CHECK.md` and KAN-33's isolation test suite, `tests/integration/
+  test_workflows_cross_user_isolation.py`, for the verified detail). This paragraph's original
+  `organization_id` design was aspirational — describing a future org-level grouping *above*
+  today's per-user model, not something partially built. Treat any other `organization_id`
+  reference in this document the same way until an actual `Organization` concept ships.
 - **Indexing at scale**: the existing indexer's clone-and-parse model remains for Phase 1;
   incremental (webhook-driven, diff-only) indexing is a Phase 2 requirement once repo count per
   org exceeds what full re-clones can keep current.
@@ -412,8 +437,10 @@ no core architecture change required, only new agent + integration modules.
 ## Logging
 
 Structured JSON logs (existing `loguru` convention) with mandatory fields on every agent-related
-log line: `run_id`, `agent_id`, `subject_id`, `organization_id`. This is what makes "which agent
-run produced this graph fact" answerable in production without a debugger.
+log line: `run_id`, `agent_id`, `subject_id`. This is what makes "which agent run produced this
+graph fact" answerable in production without a debugger. (`organization_id` here is the same
+not-yet-built field flagged in Scalability Considerations above — omitted from this list as of
+this audit, not silently dropped from logging.)
 
 ## Telemetry
 
@@ -426,9 +453,19 @@ visible if every run is instrumented identically.
 
 - Access tokens for every integration remain encrypted at rest via the existing `app.core.crypto`
   Fernet pattern — extended, not replaced, for Jira/Confluence tokens.
-- Graph queries are always scoped by `organization_id` at the repository layer — an agent cannot
-  accidentally traverse into another tenant's subgraph because the query builder never accepts an
-  unscoped Cypher fragment from agent code.
+- **Corrected by KAN-33's audit**: there is no `organization_id` scoping — see Scalability
+  Considerations above. What actually prevents cross-tenant graph access today: every endpoint
+  that reads or writes the graph first resolves and ownership-checks a Postgres `Repository` row
+  (`Repository.user_id == current_user.id`, `NotFoundError` — not `Forbidden`, so a repository
+  owned by someone else is indistinguishable from one that doesn't exist) *before* any Cypher
+  query runs, and every graph node/edge carries the corresponding `repository_id`. This is real
+  and independently verified for the workflow-lifecycle endpoints (KAN-33's isolation suite,
+  `tests/integration/test_workflows_cross_user_isolation.py`), but it is an **API-layer
+  convention applied per-router**, not a structural guarantee inside the query builder itself —
+  nothing today would stop a new Cypher-touching endpoint from being written without the
+  preceding ownership check. Extracting that ownership check into a shared, structurally-required
+  dependency (so an unscoped graph query becomes impossible to write, not just discouraged by
+  convention) is scoped as KAN-33 follow-up work, not yet done.
 - Agent tool calls that reach external systems (posting a GitHub comment, updating a Jira ticket)
   require the same explicit-permission-required category discipline the product already applies
   to user-facing actions — an agent auto-commenting on a PR is a "send a message" action and must

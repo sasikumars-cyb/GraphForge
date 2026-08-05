@@ -1,5 +1,29 @@
 # Architecture overview
 
+> **This document is historical.** It describes the backend as it stood at
+> the end of the original "ChangeGuard" phases (auth, GitHub integration,
+> the deterministic architecture indexer, and deterministic PR impact
+> analysis) — everything below is still accurate *for those specific
+> subsystems*, but the codebase has since grown well beyond this
+> description: an Agent Orchestrator, 12+ registered agents, a five-stage
+> Knowledge Engine, Engineering Memory, and the Engineering Intelligence
+> Service Layer all now exist and are not covered here.
+>
+> For the target design those additions were built against, see
+> [`docs/graphforge/ARCHITECTURE.md`](../graphforge/ARCHITECTURE.md). For
+> an honest, evidence-cited account of what's actually implemented today —
+> including what's real, what's partial, and what's still a documented gap
+> — see [`docs/handbook/16_REALITY_CHECK.md`](../handbook/16_REALITY_CHECK.md),
+> which is the current source of truth. Where this document and either of
+> those disagree, they win — the same "trust the code, then fix the
+> discrepancy" rule [`docs/deployment/README.md`](../deployment/README.md)
+> already states for its own directory, generalized here rather than left
+> implicit. A lightweight discipline worth adopting repo-wide: whenever a
+> handbook/reality-check pass finds a doc making a claim the code no longer
+> backs, fix that doc in the same change instead of filing it as separate
+> follow-up work — the same standard `docs/adr/`'s superseded-ADR pattern
+> already sets.
+
 ## Backend
 
 ```
@@ -46,7 +70,7 @@ Dependency direction: `api` → `services` → (`models`, `schemas`, and the int
 | `graph/` | `IGraphRepository` | **Real, working** — `Neo4jGraphRepository` in `graph/neo4j_repository.py` |
 | `ai/` | `ILLMProvider` | **Real, working** — `OpenAIProvider` in `ai/providers/openai_provider.py`; factory supports future Claude/Gemini/Ollama providers |
 | `integrations/` | `IOAuthProvider` (+ `list_repositories`) | **Real, working** — `GitHubOAuthProvider` in `integrations/github.py` |
-| `integrations/` | `IVersionControlProvider` | **Real (partially)** — `GitHubVersionControlProvider.list_changed_files` is real; `get_diff` (full diff content) remains unimplemented |
+| `integrations/` | `IVersionControlProvider` | **Real, working** — `GitHubVersionControlProvider.list_changed_files` and `get_diff` (full diff content, via GitHub's `.diff` media type) are both real; `get_diff` is wired into `app/ai/agent/tools.py`'s `ReadGitDiffTool`, called when PR risk is non-trivial (KAN-35, corrected — this row previously and incorrectly described `get_diff` as unimplemented) |
 | `integrations/` | `IIssueTrackerProvider` | Not built — future Jira client |
 | `indexer/` | `ILanguageParser` | **Real, working** — `SpringBootJavaParser` (Java + Spring Boot/Maven only); registered in `indexer/parsers/registry.py` as the extension point for future languages |
 | `analysis/` | `IImpactGraphReader` | **Real, working** — `Neo4jImpactGraphReader` in `analysis/graph/neo4j_impact_reader.py` |
