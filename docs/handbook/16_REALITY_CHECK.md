@@ -13,7 +13,7 @@ is invented. Every row cites its source.
 | Engineering Memory (append-only Postgres log) | ADR 0018 RFC-04, implemented 2026-08-02; `app/repositories/engineering_memory_repository.py` |
 | `DefaultConfidenceEngine` — deterministic, incremental, monotonic, parity-tested against `cross_repo_linker.py` | ADR 0018 RFC-03; `app/knowledge_engine/confidence/default_engine.py` |
 | Cross-repository relationship persistence into Engineering Memory | ADR 0018 RFC-05, implemented 2026-08-02, with a real concurrency bug found and fixed pre-ship |
-| Materializer (Engineering Memory → Neo4j projection), replay-tested | ADR 0018 RFC-05B; `app/knowledge_engine/materializer.py` — **not yet wired into any live write path** (see Partial, below) |
+| Materializer (Engineering Memory → Neo4j projection), replay-tested, shadow-compared on every real index | ADR 0018 RFC-05B; `app/knowledge_engine/materializer.py`. `app/knowledge_engine/shadow_compare.py` (KAN-16) now compares its projection against the direct write on every indexing run and logs `materializer_shadow_compare_match`/`_mismatch` — real production signal, not yet the live write path (see Partial, below) |
 | Frontier LLM Hypothesis Generator, shadow mode, gated off by default | ADR 0018 RFC-06, implemented 2026-08-02, `enable_frontier_llm_generator=False` |
 | Evidence-keyword validators promoting LLM hypotheses above `CANDIDATE` | ADR 0018 RFC-06B |
 | Confidence explainability, persisted | ADR 0018 RFC-06C |
@@ -31,7 +31,7 @@ is invented. Every row cites its source.
 
 | Capability | What works | What doesn't (yet) |
 |---|---|---|
-| Neo4j as "derived projection" | Materializer exists and passes a real replay test | The materializer is **not called by any production write path** — `replace_repository_graph`/`replace_cross_repository_edges` are still what actually writes Neo4j today. The architectural inversion is proven possible, not yet cut over. |
+| Neo4j as "derived projection" | Materializer exists, passes a real replay test, and (KAN-16) now shadow-compares its projection against the direct write on every real indexing run, logging a structured match/mismatch — the "shadow-write/compare before full cutover" step the cutover ticket's own risk note called for | The materializer still is **not called by any production write path** — `replace_repository_graph`/`replace_cross_repository_edges` are still what actually writes Neo4j today. Cutting the live write path over is deliberately sequenced behind a run of real shadow-compare data (this session couldn't accumulate that data — it only proves the comparison logic is correct, not that it has run against production-scale/production-variety repositories yet). |
 | Cross-repository knowledge in Engineering Memory | RFC-05 persists cross-repo relationships from the `cross_repo_linker` rules; Feign naming-convention matching (Gap 2) and Kafka topic detection (Gap 1) are both now closed | — |
 | Impact Analysis / blast radius | Computes correctly within one repository **and now correctly crosses repository boundaries** in both the Engineering Intelligence Service Layer and the legacy PR-analysis pipeline (Gap 3 closed, KAN-19) | — |
 | Dependency Query | Confidence-aware, evidence-backed search works; `direct_dependencies` is accurate | `downstream_consumers` is still intra-repository-only (Known Gap 4, a distinct partition-scoping limitation) — now explicitly labeled as such in the API/UI (KAN-22) rather than presented as an authoritative count |

@@ -20,6 +20,7 @@ from app.indexer.models.architecture import ArchitectureModel
 from app.indexer.parsers.registry import get_parser
 from app.indexer.scanner.language_detector import DetectedLanguage, detect_language
 from app.indexer.scanner.repository_cloner import clone_repository
+from app.knowledge_engine.shadow_compare import shadow_compare_materialized_graph
 from app.models.github_connection import GitHubConnection
 from app.models.repository import Repository
 
@@ -110,6 +111,17 @@ async def index_repository(
         db=db,
         repository_evidence_facts=repository_evidence_facts,
     )
+
+    # KAN-16 — shadow-compare the Materializer's projection against the
+    # graph just written, on every real indexing run (not just the one
+    # fixture the replay test covers). Diagnostic only: runs after shadow
+    # hypothesis generation has had a chance to persist evidence for this
+    # exact commit, never raises, never affects `graph` or this function's
+    # return value. `db is None` (every pre-RFC-04 call site and test)
+    # skips this the same way it skips shadow persistence itself - there's
+    # no Engineering Memory to materialize from without a session.
+    if db is not None:
+        await shadow_compare_materialized_graph(db, repository_id, graph)
 
     return _summarize(model)
 
