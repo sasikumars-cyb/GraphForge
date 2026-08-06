@@ -24,12 +24,16 @@ function messageFrom(err: unknown, fallback: string): string {
 /** GitHub account connection (OAuth or PAT) plus local-folder repository
  * tracking, in one card — same collapsed-by-default shell every other
  * Knowledge Source card in Settings -> Integrations uses
- * (IntegrationsSection.tsx's IntegrationCard), with "+ Add Connection"
- * expanding to reveal both forms. Kept as its own component rather than
- * folded into that generic one because GitHub (and local repos, which
- * ride along with it here) is per-user data driven by the /github/* and
- * /repositories/local endpoints, not the admin-only install-wide
- * Knowledge Connections API the generic card reads from. */
+ * (IntegrationsSection.tsx's IntegrationCard). Two independent toggle
+ * buttons/panels, not one: "Add Connection" (OAuth or PAT) disappears
+ * once connected — one connection per user, replacing it means Disconnect
+ * then reconnect — while "Add Local Folder" stays available regardless,
+ * since local folder tracking was never actually about the GitHub
+ * connection. Kept as its own component rather than folded into the
+ * generic one because GitHub (and local repos, which ride along with it
+ * here) is per-user data driven by the /github/* and /repositories/local
+ * endpoints, not the admin-only install-wide Knowledge Connections API
+ * the generic card reads from. */
 export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}) {
   const { token } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -38,6 +42,7 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
   const [isConnecting, setIsConnecting] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  const [showAddLocalFolder, setShowAddLocalFolder] = useState(false);
 
   const [patInput, setPatInput] = useState("");
   const [isConnectingWithPat, setIsConnectingWithPat] = useState(false);
@@ -163,7 +168,7 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
       setNotice(`Tracking '${repo.name}' (branch: ${repo.default_branch}).`);
       setLocalName("");
       setLocalPath("");
-      setShowAdd(false);
+      setShowAddLocalFolder(false);
       onSaved?.();
     } catch (err) {
       setError(messageFrom(err, "Couldn't add this local repository."));
@@ -245,13 +250,30 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
               Disconnect
             </button>
           )}
+          {/* One GitHub connection per user (unlike Jira/TestRail's generic
+              card, which supports several) - once connected, replacing it
+              means Disconnect then reconnect, not "add another", so this
+              button disappears entirely. "Add Local Folder" below is a
+              separate, always-visible button - local folder tracking was
+              never actually about the GitHub connection, it just shared
+              this button/panel before. */}
+          {!status?.connected && (
+            <button
+              type="button"
+              onClick={() => setShowAdd(!showAdd)}
+              className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
+            >
+              <Plus className="h-3 w-3" />
+              Add Connection
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setShowAdd(!showAdd)}
+            onClick={() => setShowAddLocalFolder(!showAddLocalFolder)}
             className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
           >
             <Plus className="h-3 w-3" />
-            Add Connection
+            Add Local Folder
           </button>
         </div>
       </div>
@@ -300,84 +322,87 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
         </div>
       )}
 
-      {/* Add Connection — GitHub account (OAuth/PAT) and local folders */}
-      {showAdd && (
-        <div className="mt-3 flex flex-col gap-4 border-t border-line-muted pt-3">
-          <div className="flex flex-col gap-2">
-            <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">
-              Connect a GitHub account
-            </p>
-            <div className="flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                onClick={() => void handleConnect()}
-                disabled={isConnecting}
-                className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
-              >
-                {isConnecting ? "Connecting…" : "Connect via OAuth"}
-              </button>
-              <span className="text-xs text-fg-muted">or paste a personal access token:</span>
-            </div>
-            <div className="flex gap-2">
-              <input
-                id="github-pat"
-                aria-label="Personal access token"
-                type="password"
-                autoComplete="off"
-                value={patInput}
-                onChange={(e) => setPatInput(e.target.value)}
-                placeholder="ghp_…"
-                className="flex-1 rounded-md border border-line-strong bg-canvas px-3 py-1.5 text-xs text-fg-secondary"
-              />
-              <button
-                type="button"
-                onClick={() => void handleConnectWithPat()}
-                disabled={isConnectingWithPat || !patInput.trim()}
-                className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
-              >
-                {isConnectingWithPat ? "Connecting…" : "Connect with token"}
-              </button>
-            </div>
-            <p className="text-xs text-fg-muted">
-              Requires a token with <code>repo</code> and <code>read:user</code> scopes.
-            </p>
-            <OAuthAppCredentialFields providerKey="github" label="GitHub OAuth App (admin)" />
-          </div>
-
-          <div className="flex flex-col gap-2 border-t border-line-muted pt-3">
-            <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">
-              Track a local folder
-            </p>
-            <p className="text-xs text-fg-muted">
-              No GitHub account needed — indexes a folder on the server's filesystem directly.
-            </p>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <input
-                type="text"
-                aria-label="Local repository name"
-                value={localName}
-                onChange={(e) => setLocalName(e.target.value)}
-                placeholder="Name (e.g. order-service)"
-                className="rounded-md border border-line-strong bg-canvas px-3 py-1.5 text-xs text-fg-secondary"
-              />
-              <input
-                type="text"
-                aria-label="Local repository path"
-                value={localPath}
-                onChange={(e) => setLocalPath(e.target.value)}
-                placeholder="Path (relative to the local repos root)"
-                className="rounded-md border border-line-strong bg-canvas px-3 py-1.5 text-xs text-fg-secondary"
-              />
-            </div>
+      {/* Add Connection — GitHub account (OAuth or PAT). Hidden entirely
+          once connected, along with its toggle button above. */}
+      {showAdd && !status?.connected && (
+        <div className="mt-3 flex flex-col gap-2 border-t border-line-muted pt-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">
+            Connect a GitHub account
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              onClick={() => void handleAddLocalRepository()}
-              disabled={isAddingLocal || !localName.trim() || !localPath.trim()}
-              className="self-start rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
+              onClick={() => void handleConnect()}
+              disabled={isConnecting}
+              className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
             >
-              {isAddingLocal ? "Adding…" : "Add local repository"}
+              {isConnecting ? "Connecting…" : "Connect via OAuth"}
+            </button>
+            <span className="text-xs text-fg-muted">or paste a personal access token:</span>
+          </div>
+          <div className="flex gap-2">
+            <input
+              id="github-pat"
+              aria-label="Personal access token"
+              type="password"
+              autoComplete="off"
+              value={patInput}
+              onChange={(e) => setPatInput(e.target.value)}
+              placeholder="ghp_…"
+              className="flex-1 rounded-md border border-line-strong bg-canvas px-3 py-1.5 text-xs text-fg-secondary"
+            />
+            <button
+              type="button"
+              onClick={() => void handleConnectWithPat()}
+              disabled={isConnectingWithPat || !patInput.trim()}
+              className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
+            >
+              {isConnectingWithPat ? "Connecting…" : "Connect with token"}
             </button>
           </div>
+          <p className="text-xs text-fg-muted">
+            Requires a token with <code>repo</code> and <code>read:user</code> scopes.
+          </p>
+          <OAuthAppCredentialFields providerKey="github" label="GitHub OAuth App (admin)" />
+        </div>
+      )}
+
+      {/* Add Local Folder — independent of GitHub connection status, its
+          own always-visible toggle button. */}
+      {showAddLocalFolder && (
+        <div className="mt-3 flex flex-col gap-2 border-t border-line-muted pt-3">
+          <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">
+            Track a local folder
+          </p>
+          <p className="text-xs text-fg-muted">
+            No GitHub account needed — indexes a folder on the server's filesystem directly.
+          </p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            <input
+              type="text"
+              aria-label="Local repository name"
+              value={localName}
+              onChange={(e) => setLocalName(e.target.value)}
+              placeholder="Name (e.g. order-service)"
+              className="rounded-md border border-line-strong bg-canvas px-3 py-1.5 text-xs text-fg-secondary"
+            />
+            <input
+              type="text"
+              aria-label="Local repository path"
+              value={localPath}
+              onChange={(e) => setLocalPath(e.target.value)}
+              placeholder="Path (relative to the local repos root)"
+              className="rounded-md border border-line-strong bg-canvas px-3 py-1.5 text-xs text-fg-secondary"
+            />
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleAddLocalRepository()}
+            disabled={isAddingLocal || !localName.trim() || !localPath.trim()}
+            className="self-start rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
+          >
+            {isAddingLocal ? "Adding…" : "Add local repository"}
+          </button>
         </div>
       )}
     </div>

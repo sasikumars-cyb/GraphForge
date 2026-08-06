@@ -134,14 +134,18 @@ export function GoogleDriveIntegrationCard() {
               Disconnect
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => setShowAdd(!showAdd)}
-            className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
-          >
-            <Plus className="h-3 w-3" />
-            Add Connection
-          </button>
+          {/* One connection per user - once connected, replacing it means
+              Disconnect then reconnect, not "add another". */}
+          {!status?.connected && (
+            <button
+              type="button"
+              onClick={() => setShowAdd(!showAdd)}
+              className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
+            >
+              <Plus className="h-3 w-3" />
+              Add Connection
+            </button>
+          )}
         </div>
       </div>
 
@@ -156,8 +160,10 @@ export function GoogleDriveIntegrationCard() {
 
       {/* Add Connection — Google Drive account (OAuth only, no fields to
           fill: unlike Jira/TestRail there's no API key to paste, and
-          unlike GitHub there's no PAT alternative Google supports here). */}
-      {showAdd && (
+          unlike GitHub there's no PAT alternative Google supports here).
+          Guarded on !status?.connected too, not just the toggle button
+          above, so this can never be left open with no way to close it. */}
+      {showAdd && !status?.connected && (
         <div className="mt-3 flex flex-col gap-2 border-t border-line-muted pt-3">
           <p className="text-xs font-medium uppercase tracking-wide text-fg-muted">
             Connect a Google account

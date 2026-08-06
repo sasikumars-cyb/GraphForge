@@ -125,6 +125,16 @@ describe("GitHubIntegrationCard", () => {
     expect(notesCheckbox).not.toBeChecked();
   });
 
+  it("hides Add Connection once already connected, but keeps Add Local Folder", async () => {
+    vi.spyOn(githubApi, "getConnectionStatus").mockResolvedValue(CONNECTED);
+    vi.spyOn(githubApi, "listAvailableRepositories").mockResolvedValue(REPOS);
+    renderCard();
+
+    await screen.findByText("Connected as @ada");
+    expect(screen.queryByRole("button", { name: "Add Connection" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Add Local Folder" })).toBeInTheDocument();
+  });
+
   it("saves the updated selection when a repo is toggled and Save is clicked", async () => {
     vi.spyOn(githubApi, "getConnectionStatus").mockResolvedValue(CONNECTED);
     vi.spyOn(githubApi, "listAvailableRepositories").mockResolvedValue(REPOS);
@@ -227,7 +237,8 @@ describe("GitHubIntegrationCard", () => {
       created_at: "2026-07-30T00:00:00Z",
     });
     renderCard();
-    const user = await openAddConnection();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add Local Folder" }));
 
     await user.type(screen.getByLabelText("Local repository name"), "order-service");
     await user.type(screen.getByLabelText("Local repository path"), "order-service");
