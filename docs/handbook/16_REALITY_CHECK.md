@@ -147,6 +147,40 @@ sequence that originally proposed them; what's *not* yet built is the
 sequential-handoff SDLC pipeline connecting them end-to-end as one
 continuous flow.
 
+## Doc-drift prevention (KAN-39)
+
+`docs/architecture/overview.md` sat for a long stretch describing a
+materially older product state (single-agent, no orchestrator) while this
+document and `docs/graphforge/ARCHITECTURE.md` had already moved well
+past it, with nothing cross-referencing the contradiction — exactly the
+kind of drift a new reader (or judge, or engineer) has no way to detect
+except by noticing the dates feel wrong. `docs/deployment/README.md`
+already states the right rule for its own directory ("where something
+here differs from other documentation... trust the code, then fix the
+discrepancy"); the proposal here is to apply it repo-wide, concretely:
+
+1. **Whenever this document (`16_REALITY_CHECK.md`) is updated for a
+   ticket that changes a capability's status** (a row moves from
+   "partially implemented" to "implemented", a new gap is found, a gap is
+   closed), grep `docs/architecture/overview.md` and the root `README.md`
+   for that capability's name in the same change. If either makes a claim
+   this update just contradicted, fix it there too rather than filing it
+   as separate follow-up work — the same standard already applied to this
+   pass (see `docs/architecture/overview.md`'s KAN-34 login-via-GitHub
+   correction, made in the same change as this document's KAN-34 update).
+2. **Every ADR that describes a capability later implemented, changed, or
+   reversed gets an "Update" section appended** (not a rewritten
+   narrative — ADRs are point-in-time decision records) linking to the
+   ticket and the doc that now reflects current reality. See ADR 0005's
+   and ADR 0006's KAN-34 update notes for the pattern.
+3. **A lightweight quarterly pass** (or one per epic closeout, whichever
+   comes first): read `docs/architecture/overview.md` and the root
+   `README.md` status line top to bottom against this document's
+   "Implemented and working" table; anything this table now contradicts
+   gets fixed same-day, not queued. This doesn't need tooling or CI to be
+   worth doing — the failure mode it prevents is a document nobody is
+   assigned to update, not one that's hard to update once someone looks.
+
 ## The most honest one-paragraph summary
 
 GraphForge's actual, current strength is architectural discipline applied

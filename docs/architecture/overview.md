@@ -79,7 +79,7 @@ Dependency direction: `api` → `services` → (`models`, `schemas`, and the int
 
 Local (email/password) auth is fully implemented: `POST /auth/register`, `POST /auth/login` (JSON body, returns a JWT), and `GET /auth/me` (protected). `core/security.py` handles password hashing (bcrypt) and JWT encode/decode (PyJWT, HS256); `api/v1/dependencies.get_current_user` is the dependency any protected route uses.
 
-Login-via-GitHub is prepared but not implemented: `GET /auth/github/login` / `GET /auth/github/callback` return `501 not_implemented`. See [ADR 0005](../adr/0005-authentication.md) — including why login uses JSON bodies instead of the OAuth2 form convention, and why the `User` model's `hashed_password` is nullable.
+**KAN-34 (done):** Login-via-GitHub is implemented — `GET /auth/github/login` / `GET /auth/github/callback` (`app/services/github_login_service.py`) find-or-create a local `User` by the GitHub profile's verified email and issue this app's own JWT, reusing the same `GitHubOAuthProvider` as "Connect GitHub" below behind a separate redirect URI. See [ADR 0005](../adr/0005-authentication.md)'s update note — including why login uses JSON bodies instead of the OAuth2 form convention, why the `User` model's `hashed_password` is nullable, and the account-linking decision (no auto-link to an existing local account sharing the same email).
 
 ### GitHub integration ("Connect GitHub")
 
