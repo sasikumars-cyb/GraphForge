@@ -54,7 +54,7 @@ from app.graph.models import GraphNode
 from app.integrations.interfaces import IVersionControlProvider
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
-from app.services.github_service import get_decrypted_access_token
+from app.services.github_service import get_decrypted_access_token, list_repository_ids_for_user
 
 
 def _is_pom_file(path: str) -> bool:
@@ -110,6 +110,12 @@ class InvestigationAgent:
             )
 
         access_token = await get_decrypted_access_token(self._db, repository.user_id)
+        # KAN-45: this user's own other tracked repositories - the
+        # allow-list find_cross_repository_topic_peers needs to avoid
+        # surfacing another tenant's component on a topic-name collision.
+        allowed_cross_repository_ids = (
+            await list_repository_ids_for_user(self._db, repository.user_id)
+        ) - {repository_id}
         changed_files = await self._version_control_provider.list_changed_files(
             owner=repository.owner,
             repo=repository.name,
@@ -129,6 +135,7 @@ class InvestigationAgent:
             self._build_tool_registry(
                 repository=repository,
                 repository_id=repository_id,
+                allowed_cross_repository_ids=allowed_cross_repository_ids,
                 pull_number=pull_request.number,
                 access_token=access_token,
             )
@@ -246,12 +253,15 @@ class InvestigationAgent:
         *,
         repository: Repository,
         repository_id: str,
+        allowed_cross_repository_ids: set[str],
         pull_number: int,
         access_token: str | None,
     ) -> ToolRegistry:
         tools = [
             ReadDependencyGraphTool(self._impact_graph_reader, repository_id),
-            TraverseDependencyGraphTool(self._impact_graph_reader, repository_id),
+            TraverseDependencyGraphTool(
+                self._impact_graph_reader, repository_id, allowed_cross_repository_ids
+            ),
             ReadIndexingInformationTool(self._graph_repository, repository_id),
             RetrieveRepositoryMetadataTool(self._db, repository),
             ReadGitDiffTool(

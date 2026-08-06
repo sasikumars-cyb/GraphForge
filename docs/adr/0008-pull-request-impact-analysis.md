@@ -42,6 +42,10 @@ The available inputs are narrow and matter a lot for what's actually achievable 
 - `tests/integration/test_pull_requests_api.py` — both endpoints through real HTTP requests, real auth, real ownership checks, with `GitHubVersionControlProvider.list_changed_files` patched at the class level (the same technique `test_github_oauth.py` already uses for the OAuth provider) so no real GitHub account or network call is needed.
 - The cross-repository Kafka topic-name matching was additionally verified by hand against two independently indexed copies of the same fixture repository in a real Neo4j instance before being folded into the engine, confirming peers in a *different* repository are correctly found by topic name and excluded from same-repository results.
 
+## Update (KAN-45)
+
+The topic-name matching this ADR describes had a real cross-tenant gap: `find_cross_repository_topic_peers` matched by topic name across the *entire* Neo4j graph, with no attribution to which user owns which repository — two different tenants naming a topic the same thing (e.g. `order-events`) would leak each other's component identities. Fixed by changing the method's second parameter from an exclude-one-id filter to a tenant-scoped allow-list; every caller (`repositories.py`'s two endpoints, `ImpactAnalysisEngine`, and the Change Investigation Agent's `TraverseDependencyGraphTool`) now passes the requesting user's own tracked repository ids, resolved via `github_service.list_repository_ids_for_user`. See `docs/handbook/16_REALITY_CHECK.md`'s KAN-33 row and `tests/integration/test_cross_repository_topic_peers_tenant_isolation.py` for the regression test proving it.
+
 ## Consequences
 - Impact analysis is only as good as file-path granularity — a large, multi-concern PR touching one Controller file will mark the whole controller (and everything downstream of it) impacted, even if only one unrelated method changed.
 - "Downstream services" across repositories is limited to what Kafka topic-name matching can find; REST-based service-to-service impact only surfaces within a single indexed repository's own graph.

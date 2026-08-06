@@ -278,6 +278,15 @@ async def list_tracked_repositories(db: AsyncSession, user: User) -> list[Reposi
     return list(result.scalars().all())
 
 
+async def list_repository_ids_for_user(db: AsyncSession, user_id: uuid.UUID) -> set[str]:
+    """The same set `list_tracked_repositories` reads, as bare id strings -
+    for call sites (KAN-45's tenant-scoping fix) that only have a bare
+    `user_id` on hand (e.g. `Repository.user_id`, not a full `User` row)
+    and need it as a Neo4j-query-ready allow-list, not ORM objects."""
+    result = await db.execute(select(Repository.id).where(Repository.user_id == user_id))
+    return {str(repo_id) for repo_id in result.scalars().all()}
+
+
 async def set_selected_repositories(
     db: AsyncSession, user: User, selection: RepositorySelectionRequest
 ) -> list[Repository]:

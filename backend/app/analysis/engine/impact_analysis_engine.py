@@ -24,7 +24,7 @@ from app.integrations.interfaces import IVersionControlProvider
 from app.models.pull_request import PullRequest
 from app.models.pull_request_analysis import PullRequestAnalysis
 from app.models.repository import Repository
-from app.services.github_service import get_decrypted_access_token
+from app.services.github_service import get_decrypted_access_token, list_repository_ids_for_user
 
 
 class RepositoryNotIndexedError(AppError):
@@ -113,9 +113,16 @@ class ImpactAnalysisEngine:
             if topic_ids
             else []
         )
+        # KAN-45: scoped to this same user's other tracked repositories -
+        # find_cross_repository_topic_peers matches by topic *name* with
+        # no tenant attribution of its own, so passing anything wider here
+        # (e.g. the old "exclude just this one id" shape) would surface
+        # another tenant's component whenever a topic name collides.
         cross_repo_peer_hops = (
             await self._impact_graph_reader.find_cross_repository_topic_peers(
-                topic_names, repository_id
+                topic_names,
+                (await list_repository_ids_for_user(self._db, repository.user_id))
+                - {repository_id},
             )
             if topic_names
             else []
