@@ -40,6 +40,15 @@ class GraphEdgeResponse(BaseModel):
 class GraphResponse(BaseModel):
     nodes: list[GraphNodeResponse]
     edges: list[GraphEdgeResponse]
+    # Set only by the bounded `.../graph` request (a `limit`/`node_types`
+    # query param was supplied): `truncated=True` means `nodes` is a
+    # partial page, not the whole graph — `total_node_count` says how many
+    # nodes actually matched. The frontend uses this to show "showing
+    # 2,000 of 8,400 — narrow with a filter" instead of silently rendering
+    # a partial graph as if it were complete. Defaults preserve the
+    # unbounded response shape exactly.
+    truncated: bool = False
+    total_node_count: int | None = None
 
 
 class CrossRepositoryLinkResponse(BaseModel):

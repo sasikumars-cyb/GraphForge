@@ -1,8 +1,8 @@
 """The `users` table.
 
 `hashed_password` is nullable and `auth_provider` exists specifically to
-accommodate a future GitHub-OAuth-only account (no local password at all) —
-see `app.integrations.interfaces.IOAuthProvider` and ADR 0005 for the plan.
+accommodate a GitHub-OAuth-only account (no local password at all) - see
+`app.services.github_login_service` (KAN-34) and ADR 0005.
 """
 
 import uuid
@@ -25,9 +25,10 @@ class User(Base):
     # password at all, not an empty one.
     hashed_password: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
-    # "local" today; a future GitHub adapter would set this to "github" for
-    # accounts created via OAuth. Not an enum yet — one value in production
-    # so far, and a DB-level enum migration is cheap to do later if needed.
+    # "local" (email/password, via auth_service) or "github" (via
+    # github_login_service, KAN-34). Not an enum yet - two values in
+    # production so far, and a DB-level enum migration is cheap to do
+    # later if needed.
     auth_provider: Mapped[str] = mapped_column(String(50), nullable=False, default="local")
 
     # Role-based access control. "user" is the default; "admin" grants access

@@ -51,13 +51,27 @@ class IImpactGraphReader(ABC):
 
     @abstractmethod
     async def find_cross_repository_topic_peers(
-        self, topic_names: set[str], exclude_repository_id: str
+        self, topic_names: set[str], allowed_repository_ids: set[str]
     ) -> list[TraversalHop]:
         """Components in *other* indexed repositories whose `KafkaTopic`
         nodes share a `name` in `topic_names` - the cross-service side of
         Kafka pub/sub coupling (see ADR 0008 for why topic-name matching,
         not a graph edge, is how this is discovered: no edge crosses a
-        repository boundary in this graph)."""
+        repository boundary in this graph).
+
+        `allowed_repository_ids` (KAN-45) is a tenant-scoping allow-list,
+        not an "exclude the source repo" filter: this Cypher query matches
+        by topic *name* across the whole graph, with no tenant/user
+        attribution of its own, so without this every caller's topic name
+        would match every other tenant's repository carrying the same
+        literal name - a real cross-tenant data leak (caller-side
+        Postgres ownership filtering elsewhere in the codebase never
+        reaches this query). Every caller must pass exactly the set of
+        repository ids it is authorized to see peers from - typically the
+        current user's own tracked repositories, `str(repository.id)`
+        included or excluded depending on whether that caller also wants
+        same-repository self-matches. Passing an empty set returns no
+        results (fails closed), never "everything"."""
         raise NotImplementedError
 
     @abstractmethod

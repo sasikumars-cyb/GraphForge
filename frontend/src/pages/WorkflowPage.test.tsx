@@ -39,6 +39,7 @@ function renderWithAuth(ui: React.ReactElement, authValue?: Partial<AuthContextV
     token: "test-token",
     isLoading: false,
     login: vi.fn(),
+    loginWithToken: vi.fn(),
     logout: vi.fn(),
     ...authValue,
   };
@@ -222,6 +223,7 @@ describe("WorkflowPage", () => {
       token: "test-token",
       isLoading: false,
       login: vi.fn(),
+      loginWithToken: vi.fn(),
       logout: vi.fn(),
     };
     return render(

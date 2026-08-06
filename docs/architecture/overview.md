@@ -79,7 +79,7 @@ Dependency direction: `api` → `services` → (`models`, `schemas`, and the int
 
 Local (email/password) auth is fully implemented: `POST /auth/register`, `POST /auth/login` (JSON body, returns a JWT), and `GET /auth/me` (protected). `core/security.py` handles password hashing (bcrypt) and JWT encode/decode (PyJWT, HS256); `api/v1/dependencies.get_current_user` is the dependency any protected route uses.
 
-Login-via-GitHub is prepared but not implemented: `GET /auth/github/login` / `GET /auth/github/callback` return `501 not_implemented`. See [ADR 0005](../adr/0005-authentication.md) — including why login uses JSON bodies instead of the OAuth2 form convention, and why the `User` model's `hashed_password` is nullable.
+**KAN-34 (done):** Login-via-GitHub is implemented — `GET /auth/github/login` / `GET /auth/github/callback` (`app/services/github_login_service.py`) find-or-create a local `User` by the GitHub profile's verified email and issue this app's own JWT, reusing the same `GitHubOAuthProvider` as "Connect GitHub" below behind a separate redirect URI. See [ADR 0005](../adr/0005-authentication.md)'s update note — including why login uses JSON bodies instead of the OAuth2 form convention, why the `User` model's `hashed_password` is nullable, and the account-linking decision (no auto-link to an existing local account sharing the same email).
 
 ### GitHub integration ("Connect GitHub")
 
@@ -147,7 +147,7 @@ frontend/src/
 
 `GitHubIntegrationCard` (rendered on the Settings page) is the second real backend integration on the frontend: connection status, the "Connect" button (fetches an authorization URL, then does a top-level `window.location` navigation to it), the repository checklist, and Save/Disconnect actions. It also consumes the `?github=connected|error` query param the backend's OAuth callback redirects with.
 
-The Dashboard, Pull Requests, Architecture, and Reports pages still render from `lib/mock/*` — GitHub connect/select is real, but nothing yet reads the persisted `repositories`/`pull_requests` data back into those pages. No data-fetching library (TanStack Query, etc.) has been added — `lib/api/client.ts`'s `apiFetch` is enough for the current handful of calls; revisit once there are many more.
+**KAN-37 (done):** TanStack Query (`@tanstack/react-query`) is now the standard data-fetching pattern for pages doing more than a couple of ad hoc calls — see `app/queryClient.ts` for the shared `QueryClient` and its defaults. `ControlCenterPage`, `ArchitecturePage`, and `RepositoriesPage` are migrated as the proof point; `lib/api/client.ts`'s `apiFetch` remains the underlying fetch wrapper every query/mutation calls into, it's just no longer wrapped in hand-rolled loading/error/cache state per page. Newer pages should default to `useQuery`/`useMutation` over the page's own `useState`/`useEffect` fetch, migrating incrementally rather than all at once.
 
 ## See also
 

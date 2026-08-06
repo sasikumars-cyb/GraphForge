@@ -65,13 +65,18 @@ class Settings(BaseSettings):
     # --- Frontend (for post-OAuth redirects) ---
     frontend_base_url: str = Field(default="http://localhost:5173")
 
-    # --- GitHub OAuth App (for "Connect GitHub", not login) ---
+    # --- GitHub OAuth App (shared between "Connect GitHub" repo access and
+    # "Sign in with GitHub" login, KAN-34 - same OAuth App, two different
+    # redirect URIs since they land on two different callback routes) ---
     # None until the user configures their own personal GitHub OAuth App -
     # see docs/setup.md. Never set these to a company-owned app's
     # credentials (see docs/adr/0006-github-integration.md).
     github_client_id: str | None = Field(default=None)
     github_client_secret: str | None = Field(default=None)
     github_oauth_redirect_uri: str = Field(default="http://localhost:8000/api/v1/github/callback")
+    github_login_redirect_uri: str = Field(
+        default="http://localhost:8000/api/v1/auth/github/callback"
+    )
 
     google_client_id: str | None = Field(default=None)
     google_client_secret: str | None = Field(default=None)

@@ -140,17 +140,16 @@ See [Architecture: AI Analysis](architecture/ai-analysis.md) for full documentat
 
 `JWT_SECRET_KEY` has an insecure default (`dev-only-insecure-secret-change-me`) so login works with zero config locally — see `backend/.env.example`. Any real deployment must override it with a long random value (`openssl rand -hex 32`).
 
-GitHub OAuth ("Continue with GitHub" on the login page) is intentionally disabled — `GET /api/v1/auth/github/login` returns `501 not_implemented` until a provider is registered. See ADR 0005 for the extension point. This is a *different* thing from "Connect GitHub" in Settings, below — see ADR 0006.
+GitHub OAuth login ("Continue with GitHub" on the login page, KAN-34) and "Connect GitHub" in Settings (repo access, below) share one GitHub OAuth App but are otherwise separate: login finds-or-creates a local account by the GitHub profile's verified email and issues this app's own JWT; "Connect GitHub" links an *already-authenticated* user's account for repo read access. See `app.services.github_login_service`'s module docstring and ADR 0006. Both are disabled by default until `GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET` are set — see below.
 
 ## Connecting GitHub
-
-"Connect GitHub" in Settings links a GitHub account for repo access (it is not how you log in — see above). It's disabled by default; enabling it needs your own GitHub OAuth App.
 
 **Use a personal GitHub account and a personal OAuth App — never a company-owned one.** This applies regardless of what you're testing with.
 
 1. On GitHub: **Settings → Developer settings → OAuth Apps → New OAuth App.**
    - Homepage URL: `http://localhost:5173`
    - Authorization callback URL: `http://localhost:8000/api/v1/github/callback` (must match `GITHUB_OAUTH_REDIRECT_URI` exactly)
+   - After creating the app, click **Settings → Developer settings → OAuth Apps → (your app) → Authorization callback URL** again and add a second line: `http://localhost:8000/api/v1/auth/github/callback` (must match `GITHUB_LOGIN_REDIRECT_URI` exactly) — GitHub OAuth Apps accept multiple callback URLs on one app, so login and "Connect GitHub" share the same Client ID/Secret.
 2. Copy the generated Client ID, and generate a Client Secret.
 3. Set them, either:
    - **In `backend/.env`** (requires a backend restart — env vars are only read at process startup, not picked up by `--reload`):
@@ -158,8 +157,9 @@ GitHub OAuth ("Continue with GitHub" on the login page) is intentionally disable
      GITHUB_CLIENT_ID=<your client id>
      GITHUB_CLIENT_SECRET=<your client secret>
      ```
-   - **Or from the UI, no restart needed** — as an admin, in **Settings → Integrations → GitHub → Add Connection**, under "GitHub OAuth App (admin)". Takes effect immediately for every user on this installation; a stored value here takes precedence over the env vars above.
-4. In the app: **Settings → Integrations → Connect**, authorize on GitHub, and you'll land back on Settings with your repositories listed — check the ones you want tracked and **Save selection**.
+   - **Or from the UI, no restart needed** — as an admin, in **Settings → Integrations → GitHub → Add Connection**, under "GitHub OAuth App (admin)". Takes effect immediately for every user on this installation; a stored value here takes precedence over the env vars above. Also used by login, not just Connect.
+4. To connect repo access for an already-logged-in user: **Settings → Integrations → Connect**, authorize on GitHub, and you'll land back on Settings with your repositories listed — check the ones you want tracked and **Save selection**.
+5. To log in with GitHub instead of a local password: **Continue with GitHub** on the login page.
 
 ### Receiving pull request webhooks
 

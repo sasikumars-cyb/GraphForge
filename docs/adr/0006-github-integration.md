@@ -38,5 +38,5 @@ Constraint carried over from earlier in this project: **no company-owned GitHub 
 
 ## Consequences
 - Enabling this for real requires the user's own personal GitHub OAuth App (`GITHUB_CLIENT_ID`/`GITHUB_CLIENT_SECRET`) and a manually-configured webhook (`GITHUB_WEBHOOK_SECRET`) on each repo they want events from — see `docs/setup.md`.
-- Login-via-GitHub (the login page's disabled "Continue with GitHub" button) is still not implemented; this ADR doesn't change that.
+- ~~Login-via-GitHub (the login page's disabled "Continue with GitHub" button) is still not implemented; this ADR doesn't change that.~~ **Update (KAN-34):** implemented — see ADR 0005's own update note. It reuses this ADR's `GitHubOAuthProvider` and shares one OAuth App with "Connect GitHub" (two redirect URIs, see `docs/setup.md`), but is otherwise the separate use case this ADR always described it as.
 - The next natural extension — reading a PR's actual diff (`IVersionControlProvider.get_diff`) and doing something with it — is exactly the boundary this task stopped short of.

@@ -5,13 +5,13 @@ their architecture indexing jobs / discovered graph.
 import asyncio
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
 from app.api.v1.dependencies import get_current_user
-from app.core.exceptions import ConflictError, NotFoundError
+from app.core.exceptions import AppError, ConflictError, NotFoundError
 from app.database.session import get_db_session
 from app.graph.models import GraphNode, GraphPayload
 from app.graph.neo4j_repository import Neo4jGraphRepository
@@ -33,7 +33,11 @@ from app.schemas.indexing import (
     GraphResponse,
     IndexingJobResponse,
 )
-from app.services.github_service import list_tracked_repositories, set_selected_repositories
+from app.services.github_service import (
+    list_repository_ids_for_user,
+    list_tracked_repositories,
+    set_selected_repositories,
+)
 from app.services.local_repository_service import create_local_repository
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
@@ -68,6 +72,8 @@ def _graph_response(graph: GraphPayload) -> GraphResponse:
             }
             for edge in graph.edges
         ],
+        truncated=graph.truncated,
+        total_node_count=graph.total_node_count,
     )
 
 
@@ -98,10 +104,12 @@ async def get_all_cross_repository_links(
     repository at once - one Neo4j relationship query instead of the
     overview issuing one HTTP request per repository.
 
-    Reuses `find_cross_repository_topic_peers` unchanged: passing a
-    sentinel exclude id that can never match a real repository means no
-    repository is excluded, so it returns every producer/consumer of every
-    topic name collected across all tracked repositories."""
+    KAN-45: `find_cross_repository_topic_peers` takes a tenant-scoping
+    allow-list, not an exclude-one-id filter - passing this user's own
+    tracked repository ids means it returns every producer/consumer of
+    every topic name collected across *this user's* tracked repositories,
+    never another tenant's repository sharing a topic name by
+    coincidence."""
     repositories = await list_tracked_repositories(db, current_user)
     if not repositories:
         return []
@@ -120,8 +128,11 @@ async def get_all_cross_repository_links(
     if not topic_names:
         return []
 
+    allowed_repository_ids = {str(repo.id) for repo in repositories}
     impact_reader = Neo4jImpactGraphReader(driver)
-    hops = await impact_reader.find_cross_repository_topic_peers(topic_names, "")
+    hops = await impact_reader.find_cross_repository_topic_peers(
+        topic_names, allowed_repository_ids
+    )
 
     repo_name_by_id = {str(repo.id): repo.full_name for repo in repositories}
 
@@ -305,12 +316,36 @@ async def get_latest_indexing_job(
 @router.get("/{repository_id}/graph", response_model=GraphResponse)
 async def get_repository_graph(
     repository_id: uuid.UUID,
+    limit: int = Query(
+        2000,
+        ge=1,
+        le=10_000,
+        description=(
+            "Max nodes to return, node-count-capped so a very large repository's graph "
+            "can't blow up a single response — see GraphResponse.truncated/total_node_count "
+            "for whether this cut anything off. Server enforces an absolute ceiling "
+            "regardless of what's requested here."
+        ),
+    ),
+    node_types: list[str] | None = Query(
+        None,
+        description=(
+            "Restrict to nodes carrying at least one of these labels (e.g. Service, "
+            "KafkaTopic) — filtered inside the query, not after fetching everything. "
+            "Omit to include every type."
+        ),
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> GraphResponse:
     repository = await _get_owned_repository(db, repository_id, current_user)
     graph_repository = Neo4jGraphRepository(get_driver())
-    graph = await graph_repository.get_full_graph(str(repository.id))
+    try:
+        graph = await graph_repository.get_full_graph(
+            str(repository.id), limit=limit, node_types=node_types
+        )
+    except ValueError as exc:
+        raise AppError(str(exc), status_code=400, error_code="invalid_node_type") from exc
     return _graph_response(graph)
 
 
@@ -325,7 +360,14 @@ async def get_cross_repository_links(
     """Lightweight cross-repository relationship metadata - reuses the same
     topic-name matching the deterministic analysis engine uses
     (`find_cross_repository_topic_peers`), so discovering which other
-    repositories are linked never requires downloading their full graphs."""
+    repositories are linked never requires downloading their full graphs.
+
+    KAN-45: the allow-list passed is this user's own *other* tracked
+    repositories (this repository's own id excluded, same as the old
+    exclude-id behavior - same-repository peers are `find_same_repository_
+    topic_peers`'s job elsewhere, not this one's) - never every repository
+    in the graph, which would leak another tenant's component whenever a
+    topic name happens to collide."""
     repository = await _get_owned_repository(db, repository_id, current_user)
 
     driver = get_driver()
@@ -337,8 +379,12 @@ async def get_cross_repository_links(
     if not topic_names:
         return []
 
+    own_repository_ids = await list_repository_ids_for_user(db, current_user.id)
+    allowed_repository_ids = own_repository_ids - {str(repository.id)}
     impact_reader = Neo4jImpactGraphReader(driver)
-    hops = await impact_reader.find_cross_repository_topic_peers(topic_names, str(repository.id))
+    hops = await impact_reader.find_cross_repository_topic_peers(
+        topic_names, allowed_repository_ids
+    )
 
     peer_repo_ids = {uuid.UUID(hop.from_node.properties["repository_id"]) for hop in hops}
     peers_result = await db.execute(select(Repository).where(Repository.id.in_(peer_repo_ids)))

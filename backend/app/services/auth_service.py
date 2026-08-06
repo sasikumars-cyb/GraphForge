@@ -3,10 +3,10 @@ accounts.
 
 This is deliberately NOT behind an interface the way `graph`/`ai`/
 `integrations` are: it's built-in functionality, not a swappable external
-adapter. A future GitHub-OAuth login is a different code path (see
-`app.integrations.interfaces.IOAuthProvider`) that creates or looks up a
-User with `auth_provider="github"`, then issues a token the same way this
-module does for local accounts.
+adapter. GitHub-OAuth login (KAN-34) is a different code path -
+`app.services.github_login_service` - that creates or looks up a User with
+`auth_provider="github"`, then issues a token the same way this module
+does for local accounts.
 """
 
 from sqlalchemy import select

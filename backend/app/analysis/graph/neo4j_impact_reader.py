@@ -80,18 +80,24 @@ class Neo4jImpactGraphReader(IImpactGraphReader):
         )
 
     async def find_cross_repository_topic_peers(
-        self, topic_names: set[str], exclude_repository_id: str
+        self, topic_names: set[str], allowed_repository_ids: set[str]
     ) -> list[TraversalHop]:
+        # KAN-45: an include-list (`topic.repository_id IN ...`), not the
+        # exclude-one-id filter this used to be - see the interface
+        # docstring for why an exclude-only filter was a real cross-tenant
+        # leak. `IN []` matches nothing, so an empty allow-list fails
+        # closed rather than falling through to "match everything" the
+        # way the old sentinel-exclude-id shape did.
         async with self._driver.session() as session:
             result = await session.run(
                 """
                 MATCH (topic:KafkaTopic)
-                WHERE topic.name IN $topic_names AND topic.repository_id <> $exclude_repository_id
+                WHERE topic.name IN $topic_names AND topic.repository_id IN $allowed_repository_ids
                 MATCH (peer:Component)-[r:PRODUCES_TO|CONSUMES_FROM]->(topic)
                 RETURN DISTINCT peer AS start, type(r) AS rel_type, topic AS target
                 """,
                 topic_names=list(topic_names),
-                exclude_repository_id=exclude_repository_id,
+                allowed_repository_ids=list(allowed_repository_ids),
             )
             records = [record async for record in result]
         return [

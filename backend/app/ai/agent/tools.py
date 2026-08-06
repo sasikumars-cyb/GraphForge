@@ -90,9 +90,19 @@ class TraverseDependencyGraphTool(Tool):
 
     name = "traverse_dependency_graph"
 
-    def __init__(self, impact_graph_reader: IImpactGraphReader, repository_id: str) -> None:
+    def __init__(
+        self,
+        impact_graph_reader: IImpactGraphReader,
+        repository_id: str,
+        allowed_cross_repository_ids: set[str],
+    ) -> None:
         self._reader = impact_graph_reader
         self._repository_id = repository_id
+        # KAN-45: this user's own other tracked repositories - see
+        # `IImpactGraphReader.find_cross_repository_topic_peers`'s
+        # docstring for why passing anything wider would leak another
+        # tenant's component whenever a topic name collides.
+        self._allowed_cross_repository_ids = allowed_cross_repository_ids
 
     async def execute(self, state: AgentState) -> Observation:
         direct_ids = {node.id for node in state.direct_nodes}
@@ -117,7 +127,9 @@ class TraverseDependencyGraphTool(Tool):
             else []
         )
         state.cross_repository_peer_hops = (
-            await self._reader.find_cross_repository_topic_peers(topic_names, self._repository_id)
+            await self._reader.find_cross_repository_topic_peers(
+                topic_names, self._allowed_cross_repository_ids
+            )
             if topic_names
             else []
         )

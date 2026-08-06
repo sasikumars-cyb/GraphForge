@@ -34,6 +34,7 @@ function renderRunDetailPage(runId = "run-1") {
     token: "test-token",
     isLoading: false,
     login: vi.fn(),
+    loginWithToken: vi.fn(),
     logout: vi.fn(),
   };
   return render(

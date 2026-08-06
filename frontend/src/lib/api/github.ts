@@ -37,8 +37,11 @@ export function listAvailableRepositories(token: string): Promise<AvailableRepos
   return apiFetch<AvailableRepository[]>("/github/repositories", { token });
 }
 
-export function listTrackedRepositories(token: string): Promise<TrackedRepository[]> {
-  return apiFetch<TrackedRepository[]>("/repositories", { token });
+export function listTrackedRepositories(
+  token: string,
+  signal?: AbortSignal,
+): Promise<TrackedRepository[]> {
+  return apiFetch<TrackedRepository[]>("/repositories", { token, signal });
 }
 
 export function saveSelectedRepositories(

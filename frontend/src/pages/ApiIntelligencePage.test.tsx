@@ -41,6 +41,7 @@ function renderWithAuth(authValue?: Partial<AuthContextValue>) {
     token: "test-token",
     isLoading: false,
     login: vi.fn(),
+    loginWithToken: vi.fn(),
     logout: vi.fn(),
     ...authValue,
   };

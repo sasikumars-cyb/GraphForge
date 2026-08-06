@@ -13,7 +13,7 @@ is invented. Every row cites its source.
 | Engineering Memory (append-only Postgres log) | ADR 0018 RFC-04, implemented 2026-08-02; `app/repositories/engineering_memory_repository.py` |
 | `DefaultConfidenceEngine` — deterministic, incremental, monotonic, parity-tested against `cross_repo_linker.py` | ADR 0018 RFC-03; `app/knowledge_engine/confidence/default_engine.py` |
 | Cross-repository relationship persistence into Engineering Memory | ADR 0018 RFC-05, implemented 2026-08-02, with a real concurrency bug found and fixed pre-ship |
-| Materializer (Engineering Memory → Neo4j projection), replay-tested | ADR 0018 RFC-05B; `app/knowledge_engine/materializer.py` — **not yet wired into any live write path** (see Partial, below) |
+| Materializer (Engineering Memory → Neo4j projection), replay-tested, shadow-compared on every real index | ADR 0018 RFC-05B; `app/knowledge_engine/materializer.py`. `app/knowledge_engine/shadow_compare.py` (KAN-16) now compares its projection against the direct write on every indexing run and logs `materializer_shadow_compare_match`/`_mismatch` — real production signal, not yet the live write path (see Partial, below) |
 | Frontier LLM Hypothesis Generator, shadow mode, gated off by default | ADR 0018 RFC-06, implemented 2026-08-02, `enable_frontier_llm_generator=False` |
 | Evidence-keyword validators promoting LLM hypotheses above `CANDIDATE` | ADR 0018 RFC-06B |
 | Confidence explainability, persisted | ADR 0018 RFC-06C |
@@ -31,7 +31,7 @@ is invented. Every row cites its source.
 
 | Capability | What works | What doesn't (yet) |
 |---|---|---|
-| Neo4j as "derived projection" | Materializer exists and passes a real replay test | The materializer is **not called by any production write path** — `replace_repository_graph`/`replace_cross_repository_edges` are still what actually writes Neo4j today. The architectural inversion is proven possible, not yet cut over. |
+| Neo4j as "derived projection" | Materializer exists, passes a real replay test, and (KAN-16) now shadow-compares its projection against the direct write on every real indexing run, logging a structured match/mismatch — the "shadow-write/compare before full cutover" step the cutover ticket's own risk note called for | The materializer still is **not called by any production write path** — `replace_repository_graph`/`replace_cross_repository_edges` are still what actually writes Neo4j today. Cutting the live write path over is deliberately sequenced behind a run of real shadow-compare data (this session couldn't accumulate that data — it only proves the comparison logic is correct, not that it has run against production-scale/production-variety repositories yet). |
 | Cross-repository knowledge in Engineering Memory | RFC-05 persists cross-repo relationships from the `cross_repo_linker` rules; Feign naming-convention matching (Gap 2) and Kafka topic detection (Gap 1) are both now closed | — |
 | Impact Analysis / blast radius | Computes correctly within one repository **and now correctly crosses repository boundaries** in both the Engineering Intelligence Service Layer and the legacy PR-analysis pipeline (Gap 3 closed, KAN-19) | — |
 | Dependency Query | Confidence-aware, evidence-backed search works; `direct_dependencies` is accurate | `downstream_consumers` is still intra-repository-only (Known Gap 4, a distinct partition-scoping limitation) — now explicitly labeled as such in the API/UI (KAN-22) rather than presented as an authoritative count |
@@ -40,7 +40,7 @@ is invented. Every row cites its source.
 | Confidence calibration (prompt-version vs. human-agreement tracking) | `GET /api/v1/calibration/summary` (admin-only) computes real per-agent approval-rate-by-confidence-bucket curves from `ConfidenceCalibration` rows, and now a per-`prompt_version` breakdown joined against `AgentStep` — a version whose approval rate diverges from its agent's overall rate by more than 20 points (with ≥5 decisions) is flagged `flagged_miscalibrated` (KAN-23) | No dashboard consumes it yet — the response types exist in the frontend (`frontend/src/types/calibration.ts`) but are wired into zero components; prompt evolution, health scoring, and org-wide learning remain unbuilt, as RFC-06D always scoped them as later phases |
 | Shared Memory / `RunContext` | Functions correctly for a single process | Documented as an in-memory stand-in, not the Redis-backed version the architecture calls for; "required before any multi-process/multi-replica deployment" |
 | Entry Resolvers / Context Builder generalization | `freetext` and GitHub (repository id, pull request URL) resolvers both exist and are real, working, tested (`app/context/resolvers/freetext.py`, `app/context/resolvers/github.py`, KAN-27) | Jira and Confluence resolvers remain not built — blocked on a real Jira/Confluence integration existing at all (today's Jira access is read-only) |
-| Multi-tenant isolation (KAN-33) | The real tenancy boundary — `user_id`-scoped ownership checks, 404-not-403 to close the IDOR-existence-oracle gap — is now independently verified end-to-end for `workflows.py` (12 tests), `agent_runs.py` (7 tests), the one per-user-sensitive path in `knowledge.py` (5 tests), the Postgres-backed slice of `repositories.py` (4 tests), `pull_requests.py` (pre-existing coverage, verified still current), `learning.py` (7 tests, its full surface), `api_intelligence.py` (3 tests), `documentation.py`'s create-PR endpoint (3 tests), `reports.py` (6 tests, including its intentional ownerless-workflow-is-shared behavior), and `ai_analysis.py` (7 tests — every endpoint gates on `_get_owned_pull_request` before any LLM/Neo4j/GitHub call). 64 tests total, all passing. All 26 routers have now been reviewed (not all needed new tests): `ai_workspace.py`/`oauth_apps.py`/`tools.py` are admin-only shared config with no per-user resource (same pattern as `knowledge.py`'s `KnowledgeConnection`); `github.py`/`google_drive.py`'s connection endpoints are self-referential (operate on the calling JWT's own identity, no path-parameter object id, so there is no cross-user reference to make); `test_case_uploads.py`/`testrail.py` are explicitly documented (`app/models/test_case_upload.py`'s own docstring) as intentionally install-wide shared knowledge, not per-user; `webhooks.py` is HMAC-signature-verified, not JWT-scoped, by design; `oauth.py` is the still-unimplemented KAN-34 stub. `parity.py` is the one router genuinely left unverified — Neo4j-dependent, untestable in this sandbox. | `organization_id` — what `ARCHITECTURE.md` previously described as the enforcement mechanism — **does not exist anywhere in the codebase** (now corrected there); the verified `user_id` mechanism is a per-router convention, not a structural guarantee. The sweep surfaced two real, unresolved findings: `engineering_sessions.py` has **no ownership check at all** (KAN-44, blocked on a product decision — private per-investigator vs. shared team workspace); and `find_cross_repository_topic_peers` (used by `repositories.py`, an AI agent tool, and the impact-analysis engine) has **no tenant filter at the Neo4j query level**, so components from another tenant's repository can leak into a topic-peer response when topic names collide (KAN-45, needs a Neo4j-available environment to fix and verify — unavailable in this sandbox). |
+| Multi-tenant isolation (KAN-33) | The real tenancy boundary — `user_id`-scoped ownership checks, 404-not-403 to close the IDOR-existence-oracle gap — is now independently verified end-to-end for `workflows.py` (12 tests), `agent_runs.py` (7 tests), the one per-user-sensitive path in `knowledge.py` (5 tests), the Postgres-backed slice of `repositories.py` (4 tests), `pull_requests.py` (pre-existing coverage, verified still current), `learning.py` (7 tests, its full surface), `api_intelligence.py` (3 tests), `documentation.py`'s create-PR endpoint (3 tests), `reports.py` (6 tests, including its intentional ownerless-workflow-is-shared behavior), and `ai_analysis.py` (7 tests — every endpoint gates on `_get_owned_pull_request` before any LLM/Neo4j/GitHub call). 64 tests total, all passing. All 26 routers have now been reviewed (not all needed new tests): `ai_workspace.py`/`oauth_apps.py`/`tools.py` are admin-only shared config with no per-user resource (same pattern as `knowledge.py`'s `KnowledgeConnection`); `github.py`/`google_drive.py`'s connection endpoints are self-referential (operate on the calling JWT's own identity, no path-parameter object id, so there is no cross-user reference to make); `test_case_uploads.py`/`testrail.py` are explicitly documented (`app/models/test_case_upload.py`'s own docstring) as intentionally install-wide shared knowledge, not per-user; `webhooks.py` is HMAC-signature-verified, not JWT-scoped, by design; `oauth.py` (KAN-34, now implemented) creates/looks up a `User` by GitHub-verified email with no cross-user reference either — same self-referential shape as `github.py`'s connection endpoints. `parity.py` (KAN-33) now has a dedicated cross-user isolation test (`test_parity_cross_user_isolation.py`, 2 tests) against a real Neo4j — closing what was previously the one router left unverified. | `organization_id` — what `ARCHITECTURE.md` previously described as the enforcement mechanism — **does not exist anywhere in the codebase** (now corrected there); the verified `user_id` mechanism is a per-router convention, not a structural guarantee. The sweep surfaced two real findings: `engineering_sessions.py` has **no ownership check at all** (KAN-44, blocked on a product decision — private per-investigator vs. shared team workspace, still open); and `find_cross_repository_topic_peers` (used by `repositories.py`, an AI agent tool, and the impact-analysis engine) had **no tenant filter at the Neo4j query level** — **fixed (KAN-45)**: the query now takes a tenant-scoped allow-list instead of an exclude-one-id filter, every caller passes the requesting user's own tracked repository ids, and a regression test (`test_cross_repository_topic_peers_tenant_isolation.py`, 2 tests, real Neo4j) proves a topic-name collision between two tenants' repositories no longer leaks either one's component identity to the other. |
 
 ## Intentionally deferred (documented scope boundaries, not gaps)
 
@@ -146,6 +146,40 @@ Testing agent) already exist as standalone agents ahead of the phase
 sequence that originally proposed them; what's *not* yet built is the
 sequential-handoff SDLC pipeline connecting them end-to-end as one
 continuous flow.
+
+## Doc-drift prevention (KAN-39)
+
+`docs/architecture/overview.md` sat for a long stretch describing a
+materially older product state (single-agent, no orchestrator) while this
+document and `docs/graphforge/ARCHITECTURE.md` had already moved well
+past it, with nothing cross-referencing the contradiction — exactly the
+kind of drift a new reader (or judge, or engineer) has no way to detect
+except by noticing the dates feel wrong. `docs/deployment/README.md`
+already states the right rule for its own directory ("where something
+here differs from other documentation... trust the code, then fix the
+discrepancy"); the proposal here is to apply it repo-wide, concretely:
+
+1. **Whenever this document (`16_REALITY_CHECK.md`) is updated for a
+   ticket that changes a capability's status** (a row moves from
+   "partially implemented" to "implemented", a new gap is found, a gap is
+   closed), grep `docs/architecture/overview.md` and the root `README.md`
+   for that capability's name in the same change. If either makes a claim
+   this update just contradicted, fix it there too rather than filing it
+   as separate follow-up work — the same standard already applied to this
+   pass (see `docs/architecture/overview.md`'s KAN-34 login-via-GitHub
+   correction, made in the same change as this document's KAN-34 update).
+2. **Every ADR that describes a capability later implemented, changed, or
+   reversed gets an "Update" section appended** (not a rewritten
+   narrative — ADRs are point-in-time decision records) linking to the
+   ticket and the doc that now reflects current reality. See ADR 0005's
+   and ADR 0006's KAN-34 update notes for the pattern.
+3. **A lightweight quarterly pass** (or one per epic closeout, whichever
+   comes first): read `docs/architecture/overview.md` and the root
+   `README.md` status line top to bottom against this document's
+   "Implemented and working" table; anything this table now contradicts
+   gets fixed same-day, not queued. This doesn't need tooling or CI to be
+   worth doing — the failure mode it prevents is a document nobody is
+   assigned to update, not one that's hard to update once someone looks.
 
 ## The most honest one-paragraph summary
 

@@ -102,15 +102,18 @@ export function LoginPage() {
             <span className="h-px flex-1 bg-surface-raised" />
           </div>
 
-          <button
-            type="button"
-            disabled
-            title="GitHub OAuth is not implemented yet"
-            className="flex items-center justify-center gap-2 rounded-md border border-line px-3 py-2 text-sm font-medium text-fg-muted disabled:cursor-not-allowed"
+          {/* KAN-34 — a real top-level navigation (not a `login`-style
+              fetch): GitHub's authorize page can't be reached via XHR, and
+              there's no token to obtain client-side until GitHub redirects
+              back through /api/v1/auth/github/callback -> /oauth/callback
+              (see OAuthCallbackPage). */}
+          <a
+            href={`${API_BASE_URL}/auth/github/login`}
+            className="flex items-center justify-center gap-2 rounded-md border border-line px-3 py-2 text-sm font-medium text-fg-secondary transition-colors hover:border-line-strong hover:bg-surface-hover"
           >
             <GitBranch className="h-4 w-4" aria-hidden="true" />
-            Continue with GitHub (coming soon)
-          </button>
+            Continue with GitHub
+          </a>
         </form>
 
         <p className="mt-4 text-center text-xs text-fg-muted">

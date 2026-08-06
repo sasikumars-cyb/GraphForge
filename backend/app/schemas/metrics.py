@@ -85,3 +85,25 @@ class MetricsReportResponse(BaseModel):
     run_success_by_stage: list[RunStageOutcome]
     repository_components: list[RepositoryComponentCount]
     recent_workflows: list[WorkflowSummary]
+
+
+class WorkflowStageLLMUsage(BaseModel):
+    """One workflow's LLM consumption for a single stage (Planning,
+    Development, Testing, ...) - the per-stage breakdown Frontier Agent
+    users need to see which stage actually drove cost/latency, not just
+    the workflow's total."""
+
+    stage: str
+    models: list[str]
+    calls: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    cost_usd: float
+    avg_latency_ms: float
+
+
+class WorkflowLLMUsageResponse(BaseModel):
+    workflow_id: str
+    workflow_title: str
+    stages: list[WorkflowStageLLMUsage]

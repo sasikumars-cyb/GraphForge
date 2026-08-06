@@ -465,7 +465,14 @@ visible if every run is instrumented identically.
   nothing today would stop a new Cypher-touching endpoint from being written without the
   preceding ownership check. Extracting that ownership check into a shared, structurally-required
   dependency (so an unscoped graph query becomes impossible to write, not just discouraged by
-  convention) is scoped as KAN-33 follow-up work, not yet done.
+  convention) is scoped as KAN-33 follow-up work, not yet done. **KAN-45 is a realized instance
+  of exactly this risk, since fixed**: `find_cross_repository_topic_peers` matched Kafka topics
+  by literal *name* across the whole graph, not by any tenant attribution, so two tenants naming
+  a topic identically leaked each other's component identity — the router-level ownership check
+  on the *source* repository never reached this query's own unscoped traversal. Fixed by giving
+  the query a tenant-scoped allow-list instead of an exclude-one-id filter; see ADR 0008's update
+  note. The structural-guard follow-up above would have caught this class of bug earlier and
+  remains open.
 - Agent tool calls that reach external systems (posting a GitHub comment, updating a Jira ticket)
   require the same explicit-permission-required category discipline the product already applies
   to user-facing actions — an agent auto-commenting on a PR is a "send a message" action and must

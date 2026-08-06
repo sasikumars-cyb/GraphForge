@@ -11,7 +11,7 @@ What GraphForge's security posture actually is today (verified against the code)
 - **Session model**: stateless JWT (`PyJWT`, HS256, `jwt_secret_key`). No server-side session store, no cookies. The frontend holds the token in `localStorage` (`AuthProvider`/`useAuth`) and sends it as `Authorization: Bearer <token>` on every call.
 - **Token expiry**: 60 minutes by default (`access_token_expire_minutes`). No refresh-token mechanism exists — re-login is required after expiry. This is a product/UX characteristic, not a flagged security gap.
 - **Scoped tokens**: a JWT can carry a `purpose` claim (e.g. `github_oauth_state`) restricting it to one narrow flow; `get_current_user` explicitly rejects any token with a `purpose` claim as a general bearer token — so a token minted for the GitHub OAuth state parameter can never double as an API session token even if it leaks (referrer header, browser history, logs).
-- **GitHub login** (as distinct from GitHub *repository connection*) is a stub — `GET /auth/github/login`/`GET /auth/github/callback` return `501`. Not a security gap; simply not implemented.
+- **GitHub login** (as distinct from GitHub *repository connection*) is implemented (KAN-34) — `app/services/github_login_service.py` finds-or-creates a local `User` by the GitHub profile's verified email and issues the same JWT local login does. Deliberately does not auto-link to an existing `auth_provider="local"` account sharing that email (no account-linking UI exists) — a GitHub sign-in matching a local account's email is rejected with a clear error rather than silently granted access.
 
 ## Authorization
 

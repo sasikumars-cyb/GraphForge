@@ -213,5 +213,10 @@ export function mergeCrossRepositoryLinks(ownGraph: Graph, links: CrossRepositor
   return {
     nodes: [...ownGraph.nodes, ...peerNodes],
     edges: [...ownGraph.edges, ...peerEdges],
+    // Carried through explicitly — a plain object spread would silently
+    // drop these, and `ownGraph`'s truncation state doesn't change just
+    // because peer-link nodes were merged in on top of it.
+    truncated: ownGraph.truncated,
+    total_node_count: ownGraph.total_node_count,
   };
 }

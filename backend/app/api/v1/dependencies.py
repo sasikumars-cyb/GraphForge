@@ -1,6 +1,5 @@
 """Shared FastAPI dependencies for API v1: the current-user guard and the
-(currently unregistered) OAuth provider extension point.
-"""
+admin-role guard."""
 
 import uuid
 
@@ -13,7 +12,6 @@ from app.core.exceptions import ForbiddenError, InvalidTokenError, UnauthorizedE
 from app.core.request_context import set_user_id
 from app.core.security import decode_access_token
 from app.database.session import get_db_session
-from app.integrations.interfaces import IOAuthProvider
 from app.models.user import User
 
 # tokenUrl only affects what Swagger UI's "Authorize" dialog points at; the
@@ -69,17 +67,6 @@ async def get_current_user(
 
     set_user_id(str(user.id))
     return user
-
-
-def get_oauth_provider() -> IOAuthProvider | None:
-    """Return the registered GitHub OAuth adapter, or None if not configured.
-
-    No concrete `IOAuthProvider` implementation exists yet. When one is
-    added under `app.integrations`, construct and return it here — every
-    caller of this dependency (see `api/v1/routers/oauth.py`) already
-    handles the `None` case by treating GitHub login as not configured.
-    """
-    return None
 
 
 async def require_admin(

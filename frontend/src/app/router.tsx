@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, type RouteObject } from "react-router-do
 import { AppLayout } from "../components/layout/AppLayout";
 import { RequireAuth } from "../components/layout/RequireAuth";
 import { LoginPage } from "../pages/LoginPage";
+import { OAuthCallbackPage } from "../pages/OAuthCallbackPage";
 import { ControlCenterPage } from "../pages/ControlCenterPage";
 import { WorkspacePage } from "../pages/WorkspacePage";
 import { PlanningPage } from "../pages/PlanningPage";
@@ -23,6 +24,7 @@ import { RepositoriesPage } from "../pages/RepositoriesPage";
 import { RepositoryDetailPage } from "../pages/RepositoryDetailPage";
 import { ArchitecturePage } from "../pages/ArchitecturePage";
 import { MetricsPage } from "../pages/MetricsPage";
+import { WorkflowLLMUsagePage } from "../pages/WorkflowLLMUsagePage";
 import { ReportsPage } from "../pages/ReportsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WorkflowPage, NewWorkflowPage } from "../pages/WorkflowPage";
@@ -34,6 +36,7 @@ import { NotFoundPage } from "../pages/NotFoundPage";
 // it and risking drift.
 export const routes: RouteObject[] = [
   { path: "/login", element: <LoginPage /> },
+  { path: "/oauth/callback", element: <OAuthCallbackPage /> },
   // Catch-all — top-level (not nested under RequireAuth) so it renders
   // regardless of auth state for any unmatched path (typo, stale bookmark,
   // bad deep link), instead of React Router's default unstyled fallback.
@@ -72,6 +75,7 @@ export const routes: RouteObject[] = [
           { path: "/runs", element: <RunHistoryPage /> },
           { path: "/runs/:runId", element: <RunDetailPage /> },
           { path: "/metrics", element: <MetricsPage /> },
+          { path: "/metrics/workflows/:workflowId", element: <WorkflowLLMUsagePage /> },
 
           // ── Knowledge ────────────────────────────────────────────
           { path: "/repositories", element: <RepositoriesPage /> },

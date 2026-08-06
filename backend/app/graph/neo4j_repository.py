@@ -44,6 +44,14 @@ def _repository_node_id(repository_id: str) -> str:
 # near an anchor" and far more than any caller in this codebase requests.
 _MAX_NEIGHBORHOOD_HOPS = 5
 
+# Hard ceiling on `get_full_graph`'s `limit`, enforced regardless of what a
+# caller requests — same defense-in-depth reasoning as
+# `_MAX_NEIGHBORHOOD_HOPS` above. High enough that no real "give me this
+# repository's package-level graph" request should ever hit it; low enough
+# that hitting it caps a single response well short of the point a browser
+# tab would actually struggle to render it.
+_MAX_FULL_GRAPH_LIMIT = 10_000
+
 
 class Neo4jGraphRepository(IGraphRepository):
     def __init__(self, driver: AsyncDriver) -> None:
@@ -107,7 +115,13 @@ class Neo4jGraphRepository(IGraphRepository):
                 edges=payload,
             )
 
-    async def get_full_graph(self, repository_id: str) -> GraphPayload:
+    async def get_full_graph(
+        self,
+        repository_id: str,
+        *,
+        limit: int | None = None,
+        node_types: list[str] | None = None,
+    ) -> GraphPayload:
         """The `OPTIONAL MATCH`'s target used to require `m.repository_id =
         $repository_id`, which structurally excludes every cross-repository
         edge (`replace_cross_repository_edges`'s CALLS_SERVICE/SHARES_TOPIC/
@@ -123,7 +137,31 @@ class Neo4jGraphRepository(IGraphRepository):
         same RFC-06 design (see its own docstring), edges-only: it never
         materializes a *foreign* Repository node either. Including it here
         would manufacture a node-side parity mismatch, not close one.
+
+        `limit`/`node_types` (see the interface docstring) switch to a
+        bounded, two-pass query — select the (capped, optionally
+        label-filtered) node set first, then fetch edges among only that
+        set — the same shape `get_neighborhood` below already uses, so a
+        repository with a huge edge fan-out can never inflate the
+        node-selection query, and an excluded type is never read off disk.
+        `limit=None, node_types=None` (the default) is the original,
+        unbounded query, byte-for-byte — every existing caller that passes
+        neither keeps today's exact behavior.
         """
+        if node_types is not None:
+            unknown = set(node_types) - _ALLOWED_LABELS
+            if unknown:
+                raise ValueError(f"Unknown node type(s): {sorted(unknown)}")
+
+        if limit is None and node_types is None:
+            return await self._get_full_graph_unbounded(repository_id)
+        return await self._get_full_graph_bounded(
+            repository_id,
+            limit=min(limit, _MAX_FULL_GRAPH_LIMIT) if limit is not None else _MAX_FULL_GRAPH_LIMIT,
+            node_types=node_types,
+        )
+
+    async def _get_full_graph_unbounded(self, repository_id: str) -> GraphPayload:
         async with self._driver.session() as session:
             result = await session.run(
                 f"""
@@ -157,6 +195,100 @@ class Neo4jGraphRepository(IGraphRepository):
                 )
 
         return GraphPayload(nodes=list(nodes_by_id.values()), edges=edges)
+
+    async def _get_full_graph_bounded(
+        self, repository_id: str, *, limit: int, node_types: list[str] | None
+    ) -> GraphPayload:
+        label_filter = "AND any(l IN labels(n) WHERE l IN $node_types)" if node_types else ""
+
+        async with self._driver.session() as session:
+            # Pass 1: the node set itself — capped and (optionally)
+            # label-filtered inside Cypher, not after fetching everything.
+            # Ordered by id for a deterministic, stable-across-requests
+            # selection (not true keyset pagination, but consistent enough
+            # that re-running the same request returns the same page).
+            node_result = await session.run(
+                f"""
+                MATCH (n {{repository_id: $repository_id}})
+                WHERE true {label_filter}
+                RETURN n
+                ORDER BY n.id
+                LIMIT $limit
+                """,
+                repository_id=repository_id,
+                node_types=node_types,
+                limit=limit,
+            )
+            node_records = [record async for record in node_result]
+            nodes_by_id = {rec["n"]["id"]: node_from_value(rec["n"]) for rec in node_records}
+            node_ids = list(nodes_by_id.keys())
+
+            # Only pay for a count() when the node query actually filled the
+            # page — fewer results than `limit` already proves nothing was
+            # cut off, no second query needed to know that.
+            truncated = False
+            total_node_count = len(node_ids)
+            if len(node_ids) == limit:
+                count_result = await session.run(
+                    f"""
+                    MATCH (n {{repository_id: $repository_id}})
+                    WHERE true {label_filter}
+                    RETURN count(n) AS total
+                    """,
+                    repository_id=repository_id,
+                    node_types=node_types,
+                )
+                count_record = await count_result.single()
+                total_node_count = int(count_record["total"]) if count_record else len(node_ids)
+                truncated = total_node_count > len(node_ids)
+
+            if not node_ids:
+                return GraphPayload(truncated=truncated, total_node_count=total_node_count)
+
+            # Pass 2: edges among only the selected node set — mirrors
+            # `get_neighborhood`'s own two-pass shape below. An edge to a
+            # same-repository node that didn't make the cut is dropped
+            # (there's nothing on screen for it to point at); a
+            # cross-repository edge is kept regardless, same as the
+            # unbounded query above.
+            # `n.id`/`m.id` returned directly rather than via
+            # `relationship.start_node`/`end_node` — the driver only
+            # hydrates a relationship's endpoint node *properties* (as
+            # opposed to just its internal element id) when that node is
+            # also explicitly returned by the query, which `n`/`m` aren't
+            # here (only `r` is). Matches `get_neighborhood`'s own
+            # `RETURN x.id AS source_id, y.id AS target_id, ...` shape
+            # below for exactly this reason.
+            edge_result = await session.run(
+                f"""
+                UNWIND $node_ids AS nid
+                MATCH (n {{id: nid, repository_id: $repository_id}})
+                OPTIONAL MATCH (n)-[r]->(m)
+                WHERE (m.repository_id = $repository_id AND m.id IN $node_ids)
+                      OR type(r) IN {list(_CROSS_REPO_REL_TYPES)!r}
+                RETURN n.id AS source_id, m.id AS target_id, type(r) AS rel_type,
+                       properties(r) AS props
+                """,
+                node_ids=node_ids,
+                repository_id=repository_id,
+            )
+            edges = [
+                GraphEdge(
+                    source_id=rec["source_id"],
+                    target_id=rec["target_id"],
+                    type=rec["rel_type"],
+                    properties=dict(rec["props"]),
+                )
+                for rec in [row async for row in edge_result]
+                if rec["rel_type"] is not None
+            ]
+
+        return GraphPayload(
+            nodes=list(nodes_by_id.values()),
+            edges=edges,
+            truncated=truncated,
+            total_node_count=total_node_count,
+        )
 
     async def get_kafka_topic_edges(self, repository_id: str) -> list[GraphEdge]:
         async with self._driver.session() as session:

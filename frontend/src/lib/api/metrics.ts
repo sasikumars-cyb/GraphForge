@@ -4,7 +4,11 @@
  */
 
 import { apiFetch } from "./client";
-import type { MetricsReportResponse, MetricsScope } from "../../types/metrics";
+import type {
+  MetricsReportResponse,
+  MetricsScope,
+  WorkflowLLMUsageResponse,
+} from "../../types/metrics";
 
 export interface GetReportParams {
   scope?: MetricsScope;
@@ -22,6 +26,19 @@ export function getMetricsReport(
 
   const qs = searchParams.toString();
   return apiFetch<MetricsReportResponse>(`/metrics/report${qs ? `?${qs}` : ""}`, {
+    token,
+    signal,
+  });
+}
+
+/** Per-stage LLM usage (model, tokens, cost, latency, call count) for one
+ * workflow — what a "Recent Workflows" row on the Metrics page links to. */
+export function getWorkflowLLMUsage(
+  token: string,
+  workflowId: string,
+  signal?: AbortSignal,
+): Promise<WorkflowLLMUsageResponse> {
+  return apiFetch<WorkflowLLMUsageResponse>(`/metrics/workflows/${workflowId}/llm-usage`, {
     token,
     signal,
   });

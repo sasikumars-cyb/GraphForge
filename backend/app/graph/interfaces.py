@@ -23,8 +23,25 @@ class IGraphRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_full_graph(self, repository_id: str) -> GraphPayload:
-        """Return every node and edge belonging to `repository_id`."""
+    async def get_full_graph(
+        self,
+        repository_id: str,
+        *,
+        limit: int | None = None,
+        node_types: list[str] | None = None,
+    ) -> GraphPayload:
+        """Return nodes and edges belonging to `repository_id`.
+
+        `limit` bounds the node set (implementations must cap it at their
+        own hard maximum regardless of what's requested — see
+        `Neo4jGraphRepository._MAX_FULL_GRAPH_LIMIT`); the returned
+        `GraphPayload.truncated`/`total_node_count` report whether it cut
+        anything off. `node_types` restricts to nodes carrying at least one
+        of the given labels — applied as a query predicate, not a
+        post-fetch filter, so an excluded type is never read off disk.
+        `limit=None` (the default) returns everything, unbounded — existing
+        callers that pass no arguments keep today's behavior exactly.
+        """
         raise NotImplementedError
 
     @abstractmethod
