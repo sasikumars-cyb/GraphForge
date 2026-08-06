@@ -507,6 +507,38 @@ async def test_gemini_usage_metadata_parsing() -> None:
 
 
 @pytest.mark.asyncio
+async def test_gemini_thinking_tokens_are_folded_into_completion_tokens() -> None:
+    """A "thinking" model's `usageMetadata` includes a third category,
+    `thoughtsTokenCount`, already counted in `totalTokenCount` but absent
+    from `candidatesTokenCount` - left uncaptured, `total_tokens` would
+    silently exceed `prompt_tokens + completion_tokens` (confirmed against
+    real production `llm_invocations` rows). Folded into `completion_tokens`
+    so the same `total == prompt + completion` invariant every other
+    provider upholds holds for Gemini too."""
+    payload = json.dumps(_valid_ai_result())
+    transport = httpx.MockTransport(
+        lambda request: _gemini_response(
+            payload,
+            usage={
+                "promptTokenCount": 1328,
+                "candidatesTokenCount": 1164,
+                "thoughtsTokenCount": 2585,
+                "totalTokenCount": 5077,
+            },
+        )
+    )
+    client = httpx.AsyncClient(transport=transport)
+    provider = GeminiProvider(api_key="gk-test", http_client=client)
+
+    llm_response = await provider._request_completion("raw prompt")  # noqa: SLF001
+
+    assert llm_response.prompt_tokens == 1328
+    assert llm_response.completion_tokens == 1164 + 2585
+    assert llm_response.total_tokens == 5077
+    assert llm_response.prompt_tokens + llm_response.completion_tokens == llm_response.total_tokens
+
+
+@pytest.mark.asyncio
 async def test_gemini_complete_accepts_but_ignores_response_format() -> None:
     """Gemini's generateContent API has no JSON-mode param — complete()
     must still accept LLMRequestOptions(response_format=...) without

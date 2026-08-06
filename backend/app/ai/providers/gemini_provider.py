@@ -160,6 +160,24 @@ class GeminiProvider(BaseAnalysisProvider):
             prompt_tokens = usage.get("promptTokenCount")
             completion_tokens = usage.get("candidatesTokenCount")
             total_tokens = usage.get("totalTokenCount")
+            # Gemini's "thinking" models (this one included) bill a third
+            # token category - `thoughtsTokenCount` - that's already
+            # folded into `totalTokenCount` but never appears in
+            # `candidatesTokenCount`. Left uncaptured, `total_tokens`
+            # silently exceeds `prompt_tokens + completion_tokens` by
+            # exactly that amount - confirmed against real production
+            # `llm_invocations` rows (KAN-metrics follow-up) where a
+            # context_discovery synthesis call showed prompt=1328/
+            # completion=1164 (sum 2492) against a stored total of 5077.
+            # Folded into `completion_tokens` (thinking output is
+            # model-generated output, the same category cost-wise) so
+            # every consumer of these three fields - the Metrics per-
+            # stage breakdown, cost_by_stage, cost_by_day - can rely on
+            # the same total = prompt + completion invariant every other
+            # provider already upholds, rather than a Gemini-only gap.
+            thoughts_tokens = usage.get("thoughtsTokenCount")
+            if thoughts_tokens is not None and completion_tokens is not None:
+                completion_tokens = int(completion_tokens) + int(thoughts_tokens)
 
             return LLMResponse(
                 text="\n".join(texts),
