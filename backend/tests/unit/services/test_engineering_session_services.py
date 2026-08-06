@@ -51,8 +51,26 @@ async def test_create_session_starts_orienting(db_session: AsyncSession) -> None
 
 
 async def test_get_session_not_found_raises(db_session: AsyncSession) -> None:
+    user = await _make_user(db_session)
     with pytest.raises(NotFoundError):
-        await SessionService(db_session).get_session(uuid.uuid4())
+        await SessionService(db_session).get_session(uuid.uuid4(), user_id=user.id)
+
+
+async def test_get_session_owned_by_another_user_raises_not_found(
+    db_session: AsyncSession,
+) -> None:
+    """KAN-44: same `NotFoundError` as a nonexistent id — no existence
+    oracle for another user's session."""
+    owner = await _make_user(db_session, "owner@example.com")
+    other = await _make_user(db_session, "other@example.com")
+    session = await SessionService(db_session).create_session(title="T", created_by=owner)
+
+    with pytest.raises(NotFoundError):
+        await SessionService(db_session).get_session(session.id, user_id=other.id)
+
+    # The owner themselves can still fetch it.
+    fetched = await SessionService(db_session).get_session(session.id, user_id=owner.id)
+    assert fetched.id == session.id
 
 
 async def test_transition_status_accepts_any_valid_v21_state(db_session: AsyncSession) -> None:
@@ -65,12 +83,12 @@ async def test_transition_status_accepts_any_valid_v21_state(db_session: AsyncSe
     participant = await get_or_create_human_participant(db_session, user)
 
     updated = await session_service.transition_status(
-        session.id, new_status="converging", participant_id=participant.id
+        session.id, user_id=user.id, new_status="converging", participant_id=participant.id
     )
     assert updated.status == "converging"
 
     reopened = await session_service.transition_status(
-        session.id, new_status="investigating", participant_id=participant.id
+        session.id, user_id=user.id, new_status="investigating", participant_id=participant.id
     )
     assert reopened.status == "investigating"
 
@@ -83,31 +101,62 @@ async def test_transition_status_rejects_an_unknown_status(db_session: AsyncSess
 
     with pytest.raises(ConflictError):
         await session_service.transition_status(
-            session.id, new_status="not-a-real-status", participant_id=participant.id
+            session.id,
+            user_id=user.id,
+            new_status="not-a-real-status",
+            participant_id=participant.id,
+        )
+
+
+async def test_transition_status_on_another_users_session_raises_not_found(
+    db_session: AsyncSession,
+) -> None:
+    owner = await _make_user(db_session, "owner2@example.com")
+    other = await _make_user(db_session, "other2@example.com")
+    session_service = SessionService(db_session)
+    session = await session_service.create_session(title="T", created_by=owner)
+    participant = await get_or_create_human_participant(db_session, other)
+
+    with pytest.raises(NotFoundError):
+        await session_service.transition_status(
+            session.id, user_id=other.id, new_status="converging", participant_id=participant.id
         )
 
 
 async def test_list_sessions_paginates(db_session: AsyncSession) -> None:
-    # Baseline first — `list_sessions` is intentionally unscoped (no
-    # per-Organization/Mission filter exists yet, see RFC-001.md's Known
-    # Limitations), so this asserts the *increase* this test caused rather
-    # than an absolute count, which would be fragile against whatever else
-    # already exists in a shared database.
+    # KAN-44: list_sessions is scoped to the calling user — a fresh user
+    # starts at 0 (no shared-database fragility to guard against anymore),
+    # but the baseline-then-delta shape is kept anyway since it also
+    # tolerates any unowned legacy rows the ownership fallback still
+    # surfaces to every user.
     user = await _make_user(db_session)
     session_service = SessionService(db_session)
-    _, baseline_total = await session_service.list_sessions(limit=1, offset=0)
+    _, baseline_total = await session_service.list_sessions(user_id=user.id, limit=1, offset=0)
 
     created_ids = set()
     for i in range(3):
         session = await session_service.create_session(title=f"Session {i}", created_by=user)
         created_ids.add(session.id)
 
-    page1, total = await session_service.list_sessions(limit=2, offset=0)
+    page1, total = await session_service.list_sessions(user_id=user.id, limit=2, offset=0)
     assert total == baseline_total + 3
     assert len(page1) == 2
 
-    all_items, _ = await session_service.list_sessions(limit=total, offset=0)
+    all_items, _ = await session_service.list_sessions(user_id=user.id, limit=total, offset=0)
     assert created_ids.issubset({s.id for s in all_items})
+
+
+async def test_list_sessions_does_not_include_another_users_sessions(
+    db_session: AsyncSession,
+) -> None:
+    owner = await _make_user(db_session, "list-owner@example.com")
+    other = await _make_user(db_session, "list-other@example.com")
+    session_service = SessionService(db_session)
+    await session_service.create_session(title="Owner's session", created_by=owner)
+
+    items, total = await session_service.list_sessions(user_id=other.id, limit=50, offset=0)
+    assert "Owner's session" not in {s.title for s in items}
+    assert total == len(items)
 
 
 # --- BeliefService / Hypothesis lifecycle -------------------------------

@@ -70,14 +70,32 @@ from app.services.understanding_service import UnderstandingService
 router = APIRouter(prefix="/sessions", tags=["engineering-sessions"])
 
 
-async def _author(
-    db: AsyncSession, current_user: User, agent_role: str | None
-) -> Participant:
+async def _author(db: AsyncSession, current_user: User, agent_role: str | None) -> Participant:
     """The authoring Participant for a mutating request — see module
     docstring for the agent_role/human resolution rule."""
     if agent_role is not None:
         return await get_or_create_agent_participant(db, agent_role)
     return await get_or_create_human_participant(db, current_user)
+
+
+async def _verified_session_owner(
+    session_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> User:
+    """KAN-44: the ownership gate every `/sessions/{session_id}/...`
+    endpoint below depends on in place of a bare `Depends(get_current_user)`
+    — FastAPI resolves `session_id` from the same path parameter the
+    endpoint itself declares, so this runs before the handler body, and
+    raises the same `NotFoundError` `SessionService.get_session` raises for
+    "doesn't exist" and "exists but isn't yours" alike (404-not-403 — see
+    that method's own docstring). Returns `current_user` so an endpoint
+    that already had `current_user: User = Depends(get_current_user)` for
+    its own purposes (participant/author resolution) gets both the check
+    and the value from one dependency, not two.
+    """
+    await SessionService(db).get_session(session_id, user_id=current_user.id)
+    return current_user
 
 
 def _require_same_session(artifact_session_id: uuid.UUID, path_session_id: uuid.UUID) -> None:
@@ -90,8 +108,7 @@ def _require_same_session(artifact_session_id: uuid.UUID, path_session_id: uuid.
     """
     if artifact_session_id != path_session_id:
         raise NotFoundError(
-            f"No such artifact in Session {path_session_id} "
-            f"(it belongs to a different Session)."
+            f"No such artifact in Session {path_session_id} (it belongs to a different Session)."
         )
 
 
@@ -113,10 +130,12 @@ async def list_sessions(
     status: str | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> SessionListResponse:
-    items, total = await SessionService(db).list_sessions(status=status, limit=limit, offset=offset)
+    items, total = await SessionService(db).list_sessions(
+        user_id=current_user.id, status=status, limit=limit, offset=offset
+    )
     return SessionListResponse(
         items=[SessionResponse.model_validate(s) for s in items],
         page=Page(total=total, limit=limit, offset=offset),
@@ -126,10 +145,10 @@ async def list_sessions(
 @router.get("/{session_id}", response_model=SessionResponse)
 async def get_session(
     session_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> SessionResponse:
-    session = await SessionService(db).get_session(session_id)
+    session = await SessionService(db).get_session(session_id, user_id=current_user.id)
     return SessionResponse.model_validate(session)
 
 
@@ -137,12 +156,16 @@ async def get_session(
 async def update_session_status(
     session_id: uuid.UUID,
     body: SessionStatusUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> SessionResponse:
     participant = await get_or_create_human_participant(db, current_user)
     session = await SessionService(db).transition_status(
-        session_id, new_status=body.status, participant_id=participant.id, reason=body.reason
+        session_id,
+        user_id=current_user.id,
+        new_status=body.status,
+        participant_id=participant.id,
+        reason=body.reason,
     )
     return SessionResponse.model_validate(session)
 
@@ -155,7 +178,7 @@ async def get_timeline(
     session_id: uuid.UUID,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    _: User = Depends(get_current_user),
+    _: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> TimelineListResponse:
     items, total = await TimelineService(db).list_page(session_id, limit=limit, offset=offset)
@@ -171,7 +194,7 @@ async def get_timeline(
 @router.get("/{session_id}/understanding", response_model=WorkingUnderstandingResponse)
 async def get_working_understanding(
     session_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    _: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> WorkingUnderstandingResponse:
     wu = await UnderstandingService(db).get_working_understanding(session_id)
@@ -190,7 +213,7 @@ async def get_working_understanding(
 async def propose_hypothesis(
     session_id: uuid.UUID,
     body: HypothesisCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> HypothesisResponse:
     author = await _author(db, current_user, body.agent_role)
@@ -207,7 +230,7 @@ async def propose_hypothesis(
 async def list_hypotheses(
     session_id: uuid.UUID,
     unresolved_only: bool = Query(default=False),
-    _: User = Depends(get_current_user),
+    _: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[HypothesisResponse]:
     hypotheses = await BeliefService(db).list_hypotheses(
@@ -225,7 +248,7 @@ async def resolve_hypothesis(
     session_id: uuid.UUID,
     hypothesis_id: uuid.UUID,
     body: HypothesisResolveRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> BeliefResponse:
     belief_service = BeliefService(db)
@@ -246,7 +269,7 @@ async def reject_hypothesis(
     session_id: uuid.UUID,
     hypothesis_id: uuid.UUID,
     body: HypothesisRejectRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> HypothesisResponse:
     belief_service = BeliefService(db)
@@ -262,7 +285,7 @@ async def reject_hypothesis(
 @router.get("/{session_id}/beliefs", response_model=list[BeliefResponse])
 async def list_beliefs(
     session_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    _: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[BeliefResponse]:
     beliefs = await BeliefService(db).list_beliefs(session_id)
@@ -274,7 +297,7 @@ async def revise_belief(
     session_id: uuid.UUID,
     belief_id: uuid.UUID,
     body: BeliefReviseRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> BeliefResponse:
     belief_service = BeliefService(db)
@@ -292,7 +315,7 @@ async def retract_belief(
     session_id: uuid.UUID,
     belief_id: uuid.UUID,
     body: BeliefRetractRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> BeliefResponse:
     belief_service = BeliefService(db)
@@ -312,7 +335,7 @@ async def retract_belief(
 async def record_evidence(
     session_id: uuid.UUID,
     body: EvidenceCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> EvidenceResponse:
     author = await _author(db, current_user, body.agent_role)
@@ -332,7 +355,7 @@ async def list_evidence(
     session_id: uuid.UUID,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    _: User = Depends(get_current_user),
+    _: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> EvidenceListResponse:
     items, total = await EvidenceService(db).list_page(session_id, limit=limit, offset=offset)
@@ -351,7 +374,7 @@ async def list_evidence(
 async def propose_recommendation(
     session_id: uuid.UUID,
     body: RecommendationCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> RecommendationResponse:
     author = await _author(db, current_user, body.agent_role)
@@ -368,7 +391,7 @@ async def propose_recommendation(
 @router.get("/{session_id}/recommendations", response_model=list[RecommendationResponse])
 async def list_open_recommendations(
     session_id: uuid.UUID,
-    _: User = Depends(get_current_user),
+    _: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[RecommendationResponse]:
     recommendations = await RecommendationService(db).list_open(session_id)
@@ -382,7 +405,7 @@ async def list_open_recommendations(
 async def accept_recommendation(
     session_id: uuid.UUID,
     recommendation_id: uuid.UUID,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> RecommendationResponse:
     recommendation_service = RecommendationService(db)
@@ -403,7 +426,7 @@ async def decline_recommendation(
     session_id: uuid.UUID,
     recommendation_id: uuid.UUID,
     body: RecommendationDeclineRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> RecommendationResponse:
     recommendation_service = RecommendationService(db)
@@ -423,7 +446,7 @@ async def decline_recommendation(
 async def commit_decision(
     session_id: uuid.UUID,
     body: DecisionCommitRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> DecisionResponse:
     # No agent_role resolution here at all, by design — see module
@@ -445,7 +468,7 @@ async def list_decisions(
     session_id: uuid.UUID,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    _: User = Depends(get_current_user),
+    _: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> DecisionListResponse:
     items, total = await DecisionService(db).list_page(session_id, limit=limit, offset=offset)
@@ -460,7 +483,7 @@ async def supersede_decision(
     session_id: uuid.UUID,
     decision_id: uuid.UUID,
     body: DecisionSupersedeRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> DecisionResponse:
     decision_service = DecisionService(db)
@@ -479,13 +502,11 @@ async def supersede_decision(
 # --- Contradictions ------------------------------------------------------
 
 
-@router.post(
-    "/{session_id}/contradictions", response_model=ContradictionResponse, status_code=201
-)
+@router.post("/{session_id}/contradictions", response_model=ContradictionResponse, status_code=201)
 async def detect_contradiction(
     session_id: uuid.UUID,
     body: ContradictionCreateRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> ContradictionResponse:
     author = await _author(db, current_user, body.agent_role)
@@ -504,7 +525,7 @@ async def list_contradictions(
     unresolved_only: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    _: User = Depends(get_current_user),
+    _: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> ContradictionListResponse:
     items, total = await ContradictionService(db).list_page(
@@ -524,7 +545,7 @@ async def resolve_contradiction(
     session_id: uuid.UUID,
     contradiction_id: uuid.UUID,
     body: ContradictionResolveRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> ContradictionResponse:
     contradiction_service = ContradictionService(db)
@@ -548,7 +569,7 @@ async def mark_contradiction_unresolved(
     session_id: uuid.UUID,
     contradiction_id: uuid.UUID,
     body: ContradictionMarkUnresolvedRequest,
-    current_user: User = Depends(get_current_user),
+    current_user: User = Depends(_verified_session_owner),
     db: AsyncSession = Depends(get_db_session),
 ) -> ContradictionResponse:
     contradiction_service = ContradictionService(db)

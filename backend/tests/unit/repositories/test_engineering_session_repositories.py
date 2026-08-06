@@ -39,6 +39,17 @@ async def _make_agent(db_session: AsyncSession, role: str = "investigator") -> P
     return participant
 
 
+async def _make_user(db_session: AsyncSession) -> User:
+    user = User(
+        email=f"session-owner-{uuid.uuid4().hex[:8]}@example.com",
+        hashed_password="x",
+        full_name="Session Owner",
+    )
+    db_session.add(user)
+    await db_session.flush()
+    return user
+
+
 async def _make_session(db_session: AsyncSession, title: str = "T") -> EngineeringSession:
     session = EngineeringSession(title=title)
     db_session.add(session)
@@ -66,9 +77,62 @@ async def test_session_repository_list_page_filters_by_status(db_session: AsyncS
     await repo.add(EngineeringSession(title="A", status="orienting"))
     await repo.add(EngineeringSession(title="B", status="converging"))
 
-    items, total = await repo.list_page(status="converging", limit=10, offset=0)
+    unrelated_user = await _make_user(db_session)
+    items, total = await repo.list_page(
+        user_id=unrelated_user.id, status="converging", limit=10, offset=0
+    )
     assert total == 1
     assert items[0].title == "B"
+
+
+async def test_session_repository_list_page_is_scoped_to_the_owning_user(
+    db_session: AsyncSession,
+) -> None:
+    """KAN-44: a session with no recorded owner (user_id=None) stays
+    visible to any authenticated user — the same legacy-row fallback
+    `agent_runs.py`'s own ownership clause applies — but a session owned by
+    a *different* user must not appear."""
+    repo = SessionRepository(db_session)
+    owner = await _make_user(db_session)
+    other = await _make_user(db_session)
+    await repo.add(EngineeringSession(title="Mine", status="orienting", user_id=owner.id))
+    await repo.add(EngineeringSession(title="Theirs", status="orienting", user_id=other.id))
+    await repo.add(EngineeringSession(title="Unowned legacy row", status="orienting"))
+
+    items, total = await repo.list_page(user_id=owner.id, limit=10, offset=0)
+
+    titles = {item.title for item in items}
+    assert total == 2
+    assert titles == {"Mine", "Unowned legacy row"}
+
+
+async def test_session_repository_get_does_not_return_another_users_session(
+    db_session: AsyncSession,
+) -> None:
+    repo = SessionRepository(db_session)
+    owner = await _make_user(db_session)
+    other = await _make_user(db_session)
+    session = await repo.add(
+        EngineeringSession(title="Theirs", status="orienting", user_id=owner.id)
+    )
+
+    assert await repo.get(session.id, user_id=other.id) is None
+    assert await repo.get(session.id, user_id=owner.id) is not None
+
+
+async def test_session_repository_get_with_no_user_id_ignores_ownership(
+    db_session: AsyncSession,
+) -> None:
+    """The plain existence check every sub-resource service
+    (BeliefService, EvidenceService, ...) relies on — omitting `user_id`
+    entirely must not filter by ownership at all."""
+    repo = SessionRepository(db_session)
+    owner = await _make_user(db_session)
+    session = await repo.add(
+        EngineeringSession(title="Theirs", status="orienting", user_id=owner.id)
+    )
+
+    assert await repo.get(session.id) is not None
 
 
 async def test_timeline_repository_next_sequence_is_monotonic(db_session: AsyncSession) -> None:
@@ -243,9 +307,7 @@ async def test_recommendation_repository_list_for_target_belief(
         )
     )
     await repo.add(
-        Recommendation(
-            session_id=session.id, participant_id=participant.id, statement="untargeted"
-        )
+        Recommendation(session_id=session.id, participant_id=participant.id, statement="untargeted")
     )
 
     targeted = await repo.list_for_target_belief(session.id, belief.id)
@@ -299,9 +361,7 @@ async def test_contradiction_repository_add_persists_all_parties(
 
     repo = ContradictionRepository(db_session)
     created = await repo.add(
-        Contradiction(
-            session_id=session.id, participant_id=participant.id, description="A vs B"
-        ),
+        Contradiction(session_id=session.id, participant_id=participant.id, description="A vs B"),
         party_artifact_ids=[belief_a.id, belief_b.id],
     )
 
@@ -404,8 +464,6 @@ async def test_contradiction_party_pair_uniqueness_is_enforced(db_session: Async
         party_artifact_ids=[belief_a.id, belief_b.id],
     )
 
-    db_session.add(
-        ContradictionParty(contradiction_id=contradiction.id, artifact_id=belief_a.id)
-    )
+    db_session.add(ContradictionParty(contradiction_id=contradiction.id, artifact_id=belief_a.id))
     with pytest.raises(Exception):  # noqa: B017 - asserting the DB IntegrityError surfaces
         await db_session.flush()

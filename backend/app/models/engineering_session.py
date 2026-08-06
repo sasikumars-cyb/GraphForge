@@ -61,6 +61,28 @@ class EngineeringSession(Base):
         String(32), nullable=False, default="orienting", server_default="orienting"
     )
 
+    # KAN-44: the human who created this Session — the ownership boundary
+    # `SessionService`/`engineering_sessions.py` enforce, matching the
+    # `user_id` convention every other user-owned resource in the app
+    # (Repository, Workflow, Run) already uses. Nullable, not because a
+    # Session can legitimately have no owner going forward (creation always
+    # sets it — see `SessionService.create_session`), but because it must
+    # tolerate rows that predate this column; a `NULL` here is a "no
+    # recorded owner" row, treated by the ownership check as visible to any
+    # authenticated user rather than becoming permanently inaccessible to
+    # everyone — the same fallback rule `agent_runs.py`'s
+    # `_run_ownership_clause` already applies to its own legacy rows.
+    # Deliberately a direct column, not derived by joining through
+    # `created_by_participant_id -> Participant.user_id` at query time: an
+    # agent-authored artifact still has `created_by_participant_id` set,
+    # but `Participant.user_id` is only ever non-null for kind="human" (see
+    # `Participant`'s own CHECK constraint) — this column names the human
+    # owner unambiguously, without every ownership check needing to know
+    # that distinction.
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     # Reserved for the Mission aggregate (a later RFC) — see module
     # docstring. No FK constraint yet; deliberately not enforced until
     # Mission exists as a real table.
