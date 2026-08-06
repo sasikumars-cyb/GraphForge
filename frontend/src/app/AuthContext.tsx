@@ -67,6 +67,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setToken(tokens.access_token);
   }
 
+  function loginWithToken(accessToken: string) {
+    localStorage.setItem(TOKEN_STORAGE_KEY, accessToken);
+    setToken(accessToken);
+  }
+
   function logout() {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     setToken(null);
@@ -74,7 +79,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, token, isLoading, login, logout }}>
+    <AuthContext.Provider value={{ user, token, isLoading, login, loginWithToken, logout }}>
       {children}
     </AuthContext.Provider>
   );

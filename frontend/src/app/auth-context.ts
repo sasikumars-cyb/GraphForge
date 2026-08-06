@@ -6,6 +6,10 @@ export interface AuthContextValue {
   token: string | null;
   isLoading: boolean;
   login: (email: string, password: string) => Promise<void>;
+  /** Adopts a token this app already issued elsewhere (KAN-34's GitHub
+   * OAuth login redirect carries one in `/oauth/callback?token=`) rather
+   * than obtaining one via `login`'s own email/password POST. */
+  loginWithToken: (token: string) => void;
   logout: () => void;
 }
 

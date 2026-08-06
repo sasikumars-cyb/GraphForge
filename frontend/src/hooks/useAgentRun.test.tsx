@@ -17,6 +17,7 @@ function wrapper({ children }: { children: ReactNode }) {
     token: "test-token",
     isLoading: false,
     login: vi.fn(),
+    loginWithToken: vi.fn(),
     logout: vi.fn(),
   };
   return <AuthContext.Provider value={authValue}>{children}</AuthContext.Provider>;

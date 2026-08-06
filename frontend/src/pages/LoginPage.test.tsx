@@ -26,12 +26,15 @@ describe("LoginPage", () => {
     vi.restoreAllMocks();
   });
 
-  it("renders email, password, and a disabled GitHub option", async () => {
+  it("renders email, password, and a GitHub sign-in link", async () => {
     renderLoginPage();
 
     expect(await screen.findByLabelText("Email")).toBeInTheDocument();
     expect(screen.getByLabelText("Password")).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /continue with github/i })).toBeDisabled();
+    // KAN-34 - a real top-level navigation to the backend's OAuth login
+    // route, not a same-origin SPA link - see LoginPage's own comment.
+    const githubLink = screen.getByRole("link", { name: /continue with github/i });
+    expect(githubLink).toHaveAttribute("href", expect.stringContaining("/auth/github/login"));
   });
 
   it("shows the backend's error message when login fails", async () => {

@@ -31,6 +31,7 @@ function renderWithAuth(ui: React.ReactElement) {
     token: "tok",
     isLoading: false,
     login: vi.fn(),
+    loginWithToken: vi.fn(),
     logout: vi.fn(),
   };
   return render(

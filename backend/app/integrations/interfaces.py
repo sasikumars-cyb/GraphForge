@@ -42,13 +42,12 @@ class IOAuthProvider(ABC):
     use case go through this same contract.
 
     `GitHubOAuthProvider` (app.integrations.github) is a real, working
-    implementation used today by `/api/v1/github/connect` and
-    `/api/v1/github/callback` (repo-access "Connect GitHub", not login).
-
-    `api/v1/routers/oauth.py`'s `/auth/github/login` / `/auth/github/callback`
-    routes are a *separate*, still-unimplemented use case (signing in AS a
-    GitHub identity) and are deliberately not wired to this provider yet —
-    see ADR 0006.
+    implementation used by both use cases today: `/api/v1/github/connect`
+    and `/api/v1/github/callback` (repo-access "Connect GitHub"), and
+    (KAN-34) `/api/v1/auth/github/login` and `/api/v1/auth/github/callback`
+    (signing in AS a GitHub identity, via `app.services.github_login_service`
+    — a separate redirect URI and a separate account-creation path, but
+    the same provider contract). See ADR 0006.
     """
 
     @abstractmethod

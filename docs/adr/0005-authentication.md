@@ -28,6 +28,10 @@ The app needed real authentication — a login page and JWT-based sessions — w
 
 **One event loop for the whole pytest session** (`asyncio_default_fixture_loop_scope` and `asyncio_default_test_loop_scope`, both `"session"`). `app.database.session` creates its async engine once at import time; pytest-asyncio's default of one event loop per test function causes asyncpg connections to be used across event loops they weren't created on, which asyncpg does not support. This surfaced as a real, reproducible failure while writing the auth tests, not a hypothetical.
 
+## Update (KAN-34)
+
+`/auth/github/login` and `/auth/github/callback` are no longer 501 stubs — `app.services.github_login_service` implements the login-identity use case this ADR prepared for, using the same `GitHubOAuthProvider` ADR 0006 built for "Connect GitHub." `api/v1/dependencies.get_oauth_provider()` (described above as the one-line change needed) was removed rather than reused: the router calls `github_login_service` directly instead, since the real implementation needed its own credential resolution (admin-configured override, per ADR 0006) and redirect URI (`GITHUB_LOGIN_REDIRECT_URI`, distinct from the connect flow's), not just a constructed `IOAuthProvider`. See `github_login_service`'s module docstring for the account-linking decision (a GitHub sign-in does not auto-link to an existing `auth_provider="local"` account sharing the same email).
+
 ## Consequences
 - Adding GitHub OAuth later touches: one new file in `app/integrations` implementing `IOAuthProvider`, one line in `get_oauth_provider`, and the two route bodies in `oauth.py` (currently just the "not configured" branch) — no change to `auth_service`, no change to the `User` model beyond possibly relaxing the current single-provider assumption if a user should be able to link both.
 - Anyone adding a DB-touching test must use the `db_session`/`db_client` fixtures, not the plain `client` fixture — `client` intentionally has no database wired in, so purely HTTP-level tests (health, error handling) stay independent of Postgres being reachable at all.

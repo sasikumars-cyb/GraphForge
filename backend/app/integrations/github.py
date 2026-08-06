@@ -31,8 +31,13 @@ _API_BASE = "https://api.github.com"
 
 # `repo` covers listing + reading both public and private repos the user
 # grants access to; `read:user` gets us their login/profile for
-# GitHubConnection.github_username.
-_SCOPE = "repo read:user"
+# GitHubConnection.github_username. `user:email` (added for KAN-34,
+# "Sign in with GitHub") lets `fetch_user_profile` fall back to
+# `/user/emails` when `/user` itself doesn't return one - GitHub omits
+# `email` from `/user` whenever it's unset or the account's privacy
+# setting keeps it out of that response, which is common and does not by
+# itself mean the account has no verified email to offer.
+_SCOPE = "repo read:user user:email"
 
 _API_HEADERS = {
     "Accept": "application/vnd.github+json",
@@ -84,6 +89,22 @@ async def _github_get(
     return response.json()
 
 
+async def _fetch_primary_verified_email(access_token: str) -> str | None:
+    """`/user/emails` (requires the `user:email` scope) — GitHub's own
+    recommended fallback for when `/user` doesn't include `email` (see
+    `fetch_user_profile`). Returns the verified address flagged `primary`,
+    or `None` if there isn't one (email access wasn't granted, or the
+    account genuinely has no verified email)."""
+    try:
+        emails = await _github_get("/user/emails", access_token)
+    except GitHubApiError:
+        return None
+    for entry in emails:
+        if entry.get("primary") and entry.get("verified"):
+            return cast(str, entry["email"])
+    return None
+
+
 async def fetch_user_profile(access_token: str) -> OAuthUserProfile:
     """Fetch the authenticated user's profile from GitHub.
 
@@ -96,9 +117,16 @@ async def fetch_user_profile(access_token: str) -> OAuthUserProfile:
     is unchanged for the OAuth flow.
     """
     data = await _github_get("/user", access_token)
+    email = data.get("email")
+    if email is None:
+        # Falls back to the emails endpoint rather than leaving this None -
+        # "Connect GitHub" never needed an email at all, but KAN-34's
+        # "Sign in with GitHub" identifies/creates a User by email and
+        # can't proceed without one.
+        email = await _fetch_primary_verified_email(access_token)
     return OAuthUserProfile(
         provider_user_id=str(data["id"]),
-        email=data.get("email"),
+        email=email,
         # `login` (the @handle) over the optional display `name`: it's
         # always present, and what "Connect GitHub" needs to show as
         # "Connected as @login" - unlike a future login-via-GitHub use

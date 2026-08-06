@@ -52,6 +52,7 @@ function renderWithAuth() {
     token: "test-token",
     isLoading: false,
     login: vi.fn(),
+    loginWithToken: vi.fn(),
     logout: vi.fn(),
   };
 
@@ -84,6 +85,7 @@ const repos: TrackedRepository[] = [
     private: false,
     default_branch: "main",
     html_url: "https://github.com/acme/billing-service",
+    created_at: "2026-01-01T00:00:00Z",
   },
 ];
 

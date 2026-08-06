@@ -151,14 +151,27 @@ async def test_me_with_valid_token_returns_current_user(db_client: AsyncClient) 
     assert response.json()["email"] == REGISTER_PAYLOAD["email"]
 
 
-async def test_github_oauth_login_is_not_configured(db_client: AsyncClient) -> None:
-    response = await db_client.get("/api/v1/auth/github/login")
+async def test_github_oauth_login_redirects_to_github_authorize(db_client: AsyncClient) -> None:
+    # This environment has GITHUB_CLIENT_ID/SECRET configured (see .env) -
+    # the "not configured" case (GitHubLoginNotConfiguredError, 503) is
+    # covered directly against github_login_service in
+    # tests/unit/services/test_github_login_service.py instead, since it
+    # can't be exercised through this app instance's real settings.
+    response = await db_client.get("/api/v1/auth/github/login", follow_redirects=False)
 
-    assert response.status_code == 501
-    assert response.json()["error"]["code"] == "not_implemented"
+    assert response.status_code in (302, 307)
+    assert response.headers["location"].startswith("https://github.com/login/oauth/authorize")
 
 
-async def test_github_oauth_callback_is_not_configured(db_client: AsyncClient) -> None:
-    response = await db_client.get("/api/v1/auth/github/callback?code=abc&state=xyz")
+async def test_github_oauth_callback_redirects_to_frontend_on_invalid_state(
+    db_client: AsyncClient,
+) -> None:
+    # Success and every failure of this route are a redirect to the
+    # frontend's /oauth/callback, never a raised error the browser is
+    # mid-navigation and can't render (see routers/oauth.py's docstring).
+    response = await db_client.get(
+        "/api/v1/auth/github/callback?code=abc&state=xyz", follow_redirects=False
+    )
 
-    assert response.status_code == 501
+    assert response.status_code in (302, 307)
+    assert "/oauth/callback?error=" in response.headers["location"]

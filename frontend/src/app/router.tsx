@@ -2,6 +2,7 @@ import { createBrowserRouter, Navigate, type RouteObject } from "react-router-do
 import { AppLayout } from "../components/layout/AppLayout";
 import { RequireAuth } from "../components/layout/RequireAuth";
 import { LoginPage } from "../pages/LoginPage";
+import { OAuthCallbackPage } from "../pages/OAuthCallbackPage";
 import { ControlCenterPage } from "../pages/ControlCenterPage";
 import { WorkspacePage } from "../pages/WorkspacePage";
 import { PlanningPage } from "../pages/PlanningPage";
@@ -34,6 +35,7 @@ import { NotFoundPage } from "../pages/NotFoundPage";
 // it and risking drift.
 export const routes: RouteObject[] = [
   { path: "/login", element: <LoginPage /> },
+  { path: "/oauth/callback", element: <OAuthCallbackPage /> },
   // Catch-all — top-level (not nested under RequireAuth) so it renders
   // regardless of auth state for any unmatched path (typo, stale bookmark,
   // bad deep link), instead of React Router's default unstyled fallback.
