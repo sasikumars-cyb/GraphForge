@@ -5,6 +5,8 @@ Swagger UI is served automatically at `/docs` (ReDoc at `/redoc`, the raw
 schema at `/openapi.json`) - no extra wiring needed beyond the metadata below.
 """
 
+import asyncio
+import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -12,6 +14,17 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 
+# Imported for their module-level `register_handler(...)` side effects, not
+# any name used directly here — the durable-queue Worker started below must
+# not begin polling before every job_type it might claim has a handler
+# registered (see app.orchestrator.worker's registry docstring). Explicit,
+# eager imports here (rather than relying on some route handler importing
+# them lazily on first request) guarantee that ordering, the same way
+# alembic/env.py explicitly imports every model module rather than trusting
+# something else to have done it first. Kept below the normal import block
+# (not sorted into it) so this ordering rationale stays visually attached
+# to the two imports it explains.
+import app.orchestrator.background_execution as background_execution  # noqa: E402
 from app.agents.setup import register_agents
 from app.api.v1.routers import api_router
 from app.core.config import get_settings
@@ -20,8 +33,11 @@ from app.core.logging import configure_logging
 from app.core.request_id_middleware import RequestIDMiddleware
 from app.database.session import AsyncSessionLocal, engine
 from app.graph.session import close_driver
-from app.orchestrator.background_execution import recover_orphaned_runs
+from app.indexer.workers import index_worker  # noqa: F401, E402
+from app.orchestrator.worker import Worker, reclaim_expired_leases_once
 from app.tools.setup import register_all_tools, sync_all_knowledge_connections_to_tools
+
+logger = logging.getLogger(__name__)
 
 OPENAPI_TAGS = [
     {
@@ -74,7 +90,8 @@ def create_app() -> FastAPI:
                 )
             )
             # Ensure knowledge_connections table exists.
-            await conn.execute(text("""
+            await conn.execute(
+                text("""
                 CREATE TABLE IF NOT EXISTS knowledge_connections (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     source_type VARCHAR(64) NOT NULL,
@@ -93,11 +110,14 @@ def create_app() -> FastAPI:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
-            """))
-            await conn.execute(text("""
+            """)
+            )
+            await conn.execute(
+                text("""
                 CREATE INDEX IF NOT EXISTS ix_knowledge_connections_source_type
                 ON knowledge_connections (source_type)
-            """))
+            """)
+            )
             # No admin-promotion SQL here on purpose — the bootstrap admin
             # account is seeded once, by the b5c6d7e8f9a0 migration, not on
             # every process start. An unconditional
@@ -109,11 +129,20 @@ def create_app() -> FastAPI:
             # hypothetical one. See b5c6d7e8f9a0's own docstring for the
             # production-safety note on that seeded account.
 
-        # Recover any Run left "running" by a previous process — background
-        # execution (see app.orchestrator.background_execution) runs on
-        # asyncio.create_task, which does not survive a restart.
+        # KAN-18: requeue any BackgroundJob a previous process's worker
+        # abandoned mid-lease (crashed/killed before completing) — the
+        # queue-side half of startup recovery. Must run before
+        # recover_orphaned_runs, which only fails a Run once it confirms no
+        # job can still retry it.
+        reclaimed = await reclaim_expired_leases_once()
+        if reclaimed:
+            logger.warning("reclaimed_expired_job_leases count=%d", reclaimed)
+
+        # Backstop for what even a reclaimed lease can't cover: a Run with
+        # no BackgroundJob left able to retry it (dead-lettered, or none
+        # ever existed — e.g. a row from before this migration).
         async with AsyncSessionLocal() as db:
-            await recover_orphaned_runs(db)
+            await background_execution.recover_orphaned_runs(db)
 
         # Activate Tool Registry entries (Jira, Confluence, ...) for any
         # Knowledge Connection (Settings → Integrations) made in an earlier
@@ -122,7 +151,28 @@ def create_app() -> FastAPI:
         async with AsyncSessionLocal() as db:
             await sync_all_knowledge_connections_to_tools(db)
 
+        # KAN-18: an embedded worker, polling the durable queue on this same
+        # process — what makes agent runs, resumes, and indexing jobs
+        # actually execute now that scheduling them only enqueues a row (see
+        # app.orchestrator.background_execution's module docstring). Kept
+        # in-process rather than requiring a separate deployed worker
+        # service so local dev and today's single-replica deployment need
+        # no new infrastructure; nothing here stops a dedicated worker
+        # process (a second `Worker().run_forever()` elsewhere, pointed at
+        # the same Postgres) from also claiming jobs once one exists — the
+        # SELECT ... FOR UPDATE SKIP LOCKED claim is safe for any number of
+        # concurrent workers, in this process or another.
+        worker_stop_event = asyncio.Event()
+        worker_task = asyncio.create_task(Worker().run_forever(worker_stop_event))
+
         yield
+
+        # Graceful shutdown: stop claiming new jobs and let any in-flight
+        # one finish (Worker.run_forever awaits its own in-flight tasks
+        # once the stop event is set) before tearing down the connections
+        # those jobs depend on.
+        worker_stop_event.set()
+        await worker_task
 
         # Graceful shutdown: release the Neo4j connection pool and dispose
         # the SQLAlchemy engine's own pool, rather than leaving both open

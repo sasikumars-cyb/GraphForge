@@ -530,7 +530,8 @@ async def create_run(
     # is what makes the run's own logs carry the same correlation id.
     set_workflow_context(workflow_run_id=str(run.id))
 
-    schedule_run_execution(
+    await schedule_run_execution(
+        db=db,
         run_id=run.id,
         subject=subject,
         goal=body.goal,

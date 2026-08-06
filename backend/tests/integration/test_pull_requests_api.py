@@ -2,13 +2,19 @@
 
 Uses the plain `client` fixture (real, committed `AsyncSessionLocal`)
 rather than `db_client`'s rolled-back test transaction - the setup step
-here triggers `POST /repositories/{id}/index`, which schedules a
-background task on its *own* DB session (see
-`app.indexer.workers.index_worker`) that would never see data written
-inside a savepoint that's rolled back instead of committed (see
+here triggers `POST /repositories/{id}/index`, which enqueues a durable job
+(see `app.indexer.workers.index_worker`, `app.orchestrator.job_queue`) a
+`Worker` runs against its *own* DB session, which would never see data
+written inside a savepoint that's rolled back instead of committed (see
 `test_indexing_api.py` for the same pattern). The analyze/analysis
 endpoints themselves are synchronous (no background task), but they still
-need the indexed repository's row to actually be committed and visible.
+need the indexed repository's row to actually be committed and visible —
+and, since KAN-18, need the indexing job to have actually *finished*, which
+`POST .../index` returning 202 no longer implies (see
+`_poll_indexing_job_until_terminal` below and `test_indexing_api.py`'s
+module docstring for why: Starlette used to await a `BackgroundTasks`
+callback within the response cycle itself, which is why no fixture here
+ever needed to poll before).
 
 `GitHubVersionControlProvider.list_changed_files` is patched at the class
 level (same technique `test_github_oauth.py` uses for the OAuth provider)
@@ -16,6 +22,7 @@ so these hit our own routes/engine/DB/Neo4j for real, without a real
 GitHub account or network call.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -36,6 +43,28 @@ from app.models.pull_request import PullRequest
 from app.models.user import User
 
 pytestmark = pytest.mark.asyncio
+
+
+async def _poll_indexing_job_until_terminal(
+    client: AsyncClient, repository_id: str, headers: dict[str, str], timeout_s: float = 10.0
+) -> dict[str, object] | None:
+    """Same helper as `test_indexing_api.py`'s own — duplicated rather than
+    imported to keep these two files independently runnable/readable, the
+    same trade-off `_poll_run_until_terminal`-style helpers already make
+    across this test suite."""
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while True:
+        response = await client.get(f"/api/v1/repositories/{repository_id}/index", headers=headers)
+        if response.status_code == 404:
+            return None
+        body: dict[str, object] = response.json()
+        if body["status"] not in ("pending", "running"):
+            return body
+        if asyncio.get_event_loop().time() > deadline:
+            raise AssertionError(
+                f"Indexing job for repository {repository_id} did not finish in time"
+            )
+        await asyncio.sleep(0.05)
 
 
 @pytest.fixture
@@ -79,6 +108,9 @@ async def indexed_repository_with_pr(
         f"/api/v1/repositories/{repository_id}/index", headers=headers
     )
     assert index_response.status_code == 202
+    finished_job = await _poll_indexing_job_until_terminal(client, repository_id, headers)
+    assert finished_job is not None
+    assert finished_job["status"] == "completed"
 
     async with AsyncSessionLocal() as session:
         pull_request = PullRequest(
