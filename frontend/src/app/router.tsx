@@ -24,6 +24,7 @@ import { RepositoriesPage } from "../pages/RepositoriesPage";
 import { RepositoryDetailPage } from "../pages/RepositoryDetailPage";
 import { ArchitecturePage } from "../pages/ArchitecturePage";
 import { MetricsPage } from "../pages/MetricsPage";
+import { WorkflowLLMUsagePage } from "../pages/WorkflowLLMUsagePage";
 import { ReportsPage } from "../pages/ReportsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WorkflowPage, NewWorkflowPage } from "../pages/WorkflowPage";
@@ -74,6 +75,7 @@ export const routes: RouteObject[] = [
           { path: "/runs", element: <RunHistoryPage /> },
           { path: "/runs/:runId", element: <RunDetailPage /> },
           { path: "/metrics", element: <MetricsPage /> },
+          { path: "/metrics/workflows/:workflowId", element: <WorkflowLLMUsagePage /> },
 
           // ── Knowledge ────────────────────────────────────────────
           { path: "/repositories", element: <RepositoriesPage /> },

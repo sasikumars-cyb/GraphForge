@@ -82,3 +82,22 @@ export interface MetricsReportResponse {
   repository_components: RepositoryComponentCount[];
   recent_workflows: WorkflowSummary[];
 }
+
+/** One workflow's LLM consumption for a single stage (Planning,
+ * Development, Testing, ...) — mirrors `WorkflowStageLLMUsage`. */
+export interface WorkflowStageLLMUsage {
+  stage: string;
+  models: string[];
+  calls: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  avg_latency_ms: number;
+}
+
+export interface WorkflowLLMUsageResponse {
+  workflow_id: string;
+  workflow_title: string;
+  stages: WorkflowStageLLMUsage[];
+}

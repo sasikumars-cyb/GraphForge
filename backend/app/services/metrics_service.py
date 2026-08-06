@@ -18,7 +18,8 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from neo4j import AsyncDriver
-from sqlalchemy import and_, func as sa_func, or_, select
+from sqlalchemy import and_, or_, select
+from sqlalchemy import func as sa_func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.llm_invocation import LLMInvocation
@@ -34,8 +35,11 @@ from app.schemas.metrics import (
     RepositoryComponentCount,
     RunStageOutcome,
     StageCost,
+    WorkflowLLMUsageResponse,
+    WorkflowStageLLMUsage,
     WorkflowSummary,
 )
+from app.services import workflow_service
 
 Scope = Literal["user", "global"]
 
@@ -402,4 +406,72 @@ async def get_metrics_report(
         run_success_by_stage=await _run_success_by_stage(db, scope, user_id),
         repository_components=repository_components,
         recent_workflows=await _recent_workflows(db, scope, user_id),
+    )
+
+
+async def get_workflow_llm_usage(
+    db: AsyncSession, workflow_id: uuid.UUID, user_id: uuid.UUID
+) -> WorkflowLLMUsageResponse:
+    """Per-stage LLM usage for one workflow - lets a user see which stage
+    (Planning, Development, Testing, ...) actually drove that workflow's
+    cost/latency, and compare stages against each other, rather than only
+    ever seeing the workflow's rolled-up total. `workflow_service.
+    get_workflow`'s ownership check (404-not-403) is reused as-is - this
+    is the same "own it or it doesn't exist" rule every other per-workflow
+    read already enforces."""
+    workflow = await workflow_service.get_workflow(db, workflow_id, user_id=user_id)
+
+    stage_col = sa_func.coalesce(Run.workflow_stage, Run.goal)
+    totals_query = (
+        select(
+            stage_col.label("stage"),
+            sa_func.count(LLMInvocation.id),
+            sa_func.coalesce(sa_func.sum(LLMInvocation.prompt_tokens), 0),
+            sa_func.coalesce(sa_func.sum(LLMInvocation.completion_tokens), 0),
+            sa_func.coalesce(sa_func.sum(LLMInvocation.total_tokens), 0),
+            sa_func.coalesce(sa_func.sum(LLMInvocation.estimated_cost_usd), 0.0),
+            sa_func.coalesce(sa_func.avg(LLMInvocation.latency_ms), 0.0),
+        )
+        .select_from(LLMInvocation)
+        .join(Run, LLMInvocation.run_id == Run.id)
+        .where(Run.workflow_id == workflow_id)
+        .group_by(stage_col)
+        .order_by(sa_func.coalesce(sa_func.sum(LLMInvocation.estimated_cost_usd), 0.0).desc())
+    )
+    totals_rows = (await db.execute(totals_query)).all()
+
+    # A separate query for distinct models per stage - a stage can call
+    # more than one model (a provider fallback, or more than one agent
+    # sharing a `workflow_stage`), and that's exactly the kind of thing
+    # this view exists to surface, not average away.
+    models_query = (
+        select(stage_col.label("stage"), LLMInvocation.model)
+        .select_from(LLMInvocation)
+        .join(Run, LLMInvocation.run_id == Run.id)
+        .where(Run.workflow_id == workflow_id)
+        .distinct()
+    )
+    models_by_stage: dict[str, list[str]] = {}
+    for stage, model in (await db.execute(models_query)).all():
+        if model:
+            models_by_stage.setdefault(stage, []).append(model)
+
+    stages = [
+        WorkflowStageLLMUsage(
+            stage=stage,
+            models=sorted(models_by_stage.get(stage, [])),
+            calls=int(calls),
+            input_tokens=int(input_tokens or 0),
+            output_tokens=int(output_tokens or 0),
+            total_tokens=int(total_tokens or 0),
+            cost_usd=float(cost or 0.0),
+            avg_latency_ms=round(float(latency or 0.0)),
+        )
+        for stage, calls, input_tokens, output_tokens, total_tokens, cost, latency in totals_rows
+    ]
+
+    return WorkflowLLMUsageResponse(
+        workflow_id=str(workflow.id),
+        workflow_title=workflow.title or "Untitled",
+        stages=stages,
     )

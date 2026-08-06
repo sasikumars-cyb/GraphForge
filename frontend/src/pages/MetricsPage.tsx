@@ -1,11 +1,23 @@
+import { Link } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import { Card } from "../components/Card";
 import { StatCard } from "../components/StatCard";
 import { StatusBadge, type StatusTone } from "../components/StatusBadge";
 import { Table, type TableColumn } from "../components/Table";
-import { BarChart, HorizontalBarChart, LineChart, StackedBarChart } from "../components/charts/SimpleCharts";
+import {
+  BarChart,
+  HorizontalBarChart,
+  LineChart,
+  StackedBarChart,
+} from "../components/charts/SimpleCharts";
 import { useReportsData } from "../hooks/useReportsData";
-import type { MetricsReportResponse, MetricsScope, ModelUsage, WorkflowSummary } from "../types/metrics";
+import { formatCount, formatLabel, formatUsd } from "../lib/formatMetrics";
+import type {
+  MetricsReportResponse,
+  MetricsScope,
+  ModelUsage,
+  WorkflowSummary,
+} from "../types/metrics";
 
 const WORKFLOW_STATUS_TONE: Record<string, StatusTone> = {
   in_progress: "info",
@@ -16,18 +28,6 @@ const WORKFLOW_STATUS_TONE: Record<string, StatusTone> = {
   rejected: "danger",
   failed: "danger",
 };
-
-function formatUsd(value: number): string {
-  return `$${value.toFixed(4)}`;
-}
-
-function formatCount(value: number): string {
-  return value.toLocaleString();
-}
-
-function formatLabel(value: string): string {
-  return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
-}
 
 /** Live activity dashboard — workflows, AI cost/tokens, and indexed
  * architecture. Separate from ReportsPage, which is the PR-review evidence
@@ -52,7 +52,10 @@ export function MetricsPage() {
             disabled={isLoading}
             className="inline-flex items-center gap-1.5 rounded-lg border border-line-muted bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${isLoading ? "animate-spin" : ""}`} aria-hidden="true" />
+            <RefreshCw
+              className={`h-3.5 w-3.5 ${isLoading ? "animate-spin" : ""}`}
+              aria-hidden="true"
+            />
             Refresh
           </button>
         </div>
@@ -73,8 +76,8 @@ export function MetricsPage() {
       {report && (
         <>
           <p className="text-xs text-fg-muted">
-            Generated {new Date(report.generated_at).toLocaleString()} · last {report.window_days} days ·
-            scope: {report.scope}
+            Generated {new Date(report.generated_at).toLocaleString()} · last {report.window_days}{" "}
+            days · scope: {report.scope}
           </p>
 
           <OverviewSection report={report} />
@@ -104,7 +107,10 @@ export function MetricsPage() {
                   Cost by provider
                 </h3>
                 <HorizontalBarChart
-                  data={report.cost_by_provider.map((p) => ({ label: p.provider, value: p.cost_usd }))}
+                  data={report.cost_by_provider.map((p) => ({
+                    label: p.provider,
+                    value: p.cost_usd,
+                  }))}
                   valueFormatter={formatUsd}
                 />
               </div>
@@ -113,7 +119,10 @@ export function MetricsPage() {
                   Cost by stage
                 </h3>
                 <HorizontalBarChart
-                  data={report.cost_by_stage.map((s) => ({ label: formatLabel(s.stage), value: s.cost_usd }))}
+                  data={report.cost_by_stage.map((s) => ({
+                    label: formatLabel(s.stage),
+                    value: s.cost_usd,
+                  }))}
                   valueFormatter={formatUsd}
                 />
               </div>
@@ -126,7 +135,10 @@ export function MetricsPage() {
 
           <Card title="Repository Graph" description="Components per indexed repository">
             <BarChart
-              data={report.repository_components.map((r) => ({ label: r.name, value: r.components }))}
+              data={report.repository_components.map((r) => ({
+                label: r.name,
+                value: r.components,
+              }))}
               valueFormatter={formatCount}
               color="var(--gf-info-fg, #3b82f6)"
             />
@@ -151,7 +163,13 @@ export function MetricsPage() {
   );
 }
 
-function ScopeToggle({ scope, onChange }: { scope: MetricsScope; onChange: (scope: MetricsScope) => void }) {
+function ScopeToggle({
+  scope,
+  onChange,
+}: {
+  scope: MetricsScope;
+  onChange: (scope: MetricsScope) => void;
+}) {
   return (
     <div className="flex items-center rounded-lg border border-line-muted bg-surface p-0.5 text-xs">
       {(["user", "global"] as const).map((value) => (
@@ -175,8 +193,12 @@ function OverviewSection({ report }: { report: MetricsReportResponse }) {
   const completionRate = overview.total_workflows
     ? Math.round((overview.completed_workflows / overview.total_workflows) * 100)
     : 0;
-  const avgCostPerWorkflow = overview.total_workflows ? overview.total_cost_usd / overview.total_workflows : 0;
-  const avgTokensPerCall = overview.total_llm_calls ? Math.round(overview.total_tokens / overview.total_llm_calls) : 0;
+  const avgCostPerWorkflow = overview.total_workflows
+    ? overview.total_cost_usd / overview.total_workflows
+    : 0;
+  const avgTokensPerCall = overview.total_llm_calls
+    ? Math.round(overview.total_tokens / overview.total_llm_calls)
+    : 0;
 
   return (
     <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
@@ -185,7 +207,13 @@ function OverviewSection({ report }: { report: MetricsReportResponse }) {
         value={formatCount(overview.total_workflows)}
         hint={`${overview.completed_workflows} completed · ${completionRate}% rate`}
       />
-      <StatCard label="Agent Runs" value={formatCount(overview.completed_runs)} hint="Completed runs" />
+      <Link to="/runs" className="block transition-opacity hover:opacity-80">
+        <StatCard
+          label="Agent Runs"
+          value={formatCount(overview.completed_runs)}
+          hint="Completed runs"
+        />
+      </Link>
       <StatCard
         label="Indexed Repositories"
         value={formatCount(overview.indexed_repositories)}
@@ -197,16 +225,32 @@ function OverviewSection({ report }: { report: MetricsReportResponse }) {
         hint={`avg ${formatCount(overview.avg_latency_ms)}ms latency`}
       />
       <StatCard label="Total AI Cost" value={formatUsd(overview.total_cost_usd)} hint="USD" />
-      <StatCard label="Total Tokens" value={formatCount(overview.total_tokens)} hint="prompt + completion" />
-      <StatCard label="Avg Cost / Workflow" value={formatUsd(avgCostPerWorkflow)} hint="USD per workflow" />
-      <StatCard label="Avg Tokens / Call" value={formatCount(avgTokensPerCall)} hint="tokens per LLM call" />
+      <StatCard
+        label="Total Tokens"
+        value={formatCount(overview.total_tokens)}
+        hint="prompt + completion"
+      />
+      <StatCard
+        label="Avg Cost / Workflow"
+        value={formatUsd(avgCostPerWorkflow)}
+        hint="USD per workflow"
+      />
+      <StatCard
+        label="Avg Tokens / Call"
+        value={formatCount(avgTokensPerCall)}
+        hint="tokens per LLM call"
+      />
     </div>
   );
 }
 
 function ModelUsageTable({ rows }: { rows: ModelUsage[] }) {
   const columns: TableColumn<ModelUsage>[] = [
-    { key: "model", header: "Model", render: (r) => <span className="font-mono text-xs">{r.model}</span> },
+    {
+      key: "model",
+      header: "Model",
+      render: (r) => <span className="font-mono text-xs">{r.model}</span>,
+    },
     { key: "provider", header: "Provider", render: (r) => r.provider },
     { key: "calls", header: "Calls", render: (r) => formatCount(r.calls), className: "text-right" },
     {
@@ -232,19 +276,32 @@ function RecentWorkflowsTable({ rows }: { rows: WorkflowSummary[] }) {
       key: "title",
       header: "Title",
       render: (r) => (
-        <span className="block max-w-[260px] truncate" title={r.title}>
+        <Link
+          to={`/metrics/workflows/${r.id}`}
+          className="block max-w-[260px] truncate hover:underline"
+          title={`View LLM usage for "${r.title}"`}
+        >
           {r.title}
-        </span>
+        </Link>
       ),
     },
     {
       key: "status",
       header: "Status",
-      render: (r) => <StatusBadge label={formatLabel(r.status)} tone={WORKFLOW_STATUS_TONE[r.status] ?? "neutral"} />,
+      render: (r) => (
+        <StatusBadge
+          label={formatLabel(r.status)}
+          tone={WORKFLOW_STATUS_TONE[r.status] ?? "neutral"}
+        />
+      ),
     },
     { key: "stage", header: "Stage", render: (r) => formatLabel(r.current_stage) },
     { key: "type", header: "Type", render: (r) => formatLabel(r.workflow_type) },
-    { key: "created", header: "Created", render: (r) => new Date(r.created_at).toLocaleDateString() },
+    {
+      key: "created",
+      header: "Created",
+      render: (r) => new Date(r.created_at).toLocaleDateString(),
+    },
     {
       key: "cost",
       header: "Cost",
@@ -258,5 +315,12 @@ function RecentWorkflowsTable({ rows }: { rows: WorkflowSummary[] }) {
       className: "text-right",
     },
   ];
-  return <Table columns={columns} data={rows} getRowKey={(r) => r.id} emptyMessage="No workflows found." />;
+  return (
+    <Table
+      columns={columns}
+      data={rows}
+      getRowKey={(r) => r.id}
+      emptyMessage="No workflows found."
+    />
+  );
 }
