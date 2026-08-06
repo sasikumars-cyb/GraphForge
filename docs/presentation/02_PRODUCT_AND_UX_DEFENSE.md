@@ -13,9 +13,9 @@ survives her being on vacation — or leaving."
 ## Why existing tools fail
 
 `PRODUCT_VISION.md`'s competitive table, memorize the row headers:
-memory-across-sessions, cross-system reasoning, deterministic grounding,
-extensibility, SDLC-continuity. Generic chatbots and PR-bots score "no" or
-"partial" on every one. The one line that matters: **"GraphForge does not
+memory-across-sessions, cross-repository code reasoning, deterministic
+grounding, extensibility, SDLC-continuity. Generic chatbots and PR-bots
+score "no" or "partial" on every one. The one line that matters: **"GraphForge does not
 compete on 'better prompts.' It competes on having a graph the others
 don't."**
 

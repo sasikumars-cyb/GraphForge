@@ -121,7 +121,7 @@ existing patterns to follow.
 | | Chatbot-style AI (generic LLM wrappers) | PR-bot point solutions | Jira AI add-ons | **GraphForge** |
 |---|---|---|---|---|
 | Memory across sessions | No | Per-PR only | Per-ticket only | Persistent graph, org-wide |
-| Cross-system reasoning | No | No | No | Yes — code ↔ tickets ↔ docs ↔ releases |
+| Cross-repository code reasoning | No | No | No | Yes — call/dependency edges cross repository boundaries |
 | Deterministic grounding | No | Partial (diff-only) | No | Yes — graph traversal backs every claim |
 | Extensible to new agents | N/A | No | No | Yes — typed agent framework |
 | SDLC-continuous | No | No (review-only) | No (planning-only) | Yes — idea to operate |
@@ -129,6 +129,14 @@ existing patterns to follow.
 GraphForge does not compete on "better prompts." It competes on having a graph the others don't,
 and a framework where new agents make the *existing* agents smarter (more graph edges), rather
 than living as isolated features.
+
+*Note on scope:* the row above is scoped to what's actually graph-grounded today —
+cross-**repository** code reasoning (dependency/call edges spanning services), verified end-to-end
+(`docs/handbook/16_REALITY_CHECK.md`). The broader "code ↔ tickets ↔ docs ↔ releases" framing this
+table previously used overstated that: Jira access today is read-only search/enrichment (no
+Confluence integration, no Jira/Confluence Entry Resolvers), so tickets and docs aren't yet part of
+the same graph-backed reasoning as code — see `16_REALITY_CHECK.md`'s "Known gaps" and "Roadmap"
+sections for the current boundary.
 
 ## Why GraphForge Exists
 
