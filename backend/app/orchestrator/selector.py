@@ -51,7 +51,7 @@ class AgentSelector:
             if goal in manifest.goals:
                 return manifest.agent_id
         known = sorted(g for m in self._registry.all_manifests() for g in m.goals)
-        raise NotFoundError(f"No agent registered for goal '{goal}'. " f"Known goals: {known}")
+        raise NotFoundError(f"No agent registered for goal '{goal}'. Known goals: {known}")
 
     def known_goals(self) -> list[str]:
         return sorted(g for m in self._registry.all_manifests() for g in m.goals)

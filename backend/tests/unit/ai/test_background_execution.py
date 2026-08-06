@@ -1,14 +1,18 @@
 """Unit tests for app.orchestrator.background_execution's task bookkeeping.
 
-Pure asyncio-level tests — no real DB, no real agent. Patches the module's
-internal `_execute_run_task` with a fast fake coroutine so these tests
-verify only what this module is actually responsible for: tracking tasks
-(so they aren't garbage-collected mid-run), looking them up by run_id for
-cancellation, and cleaning up after completion. The real execution body
-(_execute_run_task itself, which opens its own session and calls
-RunCoordinator.execute_run) is exercised by the integration tests in
-tests/integration/test_background_execution_api.py instead, since it
-needs a real DB.
+Pure asyncio-level tests — no real DB, no real agent, no durable queue.
+As of KAN-18, `schedule_run_execution` itself enqueues a real
+`BackgroundJob` row (real DB access) rather than creating a task directly —
+that behavior has its own integration coverage in
+tests/integration/test_background_execution_scheduling.py. What stays a
+pure unit concern is `_track_current_task`, the primitive both
+`_execute_run_task` and `_resume_step_task` call on themselves once a
+`Worker` actually starts running one: tracking the current task (so it
+isn't garbage-collected mid-run), looking it up by run_id for cancellation,
+and cleaning up after completion. Exercised directly here via a bare
+`asyncio.create_task` wrapping a coroutine that calls `_track_current_task`
+itself — the same shape a claimed job's task has, without needing a
+Worker, a queue, or a DB to set one up.
 """
 
 from __future__ import annotations
@@ -31,27 +35,28 @@ def _clean_task_registries():
     background_execution._title_tasks.clear()
 
 
+def _spawn_tracked(run_id: uuid.UUID, body) -> asyncio.Task:
+    """The shape a claimed job's task actually has: something that calls
+    `_track_current_task(run_id)` as its first act, then awaits `body`."""
+
+    async def _wrapped() -> None:
+        background_execution._track_current_task(run_id)
+        await body()
+
+    return asyncio.create_task(_wrapped())
+
+
 @pytest.mark.asyncio
-async def test_schedule_run_execution_tracks_and_cleans_up_task(monkeypatch):
+async def test_track_current_task_tracks_and_cleans_up():
     started = asyncio.Event()
     release = asyncio.Event()
 
-    async def fake_execute_run_task(*args, **kwargs):
+    async def body():
         started.set()
         await release.wait()
 
-    monkeypatch.setattr(background_execution, "_execute_run_task", fake_execute_run_task)
-
     run_id = uuid.uuid4()
-    task = background_execution.schedule_run_execution(
-        run_id=run_id,
-        subject=None,
-        goal="fake_goal",
-        model=None,
-        extras=None,
-        agent_id="fake_agent",
-        registry=None,
-    )
+    task = _spawn_tracked(run_id, body)
 
     await asyncio.wait_for(started.wait(), timeout=1)
     assert task in background_execution._running_tasks
@@ -67,36 +72,66 @@ async def test_schedule_run_execution_tracks_and_cleans_up_task(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_track_current_task_is_a_noop_outside_a_task():
+    """Called synchronously (no enclosing asyncio.Task) — must not raise,
+    just have nothing to track. Guards a real call site: `_execute_run_task`
+    calls this unconditionally, including in any future/test context that
+    might invoke it as a bare coroutine rather than via create_task."""
+    background_execution._track_current_task(uuid.uuid4())  # must not raise
+
+
+@pytest.mark.asyncio
 async def test_cancel_run_returns_false_for_unknown_run_id():
     assert background_execution.cancel_run(uuid.uuid4()) is False
 
 
 @pytest.mark.asyncio
-async def test_cancel_run_cancels_tracked_task(monkeypatch):
+async def test_cancel_run_cancels_tracked_task():
     started = asyncio.Event()
 
-    async def fake_execute_run_task(*args, **kwargs):
+    async def body():
         started.set()
         await asyncio.sleep(60)  # long enough to be reliably still running
 
-    monkeypatch.setattr(background_execution, "_execute_run_task", fake_execute_run_task)
-
     run_id = uuid.uuid4()
-    task = background_execution.schedule_run_execution(
-        run_id=run_id,
-        subject=None,
-        goal="fake_goal",
-        model=None,
-        extras=None,
-        agent_id="fake_agent",
-        registry=None,
-    )
+    task = _spawn_tracked(run_id, body)
     await asyncio.wait_for(started.wait(), timeout=1)
 
     assert background_execution.cancel_run(run_id) is True
     with pytest.raises(asyncio.CancelledError):
         await task
     assert task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_track_current_task_survives_gc_pressure():
+    """Regression guard for the documented asyncio.create_task GC pitfall:
+    without a strong reference held somewhere, a task with no other
+    referrers can be collected before it finishes. `_track_current_task`
+    must keep one itself (_running_tasks) so a caller who doesn't hold the
+    Task it spawned is still safe — the same guarantee `schedule_run_
+    execution` used to provide directly, now provided by whatever runs the
+    claimed job instead."""
+    import gc
+
+    release = asyncio.Event()
+    ran_to_completion = False
+
+    async def body():
+        nonlocal ran_to_completion
+        await release.wait()
+        ran_to_completion = True
+
+    _spawn_tracked(uuid.uuid4(), body)
+    # Don't keep the returned Task around — simulate a caller that only
+    # cares about fire-and-forget dispatch.
+    gc.collect()
+    await asyncio.sleep(0)
+    gc.collect()
+
+    release.set()
+    await asyncio.sleep(0.05)
+    assert ran_to_completion is True
 
 
 # ---------------------------------------------------------------------------
@@ -155,9 +190,7 @@ async def test_generate_title_task_persists_generated_title(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr(
-        background_execution, "AsyncSessionLocal", lambda: _FakeSession()
-    )
+    monkeypatch.setattr(background_execution, "AsyncSessionLocal", lambda: _FakeSession())
 
     async def fake_generate_title(objective, *, model=None):
         assert objective == "Some objective"
@@ -192,9 +225,7 @@ async def test_generate_title_task_noop_when_workflow_vanished(monkeypatch):
         async def __aexit__(self, *exc):
             return False
 
-    monkeypatch.setattr(
-        background_execution, "AsyncSessionLocal", lambda: _FakeSession()
-    )
+    monkeypatch.setattr(background_execution, "AsyncSessionLocal", lambda: _FakeSession())
 
     async def fake_generate_title(objective, *, model=None):
         return "Some Title"
@@ -227,42 +258,3 @@ async def test_generate_title_task_swallows_generate_title_exception(monkeypatch
     from app.models.workflow import Workflow
 
     await background_execution._generate_title_task(Workflow, uuid.uuid4(), "Some objective", None)
-
-
-@pytest.mark.asyncio
-async def test_schedule_run_execution_survives_gc_pressure(monkeypatch):
-    """Regression guard for the documented asyncio.create_task GC pitfall:
-    without holding a strong reference, a task with no other referrers can
-    be collected before it finishes. schedule_run_execution must keep one
-    itself (_running_tasks) so callers who don't hold the returned Task
-    are still safe."""
-    import gc
-
-    release = asyncio.Event()
-    ran_to_completion = False
-
-    async def fake_execute_run_task(*args, **kwargs):
-        nonlocal ran_to_completion
-        await release.wait()
-        ran_to_completion = True
-
-    monkeypatch.setattr(background_execution, "_execute_run_task", fake_execute_run_task)
-
-    background_execution.schedule_run_execution(
-        run_id=uuid.uuid4(),
-        subject=None,
-        goal="fake_goal",
-        model=None,
-        extras=None,
-        agent_id="fake_agent",
-        registry=None,
-    )
-    # Don't keep the returned Task around — simulate a caller that only
-    # cares about fire-and-forget dispatch.
-    gc.collect()
-    await asyncio.sleep(0)
-    gc.collect()
-
-    release.set()
-    await asyncio.sleep(0.05)
-    assert ran_to_completion is True

@@ -3,8 +3,16 @@
 Reuses the same `indexed_repository_with_pr` fixture from the deterministic
 tests, and patches the LLM provider to avoid real OpenAI calls while testing
 the full HTTP path: routing → auth → ownership → service → persist → response.
+
+As of KAN-18, `POST .../index` only enqueues a durable job (see
+`app.orchestrator.job_queue`) rather than running synchronously within the
+request/response cycle the way FastAPI's `BackgroundTasks` used to — see
+`test_indexing_api.py`'s module docstring. `_poll_indexing_job_until_terminal`
+below is the same poll-for-a-terminal-state helper that file and
+`test_pull_requests_api.py` already define.
 """
 
+import asyncio
 import uuid
 from collections.abc import AsyncGenerator
 from datetime import UTC, datetime
@@ -90,6 +98,27 @@ _FAKE_AI_RESULT = AIAnalysisResult(
 )
 
 
+async def _poll_indexing_job_until_terminal(
+    client: AsyncClient, repository_id: str, headers: dict[str, str], timeout_s: float = 10.0
+) -> dict[str, object] | None:
+    """Same helper as `test_indexing_api.py`'s own — duplicated rather than
+    imported, matching this test suite's existing per-file polling-helper
+    convention (e.g. `_poll_run_until_terminal`)."""
+    deadline = asyncio.get_event_loop().time() + timeout_s
+    while True:
+        response = await client.get(f"/api/v1/repositories/{repository_id}/index", headers=headers)
+        if response.status_code == 404:
+            return None
+        body: dict[str, object] = response.json()
+        if body["status"] not in ("pending", "running"):
+            return body
+        if asyncio.get_event_loop().time() > deadline:
+            raise AssertionError(
+                f"Indexing job for repository {repository_id} did not finish in time"
+            )
+        await asyncio.sleep(0.05)
+
+
 @pytest.fixture
 async def ai_test_setup(
     client: AsyncClient, spring_boot_git_repo: Path
@@ -132,6 +161,9 @@ async def ai_test_setup(
         f"/api/v1/repositories/{repository_id}/index", headers=headers
     )
     assert index_response.status_code == 202
+    finished_job = await _poll_indexing_job_until_terminal(client, repository_id, headers)
+    assert finished_job is not None
+    assert finished_job["status"] == "completed"
 
     async with AsyncSessionLocal() as session:
         pull_request = PullRequest(
@@ -306,10 +338,7 @@ async def test_review_report_renders_html_markdown_and_json(
     assert json_response.status_code == 200
     assert json_response.headers["content-type"].startswith("application/json")
     json_body = json_response.json()
-    assert (
-        json_body["executive_summary"]["summary"]
-        == "This PR modifies the order event producer."
-    )
+    assert json_body["executive_summary"]["summary"] == "This PR modifies the order event producer."
     assert json_body["executive_summary"]["pull_request_number"] == 42
 
 

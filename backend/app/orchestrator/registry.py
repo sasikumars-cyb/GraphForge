@@ -32,8 +32,7 @@ class AgentRegistry:
         """Register an agent. Raises ValueError on duplicate agent_id."""
         if manifest.agent_id in self._store:
             raise ValueError(
-                f"Agent '{manifest.agent_id}' is already registered. "
-                "Each agent_id must be unique."
+                f"Agent '{manifest.agent_id}' is already registered. Each agent_id must be unique."
             )
         self._store[manifest.agent_id] = (manifest, agent)
         logger.info(

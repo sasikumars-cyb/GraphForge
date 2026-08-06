@@ -39,6 +39,7 @@ from app.models.run import Run
 from app.models.user import User
 from app.models.workflow import Workflow
 from app.models.workflow_report import WorkflowReport
+from app.orchestrator.on_complete_spec import OnCompleteSpec
 from app.orchestrator.registry import global_registry
 from app.orchestrator.selector import AgentSelector
 from app.schemas.engineering_understanding import (
@@ -473,9 +474,7 @@ def _report_finalizer(report_id: uuid.UUID) -> OnComplete:
         # raises MissingGreenlet from exactly this call stack (inside an
         # on_pre_commit hook, past the point SQLAlchemy can bridge an
         # implicit lazy-load), not a normal awaited query.
-        step_result = await db.execute(
-            select(AgentStep).where(AgentStep.run_id == run.id).limit(1)
-        )
+        step_result = await db.execute(select(AgentStep).where(AgentStep.run_id == run.id).limit(1))
         step = step_result.scalar_one_or_none()
         result = step.result if step else {}
         html = result.get("html")
@@ -540,11 +539,7 @@ def _build_projection_input(
 
     original_request: str = cd_result.get("original_request", "")
     raw_readiness = cd_result.get("readiness", "BLOCKED")
-    readiness = (
-        raw_readiness
-        if raw_readiness in ("READY", "PARTIAL", "BLOCKED")
-        else "BLOCKED"
-    )
+    readiness = raw_readiness if raw_readiness in ("READY", "PARTIAL", "BLOCKED") else "BLOCKED"
     blocking_reasons: list[str] = cd_result.get("blocking_reasons") or []
 
     # Typed graph projections from raw dicts
@@ -576,14 +571,10 @@ def _build_projection_input(
     ]
 
     gap_summaries = [
-        g["summary"]
-        for g in gaps
-        if g.get("status") != "verified" and g.get("summary")
+        g["summary"] for g in gaps if g.get("status") != "verified" and g.get("summary")
     ]
     unavailable_gaps = [
-        g["summary"]
-        for g in gaps
-        if g.get("status") == "unresolvable" and g.get("summary")
+        g["summary"] for g in gaps if g.get("status") == "unresolvable" and g.get("summary")
     ]
 
     documentation_status = _derive_documentation_status(breakdown, gaps)
@@ -825,7 +816,8 @@ async def create_workflow(
     # as the request that scheduled them.
     set_workflow_context(workflow_id=str(workflow.id), workflow_run_id=str(run.id))
 
-    schedule_run_execution(
+    await schedule_run_execution(
+        db=db,
         run_id=run.id,
         subject=subject,
         goal=goal,
@@ -833,7 +825,7 @@ async def create_workflow(
         extras={"workflow": workflow, "user_id": user.id, "source_workflow": source_workflow},
         agent_id=agent_id,
         registry=global_registry,
-        on_complete=_workflow_stage_finalizer(workflow.id),
+        on_complete_spec=OnCompleteSpec("workflow_stage_finalizer", workflow.id),
     )
     # Real AI title generation, off the request's critical path — the
     # workflow already carries a deterministic placeholder title (see
@@ -1178,7 +1170,8 @@ async def continue_workflow(
 
     set_workflow_context(workflow_id=str(workflow.id), workflow_run_id=str(run.id))
 
-    schedule_run_execution(
+    await schedule_run_execution(
+        db=db,
         run_id=run.id,
         subject=subject,
         goal=goal,
@@ -1186,7 +1179,7 @@ async def continue_workflow(
         extras={"workflow": workflow, "user_id": user.id, "source_workflow": source_workflow},
         agent_id=agent_id,
         registry=global_registry,
-        on_complete=_workflow_stage_finalizer(workflow.id),
+        on_complete_spec=OnCompleteSpec("workflow_stage_finalizer", workflow.id),
     )
 
     return ContinueWorkflowResponse(
@@ -1289,7 +1282,8 @@ async def clarify_workflow(
 
     set_workflow_context(workflow_id=str(workflow.id), workflow_run_id=str(run.id))
 
-    schedule_resume_execution(
+    await schedule_resume_execution(
+        db=db,
         run_id=run.id,
         step_id=step.id,
         subject=subject,
@@ -1304,7 +1298,7 @@ async def clarify_workflow(
         },
         agent_id=step.agent_id,
         registry=global_registry,
-        on_complete=_workflow_stage_finalizer(workflow.id),
+        on_complete_spec=OnCompleteSpec("workflow_stage_finalizer", workflow.id),
     )
 
     return ContinueWorkflowResponse(
@@ -1441,7 +1435,8 @@ async def override_stage_result(
 
         set_workflow_context(workflow_id=str(workflow.id), workflow_run_id=str(run.id))
 
-        schedule_run_execution(
+        await schedule_run_execution(
+            db=db,
             run_id=run.id,
             subject=subject,
             goal=goal,
@@ -1453,7 +1448,7 @@ async def override_stage_result(
             },
             agent_id=agent_id,
             registry=global_registry,
-            on_complete=_workflow_stage_finalizer(workflow.id),
+            on_complete_spec=OnCompleteSpec("workflow_stage_finalizer", workflow.id),
         )
 
         logger.info(
@@ -1513,7 +1508,8 @@ async def approve_workflow(
         report.run_id = run.id
         await db.commit()
 
-        schedule_run_execution(
+        await schedule_run_execution(
+            db=db,
             run_id=run.id,
             subject=subject,
             goal="generate_report",
@@ -1521,7 +1517,7 @@ async def approve_workflow(
             extras={"workflow": workflow, "user_id": user.id},
             agent_id=agent_id,
             registry=global_registry,
-            on_complete=_report_finalizer(report.id),
+            on_complete_spec=OnCompleteSpec("report_finalizer", report.id),
         )
     except Exception as exc:
         logger.exception(

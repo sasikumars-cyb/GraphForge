@@ -5,7 +5,7 @@ their architecture indexing jobs / discovered graph.
 import asyncio
 import uuid
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Query
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,7 +16,7 @@ from app.database.session import get_db_session
 from app.graph.models import GraphNode, GraphPayload
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
-from app.indexer.workers.index_worker import run_indexing_job
+from app.indexer.workers.index_worker import schedule_indexing_job
 from app.models.indexing_job import IndexingJob
 from app.models.pull_request import PullRequest
 from app.models.repository import Repository
@@ -264,13 +264,13 @@ async def list_pull_requests(
 @router.post("/{repository_id}/index", response_model=IndexingJobResponse, status_code=202)
 async def trigger_indexing(
     repository_id: uuid.UUID,
-    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> IndexingJob:
     """Schedules an indexing run and returns immediately - the run itself
-    happens in a background task (see `app.indexer.workers.index_worker`)
-    and its progress is tracked via the returned job's `status`."""
+    happens on the durable job queue (see `app.indexer.workers.index_worker`,
+    `app.orchestrator.job_queue`) and its progress is tracked via the
+    returned job's `status`."""
     repository = await _get_owned_repository(db, repository_id, current_user)
 
     existing_result = await db.execute(
@@ -287,7 +287,7 @@ async def trigger_indexing(
     await db.commit()
     await db.refresh(job)
 
-    background_tasks.add_task(run_indexing_job, job.id, repository.id)
+    await schedule_indexing_job(db, job.id, repository.id)
     return job
 
 

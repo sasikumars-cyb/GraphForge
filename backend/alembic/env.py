@@ -17,6 +17,7 @@ from app.database.base import Base
 from app.models.agent_step import AgentStep  # noqa: F401
 from app.models.ai_profile import AIProfile, AIProviderUsage  # noqa: F401
 from app.models.ai_provider_config import AIProviderConfig, AISettings  # noqa: F401
+from app.models.background_job import BackgroundJob  # noqa: F401
 from app.models.belief import Belief, Hypothesis  # noqa: F401
 from app.models.confidence_calibration import ConfidenceCalibration  # noqa: F401
 from app.models.contradiction import Contradiction, ContradictionParty  # noqa: F401
