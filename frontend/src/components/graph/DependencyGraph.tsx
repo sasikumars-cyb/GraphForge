@@ -372,7 +372,13 @@ export function RepositoryOverviewGraph({
   }, [repositories, dependencyEdges]);
 
   return (
-    <div style={{ height: 480 }} className="overflow-hidden rounded-xl border border-line bg-graph-canvas">
+    // Viewport-relative rather than a fixed 480px: a graph is the primary
+    // content of the surface it sits on, and a hardcoded height gave a
+    // 6-node graph and a 2,000-node graph exactly the same window — while
+    // wasting most of a tall desktop display. Clamped so it stays usable on
+    // a short laptop viewport and never grows past a comfortable reading
+    // size on a very tall one.
+    <div className="h-[clamp(20rem,70vh,45rem)] overflow-hidden rounded-xl border border-line bg-graph-canvas">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -480,7 +486,13 @@ export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphPr
   }, [baseNodes, baseEdges, selectedNodeId, realNodeIds]);
 
   return (
-    <div style={{ height: 480 }} className="overflow-hidden rounded-xl border border-line bg-graph-canvas">
+    // Viewport-relative rather than a fixed 480px: a graph is the primary
+    // content of the surface it sits on, and a hardcoded height gave a
+    // 6-node graph and a 2,000-node graph exactly the same window — while
+    // wasting most of a tall desktop display. Clamped so it stays usable on
+    // a short laptop viewport and never grows past a comfortable reading
+    // size on a very tall one.
+    <div className="h-[clamp(20rem,70vh,45rem)] overflow-hidden rounded-xl border border-line bg-graph-canvas">
       <ReactFlow
         nodes={nodes}
         edges={edges}

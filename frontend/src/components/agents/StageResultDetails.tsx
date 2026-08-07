@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { Card } from "../Card";
 import { VerificationWarnings } from "./VerificationWarnings";
+import { GroundingBanner } from "./GroundingBanner";
 import type {
   DevelopmentPlanResult,
   DocumentationPlanResult,
@@ -34,6 +35,12 @@ import type {
 export function PlanningResultDetails({ result }: { result: PlanningResult }) {
   return (
     <>
+      <GroundingBanner
+        graphContextUsed={result.graph_context_used}
+        repositoriesConsulted={result.repositories_consulted}
+        subject="plan"
+      />
+
       <VerificationWarnings warnings={result.verification_warnings} subject="plan" />
 
       {result.executive_summary && (
@@ -98,17 +105,11 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
           </Card>
         )}
 
-        {result.repositories_consulted && result.repositories_consulted.length > 0 && (
-          <Card title="Repositories Consulted">
-            <ul className="space-y-1">
-              {result.repositories_consulted.map((r) => (
-                <li key={r} className="text-sm text-fg-secondary">
-                  {r}
-                </li>
-              ))}
-            </ul>
-          </Card>
-        )}
+        {/* "Repositories Consulted" used to be a third card here. The
+            GroundingBanner at the top of this result now names the same
+            repositories as part of the grounding claim, where they carry
+            more meaning — listing them twice on one screen was the
+            duplicate-information problem, not thoroughness. */}
       </div>
 
       {result.risk_considerations && result.risk_considerations.length > 0 && (
@@ -127,10 +128,6 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
         </Card>
       )}
 
-      <div className="text-xs text-fg-muted">
-        Graph context:{" "}
-        {result.graph_context_used ? "Used architecture graph data" : "No graph data available"}
-      </div>
     </>
   );
 }
@@ -138,6 +135,12 @@ export function PlanningResultDetails({ result }: { result: PlanningResult }) {
 export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanResult }) {
   return (
     <>
+      <GroundingBanner
+        graphContextUsed={result.graph_context_used}
+        repositoriesConsulted={result.repositories_consulted}
+        subject="blueprint"
+      />
+
       <VerificationWarnings
         warnings={result.verification_warnings}
         subject="implementation plan"
@@ -378,12 +381,6 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
         </Card>
       )}
 
-      <div className="text-xs text-fg-muted">
-        Graph context:{" "}
-        {result.graph_context_used
-          ? "Blueprint grounded in architecture graph data"
-          : "No graph data available — general engineering practices used"}
-      </div>
     </>
   );
 }
@@ -391,6 +388,12 @@ export function DevelopmentResultDetails({ result }: { result: DevelopmentPlanRe
 export function TestingResultDetails({ result }: { result: TestPlanResult }) {
   return (
     <>
+      <GroundingBanner
+        graphContextUsed={result.graph_context_used}
+        repositoriesConsulted={result.repositories_consulted}
+        subject="test plan"
+      />
+
       <VerificationWarnings warnings={result.verification_warnings} subject="test plan" />
 
       {result.executive_summary && (
@@ -703,12 +706,6 @@ export function TestingResultDetails({ result }: { result: TestPlanResult }) {
         </Card>
       )}
 
-      <div className="text-xs text-fg-muted">
-        Graph context:{" "}
-        {result.graph_context_used
-          ? "Test plan grounded in architecture graph data"
-          : "No graph data available — general QA practices used"}
-      </div>
     </>
   );
 }

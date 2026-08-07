@@ -493,7 +493,7 @@ export function PullRequestDetailPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-xl font-semibold text-fg">{pr.title}</h2>
+        <h1 className="text-xl font-semibold text-fg">{pr.title}</h1>
         <p className="mt-1 text-sm text-fg-muted">
           <Link to={`/repositories/${pr.repositoryId}`} className="hover:underline">
             {pr.repositoryFullName}

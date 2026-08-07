@@ -49,7 +49,8 @@ describe("RunHistoryPage", () => {
 
   it("shows empty state message", async () => {
     renderWithAuth();
-    expect(await screen.findByText("No agent runs yet.")).toBeInTheDocument();
+    expect(await screen.findByText("Agent runs appear here")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "New Workflow" })).toBeInTheDocument();
   });
 
   it("has a refresh button", () => {

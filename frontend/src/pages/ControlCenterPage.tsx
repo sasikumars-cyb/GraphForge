@@ -2,6 +2,8 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../app/auth-context";
 import { getSystemStatus } from "../lib/api/system";
 import { getConnectionStatus } from "../lib/api/github";
+import { WaitingOnYouPanel } from "../components/workflow/WaitingOnYouPanel";
+import { InFlightWorkflowsPanel } from "../components/workflow/InFlightWorkflowsPanel";
 import {
   Activity,
   Brain,
@@ -60,7 +62,7 @@ export function ControlCenterPage() {
     return (
       <div className="flex flex-col gap-6">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-fg">Control Center</h2>
+          <h1 className="text-2xl font-bold tracking-tight text-fg">Control Center</h1>
           <p className="mt-1 text-sm text-fg-muted">Loading platform status…</p>
         </div>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -76,7 +78,7 @@ export function ControlCenterPage() {
     return (
       <div className="flex flex-col gap-6">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight text-fg">Control Center</h2>
+          <h1 className="text-2xl font-bold tracking-tight text-fg">Control Center</h1>
         </div>
         <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
@@ -97,12 +99,27 @@ export function ControlCenterPage() {
     <div className="flex flex-col gap-6">
       {/* ── Header ──────────────────────────────────────────────── */}
       <div>
-        <h2 className="text-2xl font-bold tracking-tight text-fg">Control Center</h2>
+        <h1 className="text-2xl font-bold tracking-tight text-fg">Control Center</h1>
         <p className={`mt-1 text-sm ${platformHealthColor}`}>
           <span className="inline-block h-2 w-2 rounded-full bg-current mr-2" />
           {platformHealthLabel}
         </p>
       </div>
+
+      {/* ── Work state, before platform state ───────────────────── *
+       * This page used to be entirely platform status (providers,
+       * connections, version) — a question worth answering once per
+       * session, not the thing worth seeing first every time. GraphForge's
+       * loop is "AI proposes, human approves", so what belongs above the
+       * fold is what's actually blocked on the person looking at the
+       * screen. The status indicators below aren't going anywhere (still
+       * one glance away) — renaming the page itself and moving platform
+       * status to its own settings surface is a bigger call (nav label,
+       * redirects, existing tests keyed to "Control Center") left for a
+       * separate pass; this is the content reorder that gets the value
+       * without that risk. */}
+      <WaitingOnYouPanel />
+      <InFlightWorkflowsPanel />
 
       {/* ── Status Indicators ───────────────────────────────────── */}
       {/* 4 columns only from `lg` up — at `sm` (640px) each of 4 columns
@@ -141,9 +158,9 @@ export function ControlCenterPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Left: AI Providers */}
         <section className="flex flex-col gap-2">
-          <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
+          <h2 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
             AI Providers
-          </h3>
+          </h2>
           <div className="divide-y divide-line-muted rounded-lg border border-line-muted bg-surface">
             {system.ai_providers.map((provider) => (
               <div key={provider.name} className="flex items-center gap-3 px-4 py-2.5">
@@ -179,9 +196,9 @@ export function ControlCenterPage() {
 
         {/* Right: Connections */}
         <section className="flex flex-col gap-2">
-          <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
+          <h2 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
             Connections
-          </h3>
+          </h2>
           <div className="divide-y divide-line-muted rounded-lg border border-line-muted bg-surface">
             {/* GitHub (from live check) */}
             <div className="flex items-center gap-3 px-4 py-2.5">
@@ -228,9 +245,9 @@ export function ControlCenterPage() {
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         {/* Left: Knowledge Base */}
         <section className="flex flex-col gap-2">
-          <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
+          <h2 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">
             Knowledge Base
-          </h3>
+          </h2>
           <div className="rounded-lg border border-line-muted bg-surface px-4 py-3">
             <div className="space-y-2.5">
               <MetricRow
@@ -262,7 +279,7 @@ export function ControlCenterPage() {
 
         {/* Right: Platform Info */}
         <section className="flex flex-col gap-2">
-          <h3 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Platform</h3>
+          <h2 className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Platform</h2>
           <div className="rounded-lg border border-line-muted bg-surface px-4 py-3">
             <div className="space-y-2.5">
               <MetricRow label="Version" value={system.version} />

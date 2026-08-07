@@ -114,7 +114,7 @@ export function SettingsShell() {
     <div className="flex flex-col gap-6">
       {/* Page header */}
       <div>
-        <h2 className="text-xl font-semibold text-fg">Settings</h2>
+        <h1 className="text-xl font-semibold text-fg">Settings</h1>
         <p className="mt-1 text-sm text-fg-muted">
           Configure GraphForge platform, AI providers, integrations, and preferences.
         </p>
@@ -161,7 +161,7 @@ export function SettingsShell() {
                   <current.icon className="h-5 w-5 text-accent-fg" aria-hidden="true" />
                 </div>
                 <div>
-                  <h3 className="text-base font-semibold text-fg">{current.label}</h3>
+                  <h2 className="text-base font-semibold text-fg">{current.label}</h2>
                   <p className="text-xs text-fg-muted">{current.description}</p>
                 </div>
               </div>

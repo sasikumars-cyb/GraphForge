@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { History, ChevronLeft, ChevronRight, RefreshCw, GitMerge, Trash2 } from "lucide-react";
 import { Card } from "../components/Card";
+import { ConfirmDialog } from "../components/ConfirmDialog";
+import { EmptyState, SamplePipeline } from "../components/EmptyState";
 import { StatusBadge } from "../components/StatusBadge";
 import { Table, type TableColumn } from "../components/Table";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
@@ -41,10 +43,17 @@ function StartedCell({ row }: { row: RunListItem }) {
   );
 }
 
+/** `null` when incomplete (still running, or never started) — shared by the
+ * cell renderer and the Duration column's `sortValue` so "how long did this
+ * take" means the same thing in both. */
+function durationMs(row: RunListItem): number | null {
+  if (!row.started_at || !row.completed_at) return null;
+  return new Date(row.completed_at).getTime() - new Date(row.started_at).getTime();
+}
+
 function DurationCell({ row }: { row: RunListItem }) {
-  if (!row.started_at || !row.completed_at)
-    return <span className="text-xs text-fg-muted">—</span>;
-  const ms = new Date(row.completed_at).getTime() - new Date(row.started_at).getTime();
+  const ms = durationMs(row);
+  if (ms === null) return <span className="text-xs text-fg-muted">—</span>;
   return <span className="text-sm text-fg-muted">{(ms / 1000).toFixed(1)}s</span>;
 }
 
@@ -59,17 +68,17 @@ function ProviderCell({ row }: { row: RunListItem }) {
 function DeleteRunButton({ row, onDeleted }: { row: RunListItem; onDeleted: () => void }) {
   const { token } = useAuth();
   const [isDeleting, setIsDeleting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const isActive = row.status === "queued" || row.status === "running";
+  const runLabel =
+    row.title ?? row.subject.display_name ?? stageLabelFor(row) ?? row.subject.subject_id;
 
   async function handleDelete() {
     if (!token) return;
-    const confirmMsg = isActive
-      ? "This run is still in progress — deleting it will cancel and remove it. Continue?"
-      : "Delete this run? This can't be undone.";
-    if (!window.confirm(confirmMsg)) return;
     setIsDeleting(true);
     try {
       await deleteAgentRun(token, row.run_id);
+      setConfirming(false);
       onDeleted();
     } finally {
       setIsDeleting(false);
@@ -77,16 +86,42 @@ function DeleteRunButton({ row, onDeleted }: { row: RunListItem; onDeleted: () =
   }
 
   return (
-    <button
-      type="button"
-      onClick={() => void handleDelete()}
-      disabled={isDeleting}
-      title={isActive ? "Cancel and delete this run" : "Delete run"}
-      className="text-fg-muted hover:text-danger-fg disabled:cursor-not-allowed disabled:opacity-30"
-    >
-      <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        disabled={isDeleting}
+        title={isActive ? "Cancel and delete this run" : "Delete run"}
+        className="text-fg-muted hover:text-danger-fg disabled:cursor-not-allowed disabled:opacity-30"
+      >
+        <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+      </button>
+      <ConfirmDialog
+        open={confirming}
+        title={isActive ? "Cancel and delete this run?" : "Delete this run?"}
+        body={
+          isActive
+            ? "This run is still in progress. Deleting it cancels the agent and removes the run permanently."
+            : "This removes the run and everything recorded with it. It can't be undone."
+        }
+        consequences={[
+          runLabel,
+          ...(row.confidence_score != null
+            ? [`confidence ${Math.round(row.confidence_score * 100)}%`]
+            : []),
+          "its evidence trail and execution log",
+        ]}
+        confirmLabel={isActive ? "Cancel and delete" : "Delete run"}
+        isSubmitting={isDeleting}
+        onConfirm={() => void handleDelete()}
+        onCancel={() => setConfirming(false)}
+      />
+    </>
   );
+}
+
+function stageLabelFor(row: RunListItem): string | null {
+  return row.workflow_stage ? stageLabel(row.workflow_stage) : (GOAL_LABELS[row.goal] ?? null);
 }
 
 // Standalone (non-workflow) runs — unchanged from before grouping was added.
@@ -115,12 +150,38 @@ function buildStandaloneColumns(onDeleted: () => void): TableColumn<RunListItem>
       render: (row) => (
         <span className="text-sm text-fg-secondary">{GOAL_LABELS[row.goal] ?? row.goal}</span>
       ),
+      sortValue: (row) => GOAL_LABELS[row.goal] ?? row.goal,
     },
-    { key: "status", header: "Status", render: (row) => <StatusCell row={row} /> },
-    { key: "provider", header: "Provider", render: (row) => <ProviderCell row={row} /> },
-    { key: "confidence", header: "Confidence", render: (row) => <ConfidenceCell row={row} /> },
-    { key: "started", header: "Started", render: (row) => <StartedCell row={row} /> },
-    { key: "duration", header: "Duration", render: (row) => <DurationCell row={row} /> },
+    {
+      key: "status",
+      header: "Status",
+      render: (row) => <StatusCell row={row} />,
+      sortValue: (row) => row.status,
+    },
+    {
+      key: "provider",
+      header: "Provider",
+      render: (row) => <ProviderCell row={row} />,
+      sortValue: (row) => row.provider,
+    },
+    {
+      key: "confidence",
+      header: "Confidence",
+      render: (row) => <ConfidenceCell row={row} />,
+      sortValue: (row) => row.confidence_score,
+    },
+    {
+      key: "started",
+      header: "Started",
+      render: (row) => <StartedCell row={row} />,
+      sortValue: (row) => (row.started_at ? new Date(row.started_at).getTime() : null),
+    },
+    {
+      key: "duration",
+      header: "Duration",
+      render: (row) => <DurationCell row={row} />,
+      sortValue: durationMs,
+    },
     {
       key: "actions",
       header: "",
@@ -147,10 +208,30 @@ function buildStageColumns(onDeleted: () => void): TableColumn<RunListItem>[] {
         </Link>
       ),
     },
-    { key: "status", header: "Status", render: (row) => <StatusCell row={row} /> },
-    { key: "confidence", header: "Confidence", render: (row) => <ConfidenceCell row={row} /> },
-    { key: "started", header: "Started", render: (row) => <StartedCell row={row} /> },
-    { key: "duration", header: "Duration", render: (row) => <DurationCell row={row} /> },
+    {
+      key: "status",
+      header: "Status",
+      render: (row) => <StatusCell row={row} />,
+      sortValue: (row) => row.status,
+    },
+    {
+      key: "confidence",
+      header: "Confidence",
+      render: (row) => <ConfidenceCell row={row} />,
+      sortValue: (row) => row.confidence_score,
+    },
+    {
+      key: "started",
+      header: "Started",
+      render: (row) => <StartedCell row={row} />,
+      sortValue: (row) => (row.started_at ? new Date(row.started_at).getTime() : null),
+    },
+    {
+      key: "duration",
+      header: "Duration",
+      render: (row) => <DurationCell row={row} />,
+      sortValue: durationMs,
+    },
     {
       key: "actions",
       header: "",
@@ -206,19 +287,20 @@ function WorkflowGroupRow({
 }) {
   const { token } = useAuth();
   const [isDeleting, setIsDeleting] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const stageColumns = buildStageColumns(onRunDeleted);
   const state = workflow ? deriveWorkflowState(workflow) : null;
   const status = state && workflow ? workflowStatusDisplay(workflow, state.phase) : null;
   const completedCount = workflow?.stages.filter((s) => s.status === "completed").length ?? 0;
   const totalStages = workflow?.stages.length ?? group.runs.length;
+  const isApproved = workflow?.status === "approved";
 
-  async function handleDeleteWorkflow(e: React.MouseEvent) {
-    e.stopPropagation();
+  async function handleDeleteWorkflow() {
     if (!token) return;
-    if (!window.confirm("Delete this workflow and all its stage runs? This can't be undone.")) return;
     setIsDeleting(true);
     try {
       await deleteWorkflow(token, group.workflowId);
+      setConfirming(false);
       onRunDeleted();
     } finally {
       setIsDeleting(false);
@@ -247,13 +329,32 @@ function WorkflowGroupRow({
         </span>
         <button
           type="button"
-          onClick={(e) => void handleDeleteWorkflow(e)}
+          onClick={(e) => {
+            e.stopPropagation();
+            e.preventDefault();
+            setConfirming(true);
+          }}
           disabled={isDeleting}
           title="Delete workflow"
           className="shrink-0 text-fg-muted hover:text-danger-fg disabled:cursor-not-allowed disabled:opacity-30"
         >
           <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
+        <ConfirmDialog
+          open={confirming}
+          title="Delete this workflow?"
+          body="This removes the workflow and every stage run beneath it, including their evidence trails. It can't be undone."
+          consequences={[
+            workflow?.title ?? "this workflow",
+            `${group.runs.length} run${group.runs.length === 1 ? "" : "s"}`,
+            `${completedCount} of ${totalStages} stage${totalStages === 1 ? "" : "s"} completed`,
+            ...(isApproved ? ["an approved blueprint"] : []),
+          ]}
+          confirmLabel="Delete workflow"
+          isSubmitting={isDeleting}
+          onConfirm={() => void handleDeleteWorkflow()}
+          onCancel={() => setConfirming(false)}
+        />
       </summary>
       <div className="border-t border-line-muted bg-canvas pl-8">
         {workflow?.original_prompt && (
@@ -306,7 +407,7 @@ export function RunHistoryPage() {
             <History className="h-5 w-5 text-cat-7-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">Run History</h2>
+            <h1 className="text-xl font-semibold text-fg">Run History</h1>
             <p className="text-sm text-fg-muted">
               {total} total run{total === 1 ? "" : "s"}
             </p>
@@ -348,19 +449,39 @@ export function RunHistoryPage() {
         </Card>
       )}
 
+      {/* Nothing at all, and not merely still loading — this is a first-run
+          state, so it gets an onboarding surface rather than a table with a
+          grey sentence in it. "Loading" is deliberately not routed through
+          `emptyMessage` here: "nothing exists" and "not yet known" are
+          different facts and shouldn't share a slot. */}
+      {!isLoading && groups.length === 0 && standalone.length === 0 ? (
+        <Card>
+          <EmptyState
+            illustration={<SamplePipeline />}
+            title="Agent runs appear here"
+            description="Every workflow stage and standalone analysis GraphForge executes is recorded here — with its status, confidence, duration, and the evidence it collected. Start a workflow to create the first one."
+            actions={[
+              { label: "New Workflow", to: "/workflows/new" },
+              { label: "Browse AI Workspace", to: "/workspace" },
+            ]}
+          />
+        </Card>
+      ) : (
       <Card title={groups.length > 0 ? "Standalone Runs" : undefined}>
+        {isLoading && standalone.length === 0 ? (
+          <div className="flex flex-col gap-2" aria-busy="true" aria-label="Loading runs">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="h-12 animate-pulse rounded-lg bg-surface-raised" />
+            ))}
+          </div>
+        ) : (
         <Table
           columns={buildStandaloneColumns(refresh)}
           data={standalone}
           getRowKey={(row) => row.run_id}
-          emptyMessage={
-            isLoading
-              ? "Loading…"
-              : groups.length > 0
-                ? "No standalone runs."
-                : "No agent runs yet."
-          }
+          emptyMessage="No standalone runs."
         />
+        )}
 
         {/* Pagination */}
         {total > 0 && (
@@ -393,6 +514,7 @@ export function RunHistoryPage() {
           </div>
         )}
       </Card>
+      )}
     </div>
   );
 }

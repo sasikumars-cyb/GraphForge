@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { Card } from "../components/Card";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { Table, type TableColumn } from "../components/Table";
 import { StatusBadge } from "../components/StatusBadge";
 import { useAuth } from "../app/auth-context";
@@ -55,6 +56,7 @@ export function RepositoryDetailPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isIndexing, setIsIndexing] = useState(false);
   const [isRemoving, setIsRemoving] = useState(false);
+  const [confirmingRemove, setConfirmingRemove] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Tracks component lifetime (not React Router's fixed `id` param — a
   // fresh mount if the user navigates to a different repository's page
@@ -148,13 +150,6 @@ export function RepositoryDetailPage() {
 
   async function handleRemove() {
     if (!token || !id) return;
-    if (
-      !window.confirm(
-        `Remove ${repository?.full_name}? This permanently deletes its pull requests, analyses, and architecture graph.`,
-      )
-    ) {
-      return;
-    }
     setIsRemoving(true);
     setError(null);
     try {
@@ -178,7 +173,7 @@ export function RepositoryDetailPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-fg">{repository.full_name}</h2>
+          <h1 className="text-xl font-semibold text-fg">{repository.full_name}</h1>
           <p className="mt-1 text-sm text-fg-muted">{repository.html_url}</p>
         </div>
         <div className="flex gap-2">
@@ -190,7 +185,7 @@ export function RepositoryDetailPage() {
           </Link>
           <button
             type="button"
-            onClick={() => void handleRemove()}
+            onClick={() => setConfirmingRemove(true)}
             disabled={isRemoving}
             className="rounded-md border border-danger-line/50 px-3 py-1.5 text-sm font-medium text-danger-fg hover:bg-danger-bg disabled:cursor-not-allowed disabled:opacity-50"
           >
@@ -198,6 +193,21 @@ export function RepositoryDetailPage() {
           </button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={confirmingRemove}
+        title={`Remove ${repository.full_name}?`}
+        body="This stops tracking the repository and permanently deletes everything GraphForge derived from it."
+        consequences={[
+          `${pullRequests.length} pull request${pullRequests.length === 1 ? "" : "s"} and their analyses`,
+          "its architecture graph in Neo4j",
+          "its indexing history",
+        ]}
+        confirmLabel="Remove repository"
+        isSubmitting={isRemoving}
+        onConfirm={() => void handleRemove()}
+        onCancel={() => setConfirmingRemove(false)}
+      />
 
       {error && (
         <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">

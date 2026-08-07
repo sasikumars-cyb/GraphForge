@@ -184,7 +184,7 @@ export function ApprovedQueuePage() {
           <CheckCircle2 className="h-5 w-5 text-success-fg" aria-hidden="true" />
         </div>
         <div>
-          <h2 className="text-xl font-semibold text-fg">Approved Queue</h2>
+          <h1 className="text-xl font-semibold text-fg">Approved Queue</h1>
           <p className="text-sm text-fg-muted">
             {total} approved blueprint{total === 1 ? "" : "s"}
           </p>

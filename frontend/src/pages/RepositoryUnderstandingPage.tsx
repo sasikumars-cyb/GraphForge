@@ -58,7 +58,7 @@ export function RepositoryUnderstandingPage() {
             <BookOpen className="h-5 w-5 text-cat-4-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">Repository Understanding</h2>
+            <h1 className="text-xl font-semibold text-fg">Repository Understanding</h1>
             <p className="text-sm text-fg-muted">
               Explain what a repository does — its APIs, databases, queues, integrations, and
               dependencies. Read-only, computed entirely from the indexed graph.

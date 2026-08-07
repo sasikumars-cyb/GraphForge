@@ -168,7 +168,7 @@ export function ReportsPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-xl font-semibold text-fg">Reports</h2>
+        <h1 className="text-xl font-semibold text-fg">Reports</h1>
         <p className="mt-1 text-sm text-fg-muted">
           High-level reports generated automatically when a workflow's blueprint is approved.
         </p>

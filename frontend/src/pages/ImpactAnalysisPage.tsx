@@ -58,7 +58,7 @@ export function ImpactAnalysisPage() {
             <Radar className="h-5 w-5 text-cat-6-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">Impact Analysis</h2>
+            <h1 className="text-xl font-semibold text-fg">Impact Analysis</h1>
             <p className="text-sm text-fg-muted">
               Compute a repository&apos;s blast radius — which repositories, APIs, databases, and
               queues it impacts, and how confident each relationship is. Read-only.

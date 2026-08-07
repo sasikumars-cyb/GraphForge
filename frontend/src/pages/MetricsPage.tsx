@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import { Card } from "../components/Card";
+import { EmptyState, SampleChart } from "../components/EmptyState";
 import { StatCard } from "../components/StatCard";
 import { StatusBadge, type StatusTone } from "../components/StatusBadge";
 import { Table, type TableColumn } from "../components/Table";
@@ -11,7 +12,7 @@ import {
   StackedBarChart,
 } from "../components/charts/SimpleCharts";
 import { useReportsData } from "../hooks/useReportsData";
-import { formatCount, formatLabel, formatUsd } from "../lib/formatMetrics";
+import { formatCount, formatLabel, formatUsd, shortenIsoDate } from "../lib/formatMetrics";
 import type {
   MetricsReportResponse,
   MetricsScope,
@@ -39,7 +40,7 @@ export function MetricsPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-fg">Metrics</h2>
+          <h1 className="text-xl font-semibold text-fg">Metrics</h1>
           <p className="mt-1 text-sm text-fg-muted">
             Live activity metrics — workflows, AI cost/tokens, and indexed architecture.
           </p>
@@ -68,12 +69,34 @@ export function MetricsPage() {
       )}
 
       {!report && isLoading && (
+        <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading metrics">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
+            {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+              <div key={i} className="h-24 animate-pulse rounded-xl bg-surface" />
+            ))}
+          </div>
+          <div className="h-72 animate-pulse rounded-xl bg-surface" />
+        </div>
+      )}
+
+      {/* Zero activity is not the same as zero data-to-chart: rendering eight
+          "0" tiles above six "No data to show." charts tells a first-run user
+          nothing they can act on. */}
+      {report && report.overview.total_workflows === 0 && report.overview.total_llm_calls === 0 && (
         <Card>
-          <p className="py-8 text-center text-sm text-fg-muted">Loading metrics…</p>
+          <EmptyState
+            illustration={<SampleChart />}
+            title="Usage and cost metrics appear here"
+            description={`Once workflows run, this page tracks AI spend, token usage, model mix, and per-stage success rates. Nothing has run in the last ${report.window_days} days${report.scope === "user" ? " for your account — try the Global scope above" : ""}.`}
+            actions={[
+              { label: "New Workflow", to: "/workflows/new" },
+              { label: "Browse AI Workspace", to: "/workspace" },
+            ]}
+          />
         </Card>
       )}
 
-      {report && (
+      {report && !(report.overview.total_workflows === 0 && report.overview.total_llm_calls === 0) && (
         <>
           <p className="text-xs text-fg-muted">
             Generated {new Date(report.generated_at).toLocaleString()} · last {report.window_days}{" "}
@@ -91,6 +114,8 @@ export function MetricsPage() {
                 <BarChart
                   data={report.cost_by_day.map((d) => ({ label: d.day, value: d.cost_usd }))}
                   valueFormatter={formatUsd}
+                  labelFormatter={shortenIsoDate}
+                  label="AI cost per day"
                 />
               </div>
               <div>
@@ -100,6 +125,8 @@ export function MetricsPage() {
                 <LineChart
                   data={report.cost_by_day.map((d) => ({ label: d.day, value: d.tokens }))}
                   valueFormatter={formatCount}
+                  labelFormatter={shortenIsoDate}
+                  label="Tokens per day"
                 />
               </div>
               <div>
@@ -112,6 +139,7 @@ export function MetricsPage() {
                     value: p.cost_usd,
                   }))}
                   valueFormatter={formatUsd}
+                  label="Cost by provider"
                 />
               </div>
               <div>
@@ -124,6 +152,7 @@ export function MetricsPage() {
                     value: s.cost_usd,
                   }))}
                   valueFormatter={formatUsd}
+                  label="Cost by stage"
                 />
               </div>
             </div>
@@ -134,6 +163,9 @@ export function MetricsPage() {
           </Card>
 
           <Card title="Repository Graph" description="Components per indexed repository">
+            {/* No `labelFormatter` — these labels are repository names, not
+                dates. The axis used to trim five characters off every label
+                unconditionally, which silently mangled them here. */}
             <BarChart
               data={report.repository_components.map((r) => ({
                 label: r.name,
@@ -141,16 +173,21 @@ export function MetricsPage() {
               }))}
               valueFormatter={formatCount}
               color="var(--gf-info-fg, #3b82f6)"
+              label="Components per indexed repository"
             />
           </Card>
 
-          <Card title="Run Success Rate by Stage">
+          <Card
+            title="Run Success Rate by Stage"
+            description="Each bar is scaled to its own stage's total, so rates are comparable; the run count is shown alongside."
+          >
             <StackedBarChart
               data={report.run_success_by_stage.map((r) => ({
                 label: formatLabel(r.stage),
                 succeeded: r.succeeded,
                 failed: r.failed,
               }))}
+              label="Run success rate by stage"
             />
           </Card>
 
@@ -250,14 +287,22 @@ function ModelUsageTable({ rows }: { rows: ModelUsage[] }) {
       key: "model",
       header: "Model",
       render: (r) => <span className="font-mono text-xs">{r.model}</span>,
+      sortValue: (r) => r.model,
     },
-    { key: "provider", header: "Provider", render: (r) => r.provider },
-    { key: "calls", header: "Calls", render: (r) => formatCount(r.calls), className: "text-right" },
+    { key: "provider", header: "Provider", render: (r) => r.provider, sortValue: (r) => r.provider },
+    {
+      key: "calls",
+      header: "Calls",
+      render: (r) => formatCount(r.calls),
+      className: "text-right",
+      sortValue: (r) => r.calls,
+    },
     {
       key: "cost",
       header: "Cost (USD)",
       render: (r) => <span className="font-mono text-success-fg">{formatUsd(r.cost_usd)}</span>,
       className: "text-right",
+      sortValue: (r) => r.cost_usd,
     },
   ];
   return (
@@ -266,6 +311,7 @@ function ModelUsageTable({ rows }: { rows: ModelUsage[] }) {
       data={rows}
       getRowKey={(r) => `${r.model}:${r.provider}`}
       emptyMessage="No LLM invocations recorded yet."
+      defaultSort={{ key: "cost", direction: "desc" }}
     />
   );
 }
@@ -284,6 +330,7 @@ function RecentWorkflowsTable({ rows }: { rows: WorkflowSummary[] }) {
           {r.title}
         </Link>
       ),
+      sortValue: (r) => r.title.toLowerCase(),
     },
     {
       key: "status",
@@ -294,25 +341,39 @@ function RecentWorkflowsTable({ rows }: { rows: WorkflowSummary[] }) {
           tone={WORKFLOW_STATUS_TONE[r.status] ?? "neutral"}
         />
       ),
+      sortValue: (r) => r.status,
     },
-    { key: "stage", header: "Stage", render: (r) => formatLabel(r.current_stage) },
-    { key: "type", header: "Type", render: (r) => formatLabel(r.workflow_type) },
+    {
+      key: "stage",
+      header: "Stage",
+      render: (r) => formatLabel(r.current_stage),
+      sortValue: (r) => r.current_stage,
+    },
+    {
+      key: "type",
+      header: "Type",
+      render: (r) => formatLabel(r.workflow_type),
+      sortValue: (r) => r.workflow_type,
+    },
     {
       key: "created",
       header: "Created",
       render: (r) => new Date(r.created_at).toLocaleDateString(),
+      sortValue: (r) => new Date(r.created_at).getTime(),
     },
     {
       key: "cost",
       header: "Cost",
       render: (r) => <span className="font-mono text-success-fg">{formatUsd(r.cost_usd)}</span>,
       className: "text-right",
+      sortValue: (r) => r.cost_usd,
     },
     {
       key: "tokens",
       header: "Tokens",
       render: (r) => formatCount(r.tokens),
       className: "text-right",
+      sortValue: (r) => r.tokens,
     },
   ];
   return (
@@ -321,6 +382,7 @@ function RecentWorkflowsTable({ rows }: { rows: WorkflowSummary[] }) {
       data={rows}
       getRowKey={(r) => r.id}
       emptyMessage="No workflows found."
+      defaultSort={{ key: "created", direction: "desc" }}
     />
   );
 }

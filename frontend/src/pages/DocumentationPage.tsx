@@ -74,7 +74,7 @@ export function DocumentationPage() {
             <FileText className="h-5 w-5 text-cat-5-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">Documentation</h2>
+            <h1 className="text-xl font-semibold text-fg">Documentation</h1>
             <p className="text-sm text-fg-muted">
               Review a repository&apos;s Markdown documentation against its indexed architecture —
               outdated, missing, duplicate docs, and broken links, with proposed updates.

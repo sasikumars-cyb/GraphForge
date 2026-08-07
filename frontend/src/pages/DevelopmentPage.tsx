@@ -58,7 +58,7 @@ export function DevelopmentPage() {
             <Code2 className="h-5 w-5 text-cat-7-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">Development Agent</h2>
+            <h1 className="text-xl font-semibold text-fg">Development Agent</h1>
             <p className="text-sm text-fg-muted">
               Describe an engineering change. GraphForge produces a structured implementation
               blueprint — repositories, components, phases, risks — grounded in your architecture

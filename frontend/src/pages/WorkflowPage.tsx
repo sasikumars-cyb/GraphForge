@@ -10,6 +10,7 @@ import { WorkflowApprovalBanner } from "../components/workflow/WorkflowApprovalB
 import { ContextClarificationBanner } from "../components/workflow/ContextClarificationBanner";
 import { WorkflowSummaryHero } from "../components/workflow/WorkflowSummaryHero";
 import { WorkflowReplayPanel } from "../components/workflow/WorkflowReplayPanel";
+import { StageProgressionPanel } from "../components/workflow/StageProgressionPanel";
 import { StageResultPanel } from "../components/runs/StageResultPanel";
 import { JiraIssuePicker } from "../components/workflow/JiraIssuePicker";
 import { ContextExplorerPanel } from "../components/workflow/ContextExplorerPanel";
@@ -355,106 +356,135 @@ export function WorkflowPage() {
         </Card>
       )}
 
+      {completedSteps.length > 0 && (
+        <StageProgressionPanel
+          workflowId={workflow.workflow_id}
+          stages={workflow.stages}
+          stepsByRunId={stepsByRunId}
+        />
+      )}
+
+      {/* One action zone, not a stack of independently-styled banners.
+          These conditions are already close to mutually exclusive (each
+          phase-driven banner corresponds to exactly one `phase`), with one
+          real overlap: `partialConfirm` is local UI state set mid-`phase`
+          "awaiting_approval" by a failed /continue call, so without a guard
+          it rendered *stacked on top of* the ApprovalGateBanner asking the
+          same "continue past this stage?" question a second time. Grouped
+          under one container with tighter internal spacing (gap-3, not the
+          page's gap-6) so related notices read as one zone instead of
+          unrelated page sections; the top-level `error` banner stays
+          outside it since it can appear with no other banner present at
+          all (nothing to group it with in that case). */}
       {error && phase !== "failed" && (
         <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
           {error}
         </div>
       )}
 
-      {phase === "awaiting_clarification" && workflow.pending_clarification && (
-        <ContextClarificationBanner
-          pendingClarification={workflow.pending_clarification}
-          isSubmitting={isSubmitting}
-          onAnswer={handleClarify}
-        />
-      )}
+      <div className="flex flex-col gap-3">
+        {phase === "awaiting_clarification" && workflow.pending_clarification && (
+          <ContextClarificationBanner
+            pendingClarification={workflow.pending_clarification}
+            isSubmitting={isSubmitting}
+            onAnswer={handleClarify}
+          />
+        )}
 
-      {partialConfirm && (
-        <div className="flex flex-col gap-3 rounded-xl border border-warning-line/40 bg-warning-bg px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-col gap-1">
-            <p className="text-sm font-semibold text-warning-fg">
-              Continue with incomplete context?
+        {partialConfirm && (
+          <div className="flex flex-col gap-3 rounded-xl border border-warning-line/40 bg-warning-bg px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col gap-1">
+              <p className="text-sm font-semibold text-warning-fg">
+                Continue with incomplete context?
+              </p>
+              <p className="text-xs text-warning-fg/80">{partialConfirm}</p>
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setPartialConfirm(null)}
+                disabled={isSubmitting}
+                className="focus-ring inline-flex items-center rounded-md px-3 py-2 text-xs font-medium text-fg-secondary ring-1 ring-inset ring-line transition-colors hover:bg-surface-hover disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleApprove(true)}
+                disabled={isSubmitting}
+                className="focus-ring inline-flex items-center rounded-md bg-accent-solid px-4 py-2 text-xs font-semibold text-accent-on-solid shadow-xs transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Continue anyway
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Suppressed while partialConfirm is up — that prompt already
+            asks this exact question ("continue past this stage or not?"),
+            just with the added context of what's incomplete. Showing both
+            was two controls for one decision. */}
+        {!partialConfirm && canContinue && discoveryBlocksPlanning && (
+          <div className="flex flex-col gap-1.5 rounded-xl border border-danger-line/40 bg-danger-bg px-5 py-4">
+            <p className="text-sm font-semibold text-danger-fg">
+              Planning can&apos;t start — Context Discovery couldn&apos;t establish enough context.
             </p>
-            <p className="text-xs text-warning-fg/80">{partialConfirm}</p>
+            <p className="text-xs text-danger-fg/80">
+              Nothing to approve yet. Fix what&apos;s listed under &ldquo;What&apos;s still
+              missing&rdquo; above, then run Context Discovery again.
+            </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setPartialConfirm(null)}
-              disabled={isSubmitting}
-              className="focus-ring inline-flex items-center rounded-md px-3 py-2 text-xs font-medium text-fg-secondary ring-1 ring-inset ring-line transition-colors hover:bg-surface-hover disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              onClick={() => handleApprove(true)}
-              disabled={isSubmitting}
-              className="focus-ring inline-flex items-center rounded-md bg-accent-solid px-4 py-2 text-xs font-semibold text-accent-on-solid shadow-xs transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              Continue anyway
-            </button>
-          </div>
-        </div>
-      )}
+        )}
 
+        {!partialConfirm && canContinue && lastCompletedStage && !discoveryBlocksPlanning && (
+          <ApprovalGateBanner
+            completedStage={lastCompletedStage.stage}
+            nextStage={workflow.current_stage}
+            workflowTitle={workflow.title}
+            workflowId={workflow.workflow_id}
+            isSubmitting={isSubmitting}
+            onApprove={() => handleApprove()}
+            onReject={handleRejectWorkflow}
+          />
+        )}
+
+        {phase === "failed" && currentStageInfo && (
+          <ApprovalGateBanner
+            completedStage={lastCompletedStage?.stage ?? currentStageInfo.stage}
+            nextStage={currentStageInfo.stage}
+            workflowTitle={workflow.title}
+            workflowId={workflow.workflow_id}
+            isSubmitting={isSubmitting}
+            onApprove={() => handleApprove()}
+            onReject={handleRejectWorkflow}
+            failure={{
+              stage: currentStageInfo.stage,
+              errorMessage: failedRun?.error_message ?? null,
+            }}
+          />
+        )}
+
+        {phase === "blueprint_approval" && (
+          <WorkflowApprovalBanner
+            workflowTitle={workflow.title}
+            workflowId={workflow.workflow_id}
+            status={workflow.status}
+            isSubmitting={isSubmitting}
+            onApprove={handleApproveWorkflow}
+            onReject={handleRejectWorkflow}
+          />
+        )}
+      </div>
+
+      {/* Supplementary evidence, not an action prompt — coexists with
+          whichever banner above is showing rather than competing with it,
+          so it stays outside the action zone. */}
       {(canContinue || phase === "awaiting_clarification") && discoveryResult && (
         <ContextExplorerPanel
           workflowId={workflow.workflow_id}
           result={discoveryResult}
           humanOverride={discoveryStep?.human_override ?? null}
           onOverridden={() => loadWorkflow(false)}
-        />
-      )}
-
-      {canContinue && discoveryBlocksPlanning && (
-        <div className="flex flex-col gap-1.5 rounded-xl border border-danger-line/40 bg-danger-bg px-5 py-4">
-          <p className="text-sm font-semibold text-danger-fg">
-            Planning can&apos;t start — Context Discovery couldn&apos;t establish enough context.
-          </p>
-          <p className="text-xs text-danger-fg/80">
-            Nothing to approve yet. Fix what&apos;s listed under &ldquo;What&apos;s still
-            missing&rdquo; above, then run Context Discovery again.
-          </p>
-        </div>
-      )}
-
-      {canContinue && lastCompletedStage && !discoveryBlocksPlanning && (
-        <ApprovalGateBanner
-          completedStage={lastCompletedStage.stage}
-          nextStage={workflow.current_stage}
-          workflowTitle={workflow.title}
-          workflowId={workflow.workflow_id}
-          isSubmitting={isSubmitting}
-          onApprove={() => handleApprove()}
-          onReject={handleRejectWorkflow}
-        />
-      )}
-
-      {phase === "failed" && currentStageInfo && (
-        <ApprovalGateBanner
-          completedStage={lastCompletedStage?.stage ?? currentStageInfo.stage}
-          nextStage={currentStageInfo.stage}
-          workflowTitle={workflow.title}
-          workflowId={workflow.workflow_id}
-          isSubmitting={isSubmitting}
-          onApprove={() => handleApprove()}
-          onReject={handleRejectWorkflow}
-          failure={{
-            stage: currentStageInfo.stage,
-            errorMessage: failedRun?.error_message ?? null,
-          }}
-        />
-      )}
-
-      {phase === "blueprint_approval" && (
-        <WorkflowApprovalBanner
-          workflowTitle={workflow.title}
-          workflowId={workflow.workflow_id}
-          status={workflow.status}
-          isSubmitting={isSubmitting}
-          onApprove={handleApproveWorkflow}
-          onReject={handleRejectWorkflow}
         />
       )}
 
@@ -597,9 +627,9 @@ export function NewWorkflowPage() {
           <GitMerge className="h-5 w-5 text-accent-fg" aria-hidden="true" />
         </div>
         <div>
-          <h2 className="text-xl font-semibold text-fg">
+          <h1 className="text-xl font-semibold text-fg">
             {parentId ? "Refine this plan" : "Describe what you want built"}
-          </h2>
+          </h1>
           <p className="text-sm text-fg-muted">
             {parentId
               ? "This becomes a new version of that workflow — its blueprint carries forward automatically, plus whatever you note below."

@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { Card } from "../components/Card";
+import { EmptyState, SampleGraph } from "../components/EmptyState";
 import {
   DependencyGraph,
   RepositoryOverviewGraph,
@@ -224,7 +225,7 @@ export function ArchitecturePage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <h2 className="text-xl font-semibold text-fg">Architecture</h2>
+          <h1 className="text-xl font-semibold text-fg">Architecture</h1>
           <p className="mt-1 text-sm text-fg-muted">
             The dependency graph generated from indexed repositories, showing relationships between
             repositories, modules, services, APIs, data stores, messaging systems, and other
@@ -280,9 +281,15 @@ export function ArchitecturePage() {
             Loading repositories…
           </div>
         ) : repositories.length === 0 ? (
-          <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line bg-canvas text-fg-muted">
-            <p className="text-sm">No repositories tracked yet.</p>
-          </div>
+          <EmptyState
+            illustration={<SampleGraph />}
+            title="Your architecture graph appears here"
+            description="GraphForge indexes your repositories and maps every service, API, topic, and table — plus how they depend on each other. Connect GitHub and select a repository to build the first one."
+            actions={[
+              { label: "Connect GitHub", to: "/settings" },
+              { label: "Manage repositories", to: "/repositories" },
+            ]}
+          />
         ) : selectedRepoId === "all" ? (
           <RepositoryOverviewGraph
             repositories={repositorySummaries}
@@ -294,9 +301,15 @@ export function ArchitecturePage() {
             Loading this repository's graph…
           </div>
         ) : graph.nodes.length === 0 ? (
-          <div className="flex min-h-48 flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-line bg-canvas text-fg-muted">
-            <p className="text-sm">No graph data yet - index this repository first.</p>
-          </div>
+          <EmptyState
+            illustration={<SampleGraph />}
+            title="This repository hasn't been indexed"
+            description="It's tracked, but no architecture graph exists for it yet. Indexing parses the source with tree-sitter and writes its components and relationships to the graph."
+            actions={[
+              { label: "Index this repository", to: `/repositories/${selectedRepoId}` },
+              { label: "Back to overview", onClick: () => setSelectedRepo("all") },
+            ]}
+          />
         ) : (
           <div className="flex flex-col gap-3">
             {graph.truncated && (

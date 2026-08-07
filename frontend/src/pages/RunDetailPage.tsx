@@ -140,9 +140,9 @@ export function RunDetailPage() {
 
       {/* Header */}
       <div>
-        <h2 className="text-xl font-semibold text-fg">
+        <h1 className="text-xl font-semibold text-fg">
           {run.title ?? run.subject.display_name ?? run.subject.subject_id}
-        </h2>
+        </h1>
         <div className="mt-2 flex items-center gap-3">
           <RunStatusBadge status={run.status} />
           {step?.confidence && <ConfidenceBadge confidence={step.confidence} />}

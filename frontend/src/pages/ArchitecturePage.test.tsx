@@ -127,7 +127,11 @@ describe("ArchitecturePage", () => {
 
     renderWithAuth();
 
-    expect(await screen.findByText("No repositories tracked yet.")).toBeInTheDocument();
+    expect(
+      await screen.findByText("Your architecture graph appears here"),
+    ).toBeInTheDocument();
+    // The empty state must offer a way out, not just report emptiness.
+    expect(screen.getByRole("link", { name: "Connect GitHub" })).toBeInTheDocument();
   });
 
   it("renders one overview card per tracked repository", async () => {
