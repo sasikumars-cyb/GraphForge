@@ -29,6 +29,10 @@ from app.models.evidence import Evidence  # noqa: F401
 from app.models.github_connection import GitHubConnection  # noqa: F401
 from app.models.google_drive_connection import GoogleDriveConnection  # noqa: F401
 from app.models.indexing_job import IndexingJob  # noqa: F401
+from app.models.investigation_intelligence import (  # noqa: F401
+    InvestigationOutcomeRecord,
+    InvestigationProviderEventRecord,
+)
 from app.models.knowledge_relationship import KnowledgeRelationshipRecord  # noqa: F401
 from app.models.llm_invocation import LLMInvocation  # noqa: F401
 from app.models.oauth_app_credential import OAuthAppCredential  # noqa: F401
