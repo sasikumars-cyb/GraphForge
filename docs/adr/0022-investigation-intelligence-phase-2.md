@@ -2,11 +2,17 @@
 
 ## Status
 
-Proposed — **design only**. Explicitly not implemented by this document;
-see "Why this ships as a design, not code" below. Builds on
-[ADR 0021](0021-investigation-intelligence.md), whose Phase 1 (collection
-+ one capped heuristic) and its Confluence-provider follow-up are both
-shipped and live.
+**Approved — design only, implementation deliberately not started.**
+Builds on [ADR 0021](0021-investigation-intelligence.md), whose Phase 1
+(collection + one capped heuristic) and its Confluence-provider follow-up
+are both shipped and live. Explicitly parked here by direction: no
+further Phase 2 expansion, and no implementation of what's already
+designed, until the observability endpoint (`GET /api/v1/
+investigation-intelligence/summary`) shows real production usage — the
+self-gating properties below mean that's a data-driven decision, not a
+calendar one. Product focus moves to user-facing capabilities in the
+meantime (Impact Check, Engineering Decisions, UX/explainability,
+architecture visualization, workflow experience, planning agents).
 
 ## Why this ships as a design, not code
 
