@@ -185,11 +185,23 @@ class ConfluenceProvider:
             # "not_found".
             any_call_succeeded = any(e.status == "success" for e in evidence_entries)
             status = "not_found" if any_call_succeeded else "unavailable"
-            summary = (
-                "No relevant Confluence content found."
-                if status == "not_found"
-                else "Confluence lookup could not be completed."
-            )
+            if status == "not_found":
+                summary = "No relevant Confluence content found."
+            else:
+                # Surface the real per-call failure (e.g. an Atlassian API
+                # token missing Teamwork Graph permission) rather than a
+                # generic phrase — this is the one piece of information an
+                # operator actually needs to fix it, and it was already
+                # being thrown away here even though gather_confluence_
+                # context recorded it on each failed call's own Evidence.
+                failure_detail = next(
+                    (e.summary for e in evidence_entries if e.status == "failed"), None
+                )
+                summary = (
+                    f"Confluence lookup could not be completed: {failure_detail}"
+                    if failure_detail
+                    else "Confluence lookup could not be completed."
+                )
             return ResolvedArtifact(
                 provider="confluence",
                 capability=self.capability,

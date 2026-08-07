@@ -877,6 +877,23 @@ def _documentation_necessity(ledger: Ledger) -> Necessity:
     return "recommended" if has_anchor else "not_applicable"
 
 
+def _documentation_unreachable_detail(ledger: Ledger) -> str:
+    """"Confluence is not connected" is only one of several reasons the
+    "Documentation source reachable" signal below can fail — the others
+    (every MCP call attempted but rejected, e.g. an Atlassian API token
+    missing Teamwork Graph permission) mean Confluence *is* connected, and
+    telling an operator to "Connect Confluence" for those is actively
+    wrong guidance (this is what ConfluenceInvestigator.run's own summary
+    already distinguishes — see its docstring — this just surfaces the
+    same distinction here instead of a second, generic hardcoded string)."""
+    unavailable = [
+        e for e in ledger.evidence if e.provider == "confluence" and e.outcome == "unavailable"
+    ]
+    if unavailable and unavailable[-1].summary:
+        return unavailable[-1].summary
+    return "Confluence is not connected"
+
+
 def _documentation_signals(ledger: Ledger) -> list[ConfidenceSignal]:
     documents = ledger.facts_of("document")
     reachable = [
@@ -897,10 +914,32 @@ def _documentation_signals(ledger: Ledger) -> list[ConfidenceSignal]:
             "Documentation source reachable",
             bool(reachable),
             1.0,
-            detail="Confluence is not connected",
+            detail=_documentation_unreachable_detail(ledger),
             evidence_ids=[e.evidence_id for e in reachable],
         ),
     ]
+
+
+def _documentation_remediation(ledger: Ledger) -> list[str]:
+    """Same "don't send someone to fix a healthy system" rule
+    `_architecture_remediation` above already applies to the graph
+    connection: "Connect Confluence" is only correct advice when there is
+    no Confluence connection to search with. If one exists and was
+    searched but every call was rejected (e.g. the Atlassian API token
+    lacks Teamwork Graph permission — see `ConfluenceProvider.
+    resolve_for_issue`), the fix is on the Atlassian side, not GraphForge's
+    Settings -> Integrations screen."""
+    unavailable = [
+        e for e in ledger.evidence if e.provider == "confluence" and e.outcome == "unavailable"
+    ]
+    attempted = any(e.summary and "not connected" not in e.summary.lower() for e in unavailable)
+    if attempted:
+        return [
+            "Check the Confluence evidence entry's error detail for the exact cause",
+            "Verify the Atlassian API token has Teamwork Graph permission",
+            "Link a design page to the ticket",
+        ]
+    return ["Connect Confluence", "Link a design page to the ticket"]
 
 
 # ---------------------------------------------------------------------------
@@ -1003,7 +1042,7 @@ CAPABILITIES: tuple[Capability, ...] = (
         ),
         necessity=_documentation_necessity,
         signals=_documentation_signals,
-        remediation=lambda _l: ["Connect Confluence", "Link a design page to the ticket"],
+        remediation=_documentation_remediation,
     ),
     Capability(
         key="runtime_execution",

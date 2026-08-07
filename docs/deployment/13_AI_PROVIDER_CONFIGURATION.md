@@ -16,7 +16,7 @@ How GraphForge decides which LLM provider serves any given call today, in full d
 | `config/resolver.py` | **The resolution engine** — decides *what to run* (provider, model, temperature, max_tokens) before any provider is constructed |
 | `config/store.py` | An in-memory, invalidate-on-write snapshot (`ConfigSnapshot`) of DB-stored provider configuration — exists because `create_llm_provider()` is called synchronously from ~20 call sites across the agent framework; loading config from Postgres at call time would force all of them to become async. Decrypted API keys live in this snapshot **in memory only** — never serialized, logged, or returned by an API response |
 
-Groq is served through the OpenAI-compatible Chat Completions API path (no separate `GroqProvider` class needed — it's registered as its own `ProviderSpec` in the registry but reuses the OpenAI-compatible request/response shape).
+Groq, Cerebras, DeepSeek, OpenRouter and Ollama are all served through the OpenAI-compatible Chat Completions API path (no separate provider class needed for any of them — each is registered as its own `ProviderSpec` in the registry via `registry._openai_compatible()`, pointed at that vendor's base URL, but all reuse `OpenAIProvider`'s request/response shape, retry/error handling, and streaming). DeepSeek additionally supports an env-configured base URL override (`DEEPSEEK_BASE_URL`, see `resolver._ENV_BASE_URL_FIELDS`) for self-hosted or third-party OpenAI-compatible DeepSeek endpoints.
 
 ### Provider capabilities (`Capability` enum, `registry.py`)
 

@@ -29,7 +29,15 @@ from app.context_pipeline.providers import (
     GraphProvider,
     JiraProvider,
 )
+from app.context_pipeline.reasoning import capabilities
 from app.context_pipeline.reasoning.capabilities import GRAPH_TRAVERSAL_ACTION
+from app.context_pipeline.reasoning.investigation import (
+    InvestigationAction,
+    Recorder,
+    SessionContext,
+)
+from app.context_pipeline.reasoning.investigators import ConfluenceInvestigator
+from app.context_pipeline.reasoning.ledger import Ledger
 from app.context_pipeline.reference_detection import detect_references
 from app.tools.interfaces import ToolResult
 
@@ -351,6 +359,13 @@ async def test_confluence_provider_reports_unavailable_when_every_tool_call_fail
     assert artifact is not None
     assert artifact.text == ""
     assert artifact.evidence.status == "unavailable"
+    # Regression for the misleading-message bug: this is a connected
+    # source where every attempted call failed, not "not connected" — the
+    # summary must say so, with the real per-call failure detail, not a
+    # generic "Confluence is not connected" (which sends an operator to
+    # re-connect a source that was never disconnected).
+    assert "not connected" not in artifact.evidence.summary.lower()
+    assert "permission denied" in artifact.evidence.summary
 
 
 @pytest.mark.asyncio
@@ -625,3 +640,125 @@ async def test_planning_agent_operates_solely_on_discovered_context() -> None:
     assert output.result["graph_context_used"] is True
     assert any(e.kind == "tool_call" for e in output.evidence)
     assert any(e.kind == "graph_traversal" for e in output.evidence)
+
+
+# ---------------------------------------------------------------------------
+# documentation capability: "reachable" signal / remediation must not claim
+# "Confluence is not connected" when it demonstrably is (see providers.py's
+# ConfluenceProvider.resolve_for_issue and investigators.py's
+# ConfluenceInvestigator.run for the two other halves of this fix).
+# ---------------------------------------------------------------------------
+
+
+def test_documentation_signal_reports_connected_but_failed_reason() -> None:
+    ledger = Ledger()
+    ledger.add_evidence(
+        provider="confluence",
+        action="fetch_documentation:NPT-6",
+        outcome="unavailable",
+        summary=(
+            "Confluence lookup could not be completed: Confluence graph call "
+            "failed: permission denied"
+        ),
+    )
+
+    signals = capabilities.BY_KEY["documentation"].signals(ledger)
+    reachable_signal = next(s for s in signals if s.label == "Documentation source reachable")
+
+    assert reachable_signal.satisfied is False
+    assert "not connected" not in reachable_signal.detail.lower()
+    assert "permission denied" in reachable_signal.detail
+
+
+def test_documentation_signal_reports_not_connected_when_genuinely_unconfigured() -> None:
+    ledger = Ledger()
+    ledger.add_evidence(
+        provider="confluence",
+        action="fetch_documentation:NPT-6",
+        outcome="unavailable",
+        summary="Confluence is not connected.",
+    )
+
+    signals = capabilities.BY_KEY["documentation"].signals(ledger)
+    reachable_signal = next(s for s in signals if s.label == "Documentation source reachable")
+
+    assert "Confluence is not connected" in reachable_signal.detail
+
+
+def test_documentation_signal_generic_detail_when_never_attempted() -> None:
+    signals = capabilities.BY_KEY["documentation"].signals(Ledger())
+    reachable_signal = next(s for s in signals if s.label == "Documentation source reachable")
+
+    assert reachable_signal.detail == "Confluence is not connected"
+
+
+def test_documentation_remediation_does_not_say_connect_when_already_connected() -> None:
+    ledger = Ledger()
+    ledger.add_evidence(
+        provider="confluence",
+        action="fetch_documentation:NPT-6",
+        outcome="unavailable",
+        summary="Confluence lookup could not be completed: permission denied",
+    )
+
+    remediation = capabilities.BY_KEY["documentation"].remediation(ledger)
+
+    assert not any("Connect Confluence" in step for step in remediation)
+    assert any("Teamwork Graph" in step for step in remediation)
+
+
+def test_documentation_remediation_says_connect_when_genuinely_unconfigured() -> None:
+    remediation = capabilities.BY_KEY["documentation"].remediation(Ledger())
+
+    assert remediation == ["Connect Confluence", "Link a design page to the ticket"]
+
+
+@pytest.mark.asyncio
+async def test_confluence_investigator_surfaces_the_providers_own_summary_not_a_hardcoded_one() -> (
+    None
+):
+    """Regression: ConfluenceInvestigator.run used to discard
+    ConfluenceProvider's own (already-accurate) evidence.summary and
+    replace it with a hardcoded "Confluence is not connected" string for
+    every non-"not_found" outcome — even when the connection was live and
+    the real cause was, e.g., an Atlassian permission error."""
+    from app.agents._contract import Evidence as ContractEvidence
+    from app.context_pipeline.models import ResolvedArtifact
+
+    ledger = Ledger()
+    action = InvestigationAction(
+        provider="confluence",
+        key="fetch_documentation:NPT-6",
+        intent="looking for design docs",
+        targets="documentation",
+        params={"work_item": "NPT-6", "task_description": "fix it"},
+    )
+    recorder = Recorder(ledger, action, iteration=1)
+    session = SessionContext(db=AsyncMock(), user_id=None)
+
+    artifact = ResolvedArtifact(
+        provider="confluence",
+        capability=ProviderCapability.DOCUMENTATION,
+        reference=None,
+        title="Confluence",
+        text="",
+        evidence=ContractEvidence(
+            kind="tool_call",
+            reference="confluence_context",
+            summary=(
+                "Confluence lookup could not be completed: Confluence graph call "
+                "failed: permission denied"
+            ),
+            status="unavailable",
+        ),
+        raw={},
+    )
+
+    with patch(
+        "app.context_pipeline.reasoning.investigators.ConfluenceProvider"
+    ) as mock_provider_cls:
+        mock_provider_cls.return_value.resolve_for_issue = AsyncMock(return_value=artifact)
+        outcome = await ConfluenceInvestigator().run(action, session, recorder)
+
+    assert "permission denied" in outcome.observation
+    assert "not connected" not in outcome.observation.lower()

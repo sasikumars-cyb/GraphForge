@@ -97,6 +97,10 @@ See `13_AI_PROVIDER_CONFIGURATION.md` for how this tier fits into the full resol
 | `openai_max_tokens` | `OPENAI_MAX_TOKENS` | `4096` | No | |
 | `groq_api_key` | `GROQ_API_KEY` | `None` | Only if Groq is used at this tier | Free-tier, OpenAI-compatible Chat Completions API |
 | `groq_model` | `GROQ_MODEL` | `"llama-3.3-70b-versatile"` | No | |
+| `deepseek_api_key` | `DEEPSEEK_API_KEY` | `None` | Only if DeepSeek is used at this tier | OpenAI-compatible Chat Completions API |
+| `deepseek_model` | `DEEPSEEK_MODEL` | `"deepseek-v4-flash"` | No | `"deepseek-v4-pro"` is also registered |
+| `deepseek_base_url` | `DEEPSEEK_BASE_URL` | `None` | No | Overrides the official DeepSeek API URL — self-hosted/third-party OpenAI-compatible endpoints only |
+| `deepseek_max_tokens` | `DEEPSEEK_MAX_TOKENS` | `16384` | No | Higher than OpenAI's default — both registered DeepSeek models (hybrid-reasoning) spend part of this budget on its reasoning trace before the final answer, same failure mode as Bedrock's hybrid-reasoning models |
 | `gemini_api_key` | `GEMINI_API_KEY` | `None` | Only if Gemini is used at this tier | |
 | `gemini_model` | `GEMINI_MODEL` | `"gemini-3.6-flash"` | No | |
 | `gemini_max_tokens` | `GEMINI_MAX_TOKENS` | `8192` | No | Higher than OpenAI's default — structured JSON responses were truncating at 4096 |

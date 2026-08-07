@@ -24,6 +24,12 @@ _PRICING_PER_1M: dict[str, tuple[float, float]] = {
     "gpt-4o-mini": (0.15, 0.60),
     "gemini-3.6-flash": (0.075, 0.30),
     "llama-3.3-70b-versatile": (0.59, 0.79),
+    # DeepSeek standard (cache-miss) pricing as of the models this app ships
+    # configured for; DeepSeek also offers a lower off-peak rate and a
+    # cheaper cache-hit input rate, neither modeled here — this is the
+    # worst-case (upper-bound) estimate, not an average.
+    "deepseek-v4-flash": (0.27, 1.10),
+    "deepseek-v4-pro": (0.55, 2.19),
     # Bedrock global-endpoint list price; cross-region ("us."-prefixed)
     # inference profiles may carry a premium over this (~10% per public
     # reporting as of when this was added) — not itself modeled here, so

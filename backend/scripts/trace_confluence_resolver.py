@@ -25,6 +25,15 @@ async def main() -> None:
     register_all_tools()
     async with AsyncSessionLocal() as startup_db:
         await sync_all_knowledge_connections_to_tools(startup_db)
+        # Same reason: app.ai.config.store's snapshot also starts empty
+        # outside app.main's lifespan. Without this, resolve() falls
+        # through to the environment-tier provider (Settings.ai_provider)
+        # instead of whatever is actually configured in the UI — this
+        # script would then silently trace a different provider than the
+        # one a real request actually uses.
+        from app.ai.config import store
+
+        await store.refresh(startup_db)
 
     import app.knowledge.access_resolver as resolver_module
 
