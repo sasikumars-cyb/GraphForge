@@ -23,6 +23,32 @@ class IGraphRepository(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def replace_repository_files_subgraph(
+        self, repository_id: str, file_paths: list[str], graph: GraphPayload
+    ) -> None:
+        """KAN-32 incremental indexing: delete only the nodes belonging to
+        `file_paths` (plus their relationships) and write `graph` — the
+        result of re-parsing just those files — in their place. Every
+        other node for `repository_id` (nodes from unchanged files, and
+        file-independent nodes like `MavenDependency`/`PythonDependency`/
+        `KafkaTopic`, none of which carry a `file_path` property at all —
+        see `app.indexer.graph.builder`) is left untouched.
+
+        `graph` may reference nodes outside `file_paths` (e.g. a shared
+        `KafkaTopic` a changed file still produces to) — those are
+        upserted via the same `MERGE` `replace_repository_graph` already
+        uses, never deleted by this method, since `file_paths` is the
+        deletion scope, not the write scope.
+
+        Callers own the "is this diff small/safe enough for a scoped
+        update, or does it need `replace_repository_graph` instead"
+        decision (see `app.indexer.services.incremental`) — this method
+        does exactly what it's told, no repository-wide safety heuristics
+        of its own.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def get_full_graph(
         self,
         repository_id: str,

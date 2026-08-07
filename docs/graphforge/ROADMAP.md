@@ -81,7 +81,11 @@ Orchestrator now that there's real usage data to design an LLM-based Selector ag
   the assertion. Fix in Phase 1 alongside the Review-agent migration regression pass.
 - Full-clone-per-index in `app/indexer` does not scale past a handful of repos per org — flagged
   in `ARCHITECTURE.md` § Scalability, must be resolved before Phase 2's multi-repo Architecture
-  Agent use case is exercised at more than demo scale.
+  Agent use case is exercised at more than demo scale. KAN-32 (ADR 0020) implemented the
+  incremental mechanism itself — a safe diff re-parses and merges only the changed files, with a
+  full re-index as the automatic fallback — but the GitHub `push` webhook that would trigger it on
+  a real push is still a separate, scoped follow-up (today it runs via the existing manual/API
+  index trigger only); this line stays open until that lands.
 
 ## Stretch Goals
 

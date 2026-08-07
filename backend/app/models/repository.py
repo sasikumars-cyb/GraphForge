@@ -50,6 +50,18 @@ class Repository(Base):
     default_branch: Mapped[str] = mapped_column(String(255), nullable=False)
     html_url: Mapped[str] = mapped_column(String(1024), nullable=False)
 
+    # KAN-32 incremental indexing: what a successful indexing run (full or
+    # incremental) last actually indexed. Null until the first successful
+    # run — that absence is the signal `run_indexing` uses to require a
+    # full index (there is nothing to diff a first index against).
+    # `last_indexed_language` mirrors `DetectedLanguage`'s value (e.g.
+    # "python") rather than being a foreign key to anything — the
+    # incremental path needs to know which parser to use without re-
+    # cloning the repository just to run `detect_language` again.
+    last_indexed_commit_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_indexed_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
