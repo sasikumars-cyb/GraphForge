@@ -41,3 +41,9 @@ class GraphPayload:
     # place, so there's nothing to report as truncated.
     truncated: bool = False
     total_node_count: int | None = None
+    # ADR 0023 — the last node `id` in this page (nodes are always
+    # returned `ORDER BY n.id`), to pass back as `after` for the next
+    # page. `None` when this page wasn't truncated (nothing further to
+    # fetch) or wasn't a bounded request at all — same "only meaningful
+    # when truncated" convention `total_node_count` already has.
+    next_cursor: str | None = None

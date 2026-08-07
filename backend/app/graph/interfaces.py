@@ -55,6 +55,7 @@ class IGraphRepository(ABC):
         *,
         limit: int | None = None,
         node_types: list[str] | None = None,
+        after: str | None = None,
     ) -> GraphPayload:
         """Return nodes and edges belonging to `repository_id`.
 
@@ -67,6 +68,14 @@ class IGraphRepository(ABC):
         post-fetch filter, so an excluded type is never read off disk.
         `limit=None` (the default) returns everything, unbounded — existing
         callers that pass no arguments keep today's behavior exactly.
+
+        `after` (ADR 0023) — a keyset cursor: the last node `id` from a
+        previous bounded page, since bounded results are always ordered
+        by `id`. `GraphPayload.next_cursor` on a truncated response is
+        what to pass here for the following page; `None` means there is
+        no further page. Supplying `after` alone (with `limit`/
+        `node_types` left at their defaults) still switches to the
+        bounded path — a cursor has no meaning against an unbounded read.
         """
         raise NotImplementedError
 
