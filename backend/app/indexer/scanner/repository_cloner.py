@@ -86,3 +86,40 @@ async def clone_repository(
         yield clone_dir
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)
+
+
+async def resolve_head_commit_sha(repo_path: Path) -> str | None:
+    """`git rev-parse HEAD` inside an already-cloned repository (KAN-32) —
+    what a full index actually indexed, for `Repository.
+    last_indexed_commit_sha` (what a *future* incremental run needs to
+    diff against). Reads the local clone `index_repository` already made
+    rather than a second GitHub API round-trip: works identically for
+    `source="github"` and `source="local"` repositories (a local clone has
+    no GitHub API to ask), and needs no network access of its own at all.
+
+    `None` on any failure — a shallow `--depth 1` clone always has HEAD
+    resolvable in practice, but this must never turn "couldn't get the
+    sha" into a failed indexing run over what KAN-32 treats everywhere
+    else as an optional optimization.
+    """
+    try:
+        process = await asyncio.create_subprocess_exec(
+            "git",
+            "rev-parse",
+            "HEAD",
+            cwd=str(repo_path),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=10)
+        if process.returncode != 0:
+            logger.warning(
+                "resolve_head_commit_sha_failed repo_path=%s error=%s",
+                repo_path,
+                stderr.decode(errors="replace"),
+            )
+            return None
+        return stdout.decode().strip() or None
+    except (TimeoutError, OSError) as exc:
+        logger.warning("resolve_head_commit_sha_error repo_path=%s error=%s", repo_path, str(exc))
+        return None

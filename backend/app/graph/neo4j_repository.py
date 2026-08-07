@@ -78,6 +78,37 @@ class Neo4jGraphRepository(IGraphRepository):
             await self._write_edges(tx, graph.edges)
             await tx.commit()
 
+    async def replace_repository_files_subgraph(
+        self, repository_id: str, file_paths: list[str], graph: GraphPayload
+    ) -> None:
+        """KAN-32 incremental indexing: same shape as
+        `replace_repository_graph`, but the delete is scoped to nodes
+        whose `file_path` is in `file_paths` instead of every node for
+        `repository_id`. `DETACH DELETE` still removes every relationship
+        touching a deleted node, including ones from nodes outside the
+        scope (a shared `KafkaTopic`, an unchanged file's Component) — so
+        a stale cross-file edge into a deleted node never survives, only
+        the edge, not the node on the other end.
+
+        An empty `file_paths` is a no-op delete (nothing matches `IN []`)
+        that still writes `graph` — callers never need to special-case
+        "no files changed but there's still something to upsert" (there
+        isn't, today, but this keeps the method honest about what it
+        actually does rather than asserting on an input shape it doesn't
+        need to reject).
+        """
+        async with self._driver.session() as session, await session.begin_transaction() as tx:
+            await tx.run(
+                "MATCH (n {repository_id: $repository_id}) "
+                "WHERE n.file_path IN $file_paths "
+                "DETACH DELETE n",
+                repository_id=repository_id,
+                file_paths=file_paths,
+            )
+            await self._write_nodes(tx, repository_id, graph.nodes)
+            await self._write_edges(tx, graph.edges)
+            await tx.commit()
+
     async def _write_nodes(self, tx: Any, repository_id: str, nodes: list[GraphNode]) -> None:
         keyed = sorted(nodes, key=lambda n: validate_labels(n.labels))
         for labels, group in groupby(keyed, key=lambda n: validate_labels(n.labels)):

@@ -128,6 +128,24 @@ class Settings(BaseSettings):
     groq_api_key: str | None = Field(default=None)
     groq_model: str = Field(default="llama-3.3-70b-versatile")
 
+    # --- DeepSeek (OpenAI-compatible Chat Completions API; see
+    # platform.deepseek.com) --- deepseek_base_url is optional: unset, the
+    # registry's default (the official DeepSeek API) is used. Set it to
+    # point the same provider at a self-hosted or third-party
+    # OpenAI-compatible DeepSeek endpoint without any code change.
+    deepseek_api_key: str | None = Field(default=None)
+    deepseek_model: str = Field(default="deepseek-v4-flash")
+    deepseek_base_url: str | None = Field(default=None)
+    # Higher than openai_max_tokens for the same reason bedrock_max_tokens
+    # is: both registered DeepSeek models (deepseek-v4-flash,
+    # deepseek-v4-pro) are hybrid-reasoning and spend part of this same
+    # budget on their own reasoning trace — exposed
+    # as a separate "reasoning_content" field, but billed against the same
+    # max_tokens cap — before ever emitting the final "content". Too low a
+    # cap consumes the whole budget on reasoning and returns empty content,
+    # which then fails downstream JSON parsing.
+    deepseek_max_tokens: int = Field(default=16384)
+
     # --- Gemini (Google Generative Language API) ---
     gemini_api_key: str | None = Field(default=None)
     gemini_model: str = Field(default="gemini-3.6-flash")

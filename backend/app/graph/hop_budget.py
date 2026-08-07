@@ -101,6 +101,14 @@ class GraphHopBudgetRepository(IGraphRepository):
             "directly (see app.graph.interfaces.IGraphRepository's module docstring)."
         )
 
+    async def replace_repository_files_subgraph(
+        self, repository_id: str, file_paths: list[str], graph: GraphPayload
+    ) -> None:
+        raise NotImplementedError(
+            "GraphHopBudgetRepository is read-only — agents never write to the graph "
+            "directly (see app.graph.interfaces.IGraphRepository's module docstring)."
+        )
+
     async def get_full_graph(
         self,
         repository_id: str,

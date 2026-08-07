@@ -13,3 +13,13 @@ export function formatCount(value: number): string {
 export function formatLabel(value: string): string {
   return value.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
+
+/** `2026-08-07` → `08-07`, for chart axes on a date series.
+ *
+ * Lives here rather than in SimpleCharts because it is a *caller's* choice:
+ * the axis previously trimmed five characters off every label
+ * unconditionally, which silently mangled the repository names the same
+ * chart renders elsewhere. Non-date input is returned untouched. */
+export function shortenIsoDate(label: string): string {
+  return /^\d{4}-\d{2}-\d{2}/.test(label) ? label.slice(5) : label;
+}

@@ -21,6 +21,11 @@ class _FakeGraphRepository(IGraphRepository):
     async def replace_repository_graph(self, repository_id: str, graph: GraphPayload) -> None:
         raise NotImplementedError
 
+    async def replace_repository_files_subgraph(
+        self, repository_id: str, file_paths: list[str], graph: GraphPayload
+    ) -> None:
+        raise NotImplementedError
+
     async def get_full_graph(self, repository_id: str) -> GraphPayload:
         raise NotImplementedError
 

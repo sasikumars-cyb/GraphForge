@@ -395,6 +395,196 @@ async def test_complete_propagates_rate_limit_error() -> None:
         await provider.complete(system_prompt="sys", user_prompt="usr")
 
 
+# -- Tests: complete_with_tools (native tool-calling) ------------------------
+#
+# Regression coverage for the Confluence context-gathering gap: every
+# OpenAI-compatible provider (OpenAI, Groq, DeepSeek, Cerebras, OpenRouter,
+# Ollama) shares this one implementation, so a fix here fixes all of them —
+# see gather_confluence_context's own module docstring for why native
+# tool-calling is required at all (Atlassian's MCP server has no plain
+# search, only LLM-driven graph traversal).
+
+
+def _tool_call_response(
+    *, text: str = "", tool_calls: list[dict[str, Any]] | None = None, finish_reason: str = "stop"
+) -> httpx.Response:
+    message: dict[str, Any] = {"content": text or None}
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+        finish_reason = "tool_calls"
+    return httpx.Response(
+        status_code=200,
+        json={
+            "choices": [{"message": message, "finish_reason": finish_reason}],
+            "model": "gpt-5",
+            "usage": {"prompt_tokens": 20, "completion_tokens": 5},
+        },
+    )
+
+
+@pytest.mark.asyncio
+async def test_complete_with_tools_sends_openai_tools_shape() -> None:
+    from app.ai.providers.base import ToolSpec
+
+    captured: dict[str, Any] = {}
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return _tool_call_response(text="hi")
+
+    transport = httpx.MockTransport(capture)
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    await provider.complete_with_tools(
+        system_prompt="sys",
+        messages=[{"role": "user", "content": [{"text": "find the docs"}]}],
+        tools=[
+            ToolSpec(
+                name="search",
+                description="Search for something.",
+                input_schema={"type": "object", "properties": {"q": {"type": "string"}}},
+            )
+        ],
+    )
+
+    body = captured["body"]
+    assert body["messages"][0] == {"role": "system", "content": "sys"}
+    assert body["messages"][1] == {"role": "user", "content": "find the docs"}
+    assert body["tools"] == [
+        {
+            "type": "function",
+            "function": {
+                "name": "search",
+                "description": "Search for something.",
+                "parameters": {"type": "object", "properties": {"q": {"type": "string"}}},
+            },
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_complete_with_tools_parses_tool_calls_into_converse_native_shape() -> None:
+    transport = httpx.MockTransport(
+        lambda request: _tool_call_response(
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "search", "arguments": '{"q": "SCD2 merge"}'},
+                }
+            ]
+        )
+    )
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    result = await provider.complete_with_tools(
+        system_prompt="sys",
+        messages=[{"role": "user", "content": [{"text": "find the docs"}]}],
+        tools=[],
+    )
+
+    assert result.stop_reason == "tool_calls"
+    assert len(result.tool_uses) == 1
+    assert result.tool_uses[0].id == "call_1"
+    assert result.tool_uses[0].name == "search"
+    assert result.tool_uses[0].input == {"q": "SCD2 merge"}
+    # content_blocks round-trips into the *next* call's messages verbatim
+    # (see gather_confluence_context) — must be Converse-native, not OpenAI's
+    # own tool_calls shape.
+    assert result.content_blocks == [
+        {"toolUse": {"toolUseId": "call_1", "name": "search", "input": {"q": "SCD2 merge"}}}
+    ]
+    assert result.prompt_tokens == 20
+    assert result.completion_tokens == 5
+
+
+@pytest.mark.asyncio
+async def test_complete_with_tools_no_tool_calls_returns_plain_text() -> None:
+    transport = httpx.MockTransport(lambda request: _tool_call_response(text="no relevant docs"))
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    result = await provider.complete_with_tools(
+        system_prompt="sys", messages=[{"role": "user", "content": [{"text": "q"}]}], tools=[]
+    )
+
+    assert result.text == "no relevant docs"
+    assert result.tool_uses == []
+    assert result.stop_reason == "stop"
+    assert result.content_blocks == [{"text": "no relevant docs"}]
+
+
+@pytest.mark.asyncio
+async def test_complete_with_tools_round_trips_a_full_multi_turn_conversation() -> None:
+    """Exercises exactly the sequence gather_confluence_context drives:
+    assistant turn (with a tool_use) appended verbatim, followed by a
+    toolResult turn — proving the translator handles both directions on
+    the *second* call, not just a fresh first turn."""
+    captured: dict[str, Any] = {}
+
+    def capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return _tool_call_response(text="done")
+
+    transport = httpx.MockTransport(capture)
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    messages: list[dict[str, Any]] = [
+        {"role": "user", "content": [{"text": "find the docs for NPT-30"}]},
+        {
+            "role": "assistant",
+            "content": [
+                {"toolUse": {"toolUseId": "call_1", "name": "search", "input": {"q": "NPT-30"}}}
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {"toolResult": {"toolUseId": "call_1", "content": [{"json": {"ok": True}}]}}
+            ],
+        },
+    ]
+
+    await provider.complete_with_tools(system_prompt="sys", messages=messages, tools=[])
+
+    sent = captured["body"]["messages"]
+    assert sent[0] == {"role": "system", "content": "sys"}
+    assert sent[1] == {"role": "user", "content": "find the docs for NPT-30"}
+    assert sent[2] == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "search", "arguments": '{"q": "NPT-30"}'},
+            }
+        ],
+    }
+    assert sent[3] == {"role": "tool", "tool_call_id": "call_1", "content": '{"ok": true}'}
+
+
+@pytest.mark.asyncio
+async def test_complete_with_tools_propagates_rate_limit_error() -> None:
+    """Same transport-level error mapping as complete() — via the shared
+    _post() helper, not a second copy of the timeout/HTTP-error handling."""
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            status_code=429, json={"error": {"message": "Too many requests."}}
+        )
+    )
+    client = httpx.AsyncClient(transport=transport)
+    provider = OpenAIProvider(api_key="sk-test-key", http_client=client)
+
+    with pytest.raises(AIProviderRateLimitError, match="Too many requests."):
+        await provider.complete_with_tools(
+            system_prompt="sys", messages=[{"role": "user", "content": [{"text": "q"}]}], tools=[]
+        )
+
+
 # -- Tests: Gemini Provider -------------------------------------------------
 
 
@@ -636,6 +826,62 @@ def test_factory_groq_missing_api_key_raises() -> None:
     settings = Settings(ai_provider="groq", groq_api_key=None)
     with pytest.raises(Exception, match="GROQ_API_KEY"):
         create_llm_provider(settings)
+
+
+def test_factory_creates_deepseek_provider_pointed_at_deepseek_url() -> None:
+    settings = Settings(
+        ai_provider="deepseek", deepseek_api_key="ds-test", deepseek_model="deepseek-v4-flash"
+    )
+    provider = create_llm_provider(settings)
+    assert isinstance(provider, OpenAIProvider)
+    assert provider._model == "deepseek-v4-flash"  # noqa: SLF001
+    assert (
+        provider._base_url  # noqa: SLF001
+        == "https://api.deepseek.com/v1/chat/completions"
+    )
+
+
+def test_factory_creates_deepseek_pro_model() -> None:
+    settings = Settings(ai_provider="deepseek", deepseek_api_key="ds-test")
+    provider = create_llm_provider(settings, model="deepseek-v4-pro")
+    assert provider._model == "deepseek-v4-pro"  # noqa: SLF001
+
+
+def test_factory_deepseek_uses_wider_max_tokens_default_for_reasoning_budget() -> None:
+    """Regression test for the empty-content failure a too-low max_tokens
+    causes on DeepSeek's hybrid-reasoning models: the reasoning trace can
+    consume the whole budget before any final-answer content is emitted."""
+    settings = Settings(ai_provider="deepseek", deepseek_api_key="ds-test")
+    provider = create_llm_provider(settings)
+    assert provider._max_tokens == settings.deepseek_max_tokens  # noqa: SLF001
+    assert provider._max_tokens > settings.openai_max_tokens  # noqa: SLF001
+
+
+def test_factory_deepseek_missing_api_key_raises() -> None:
+    settings = Settings(ai_provider="deepseek", deepseek_api_key=None)
+    with pytest.raises(Exception, match="DEEPSEEK_API_KEY"):
+        create_llm_provider(settings)
+
+
+def test_factory_deepseek_rejects_unsupported_model() -> None:
+    settings = Settings(ai_provider="deepseek", deepseek_api_key="ds-test")
+    with pytest.raises(UnsupportedModelError):
+        create_llm_provider(settings, model="not-a-real-model")
+
+
+def test_factory_deepseek_base_url_env_override() -> None:
+    """DEEPSEEK_BASE_URL lets an operator point the provider at a
+    self-hosted or third-party OpenAI-compatible DeepSeek endpoint."""
+    settings = Settings(
+        ai_provider="deepseek",
+        deepseek_api_key="ds-test",
+        deepseek_base_url="https://gateway.internal/deepseek/v1/chat/completions",
+    )
+    provider = create_llm_provider(settings)
+    assert (
+        provider._base_url  # noqa: SLF001
+        == "https://gateway.internal/deepseek/v1/chat/completions"
+    )
 
 
 def test_factory_gemini_missing_api_key_raises() -> None:

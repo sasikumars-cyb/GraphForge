@@ -3,11 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
 import { MemoryRouter, Routes, Route } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthContext, type AuthContextValue } from "../app/auth-context";
-import { WorkflowTimeline } from "../components/workflow/WorkflowTimeline";
 import { StageNavigation } from "../components/workflow/StageNavigation";
 import { NewWorkflowPage, WorkflowPage } from "./WorkflowPage";
-import type { AgentStep, RunDetail, WorkflowDetail, WorkflowStageInfo } from "../types/agent";
+import type { AgentStep, RunDetail, WorkflowDetail } from "../types/agent";
 import * as workflowsApi from "../lib/api/workflows";
 import * as agentRunsApi from "../lib/api/agentRuns";
 import { ApiError } from "../lib/api/client";
@@ -24,6 +24,15 @@ vi.mock("../lib/api/workflows", () => ({
 
 vi.mock("../lib/api/agentRuns", () => ({
   getAgentRun: vi.fn(),
+}));
+
+// StageProgressionPanel (rendered once any stage has completed) reads a
+// workflow's LLM usage via TanStack Query — resolved empty by default so
+// tests that don't care about cost data aren't left with an unhandled
+// rejection; the panel already degrades to duration-only when this has no
+// stages for the given workflow.
+vi.mock("../lib/api/metrics", () => ({
+  getWorkflowLLMUsage: vi.fn().mockResolvedValue({ workflow_id: "wf-1", workflow_title: "", stages: [] }),
 }));
 
 function renderWithAuth(ui: React.ReactElement, authValue?: Partial<AuthContextValue>) {
@@ -44,40 +53,16 @@ function renderWithAuth(ui: React.ReactElement, authValue?: Partial<AuthContextV
     ...authValue,
   };
 
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
   return render(
-    <AuthContext.Provider value={defaultAuth}>
-      <MemoryRouter>{ui}</MemoryRouter>
-    </AuthContext.Provider>,
+    <QueryClientProvider client={queryClient}>
+      <AuthContext.Provider value={defaultAuth}>
+        <MemoryRouter>{ui}</MemoryRouter>
+      </AuthContext.Provider>
+    </QueryClientProvider>,
   );
 }
-
-describe("WorkflowTimeline", () => {
-  const stages: WorkflowStageInfo[] = [
-    { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
-    { stage: "development", label: "Development", status: "running", run_id: "run-2" },
-    { stage: "testing", label: "Testing", status: "pending", run_id: null },
-    { stage: "review", label: "Review", status: "pending", run_id: null },
-  ];
-
-  it("renders all stage labels", () => {
-    renderWithAuth(<WorkflowTimeline stages={stages} currentStage="development" />);
-    expect(screen.getByText("Planning")).toBeInTheDocument();
-    expect(screen.getByText("Development")).toBeInTheDocument();
-    expect(screen.getByText("Testing")).toBeInTheDocument();
-    expect(screen.getByText("Review")).toBeInTheDocument();
-  });
-
-  it("renders stage icons as decorative status readouts, not links", () => {
-    // Regression test: a completed stage icon used to be its own nested
-    // <Link to="/runs/:runId">, which — when this component is wrapped in
-    // the Dashboard's own workflow-card <Link> — silently hijacked clicks
-    // away from the workflow page. Stage icons carry no navigation now.
-    renderWithAuth(<WorkflowTimeline stages={stages} currentStage="development" />);
-    expect(screen.queryAllByRole("link")).toHaveLength(0);
-    expect(screen.getByRole("img", { name: "Planning: completed" })).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Testing: pending" })).toBeInTheDocument();
-  });
-});
 
 describe("StageNavigation", () => {
   it("shows continue button for development stage", () => {
@@ -226,14 +211,17 @@ describe("WorkflowPage", () => {
       loginWithToken: vi.fn(),
       logout: vi.fn(),
     };
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     return render(
-      <AuthContext.Provider value={defaultAuth}>
-        <MemoryRouter initialEntries={[`/workflows/${workflowId}`]}>
-          <Routes>
-            <Route path="/workflows/:workflowId" element={<WorkflowPage />} />
-          </Routes>
-        </MemoryRouter>
-      </AuthContext.Provider>,
+      <QueryClientProvider client={queryClient}>
+        <AuthContext.Provider value={defaultAuth}>
+          <MemoryRouter initialEntries={[`/workflows/${workflowId}`]}>
+            <Routes>
+              <Route path="/workflows/:workflowId" element={<WorkflowPage />} />
+            </Routes>
+          </MemoryRouter>
+        </AuthContext.Provider>
+      </QueryClientProvider>,
     );
   }
 

@@ -6,7 +6,7 @@ This document explains how GraphForge actually works today: what each part of th
 
 ## Overview
 
-GraphForge is a single-tenant web application: a React SPA frontend, a FastAPI backend, PostgreSQL as the primary datastore, and Neo4j as a dedicated graph store for codebase architecture. The backend orchestrates multi-stage AI-agent "workflows" (Context Discovery → Planning → Development → Testing → Documentation Planning → Engineering Review) that call out to a pluggable set of LLM providers (Bedrock, OpenAI, Gemini, Groq), and integrates with GitHub (repository access, pull requests, webhooks) and, via a generic MCP-based tool layer, Jira/Confluence.
+GraphForge is a single-tenant web application: a React SPA frontend, a FastAPI backend, PostgreSQL as the primary datastore, and Neo4j as a dedicated graph store for codebase architecture. The backend orchestrates multi-stage AI-agent "workflows" (Context Discovery → Planning → Development → Testing → Documentation Planning → Engineering Review) that call out to a pluggable set of LLM providers (Bedrock, OpenAI, Gemini, Groq, DeepSeek), and integrates with GitHub (repository access, pull requests, webhooks) and, via a generic MCP-based tool layer, Jira/Confluence.
 
 ```mermaid
 flowchart LR
@@ -18,6 +18,7 @@ flowchart LR
     LLM --> OpenAI[OpenAI]
     LLM --> Gemini[Gemini]
     LLM --> Groq[Groq]
+    LLM --> DeepSeek[DeepSeek]
     API --> GitHub[GitHub REST API<br/>+ webhooks]
     API --> MCP[MCP tool layer<br/>Jira / Confluence]
 ```
@@ -116,7 +117,7 @@ The indexer (`app/indexer/services/indexing_service.py`) shallow-clones a reposi
 
 ## AI Providers
 
-See `13_AI_PROVIDER_CONFIGURATION.md` for the full design. Summary: `app/ai/providers/registry.py` declares each provider (`OpenAIProvider`, `GeminiProvider`, `BedrockProvider`, and a Groq path via the OpenAI-compatible interface) as a `ProviderSpec` — no vendor-name `if`/`elif` chains scattered through the app. `app/ai/config/resolver.py` resolves *what to run* (provider, model, temperature, max_tokens) through a precedence chain: explicit argument → stage override/profile → **installation-wide** stored default (`AIProviderConfig`/`AISettings`, `app/ai/config/store.py`) → environment variables (`Settings.ai_provider`, currently defaults to `"openai"`). Bedrock uses `boto3`'s default credential chain — no API key is ever stored for it.
+See `13_AI_PROVIDER_CONFIGURATION.md` for the full design. Summary: `app/ai/providers/registry.py` declares each provider (`OpenAIProvider`, `GeminiProvider`, `BedrockProvider`, and Groq/DeepSeek/Cerebras/OpenRouter/Ollama paths via the OpenAI-compatible interface) as a `ProviderSpec` — no vendor-name `if`/`elif` chains scattered through the app. `app/ai/config/resolver.py` resolves *what to run* (provider, model, temperature, max_tokens) through a precedence chain: explicit argument → stage override/profile → **installation-wide** stored default (`AIProviderConfig`/`AISettings`, `app/ai/config/store.py`) → environment variables (`Settings.ai_provider`, currently defaults to `"openai"`). Bedrock uses `boto3`'s default credential chain — no API key is ever stored for it.
 
 ## Workflow Engine
 
@@ -147,7 +148,7 @@ sequenceDiagram
     API->>BG: schedule_run_execution() — asyncio.create_task
     API-->>FE: 201, workflow_id
     BG->>RC: execute_run() — status="running"
-    RC->>LLM: resolved provider call (Bedrock/OpenAI/Gemini/Groq)
+    RC->>LLM: resolved provider call (Bedrock/OpenAI/Gemini/Groq/DeepSeek)
     LLM-->>RC: result
     RC->>DB: persist AgentStep, status="completed"|"failed"
     loop every 2.5s
@@ -194,7 +195,7 @@ flowchart TD
     G -.async, decoupled from request.-> I[RunCoordinator.execute_run]
     I --> J[app.ai.config.resolver.resolve stage=...]
     J --> K[Provider built via registry.ProviderSpec]
-    K --> L[LLM call: Bedrock / OpenAI / Gemini / Groq]
+    K --> L[LLM call: Bedrock / OpenAI / Gemini / Groq / DeepSeek]
     L --> M[Persist AgentStep + Run status]
     M --> N[(PostgreSQL)]
 ```

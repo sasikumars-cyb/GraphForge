@@ -26,6 +26,7 @@ from sqlalchemy import text
 # to the two imports it explains.
 import app.orchestrator.background_execution as background_execution  # noqa: E402
 from app.agents.setup import register_agents
+from app.ai.config import store
 from app.api.v1.routers import api_router
 from app.core.config import get_settings
 from app.core.error_handlers import register_exception_handlers
@@ -150,6 +151,25 @@ def create_app() -> FastAPI:
         # knowledge.py, this just covers what already existed at restart.
         async with AsyncSessionLocal() as db:
             await sync_all_knowledge_connections_to_tools(db)
+
+        # Load the AI provider config snapshot (app.ai.config.store) up
+        # front, rather than leaving it at its empty, loaded=False default
+        # until some ai_workspace request happens to call ensure_loaded()
+        # first. Without this, `resolver.resolve()` — synchronous, and
+        # called from every agent's LLM call, including the embedded
+        # Worker's background job execution below — reads that still-empty
+        # snapshot, sees no stored default_provider, and silently falls all
+        # the way through to the environment-tier provider (Settings
+        # .ai_provider, e.g. "groq" in dev's .env) instead of whatever
+        # provider was actually selected in the UI. That's not a transient
+        # blip: it lasts from process start until the first ai_workspace
+        # GET/PUT, which for the Worker's own background runs may never
+        # happen at all — every run until then silently uses the wrong
+        # provider with no error, only a confusing downstream failure (e.g.
+        # a rate limit on a provider nobody chose). One eager load here,
+        # symmetric with the recovery steps above, closes that window.
+        async with AsyncSessionLocal() as db:
+            await store.refresh(db)
 
         # KAN-18: an embedded worker, polling the durable queue on this same
         # process — what makes agent runs, resumes, and indexing jobs

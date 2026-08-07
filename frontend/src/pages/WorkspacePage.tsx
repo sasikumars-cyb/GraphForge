@@ -131,7 +131,7 @@ export function WorkspacePage() {
             <Sparkles className="h-5 w-5 text-accent-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">AI Workspace</h2>
+            <h1 className="text-xl font-semibold text-fg">AI Workspace</h1>
             <p className="text-sm text-fg-muted">
               Discover and run AI-powered engineering capabilities.
             </p>
@@ -185,19 +185,25 @@ export function WorkspacePage() {
 
       {/* Available capabilities */}
       {available.length > 0 && (
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {available.map((cap) => (
-            <CapabilityCard key={cap.slug} capability={cap} />
-          ))}
+        <div>
+          {/* The "Coming Soon" group below has a visible heading; this group
+              had none, so its capability names jumped straight from the page
+              <h1> to <h3>. Named for assistive tech, unstyled for sight. */}
+          <h2 className="sr-only">Available capabilities</h2>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {available.map((cap) => (
+              <CapabilityCard key={cap.slug} capability={cap} />
+            ))}
+          </div>
         </div>
       )}
 
       {/* Coming soon */}
       {comingSoon.length > 0 && (
         <div>
-          <h3 className="mb-3 text-xs font-semibold tracking-wide text-fg-subtle uppercase">
+          <h2 className="mb-3 text-xs font-semibold tracking-wide text-fg-subtle uppercase">
             Coming Soon
-          </h3>
+          </h2>
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {comingSoon.map((cap) => (
               <CapabilityCard key={cap.slug} capability={cap} />

@@ -73,8 +73,10 @@ class TransportSpec:
 
     # Which `ProviderCapability` values this transport can actually satisfy
     # for this source, e.g. Confluence's MCP transport declares DOCUMENTATION
-    # (Teamwork Graph traversal) while its REST transport declares none (CQL
-    # search has no live consumer — see ConfluenceTool's removal). This is
+    # (Teamwork Graph traversal), and so does its REST transport (CQL search
+    # — the fallback `ConfluenceProvider.resolve_for_issue` falls back to
+    # when MCP is blocked by Atlassian's org-level "API token access"
+    # toggle; see `app.agents.planning.confluence_rest_search`). This is
     # what `app.knowledge.access_resolver.derive_access_methods` filters on
     # when a caller asks "how do I reach `capability`" rather than "give me
     # every configured transport regardless of what it's for" (the Tool
@@ -249,11 +251,15 @@ _SOURCES: tuple[KnowledgeSourceSpec, ...] = (
                     "api_token": "confluence_api_token",
                 },
                 auto_wire_credential="api_token",
-                # Deliberately empty: REST search was never wired to the
-                # DOCUMENTATION capability (see access_resolver.py) and
-                # nothing else in the app asks Confluence for anything REST
-                # could satisfy today.
-                capabilities=(),
+                # REST CQL search (`app.agents.planning.confluence_rest_
+                # search`) now backs DOCUMENTATION as a fallback for when
+                # MCP is unreachable — see that module's docstring and
+                # `ConfluenceProvider.resolve_for_issue`'s MCP-then-REST
+                # policy, mirroring `JiraTool`'s own fallback exactly. This
+                # was deliberately empty before that fallback existed: a
+                # capability with no consumer would have been a dead
+                # method offered for nothing.
+                capabilities=(ProviderCapability.DOCUMENTATION,),
             ),
             TransportSpec(
                 transport=Transport.MCP,

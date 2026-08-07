@@ -151,7 +151,7 @@ describe("App navigation (authenticated)", () => {
     // Both the Topbar (h1) and the page itself (h2) show the label, so
     // assert on the page-level heading specifically.
     expect(
-      await screen.findByRole("heading", { level: 2, name: "Control Center" }),
+      await screen.findByRole("heading", { level: 1, name: "Control Center" }),
     ).toBeInTheDocument();
   });
 
@@ -163,7 +163,7 @@ describe("App navigation (authenticated)", () => {
     await user.click(within(nav).getByRole("link", { name: "AI Workspace" }));
 
     expect(
-      await screen.findByRole("heading", { level: 2, name: "AI Workspace" }),
+      await screen.findByRole("heading", { level: 1, name: "AI Workspace" }),
     ).toBeInTheDocument();
   });
 
@@ -180,7 +180,7 @@ describe("App navigation (authenticated)", () => {
     // hermetic regardless of what else is reachable on that URL.
     vi.spyOn(githubApi, "listTrackedRepositories").mockResolvedValue([]);
     renderApp(path);
-    expect(await screen.findByRole("heading", { level: 2, name: heading })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeInTheDocument();
   });
 
   it("renders the repository detail page and offers to run indexing", async () => {
@@ -191,7 +191,7 @@ describe("App navigation (authenticated)", () => {
     renderApp("/repositories/repo-1");
 
     expect(
-      await screen.findByRole("heading", { level: 2, name: "local/order-service" }),
+      await screen.findByRole("heading", { level: 1, name: "local/order-service" }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Run indexing" })).toBeInTheDocument();
     expect(await screen.findByText("Rename OrderCreated.total to totalCents")).toBeInTheDocument();
@@ -203,7 +203,6 @@ describe("App navigation (authenticated)", () => {
     vi.spyOn(repositoriesApi, "listPullRequests").mockResolvedValue([FAKE_PR]);
     vi.spyOn(repositoriesApi, "getLatestIndexingJob").mockRejectedValue(NOT_FOUND);
     vi.spyOn(repositoriesApi, "removeRepository").mockResolvedValue(undefined);
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     // This test navigates to /repositories after removal, which renders
     // RepositoriesPage's useDashboardData — it calls this per pull request
     // and it wasn't mocked here, so it fell through to whatever is
@@ -211,14 +210,19 @@ describe("App navigation (authenticated)", () => {
     vi.spyOn(analysisApi, "getDeterministicAnalysis").mockRejectedValue(NOT_FOUND);
 
     renderApp("/repositories/repo-1");
-    await screen.findByRole("heading", { level: 2, name: "local/order-service" });
+    await screen.findByRole("heading", { level: 1, name: "local/order-service" });
 
+    // Opens the in-app ConfirmDialog (was window.confirm) — removal only
+    // happens once its destructive action is chosen, so the first click
+    // must not delete anything on its own.
     await user.click(screen.getByRole("button", { name: "Remove repository" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(repositoriesApi.removeRepository).not.toHaveBeenCalled();
 
-    expect(window.confirm).toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Remove repository" }));
     expect(repositoriesApi.removeRepository).toHaveBeenCalledWith("fake-token", "repo-1");
     expect(
-      await screen.findByRole("heading", { level: 2, name: "Repositories" }),
+      await screen.findByRole("heading", { level: 1, name: "Repositories" }),
     ).toBeInTheDocument();
   });
 
@@ -228,17 +232,19 @@ describe("App navigation (authenticated)", () => {
     vi.spyOn(repositoriesApi, "listPullRequests").mockResolvedValue([FAKE_PR]);
     vi.spyOn(repositoriesApi, "getLatestIndexingJob").mockRejectedValue(NOT_FOUND);
     const removeSpy = vi.spyOn(repositoriesApi, "removeRepository");
-    vi.spyOn(window, "confirm").mockReturnValue(false);
 
     renderApp("/repositories/repo-1");
-    await screen.findByRole("heading", { level: 2, name: "local/order-service" });
+    await screen.findByRole("heading", { level: 1, name: "local/order-service" });
 
     await user.click(screen.getByRole("button", { name: "Remove repository" }));
+    const dialog = await screen.findByRole("alertdialog");
 
-    expect(window.confirm).toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
     expect(removeSpy).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
     expect(
-      screen.getByRole("heading", { level: 2, name: "local/order-service" }),
+      screen.getByRole("heading", { level: 1, name: "local/order-service" }),
     ).toBeInTheDocument();
   });
 
@@ -252,7 +258,7 @@ describe("App navigation (authenticated)", () => {
 
     expect(
       await screen.findByRole("heading", {
-        level: 2,
+        level: 1,
         name: "Rename OrderCreated.total to totalCents",
       }),
     ).toBeInTheDocument();

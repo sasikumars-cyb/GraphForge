@@ -100,6 +100,23 @@ class EngineeringMemoryService:
             repository_id, exclude_commit_sha=exclude_commit_sha, limit=limit
         )
 
+    async def prune_evidence_packs(self, repository_id: uuid.UUID, *, keep_last_n: int) -> int:
+        """KAN-24 retention: delete evidence-pack rows for `repository_id`
+        beyond the newest `keep_last_n`, per ADR 0018's own retention rule
+        (see `EngineeringMemoryRepository.prune_evidence_packs`'s
+        docstring for why this table, and only this table, is ever
+        deleted from). Not called automatically anywhere yet — wired up
+        as an operator-triggered maintenance action (see docs/adr/
+        0019-engineering-memory-retention.md) rather than an unattended
+        background job, so a bad `keep_last_n` value doesn't silently
+        delete more than intended before anyone notices."""
+        deleted = await self._repository.prune_evidence_packs(
+            repository_id, keep_last_n=keep_last_n
+        )
+        if deleted:
+            await self._db.commit()
+        return deleted
+
     async def retrieve_evidence_pack(self, pack_id: str) -> EngineeringEvidencePack | None:
         """Replay: decompress and deserialize the most recently persisted
         copy of this pack back into the exact contract shape it was

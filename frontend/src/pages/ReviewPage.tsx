@@ -51,7 +51,7 @@ export function ReviewPage() {
             <Search className="h-5 w-5 text-success-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">Review Pull Request</h2>
+            <h1 className="text-xl font-semibold text-fg">Review Pull Request</h1>
             <p className="text-sm text-fg-muted">
               Submit a GitHub PR for AI-powered change impact analysis. Every finding is grounded in graph traversals — zero hallucination.
             </p>

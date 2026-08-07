@@ -58,7 +58,7 @@ export function TestingPage() {
             <FlaskConical className="h-5 w-5 text-cat-5-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">Test Planning Agent</h2>
+            <h1 className="text-xl font-semibold text-fg">Test Planning Agent</h1>
             <p className="text-sm text-fg-muted">
               Describe an engineering change. GraphForge produces a structured testing strategy —
               regression scope, integration tests, edge cases, execution order — grounded in your

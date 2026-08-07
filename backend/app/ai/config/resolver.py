@@ -41,6 +41,16 @@ _ENV_KEY_FIELDS: dict[str, tuple[str, str]] = {
     "openai": ("openai_api_key", "openai_model"),
     "gemini": ("gemini_api_key", "gemini_model"),
     "groq": ("groq_api_key", "groq_model"),
+    "deepseek": ("deepseek_api_key", "deepseek_model"),
+}
+
+# Optional env-configured base_url override, per provider. Only DeepSeek
+# needs this today (the official API vs. a self-hosted/third-party
+# OpenAI-compatible endpoint) — kept as its own small mapping rather than
+# folded into _ENV_KEY_FIELDS so providers that never need an override (the
+# common case) don't carry an unused third tuple slot.
+_ENV_BASE_URL_FIELDS: dict[str, str] = {
+    "deepseek": "deepseek_base_url",
 }
 
 # Provider-specific options resolved from environment variables. Each entry
@@ -105,19 +115,36 @@ def env_credentials_for(spec_key: str, settings: Settings) -> tuple[str | None, 
     return _env_credentials(spec_key, settings)
 
 
+def _env_base_url(spec_key: str, settings: Settings) -> str | None:
+    """An env-configured base_url override for `spec_key`, if any.
+
+    Falls under the same "stored config beats env" precedence as
+    `_env_credentials`: callers consult this only after a stored
+    `ProviderRecord.base_url`, and it in turn yields to the registry's
+    `ProviderSpec.default_base_url` when unset.
+    """
+    field = _ENV_BASE_URL_FIELDS.get(spec_key)
+    if not field:
+        return None
+    return getattr(settings, field, None)
+
+
 def _default_max_tokens(spec_key: str, cfg: Settings) -> int:
     """Env-fallback max_tokens, per provider — used only when nothing more
-    specific (stage/profile/stored config) set one. Gemini and Bedrock both
-    need a larger budget than OpenAI's default: Gemini's structured JSON
-    responses were truncating at 4096, and a Bedrock hybrid-reasoning model
-    (e.g. Claude Haiku 4.5) spends part of this same budget on its own
-    reasoning trace before emitting the final answer - too low a cap can
-    consume the whole budget on reasoning and return empty text.
+    specific (stage/profile/stored config) set one. Gemini, Bedrock and
+    DeepSeek all need a larger budget than OpenAI's default: Gemini's
+    structured JSON responses were truncating at 4096, and a Bedrock/
+    DeepSeek hybrid-reasoning model (e.g. Claude Haiku 4.5, deepseek-
+    reasoner) spends part of this same budget on its own reasoning trace
+    before emitting the final answer - too low a cap can consume the whole
+    budget on reasoning and return empty text.
     """
     if spec_key == "gemini":
         return cfg.gemini_max_tokens
     if spec_key == "bedrock":
         return cfg.bedrock_max_tokens
+    if spec_key == "deepseek":
+        return cfg.deepseek_max_tokens
     return cfg.openai_max_tokens
 
 
@@ -316,7 +343,9 @@ def resolve(
                         or snapshot.max_tokens
                         or _default_max_tokens(spec.key, cfg)
                     ),
-                    base_url=(prov_cfg.base_url if prov_cfg else None) or spec.default_base_url,
+                    base_url=(prov_cfg.base_url if prov_cfg else None)
+                    or _env_base_url(spec.key, cfg)
+                    or spec.default_base_url,
                     provider_options=_resolve_provider_options(spec.key, prov_cfg, cfg),
                 ),
                 source=profile_source,
@@ -366,6 +395,7 @@ def resolve(
             temperature=float(temperature),
             max_tokens=int(max_tokens),
             base_url=(provider_record.base_url if provider_record else None)
+            or _env_base_url(spec.key, cfg)
             or spec.default_base_url,
             provider_options=_resolve_provider_options(spec.key, provider_record, cfg),
         ),

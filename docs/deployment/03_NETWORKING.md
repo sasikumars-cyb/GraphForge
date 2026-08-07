@@ -66,7 +66,7 @@ flowchart TB
 | Security Group | Inbound | Outbound | Rationale |
 |---|---|---|---|
 | `sg-alb` | `443` from `0.0.0.0/0`; `80` from `0.0.0.0/0` (redirect-only, see HTTPS note below) | `8000` to `sg-ecs-backend`; `80` to `sg-ecs-frontend` | Only public-facing SG in the design |
-| `sg-ecs-backend` | `8000` from `sg-alb` **only** | `443` to `0.0.0.0/0` via NAT (Bedrock, OpenAI, Gemini, Groq, GitHub REST/webhooks, Neo4j Aura if used); `5432` to `sg-rds`; `7687` to `sg-neo4j` | The only tier that talks to the internet outbound, and the only tier the data-tier SGs trust |
+| `sg-ecs-backend` | `8000` from `sg-alb` **only** | `443` to `0.0.0.0/0` via NAT (Bedrock, OpenAI, Gemini, Groq, DeepSeek, GitHub REST/webhooks, Neo4j Aura if used); `5432` to `sg-rds`; `7687` to `sg-neo4j` | The only tier that talks to the internet outbound, and the only tier the data-tier SGs trust |
 | `sg-ecs-frontend` | `80` from `sg-alb` **only** | none required | Nginx serves static assets only — it never calls the backend server-side; the browser does, via the ALB's separate path rule |
 | `sg-rds` | `5432` from `sg-ecs-backend` **only** | none | No other principal, ever — not the frontend tier, not the internet |
 | `sg-neo4j` (if self-hosted EC2) | `7687` from `sg-ecs-backend` **only**; `7474` only from a bastion/VPN SG if Neo4j Browser access is genuinely needed, never `0.0.0.0/0` | `443` outbound for OS patching | Same isolation principle as RDS |

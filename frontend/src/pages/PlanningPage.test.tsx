@@ -2,10 +2,17 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { AuthContext, type AuthContextValue } from "../app/auth-context";
 import { PlanningPage } from "./PlanningPage";
 import * as agentRunsApi from "../lib/api/agentRuns";
 import type { RunDetail } from "../types/agent";
+
+// PlanningConfidencePanel reads live connection state from /system/status
+// via TanStack Query, so this page now needs a QueryClient the way the real
+// app provides one in App.tsx. Retries off so a rejected query fails fast
+// instead of stalling the test.
+vi.mock("../lib/api/system", () => ({ getSystemStatus: vi.fn().mockResolvedValue({ connections: [] }) }));
 
 // Mock the API module
 vi.mock("../lib/api/agentRuns", () => ({
@@ -24,12 +31,18 @@ function renderWithAuth(authValue?: Partial<AuthContextValue>) {
     ...authValue,
   };
 
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+
   return render(
-    <AuthContext.Provider value={defaultAuth}>
-      <MemoryRouter>
-        <PlanningPage />
-      </MemoryRouter>
-    </AuthContext.Provider>,
+    <QueryClientProvider client={queryClient}>
+      <AuthContext.Provider value={defaultAuth}>
+        <MemoryRouter>
+          <PlanningPage />
+        </MemoryRouter>
+      </AuthContext.Provider>
+    </QueryClientProvider>,
   );
 }
 

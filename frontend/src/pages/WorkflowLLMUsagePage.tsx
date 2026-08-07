@@ -120,7 +120,7 @@ export function WorkflowLLMUsagePage() {
       {data && (
         <>
           <div>
-            <h2 className="text-xl font-semibold text-fg">{data.workflow_title}</h2>
+            <h1 className="text-xl font-semibold text-fg">{data.workflow_title}</h1>
             <p className="mt-1 text-sm text-fg-muted">
               LLM usage by stage — model, tokens, cost, and latency for each stage this workflow
               ran, so you can see which stage actually drove the total.

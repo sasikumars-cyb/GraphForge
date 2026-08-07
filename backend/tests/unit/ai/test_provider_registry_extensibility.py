@@ -41,13 +41,53 @@ def test_unimplemented_provider_build_raises_on_use():
 
 
 def test_openai_compatible_providers_need_no_adapter_code():
-    """Groq/Cerebras/OpenRouter/Ollama all build via the same
+    """Groq/Cerebras/DeepSeek/OpenRouter/Ollama all build via the same
     _openai_compatible() factory — adding another OpenAI-wire-format
     provider is a registry entry only."""
-    for key in ("groq", "cerebras", "openrouter", "ollama"):
+    for key in ("groq", "cerebras", "deepseek", "openrouter", "ollama"):
         spec = get_provider_spec(key)
         assert spec is not None
         assert spec.implemented is True
+
+
+def test_deepseek_registers_flash_and_pro_models():
+    spec = get_provider_spec("deepseek")
+    assert spec is not None
+    assert spec.model_ids() == ["deepseek-v4-flash", "deepseek-v4-pro"]
+    assert spec.resolve_default_model() == "deepseek-v4-flash"
+    assert spec.requires_api_key is True
+
+
+def test_deepseek_base_url_env_override_takes_precedence_over_registry_default():
+    from app.ai.config.resolver import _env_base_url
+
+    settings = Settings(deepseek_base_url="https://gateway.internal/deepseek/v1/chat/completions")
+    assert (
+        _env_base_url("deepseek", settings)
+        == "https://gateway.internal/deepseek/v1/chat/completions"
+    )
+
+
+def test_env_base_url_absent_for_providers_without_an_override_field():
+    from app.ai.config.resolver import _env_base_url
+
+    assert _env_base_url("groq", Settings()) is None
+
+
+def test_deepseek_default_max_tokens_is_higher_than_openai_default():
+    """Regression test: DeepSeek's hybrid-reasoning models (deepseek-v4-flash,
+    deepseek-v4-pro) can spend their whole token budget on the reasoning
+    trace before emitting any final-answer content, returning an empty
+    string that then fails downstream JSON parsing — the same failure mode
+    already guarded against for Bedrock's hybrid-reasoning models. The
+    unqualified default (no stored config, no stage/profile override) must
+    give DeepSeek the same wider budget, not silently fall back to
+    openai_max_tokens."""
+    from app.ai.config.resolver import _default_max_tokens
+
+    settings = Settings()
+    assert _default_max_tokens("deepseek", settings) == settings.deepseek_max_tokens
+    assert _default_max_tokens("deepseek", settings) > settings.openai_max_tokens
 
 
 def test_bedrock_provider_options_take_precedence_over_legacy_base_url():

@@ -87,7 +87,7 @@ export function DocumentationHealthPage() {
             <HeartPulse className="h-5 w-5 text-cat-5-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">Documentation Health</h2>
+            <h1 className="text-xl font-semibold text-fg">Documentation Health</h1>
             <p className="text-sm text-fg-muted">
               Score a repository&apos;s Markdown documentation and get a health report. Read-only —
               nothing in the repository is modified.

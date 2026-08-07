@@ -28,6 +28,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     ForeignKey,
+    Identity,
     Index,
     Integer,
     LargeBinary,
@@ -52,6 +53,20 @@ class EngineeringEvidencePackRecord(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
+
+    # Monotonic insertion ordinal — added for KAN-24's retention pruning,
+    # which needs a real "newest N" ordering. `created_at` cannot serve
+    # that role: it is `server_default=func.now()`, and Postgres's `now()`
+    # is transaction-scoped, not per-statement — two packs committed in
+    # the same transaction get an identical timestamp, exactly the bug
+    # `app.models.knowledge_relationship`'s own module docstring already
+    # documents and fixed with this same pattern for that sibling table.
+    # Nothing currently batches multiple pack inserts into one commit, so
+    # this was latent rather than observed — caught here because pruning
+    # is the first thing to actually depend on strict ordering.
+    sequence: Mapped[int] = mapped_column(
+        Integer, Identity(always=True), nullable=False, unique=True
+    )
 
     # The knowledge_engine contract's own content-addressed pack id
     # (`EngineeringEvidencePack.id`) — kept alongside the DB's own surrogate

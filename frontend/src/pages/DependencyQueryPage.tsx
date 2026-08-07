@@ -58,7 +58,7 @@ export function DependencyQueryPage() {
             <Layers className="h-5 w-5 text-cat-5-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">Dependency Query</h2>
+            <h1 className="text-xl font-semibold text-fg">Dependency Query</h1>
             <p className="text-sm text-fg-muted">
               What does this repository depend on, and what depends on it — with confidence per
               relationship. Read-only.

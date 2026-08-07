@@ -1,14 +1,15 @@
 import { useLocation } from "react-router-dom";
-import { Menu } from "lucide-react";
+import { Menu, Search } from "lucide-react";
 import { NAV_ITEMS } from "./nav-items";
 import { WORKSPACE_CAPABILITIES } from "../../config/workspace-capabilities";
 import { StatusBadge } from "../StatusBadge";
 
 interface TopbarProps {
   onMenuClick: () => void;
+  onOpenPalette: () => void;
 }
 
-export function Topbar({ onMenuClick }: TopbarProps) {
+export function Topbar({ onMenuClick, onOpenPalette }: TopbarProps) {
   const location = useLocation();
 
   // Resolve page title: first check workspace capabilities (nested routes),
@@ -39,12 +40,28 @@ export function Topbar({ onMenuClick }: TopbarProps) {
         >
           <Menu className="h-5 w-5" />
         </button>
-        <h1 className="font-display text-base font-semibold tracking-tight text-fg">
+        {/* Not a heading: this mirrors the current sidebar selection as
+            chrome, and every page below renders its own <h1> with the same
+            text. Two competing <h1>s (or an <h1> that repeats the page
+            title) is worse for heading navigation than one. */}
+        <p className="font-display text-base font-semibold tracking-tight text-fg">
           {pageTitle ?? "GraphForge"}
-        </h1>
+        </p>
       </div>
 
-      <StatusBadge label="Sample data" tone="info" />
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={onOpenPalette}
+          className="focus-ring hidden items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-hover hover:text-fg-secondary sm:flex"
+          aria-label="Open command palette"
+        >
+          <Search className="h-3.5 w-3.5" aria-hidden="true" />
+          <span>Jump to…</span>
+          <kbd className="rounded border border-line px-1 text-[10px]">⌘K</kbd>
+        </button>
+        <StatusBadge label="Sample data" tone="info" />
+      </div>
     </header>
   );
 }

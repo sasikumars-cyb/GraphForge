@@ -44,7 +44,7 @@ export function PullRequestsPage() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-xl font-semibold text-fg">Pull Requests</h2>
+        <h1 className="text-xl font-semibold text-fg">Pull Requests</h1>
         <p className="mt-1 text-sm text-fg-muted">
           Every tracked pull request across monitored repositories, with its computed risk.
         </p>

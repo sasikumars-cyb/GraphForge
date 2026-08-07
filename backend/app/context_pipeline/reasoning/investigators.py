@@ -601,15 +601,26 @@ class ConfluenceInvestigator:
 
         if artifact is None or not artifact.text:
             # The provider distinguishes "reached Confluence, nothing
-            # relevant" from "Confluence isn't connected" via evidence.status;
-            # preserving that distinction is what lets the explanation say
-            # which of the two actually happened.
+            # relevant" from "unavailable" via evidence.status — and
+            # "unavailable" itself covers more than "not connected": no
+            # access method configured, every MCP call attempted but
+            # failed (e.g. an Atlassian API token missing Teamwork Graph
+            # permission), or the LLM call itself failing. ConfluenceProvider
+            # already picked the right specific summary for whichever of
+            # those actually happened (see providers.py's own resolve_for_
+            # issue) — reusing it here, rather than collapsing every
+            # non-"not_found" case back into one hardcoded "not connected"
+            # message, is what actually preserves that distinction end to
+            # end instead of only claiming to.
             status = (artifact.evidence.status if artifact else None) or "unavailable"
             outcome = "not_found" if status == "not_found" else "unavailable"
             summary = (
                 f"Searched Confluence from {work_item} and found no relevant pages."
                 if outcome == "not_found"
-                else "Confluence is not connected, so no documentation could be searched."
+                else (
+                    (artifact.evidence.summary if artifact else None)
+                    or "Confluence lookup could not be completed."
+                )
             )
             recorder.evidence(outcome, summary)
             return InvestigationOutcome(observation=summary, yielded=False)

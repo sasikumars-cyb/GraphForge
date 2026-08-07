@@ -56,7 +56,13 @@ def test_rest_connection_auto_wires_a_synthesized_mcp_method() -> None:
     REST api_token as the MCP bearer token against the known hosted
     endpoint — this is what makes Confluence document discovery work for
     a connection the UI actually produces, instead of only for one
-    hand-edited directly in the database."""
+    hand-edited directly in the database.
+
+    A REST AccessMethod for DOCUMENTATION is also now present (see
+    `app.agents.planning.confluence_rest_search` — the MCP-then-REST
+    fallback `ConfluenceProvider` uses when Atlassian's org-level "API
+    token access" toggle blocks MCP) — MCP still sorts first, matching
+    JiraTool's own MCP-preferred, REST-fallback ordering."""
     methods = derive_access_methods(
         "confluence",
         "rest",
@@ -69,20 +75,24 @@ def test_rest_connection_auto_wires_a_synthesized_mcp_method() -> None:
     if not get_settings().confluence_mcp_default_server_url:
         pytest.skip("no known_mcp_endpoint configured in this environment")
 
-    assert len(methods) == 1
-    mcp = methods[0]
+    assert len(methods) == 2
+    mcp, rest = methods
     assert mcp.transport == Transport.MCP
     assert mcp.synthesized is True
     assert mcp.fields["api_key"] == "secret-token"
     assert mcp.fields["server_url"] == get_settings().confluence_mcp_default_server_url
+    assert rest.transport == Transport.REST
+    assert rest.synthesized is False
+    assert rest.fields["api_token"] == "secret-token"
 
 
-def test_rest_connection_yields_no_documentation_method_when_rest_declares_no_capability() -> None:
-    """Confluence's REST transport declares no capabilities (the REST CQL
-    search tool that used to consume it, ConfluenceTool, was removed as
-    dead code) — so unlike Jira, the "own transport" branch must not
-    contribute a REST AccessMethod for DOCUMENTATION, only the synthesized
-    MCP one."""
+def test_rest_connection_yields_a_documentation_method_for_the_rest_fallback() -> None:
+    """Confluence's REST transport now declares DOCUMENTATION (see
+    `app.agents.planning.confluence_rest_search` — CQL search, the
+    fallback `ConfluenceProvider.resolve_for_issue` uses when MCP is
+    unreachable) — unlike before, the "own transport" branch does
+    contribute a REST AccessMethod here, alongside the synthesized MCP
+    one."""
     methods = derive_access_methods(
         "confluence",
         "rest",
@@ -90,7 +100,7 @@ def test_rest_connection_yields_no_documentation_method_when_rest_declares_no_ca
         {"base_url": "https://x.atlassian.net"},
         {"email": "a@b.com", "api_token": "secret-token"},
     )
-    assert all(m.transport != Transport.REST for m in methods)
+    assert any(m.transport == Transport.REST for m in methods)
 
 
 def test_incomplete_rest_connection_yields_nothing_and_does_not_auto_wire() -> None:

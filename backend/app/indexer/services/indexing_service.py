@@ -1,9 +1,19 @@
 """Orchestrates the full indexing pipeline: clone -> detect language ->
 parse -> build graph -> persist -> (temp clone directory is always cleaned
 up by `clone_repository`, success or failure).
+
+KAN-32: also orchestrates the incremental alternative — re-parse only the
+files a push actually changed and merge that into the existing graph,
+instead of a full clone+parse+replace. `run_indexing` (the DB-aware
+entrypoint every real indexing run goes through) decides per-run which
+path applies; `index_repository` (the full path) is completely unchanged
+by this and remains the fallback for a first index, an unsafe diff, or
+any failure determining what changed — see `_attempt_incremental_index`.
 """
 
 import logging
+from collections.abc import Callable
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,8 +28,15 @@ from app.indexer.hypotheses.repository_evidence import extract_repository_eviden
 from app.indexer.hypotheses.shadow_runner import run_shadow_hypothesis_generation
 from app.indexer.models.architecture import ArchitectureModel
 from app.indexer.parsers.registry import get_parser
+from app.indexer.scanner.incremental import (
+    ChangedFile,
+    compute_changed_files,
+    is_safe_for_incremental_update,
+    materialize_changed_files,
+    resolve_branch_head_sha,
+)
 from app.indexer.scanner.language_detector import DetectedLanguage, detect_language
-from app.indexer.scanner.repository_cloner import clone_repository
+from app.indexer.scanner.repository_cloner import clone_repository, resolve_head_commit_sha
 from app.knowledge_engine.shadow_compare import shadow_compare_materialized_graph
 from app.models.github_connection import GitHubConnection
 from app.models.repository import Repository
@@ -64,6 +81,8 @@ async def index_repository(
     ref: str,
     access_token: str | None = None,
     db: AsyncSession | None = None,
+    on_language_detected: Callable[[DetectedLanguage], None] | None = None,
+    on_commit_resolved: Callable[[str], None] | None = None,
 ) -> IndexingSummary:
     """The DB-independent core of the pipeline — clone, detect, parse,
     build, persist. Takes plain values rather than ORM objects specifically
@@ -76,9 +95,27 @@ async def index_repository(
     it and gets byte-identical behavior to before. See
     `app.indexer.hypotheses.shadow_runner`'s module docstring for the full
     reasoning.
+
+    `on_language_detected`/`on_commit_resolved` (KAN-32) are optional
+    callbacks invoked once `detect_language`/`resolve_head_commit_sha`
+    resolve, purely so `run_indexing` can persist `Repository.
+    last_indexed_language`/`last_indexed_commit_sha` (what a future
+    incremental run needs — a parser to use and a commit to diff against
+    — without re-cloning just to re-derive them) without this function's
+    return type changing — `IndexingSummary` is asserted on by key/shape
+    in enough tests (`tests/integration/test_indexing_pipeline.py` and
+    others) that widening it was a real, avoidable blast radius for an
+    optional, additive need. Every existing call site omits both and is
+    unaffected.
     """
     async with clone_repository(html_url, ref, access_token) as repo_path:
         language = detect_language(repo_path)
+        if on_language_detected is not None:
+            on_language_detected(language)
+        if on_commit_resolved is not None:
+            commit_sha = await resolve_head_commit_sha(repo_path)
+            if commit_sha is not None:
+                on_commit_resolved(commit_sha)
         parser = get_parser(language) if language != DetectedLanguage.UNSUPPORTED else None
         if parser is None:
             raise UnsupportedRepositoryError(
@@ -126,9 +163,137 @@ async def index_repository(
     return _summarize(model)
 
 
+async def _index_changed_files(
+    repository_id: str,
+    html_url: str,
+    language: DetectedLanguage,
+    changed_files: list[ChangedFile],
+    head_sha: str,
+    access_token: str | None,
+) -> IndexingSummary:
+    """KAN-32: re-parse only `changed_files` (fetched via GitHub's API —
+    see `materialize_changed_files`, no `git clone`) and merge the result
+    into the existing graph via `replace_repository_files_subgraph`
+    instead of `index_repository`'s full clone+parse+replace.
+
+    Only ever called after `is_safe_for_incremental_update` has already
+    approved `changed_files` — this function does not re-check safety
+    itself, matching `Neo4jGraphRepository.replace_repository_files_
+    subgraph`'s own "callers own the decision" contract.
+
+    The returned summary's keys are shaped like `_summarize`'s (for the
+    same `IndexingSummary = dict[str, int]` consumers), but the *counts*
+    describe only what was found among the just-reparsed files, not the
+    repository as a whole — `files_reindexed` disambiguates that this was
+    a scoped run, not a full one.
+    """
+    parser = get_parser(language)
+    if parser is None:
+        raise UnsupportedRepositoryError(f"No parser registered for language {language}.")
+
+    async with materialize_changed_files(
+        html_url, changed_files, head_sha, access_token
+    ) as work_dir:
+        model = parser.parse(work_dir)
+
+    graph = build_graph(repository_id, model)
+    graph_repository = Neo4jGraphRepository(get_driver())
+    # A rename touches two paths: the old one (nothing lives there
+    # anymore — must be deleted) and the new one (already covered by
+    # `graph`'s freshly-parsed nodes). Both go in the deletion scope;
+    # only the new path is ever re-written.
+    file_paths = [f.path for f in changed_files] + [
+        f.previous_path for f in changed_files if f.previous_path
+    ]
+    await graph_repository.replace_repository_files_subgraph(repository_id, file_paths, graph)
+
+    summary = _summarize(model)
+    summary["files_reindexed"] = len(changed_files)
+    return summary
+
+
+async def _attempt_incremental_index(
+    repository: Repository, access_token: str | None
+) -> tuple[IndexingSummary, str] | None:
+    """Decides whether this run can be served incrementally and, if so,
+    runs it. Returns `(summary, head_sha)` on success, `None` if the
+    caller should fall back to the full `index_repository` path instead.
+
+    Every reason to decline — no prior index, an unresolvable head sha,
+    an uncomputable diff, a diff `is_safe_for_incremental_update` rejects,
+    or any error actually running the scoped update — is logged and
+    treated identically: fall back, never raise. KAN-32's own acceptance
+    criterion is that a full re-index always remains available as a
+    fallback/repair path; this is what keeps that true by construction
+    rather than by every caller remembering to catch something.
+    """
+    if repository.source != "github":
+        # GitHub's Compare/Contents/branches REST endpoints are what this
+        # entire module is built on — a `source="local"` repository's
+        # `html_url` is a filesystem path (see
+        # `app.services.local_repository_service`), not a github.com URL,
+        # and was never going to resolve against any of them. The full
+        # `index_repository` path already handles both sources correctly
+        # (plain `git clone` works against a local path too), so this is
+        # simply "incremental doesn't apply here," not a gap.
+        return None
+    if not repository.last_indexed_commit_sha or not repository.last_indexed_language:
+        return None
+    try:
+        language = DetectedLanguage(repository.last_indexed_language)
+    except ValueError:
+        return None
+
+    head_sha = await resolve_branch_head_sha(
+        repository.html_url, repository.default_branch, access_token
+    )
+    if head_sha is None:
+        return None
+
+    changed_files = await compute_changed_files(
+        repository.html_url, repository.last_indexed_commit_sha, head_sha, access_token
+    )
+    if changed_files is None or not is_safe_for_incremental_update(changed_files):
+        return None
+
+    try:
+        summary = await _index_changed_files(
+            repository_id=str(repository.id),
+            html_url=repository.html_url,
+            language=language,
+            changed_files=changed_files,
+            head_sha=head_sha,
+            access_token=access_token,
+        )
+    except Exception:
+        logger.exception(
+            "incremental_indexing_failed_falling_back_to_full repository_id=%s", repository.id
+        )
+        return None
+
+    logger.info(
+        "incremental_indexing_succeeded repository_id=%s files_changed=%d head_sha=%s",
+        repository.id,
+        len(changed_files),
+        head_sha,
+    )
+    return summary, head_sha
+
+
 async def run_indexing(db: AsyncSession, repository: Repository) -> IndexingSummary:
     """The DB-aware entrypoint: looks up the repository owner's GitHub
-    token (if connected) and runs `index_repository` with it.
+    token (if connected) and runs either an incremental or a full index,
+    then (re)computes cross-repository edges the same way regardless of
+    which path ran.
+
+    KAN-32: tries `_attempt_incremental_index` first — a prior indexed
+    commit, a resolvable diff, and a diff simple enough to trust (see
+    that function and `is_safe_for_incremental_update`) are all required
+    for it to actually run; any gap falls back to the exact `index_repository`
+    full path this function always used before KAN-32, unchanged. Either
+    way, `Repository.last_indexed_commit_sha`/`last_indexed_language`/
+    `last_indexed_at` are updated on success so the *next* run has
+    something to diff against.
 
     Also (re)computes the account's entire cross-repository graph edge set
     (see `app.indexer.graph.cross_repo_linker.relink_account`) — not just
@@ -145,13 +310,45 @@ async def run_indexing(db: AsyncSession, repository: Repository) -> IndexingSumm
     the repository's own graph is already committed and usable on its own.
     """
     access_token = await _get_access_token(db, repository.user_id)
-    summary = await index_repository(
-        repository_id=str(repository.id),
-        html_url=repository.html_url,
-        ref=repository.default_branch,
-        access_token=access_token,
-        db=db,
-    )
+
+    head_sha: str | None
+    incremental = await _attempt_incremental_index(repository, access_token)
+    if incremental is not None:
+        summary, head_sha = incremental
+    else:
+        detected_language: DetectedLanguage | None = None
+        resolved_commit_sha: str | None = None
+
+        def _capture_language(language: DetectedLanguage) -> None:
+            nonlocal detected_language
+            detected_language = language
+
+        def _capture_commit(commit_sha: str) -> None:
+            nonlocal resolved_commit_sha
+            resolved_commit_sha = commit_sha
+
+        summary = await index_repository(
+            repository_id=str(repository.id),
+            html_url=repository.html_url,
+            ref=repository.default_branch,
+            access_token=access_token,
+            db=db,
+            on_language_detected=_capture_language,
+            on_commit_resolved=_capture_commit,
+        )
+        # `resolve_head_commit_sha` reads the clone `index_repository` just
+        # made (plain `git rev-parse HEAD`) — works identically for
+        # `source="github"` and `source="local"` repositories and needs no
+        # extra network round-trip, unlike re-asking GitHub's API for the
+        # branch head after the fact would.
+        head_sha = resolved_commit_sha
+        if head_sha is not None and detected_language is not None:
+            repository.last_indexed_language = detected_language.value
+
+    if head_sha is not None:
+        repository.last_indexed_commit_sha = head_sha
+        repository.last_indexed_at = datetime.now(UTC)
+        await db.commit()
 
     graph_repository = Neo4jGraphRepository(get_driver())
     try:

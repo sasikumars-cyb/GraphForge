@@ -77,7 +77,7 @@ export function GraphParityPage() {
           <GitCompare className="h-5 w-5 text-cat-4-fg" aria-hidden="true" />
         </div>
         <div>
-          <h2 className="text-xl font-semibold text-fg">Graph Parity</h2>
+          <h1 className="text-xl font-semibold text-fg">Graph Parity</h1>
           <p className="text-sm text-fg-muted">
             Compares the live Neo4j graph against the Engineering Memory projection — read-only, no
             writes to Neo4j, no indexing triggered.

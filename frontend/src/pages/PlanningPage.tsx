@@ -51,7 +51,7 @@ export function PlanningPage() {
             <Lightbulb className="h-5 w-5 text-info-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">Planning Assistant</h2>
+            <h1 className="text-xl font-semibold text-fg">Planning Assistant</h1>
             <p className="text-sm text-fg-muted">
               Describe an engineering task. GraphForge queries your architecture graph and produces
               a plan backed by verifiable evidence — not hallucination.

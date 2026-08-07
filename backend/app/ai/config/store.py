@@ -8,9 +8,24 @@ async and force every one of those call sites to change — a large, risky diff
 for no user-visible benefit.
 
 Instead the DB state is loaded once into an immutable snapshot that sync code
-can read. Any write through the settings API calls `invalidate()`, so the next
-resolution picks up the change. That is what delivers "switch providers and
-models without restarting" while keeping the change set small.
+can read. Every write through the settings API (`app.api.v1.routers.
+ai_workspace`) calls `refresh()` directly — not the separate `invalidate()`
+below, despite what this module's history might suggest; `refresh()` both
+drops the stale snapshot and re-populates it in the same step, so the next
+resolution picks up the change immediately, with no window where the
+snapshot sits empty waiting for something else to reload it. That is what
+delivers "switch providers and models without restarting" while keeping the
+change set small.
+
+The one other place a valid snapshot has to exist without a write ever
+having happened yet: process start. `app.main`'s lifespan calls `refresh()`
+once at startup, for the same reason it recovers orphaned runs and reclaims
+expired job leases there — `resolver.resolve()` reads `current_snapshot()`
+directly (it must stay synchronous; see its own docstring), so on a fresh
+process with nothing yet forcing a load, an agent run started before any
+`ai_workspace` request would resolve against an empty, `loaded=False`
+snapshot and silently fall through to the environment-tier provider instead
+of whatever was actually configured in the UI.
 
 The snapshot holds decrypted keys in memory only. They are never serialized,
 never logged, and never returned by an API response.

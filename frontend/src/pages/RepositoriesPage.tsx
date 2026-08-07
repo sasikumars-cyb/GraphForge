@@ -173,6 +173,7 @@ export function RepositoriesPage() {
           {repo.fullName}
         </Link>
       ),
+      sortValue: (repo) => repo.fullName.toLowerCase(),
     },
     {
       key: "source",
@@ -183,6 +184,7 @@ export function RepositoriesPage() {
           tone={repo.source === "local" ? "info" : "neutral"}
         />
       ),
+      sortValue: (repo) => repo.source,
     },
     {
       key: "health",
@@ -191,8 +193,14 @@ export function RepositoriesPage() {
         const { label, tone } = repositoryHealthPresentation(repo.health);
         return <StatusBadge label={label} tone={tone} />;
       },
+      sortValue: (repo) => repositoryHealthPresentation(repo.health).label,
     },
-    { key: "openPrs", header: "Open PRs", render: (repo) => repo.openPullRequests },
+    {
+      key: "openPrs",
+      header: "Open PRs",
+      render: (repo) => repo.openPullRequests,
+      sortValue: (repo) => repo.openPullRequests,
+    },
     {
       key: "indexing",
       header: "Indexing status",
@@ -204,6 +212,26 @@ export function RepositoriesPage() {
         if (job.status === "failed") return <StatusBadge label="Index failed" tone="danger" />;
         return <StatusBadge label="Indexing…" tone="info" />;
       },
+      // Ranked, not alphabetical — "failed" first (needs attention), then
+      // "not indexed"/"indexing" (in progress or pending), "indexed" last
+      // (nothing to do). Loading is a transient client state, not a real
+      // status, so it sorts with "not indexed" rather than getting its own
+      // rank the data will never actually settle on.
+      sortValue: (repo) => {
+        const job = jobsByRepoId[repo.id];
+        const status = indexingStatusOf(job);
+        // `indexingStatusOf` never actually returns "all" (that value only
+        // exists for the page's own filter dropdown) — the fallback is here
+        // purely so this stays exhaustive against IndexingFilter's full type
+        // rather than assuming that stays true forever.
+        const rank: Record<IndexingFilter, number> = {
+          failed: 0,
+          not_indexed: 1,
+          indexed: 2,
+          all: 1,
+        };
+        return rank[status];
+      },
     },
     {
       key: "lastIndexed",
@@ -212,13 +240,17 @@ export function RepositoriesPage() {
         const job = jobsByRepoId[repo.id];
         return job?.finished_at ? formatRelativeTime(job.finished_at) : "—";
       },
+      sortValue: (repo) => {
+        const job = jobsByRepoId[repo.id];
+        return job?.finished_at ? new Date(job.finished_at).getTime() : null;
+      },
     },
   ];
 
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h2 className="text-xl font-semibold text-fg">Repositories</h2>
+        <h1 className="text-xl font-semibold text-fg">Repositories</h1>
         <p className="mt-1 text-sm text-fg-muted">
           Repositories tracked and indexed by GraphForge.
         </p>

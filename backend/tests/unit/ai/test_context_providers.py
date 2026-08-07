@@ -29,7 +29,15 @@ from app.context_pipeline.providers import (
     GraphProvider,
     JiraProvider,
 )
+from app.context_pipeline.reasoning import capabilities
 from app.context_pipeline.reasoning.capabilities import GRAPH_TRAVERSAL_ACTION
+from app.context_pipeline.reasoning.investigation import (
+    InvestigationAction,
+    Recorder,
+    SessionContext,
+)
+from app.context_pipeline.reasoning.investigators import ConfluenceInvestigator
+from app.context_pipeline.reasoning.ledger import Ledger
 from app.context_pipeline.reference_detection import detect_references
 from app.tools.interfaces import ToolResult
 
@@ -56,6 +64,20 @@ def test_detects_a_confluence_page_url() -> None:
     )
     confluence_refs = [r for r in refs if r.type == ReferenceType.CONFLUENCE_PAGE]
     assert confluence_refs and confluence_refs[0].normalized_value == "12345"
+
+
+def test_detects_a_confluence_page_url_in_a_personal_space() -> None:
+    """Regression (KAN-46): a personal space is keyed "~<accountId>" — the
+    leading tilde isn't a `\\w` character, so this silently matched nothing
+    at all before the fix, indistinguishable from "no Confluence link in
+    this text." Every Atlassian user has exactly one personal space
+    (auto-created), so this is not an edge case in practice."""
+    refs = detect_references(
+        "https://myorg.atlassian.net/wiki/spaces/~712020a3f675039f424618b2e694673681f285"
+        "/pages/1802253/ETL+Core+Engineering+Context+amp+Documentation"
+    )
+    confluence_refs = [r for r in refs if r.type == ReferenceType.CONFLUENCE_PAGE]
+    assert confluence_refs and confluence_refs[0].normalized_value == "1802253"
 
 
 def test_detects_a_github_pull_request_shorthand() -> None:
@@ -257,6 +279,16 @@ def _mcp_method(server_url="https://mcp.example", api_key="token"):
     )
 
 
+def _rest_method(base_url="https://example.atlassian.net", email="a@b.com", api_token="token"):
+    from app.knowledge.access_resolver import AccessMethod
+    from app.knowledge.registry import Transport
+
+    return AccessMethod(
+        transport=Transport.REST,
+        fields={"base_url": base_url, "email": email, "api_token": api_token},
+    )
+
+
 @pytest.mark.asyncio
 async def test_confluence_provider_reports_unavailable_without_mcp_config() -> None:
     """Not configured at all — distinct from "searched, found nothing"
@@ -313,6 +345,230 @@ async def test_confluence_provider_reports_not_found_when_nothing_relevant_but_t
 
 
 @pytest.mark.asyncio
+async def test_confluence_provider_falls_back_to_rest_when_mcp_is_unavailable_and_rest_finds_something() -> (
+    None
+):
+    """The actual bug this is a regression test for: Atlassian's MCP
+    server rejects the auto-wired API-token bearer with a permission
+    error (org-level "API token access" toggle) — REST search, a
+    completely different Atlassian API not gated by that toggle, still
+    finds the page. Mirrors JiraTool's own MCP-then-REST fallback."""
+    from app.agents._contract import Evidence
+
+    db = AsyncMock()
+    with (
+        patch(
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(
+                return_value=_access(
+                    methods=[_mcp_method(), _rest_method()], config={"base_url": "cloud-1"}
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context",
+            new=AsyncMock(
+                return_value=(
+                    None,
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="getTeamworkGraphContext",
+                            summary="You don't have permission to connect via API token.",
+                            status="failed",
+                        )
+                    ],
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.search_confluence_rest",
+            new=AsyncMock(
+                return_value=(
+                    "NPT-30 rollback plan\nHow to roll back the SCD2 merge change",
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="confluence_rest_search",
+                            summary="Searched Confluence for pages mentioning NPT-30 (1 result).",
+                            status="success",
+                        )
+                    ],
+                )
+            ),
+        ) as rest_search,
+    ):
+        artifact = await ConfluenceProvider(db).resolve_for_issue(
+            jira_issue_key="NPT-30", task_description="fix it", model=None, stage="planning"
+        )
+
+    rest_search.assert_awaited_once()
+    call_kwargs = rest_search.call_args.kwargs
+    assert call_kwargs["base_url"] == "https://example.atlassian.net"
+    assert call_kwargs["jira_issue_key"] == "NPT-30"
+
+    assert artifact is not None
+    assert artifact.evidence.status == "success"
+    assert "NPT-30 rollback plan" in artifact.text
+
+
+@pytest.mark.asyncio
+async def test_confluence_provider_stays_unavailable_when_both_mcp_and_rest_fail() -> None:
+    """REST is attempted but also finds nothing/fails — the honest
+    diagnosis (MCP's own permission error, the actionable one an operator
+    can fix) still surfaces, not a generic message implying nothing was
+    ever tried."""
+    from app.agents._contract import Evidence
+
+    db = AsyncMock()
+    with (
+        patch(
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(
+                return_value=_access(
+                    methods=[_mcp_method(), _rest_method()], config={"base_url": "cloud-1"}
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context",
+            new=AsyncMock(
+                return_value=(
+                    None,
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="getTeamworkGraphContext",
+                            summary="permission denied",
+                            status="failed",
+                        )
+                    ],
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.search_confluence_rest",
+            new=AsyncMock(return_value=(None, [])),
+        ),
+    ):
+        artifact = await ConfluenceProvider(db).resolve_for_issue(
+            jira_issue_key="NPT-30", task_description="fix it", model=None, stage="planning"
+        )
+
+    assert artifact is not None
+    assert artifact.text == ""
+    assert artifact.evidence.status == "unavailable"
+    assert "permission denied" in artifact.evidence.summary
+
+
+@pytest.mark.asyncio
+async def test_confluence_provider_reports_not_found_when_rest_fallback_searches_but_finds_nothing() -> (
+    None
+):
+    """REST genuinely ran (no error) but turned up no pages — distinct
+    from "both attempts were blocked": this is "we looked everywhere and
+    there's really nothing," which is `not_found`, not `unavailable`."""
+    from app.agents._contract import Evidence
+
+    db = AsyncMock()
+    with (
+        patch(
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(
+                return_value=_access(
+                    methods=[_mcp_method(), _rest_method()], config={"base_url": "cloud-1"}
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context",
+            new=AsyncMock(
+                return_value=(
+                    None,
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="getTeamworkGraphContext",
+                            summary="permission denied",
+                            status="failed",
+                        )
+                    ],
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.search_confluence_rest",
+            new=AsyncMock(
+                return_value=(
+                    None,
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="confluence_rest_search",
+                            summary="Searched Confluence for pages mentioning NPT-30 (0 results).",
+                            status="success",
+                        )
+                    ],
+                )
+            ),
+        ),
+    ):
+        artifact = await ConfluenceProvider(db).resolve_for_issue(
+            jira_issue_key="NPT-30", task_description="fix it", model=None, stage="planning"
+        )
+
+    assert artifact is not None
+    assert artifact.evidence.status == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_confluence_provider_does_not_attempt_rest_when_mcp_genuinely_found_nothing() -> None:
+    """`not_found` (MCP's graph traversal ran and turned up nothing linked
+    to the issue) doesn't trigger the REST fallback — REST's unrelated
+    free-text search wouldn't be answering the same question by retrying,
+    so this stays a single attempt, matching the pre-fallback behavior."""
+    from app.agents._contract import Evidence
+
+    db = AsyncMock()
+    with (
+        patch(
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(
+                return_value=_access(
+                    methods=[_mcp_method(), _rest_method()], config={"base_url": "cloud-1"}
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context",
+            new=AsyncMock(
+                return_value=(
+                    None,
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="getTeamworkGraphContext",
+                            summary="ok",
+                            status="success",
+                        )
+                    ],
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.search_confluence_rest", new=AsyncMock()
+        ) as rest_search,
+    ):
+        artifact = await ConfluenceProvider(db).resolve_for_issue(
+            jira_issue_key="NPT-30", task_description="fix it", model=None, stage="planning"
+        )
+
+    rest_search.assert_not_awaited()
+    assert artifact is not None
+    assert artifact.evidence.status == "not_found"
+
+
+@pytest.mark.asyncio
 async def test_confluence_provider_reports_unavailable_when_every_tool_call_failed() -> None:
     """A tool call that errors (e.g. the Confluence API token lacks
     Teamwork Graph permission) is an access/infra gap, not a real search
@@ -351,6 +607,13 @@ async def test_confluence_provider_reports_unavailable_when_every_tool_call_fail
     assert artifact is not None
     assert artifact.text == ""
     assert artifact.evidence.status == "unavailable"
+    # Regression for the misleading-message bug: this is a connected
+    # source where every attempted call failed, not "not connected" — the
+    # summary must say so, with the real per-call failure detail, not a
+    # generic "Confluence is not connected" (which sends an operator to
+    # re-connect a source that was never disconnected).
+    assert "not connected" not in artifact.evidence.summary.lower()
+    assert "permission denied" in artifact.evidence.summary
 
 
 @pytest.mark.asyncio
@@ -625,3 +888,125 @@ async def test_planning_agent_operates_solely_on_discovered_context() -> None:
     assert output.result["graph_context_used"] is True
     assert any(e.kind == "tool_call" for e in output.evidence)
     assert any(e.kind == "graph_traversal" for e in output.evidence)
+
+
+# ---------------------------------------------------------------------------
+# documentation capability: "reachable" signal / remediation must not claim
+# "Confluence is not connected" when it demonstrably is (see providers.py's
+# ConfluenceProvider.resolve_for_issue and investigators.py's
+# ConfluenceInvestigator.run for the two other halves of this fix).
+# ---------------------------------------------------------------------------
+
+
+def test_documentation_signal_reports_connected_but_failed_reason() -> None:
+    ledger = Ledger()
+    ledger.add_evidence(
+        provider="confluence",
+        action="fetch_documentation:NPT-6",
+        outcome="unavailable",
+        summary=(
+            "Confluence lookup could not be completed: Confluence graph call "
+            "failed: permission denied"
+        ),
+    )
+
+    signals = capabilities.BY_KEY["documentation"].signals(ledger)
+    reachable_signal = next(s for s in signals if s.label == "Documentation source reachable")
+
+    assert reachable_signal.satisfied is False
+    assert "not connected" not in reachable_signal.detail.lower()
+    assert "permission denied" in reachable_signal.detail
+
+
+def test_documentation_signal_reports_not_connected_when_genuinely_unconfigured() -> None:
+    ledger = Ledger()
+    ledger.add_evidence(
+        provider="confluence",
+        action="fetch_documentation:NPT-6",
+        outcome="unavailable",
+        summary="Confluence is not connected.",
+    )
+
+    signals = capabilities.BY_KEY["documentation"].signals(ledger)
+    reachable_signal = next(s for s in signals if s.label == "Documentation source reachable")
+
+    assert "Confluence is not connected" in reachable_signal.detail
+
+
+def test_documentation_signal_generic_detail_when_never_attempted() -> None:
+    signals = capabilities.BY_KEY["documentation"].signals(Ledger())
+    reachable_signal = next(s for s in signals if s.label == "Documentation source reachable")
+
+    assert reachable_signal.detail == "Confluence is not connected"
+
+
+def test_documentation_remediation_does_not_say_connect_when_already_connected() -> None:
+    ledger = Ledger()
+    ledger.add_evidence(
+        provider="confluence",
+        action="fetch_documentation:NPT-6",
+        outcome="unavailable",
+        summary="Confluence lookup could not be completed: permission denied",
+    )
+
+    remediation = capabilities.BY_KEY["documentation"].remediation(ledger)
+
+    assert not any("Connect Confluence" in step for step in remediation)
+    assert any("Teamwork Graph" in step for step in remediation)
+
+
+def test_documentation_remediation_says_connect_when_genuinely_unconfigured() -> None:
+    remediation = capabilities.BY_KEY["documentation"].remediation(Ledger())
+
+    assert remediation == ["Connect Confluence", "Link a design page to the ticket"]
+
+
+@pytest.mark.asyncio
+async def test_confluence_investigator_surfaces_the_providers_own_summary_not_a_hardcoded_one() -> (
+    None
+):
+    """Regression: ConfluenceInvestigator.run used to discard
+    ConfluenceProvider's own (already-accurate) evidence.summary and
+    replace it with a hardcoded "Confluence is not connected" string for
+    every non-"not_found" outcome — even when the connection was live and
+    the real cause was, e.g., an Atlassian permission error."""
+    from app.agents._contract import Evidence as ContractEvidence
+    from app.context_pipeline.models import ResolvedArtifact
+
+    ledger = Ledger()
+    action = InvestigationAction(
+        provider="confluence",
+        key="fetch_documentation:NPT-6",
+        intent="looking for design docs",
+        targets="documentation",
+        params={"work_item": "NPT-6", "task_description": "fix it"},
+    )
+    recorder = Recorder(ledger, action, iteration=1)
+    session = SessionContext(db=AsyncMock(), user_id=None)
+
+    artifact = ResolvedArtifact(
+        provider="confluence",
+        capability=ProviderCapability.DOCUMENTATION,
+        reference=None,
+        title="Confluence",
+        text="",
+        evidence=ContractEvidence(
+            kind="tool_call",
+            reference="confluence_context",
+            summary=(
+                "Confluence lookup could not be completed: Confluence graph call "
+                "failed: permission denied"
+            ),
+            status="unavailable",
+        ),
+        raw={},
+    )
+
+    with patch(
+        "app.context_pipeline.reasoning.investigators.ConfluenceProvider"
+    ) as mock_provider_cls:
+        mock_provider_cls.return_value.resolve_for_issue = AsyncMock(return_value=artifact)
+        outcome = await ConfluenceInvestigator().run(action, session, recorder)
+
+    assert "permission denied" in outcome.observation
+    assert "not connected" not in outcome.observation.lower()

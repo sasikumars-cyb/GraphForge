@@ -136,7 +136,7 @@ def _require_key(spec_key: str, cfg: ProviderBuildConfig) -> str:
 def _openai_compatible(key: str, url: str) -> Callable[[ProviderBuildConfig], ILLMProvider]:
     """Build an OpenAI-wire-format provider pointed at a different host.
 
-    Groq, Cerebras, OpenRouter and Ollama all speak the OpenAI chat
+    Groq, Cerebras, DeepSeek, OpenRouter and Ollama all speak the OpenAI chat
     completions format, so they need no adapter code of their own — only a
     base URL. This is the payoff of separating selection from construction.
     """
@@ -270,6 +270,35 @@ _SPECS: tuple[ProviderSpec, ...] = (
         ),
         default_model="llama-3.3-70b",
         default_base_url="https://api.cerebras.ai/v1/chat/completions",
+    ),
+    ProviderSpec(
+        key="deepseek",
+        label="DeepSeek",
+        build=_openai_compatible("deepseek", "https://api.deepseek.com/v1/chat/completions"),
+        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.REASONING},
+        models=(
+            ModelSpec(
+                "deepseek-v4-flash",
+                "DeepSeek V4 Flash",
+                1_000_000,
+            ),
+            ModelSpec(
+                "deepseek-v4-pro",
+                "DeepSeek V4 Pro",
+                1_000_000,
+            ),
+        ),
+        default_model="deepseek-v4-flash",
+        default_base_url="https://api.deepseek.com/v1/chat/completions",
+        notes=(
+            "Official DeepSeek API, OpenAI-compatible Chat Completions wire "
+            "format — set DEEPSEEK_BASE_URL to point at a self-hosted or "
+            "third-party OpenAI-compatible DeepSeek endpoint instead. Both "
+            "models are hybrid-reasoning: they emit a reasoning trace before "
+            "the final answer, same shape as Bedrock's hybrid-reasoning "
+            "models — see deepseek_max_tokens for the wider token budget "
+            "that trace needs."
+        ),
     ),
     ProviderSpec(
         key="openrouter",

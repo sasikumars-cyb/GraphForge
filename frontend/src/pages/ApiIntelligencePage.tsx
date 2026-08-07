@@ -75,7 +75,7 @@ export function ApiIntelligencePage() {
             <Network className="h-5 w-5 text-cat-3-fg" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-xl font-semibold text-fg">API Intelligence</h2>
+            <h1 className="text-xl font-semibold text-fg">API Intelligence</h1>
             <p className="text-sm text-fg-muted">
               Extract a visual API catalog and security review from a repository&apos;s Markdown
               documentation only — never source code.
