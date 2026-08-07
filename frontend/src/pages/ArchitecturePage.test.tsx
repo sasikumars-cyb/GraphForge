@@ -19,6 +19,7 @@ vi.mock("../lib/api/repositories", () => ({
   getRepositoryGraph: vi.fn(),
   getRepositoryGraphTypes: vi.fn(),
   getRepositoryGraphNodeNeighbors: vi.fn(),
+  updateRepositoryDomain: vi.fn(),
 }));
 
 // This page's own responsibility is navigation/data-fetching — the graph
@@ -263,6 +264,35 @@ describe("ArchitecturePage", () => {
       );
       expect(await screen.findByTestId("dependency-graph")).toHaveTextContent("2 nodes");
       expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toHaveTextContent("billing");
+    });
+
+    it("assigns a domain from the repository detail view", async () => {
+      const user = userEvent.setup();
+      vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
+      vi.mocked(repositoriesApi.getRepositoryGraphTypes).mockResolvedValue({ counts: { Module: 12 } });
+      vi.mocked(repositoriesApi.getRepositoryGraph).mockResolvedValue(REPO_GRAPH);
+      vi.mocked(repositoriesApi.updateRepositoryDomain).mockResolvedValue({
+        id: "repo-2",
+      } as never);
+      renderWithAuth();
+
+      await user.click(await screen.findByText("acme/notes"));
+      await screen.findByTestId("dependency-graph");
+
+      await user.click(screen.getByRole("button", { name: "Assign domain" }));
+      await user.type(screen.getByLabelText("Domain name"), "Notes");
+      await user.click(screen.getByRole("button", { name: "Save domain" }));
+
+      await waitFor(() =>
+        expect(repositoriesApi.updateRepositoryDomain).toHaveBeenCalledWith(
+          "test-token",
+          "repo-2",
+          "Notes",
+        ),
+      );
+      expect(
+        await screen.findByRole("button", { name: "Domain: Notes. Click to edit." }),
+      ).toBeInTheDocument();
     });
 
     it("Escape closes the node detail panel", async () => {

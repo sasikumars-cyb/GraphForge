@@ -4,6 +4,7 @@ import { Search, X } from "lucide-react";
 import { Card } from "../Card";
 import { EmptyState, SampleGraph } from "../EmptyState";
 import { DependencyGraph } from "../graph/DependencyGraph";
+import { DomainEditor } from "./DomainEditor";
 import { NodeDetailPanel } from "./NodeDetailPanel";
 import { useAuth } from "../../app/auth-context";
 import {
@@ -67,11 +68,17 @@ export function RepositoryGraphExplorer({
   repositoryName,
   mode,
   onExploreNeighbors,
+  domain = null,
+  onDomainChange,
 }: {
   repositoryId: string;
   repositoryName: string;
   mode: Mode;
   onExploreNeighbors: (node: GraphNode) => void;
+  /** Undefined in neighborhood mode (no header action there — it's a
+   * transient drill-down, not the repository's own detail view). */
+  domain?: string | null;
+  onDomainChange?: (domain: string | null) => Promise<void>;
 }) {
   const { token } = useAuth();
   const [nodeTypeFilter, setNodeTypeFilter] = useState<string[] | null>(null);
@@ -80,6 +87,17 @@ export function RepositoryGraphExplorer({
   const [query, setQuery] = useState("");
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [isExploringNeighbors, setIsExploringNeighbors] = useState(false);
+  const [isSavingDomain, setIsSavingDomain] = useState(false);
+
+  async function handleDomainSave(next: string | null) {
+    if (!onDomainChange) return;
+    setIsSavingDomain(true);
+    try {
+      await onDomainChange(next);
+    } finally {
+      setIsSavingDomain(false);
+    }
+  }
 
   // Real, untruncated per-label counts — only meaningful (and only
   // fetched) in full-repository mode; a neighborhood is already small
@@ -191,6 +209,11 @@ export function RepositoryGraphExplorer({
         mode.kind === "neighborhood"
           ? `Nodes within ${DEFAULT_NEIGHBOR_HOPS} hop of the selected node.`
           : "This repository's architecture graph, loaded progressively."
+      }
+      action={
+        mode.kind === "full" && onDomainChange ? (
+          <DomainEditor domain={domain} onSave={handleDomainSave} isSaving={isSavingDomain} />
+        ) : undefined
       }
     >
       {isLoading ? (
