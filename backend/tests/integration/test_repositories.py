@@ -254,3 +254,212 @@ async def test_remove_repository_requires_authentication(db_client: AsyncClient)
     response = await db_client.delete(f"/api/v1/repositories/{repo_id}")
 
     assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# ADR 0023 — PATCH domain, GET .../graph/types, GET .../graph/nodes/{id}/neighbors,
+# GET .../graph?after=
+# ---------------------------------------------------------------------------
+
+
+async def _select_one(db_client: AsyncClient, headers: dict[str, str]) -> str:
+    select_response = await db_client.post(
+        "/api/v1/repositories", headers=headers, json={"repositories": [REPO_ENGINE]}
+    )
+    return str(select_response.json()[0]["id"])
+
+
+class TestUpdateRepositoryDomain:
+    async def test_sets_the_domain(self, db_client: AsyncClient) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        response = await db_client.patch(
+            f"/api/v1/repositories/{repo_id}", headers=headers, json={"domain": "Payments"}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["domain"] == "Payments"
+
+        listed = await db_client.get("/api/v1/repositories", headers=headers)
+        # RepositoryResponse includes domain — set persists across a
+        # fresh read, not just echoed back from the PATCH response.
+        assert next(r for r in listed.json() if r["id"] == repo_id)["domain"] == "Payments"
+
+    async def test_clears_the_domain_with_explicit_null(self, db_client: AsyncClient) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+        await db_client.patch(
+            f"/api/v1/repositories/{repo_id}", headers=headers, json={"domain": "Payments"}
+        )
+
+        response = await db_client.patch(
+            f"/api/v1/repositories/{repo_id}", headers=headers, json={"domain": None}
+        )
+
+        assert response.status_code == 200
+        assert response.json()["domain"] is None
+
+    async def test_rejects_an_empty_string(self, db_client: AsyncClient) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        response = await db_client.patch(
+            f"/api/v1/repositories/{repo_id}", headers=headers, json={"domain": "  "}
+        )
+
+        assert response.status_code == 400
+
+    async def test_cannot_update_another_users_repository(self, db_client: AsyncClient) -> None:
+        token_a = await _register_and_get_token(db_client, USER_A)
+        repo_id = await _select_one(db_client, {"Authorization": f"Bearer {token_a}"})
+
+        token_b = await _register_and_get_token(db_client, USER_B)
+        response = await db_client.patch(
+            f"/api/v1/repositories/{repo_id}",
+            headers={"Authorization": f"Bearer {token_b}"},
+            json={"domain": "Payments"},
+        )
+
+        assert response.status_code == 404
+
+
+class TestGraphTypes:
+    async def test_returns_real_counts_per_label(self, db_client: AsyncClient) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        graph_repository = Neo4jGraphRepository(get_driver())
+        await graph_repository.replace_repository_graph(
+            repo_id,
+            GraphPayload(
+                nodes=[
+                    GraphNode(id=f"{repo_id}:s1", labels=["GraphNode", "Service"]),
+                    GraphNode(id=f"{repo_id}:s2", labels=["GraphNode", "Service"]),
+                    GraphNode(id=f"{repo_id}:t1", labels=["GraphNode", "KafkaTopic"]),
+                ]
+            ),
+        )
+
+        response = await db_client.get(f"/api/v1/repositories/{repo_id}/graph/types", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()["counts"] == {"Service": 2, "KafkaTopic": 1}
+
+    async def test_empty_repository_returns_empty_counts(self, db_client: AsyncClient) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        response = await db_client.get(f"/api/v1/repositories/{repo_id}/graph/types", headers=headers)
+
+        assert response.status_code == 200
+        assert response.json()["counts"] == {}
+
+
+class TestGraphNodeNeighbors:
+    async def test_returns_the_induced_neighborhood(self, db_client: AsyncClient) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        graph_repository = Neo4jGraphRepository(get_driver())
+        a, b, c = f"{repo_id}:a", f"{repo_id}:b", f"{repo_id}:c"
+        await graph_repository.replace_repository_graph(
+            repo_id,
+            GraphPayload(
+                nodes=[
+                    GraphNode(id=a, labels=["GraphNode", "Component"]),
+                    GraphNode(id=b, labels=["GraphNode", "Component"]),
+                    GraphNode(id=c, labels=["GraphNode", "Component"]),
+                ],
+                edges=[
+                    GraphEdge(source_id=a, target_id=b, type="CALLS"),
+                    GraphEdge(source_id=b, target_id=c, type="CALLS"),
+                ],
+            ),
+        )
+
+        response = await db_client.get(
+            f"/api/v1/repositories/{repo_id}/graph/nodes/{a}/neighbors",
+            headers=headers,
+            params={"hops": 1},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        node_ids = {n["id"] for n in body["nodes"]}
+        assert node_ids == {a, b}  # c is 2 hops away, outside hops=1
+
+    async def test_default_edge_types_exclude_cross_repository_types(
+        self, db_client: AsyncClient
+    ) -> None:
+        """No `edge_types` supplied — defaults to every non-cross-repository
+        type, since a UI click-to-expand interaction doesn't generally
+        know which specific relationship types matter."""
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        graph_repository = Neo4jGraphRepository(get_driver())
+        node_id = f"{repo_id}:a"
+        await graph_repository.replace_repository_graph(
+            repo_id, GraphPayload(nodes=[GraphNode(id=node_id, labels=["GraphNode", "Component"])])
+        )
+
+        response = await db_client.get(
+            f"/api/v1/repositories/{repo_id}/graph/nodes/{node_id}/neighbors", headers=headers
+        )
+
+        assert response.status_code == 200
+        assert {n["id"] for n in response.json()["nodes"]} == {node_id}
+
+    async def test_unknown_edge_type_returns_400(self, db_client: AsyncClient) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        response = await db_client.get(
+            f"/api/v1/repositories/{repo_id}/graph/nodes/x/neighbors",
+            headers=headers,
+            params={"edge_types": ["NOT_A_REAL_TYPE"]},
+        )
+
+        assert response.status_code == 400
+
+
+class TestGraphCursorPagination:
+    async def test_after_continues_from_the_previous_page(self, db_client: AsyncClient) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        graph_repository = Neo4jGraphRepository(get_driver())
+        nodes = [
+            GraphNode(id=f"{repo_id}:n{i}", labels=["GraphNode", "Component"]) for i in range(5)
+        ]
+        await graph_repository.replace_repository_graph(repo_id, GraphPayload(nodes=nodes))
+
+        first = await db_client.get(
+            f"/api/v1/repositories/{repo_id}/graph", headers=headers, params={"limit": 3}
+        )
+        assert first.json()["truncated"] is True
+        cursor = first.json()["next_cursor"]
+        assert cursor is not None
+
+        second = await db_client.get(
+            f"/api/v1/repositories/{repo_id}/graph",
+            headers=headers,
+            params={"limit": 3, "after": cursor},
+        )
+
+        assert second.status_code == 200
+        first_ids = {n["id"] for n in first.json()["nodes"]}
+        second_ids = {n["id"] for n in second.json()["nodes"]}
+        assert first_ids.isdisjoint(second_ids)
+        assert len(second_ids) == 2
+        assert second.json()["truncated"] is False

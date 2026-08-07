@@ -14,7 +14,8 @@ from app.api.v1.dependencies import get_current_user
 from app.core.exceptions import AppError, ConflictError, NotFoundError
 from app.database.session import get_db_session
 from app.graph.models import GraphNode, GraphPayload
-from app.graph.neo4j_repository import Neo4jGraphRepository
+from app.graph.neo4j_common import _ALLOWED_REL_TYPES
+from app.graph.neo4j_repository import _CROSS_REPO_REL_TYPES, Neo4jGraphRepository
 from app.graph.session import get_driver
 from app.indexer.workers.index_worker import schedule_indexing_job
 from app.models.indexing_job import IndexingJob
@@ -26,12 +27,14 @@ from app.schemas.github import (
     PullRequestResponse,
     RepositoryResponse,
     RepositorySelectionRequest,
+    RepositoryUpdateRequest,
 )
 from app.schemas.indexing import (
     CrossRepositoryLinkResponse,
     GraphEdgeResponse,
     GraphResponse,
     IndexingJobResponse,
+    NodeTypeCountsResponse,
 )
 from app.services.github_service import (
     list_repository_ids_for_user,
@@ -74,6 +77,7 @@ def _graph_response(graph: GraphPayload) -> GraphResponse:
         ],
         truncated=graph.truncated,
         total_node_count=graph.total_node_count,
+        next_cursor=graph.next_cursor,
     )
 
 
@@ -335,6 +339,13 @@ async def get_repository_graph(
             "Omit to include every type."
         ),
     ),
+    after: str | None = Query(
+        None,
+        description=(
+            "ADR 0023 — keyset cursor: the `next_cursor` from a previous truncated "
+            "response, to fetch the following page. Omit for the first page."
+        ),
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> GraphResponse:
@@ -342,11 +353,87 @@ async def get_repository_graph(
     graph_repository = Neo4jGraphRepository(get_driver())
     try:
         graph = await graph_repository.get_full_graph(
-            str(repository.id), limit=limit, node_types=node_types
+            str(repository.id), limit=limit, node_types=node_types, after=after
         )
     except ValueError as exc:
         raise AppError(str(exc), status_code=400, error_code="invalid_node_type") from exc
     return _graph_response(graph)
+
+
+@router.get("/{repository_id}/graph/types", response_model=NodeTypeCountsResponse)
+async def get_repository_graph_types(
+    repository_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> NodeTypeCountsResponse:
+    """ADR 0023 — real, untruncated per-label counts, server-side. Fixes
+    the earlier UX audit's own flagged gap: the frontend previously had
+    to derive filter-chip options from whatever labels happened to appear
+    in a possibly-`limit`-truncated `/graph` load, so a type only present
+    past the first `limit` nodes could never become a filter option at
+    all."""
+    repository = await _get_owned_repository(db, repository_id, current_user)
+    graph_repository = Neo4jGraphRepository(get_driver())
+    counts = await graph_repository.get_type_counts(str(repository.id))
+    return NodeTypeCountsResponse(counts=counts)
+
+
+@router.get("/{repository_id}/graph/nodes/{node_id}/neighbors", response_model=GraphResponse)
+async def get_repository_graph_node_neighbors(
+    repository_id: uuid.UUID,
+    node_id: str,
+    hops: int = Query(1, ge=1, le=5, description="How many hops out from this node to include."),
+    edge_types: list[str] | None = Query(
+        None,
+        description=(
+            "Relationship types to traverse. Omit to traverse every non-cross-repository "
+            "type — a UI 'click to expand' interaction doesn't generally know which "
+            "specific types matter the way a purpose-built caller (e.g. impact analysis) "
+            "does."
+        ),
+    ),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> GraphResponse:
+    """ADR 0023 — lazy expand-on-click: the induced subgraph within
+    `hops` of one node, not this repository's whole graph. Thin wrapper
+    over the already-existing `get_neighborhood` (also used by impact
+    analysis) — no new traversal logic, just a route exposing what
+    already exists for a drill-down UI interaction."""
+    repository = await _get_owned_repository(db, repository_id, current_user)
+    graph_repository = Neo4jGraphRepository(get_driver())
+    types = edge_types or sorted(_ALLOWED_REL_TYPES - _CROSS_REPO_REL_TYPES)
+    try:
+        graph = await graph_repository.get_neighborhood(
+            str(repository.id), [node_id], types, hops
+        )
+    except ValueError as exc:
+        raise AppError(str(exc), status_code=400, error_code="invalid_neighborhood_request") from exc
+    return _graph_response(graph)
+
+
+@router.patch("/{repository_id}", response_model=RepositoryResponse)
+async def update_repository(
+    repository_id: uuid.UUID,
+    body: RepositoryUpdateRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> Repository:
+    """ADR 0023 — repository grouping. `domain` is currently the only
+    mutable field; an empty string is rejected (a caller clearing the
+    field sends `null` explicitly, not `""`, so an accidental blank isn't
+    silently treated as "cleared")."""
+    repository = await _get_owned_repository(db, repository_id, current_user)
+    if body.domain is not None and not body.domain.strip():
+        raise AppError(
+            "domain cannot be an empty string — omit it or send null to clear it.",
+            status_code=400,
+            error_code="invalid_domain",
+        )
+    repository.domain = body.domain.strip() if body.domain is not None else None
+    await db.commit()
+    await db.refresh(repository)
+    return repository
 
 
 @router.get(

@@ -49,6 +49,19 @@ class GraphResponse(BaseModel):
     # unbounded response shape exactly.
     truncated: bool = False
     total_node_count: int | None = None
+    # ADR 0023 — pass back as the `after` query param to fetch the next
+    # page when `truncated=True`. `None` on the last page (or an
+    # unbounded/non-paginated response, which is never truncated at all).
+    next_cursor: str | None = None
+
+
+class NodeTypeCountsResponse(BaseModel):
+    """ADR 0023 — real, untruncated per-label counts for one repository's
+    graph (`GET /repositories/{id}/graph/types`). Backs filter-chip
+    options with the true count for each type, rather than deriving them
+    client-side from a possibly-`limit`-truncated `GraphResponse`."""
+
+    counts: dict[str, int]
 
 
 class CrossRepositoryLinkResponse(BaseModel):
