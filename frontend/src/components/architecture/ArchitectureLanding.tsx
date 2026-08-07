@@ -1,8 +1,17 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, Folder, Search, X } from "lucide-react";
+import { AlertTriangle, Search, X } from "lucide-react";
 import { Card } from "../Card";
 import { StatusBadge } from "../StatusBadge";
+import { Treemap, type TreemapItem } from "../Treemap";
 import type { ArchitectureRepositorySummary, ArchitectureSummary } from "../../types/architecture";
+
+type SizeMetric = "node_count" | "repository_count";
+
+const UNGROUPED_COLOR = {
+  background: "var(--gf-surface-raised)",
+  text: "var(--gf-fg-muted)",
+  border: "var(--gf-line-strong)",
+};
 
 function StatBlock({ label, value }: { label: string; value: number }) {
   return (
@@ -57,6 +66,7 @@ export function ArchitectureLanding({
   onSelectRepository: (repo: ArchitectureRepositorySummary) => void;
 }) {
   const [query, setQuery] = useState("");
+  const [sizeMetric, setSizeMetric] = useState<SizeMetric>("node_count");
 
   const matchingRepositories = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -67,7 +77,37 @@ export function ArchitectureLanding({
   const namedDomains = summary.domains.filter(
     (d): d is { domain: string; repository_count: number; node_count: number } => d.domain !== null,
   );
+  const ungroupedDomain = summary.domains.find((d) => d.domain === null);
   const ungroupedRepos = summary.repositories.filter((repo) => repo.domain === null);
+
+  // The Ownership lens's own signature visualization
+  // (ARCHITECTURE_EXPERIENCE_REDESIGN.md): area proportional to size, so
+  // "which domain owns the most" is a shape to glance at, not a column of
+  // numbers to compare. The Ungrouped bucket rides along in the same
+  // treemap (a fixed neutral grey, not the categorical palette real
+  // domains use) specifically so an outsized "Unowned" block is as
+  // visible as the doc's own read of it — but stays inert (its repos are
+  // already one scroll away, in the list below) rather than a drill-in
+  // target like a real domain.
+  const domainTreemapItems: TreemapItem[] = useMemo(() => {
+    const items: TreemapItem[] = namedDomains.map((d) => ({
+      id: d.domain,
+      label: d.domain,
+      value: d[sizeMetric],
+      sublabel: `${d.repository_count.toLocaleString()} repos · ${d.node_count.toLocaleString()} nodes`,
+    }));
+    if (ungroupedDomain && ungroupedDomain.repository_count > 0) {
+      items.push({
+        id: "__ungrouped__",
+        label: "Ungrouped",
+        value: ungroupedDomain[sizeMetric],
+        sublabel: `${ungroupedDomain.repository_count.toLocaleString()} repos · ${ungroupedDomain.node_count.toLocaleString()} nodes`,
+        color: UNGROUPED_COLOR,
+        disabled: true,
+      });
+    }
+    return items;
+  }, [namedDomains, ungroupedDomain, sizeMetric]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -145,25 +185,38 @@ export function ArchitectureLanding({
           </Card>
 
           {namedDomains.length > 0 && (
-            <Card title="Domains" description="Repositories grouped manually — assign one from a repository's own detail view.">
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-                {namedDomains.map((d) => (
-                  <button
-                    key={d.domain}
-                    type="button"
-                    onClick={() => onSelectDomain(d.domain)}
-                    className="flex flex-col gap-1 rounded-lg border border-line px-4 py-3 text-left hover:border-line-strong hover:bg-surface-raised"
-                  >
-                    <span className="flex items-center gap-2 text-sm font-medium text-fg-secondary">
-                      <Folder className="h-4 w-4 text-fg-muted" aria-hidden="true" />
-                      {d.domain}
-                    </span>
-                    <span className="text-xs text-fg-muted">
-                      {d.repository_count.toLocaleString()} repos · {d.node_count.toLocaleString()} nodes
-                    </span>
-                  </button>
-                ))}
-              </div>
+            <Card
+              title="Domains"
+              description="Repositories grouped manually — assign one from a repository's own detail view."
+              action={
+                <div
+                  role="group"
+                  aria-label="Treemap sizing metric"
+                  className="flex items-center gap-0.5 rounded-full border border-line p-0.5 text-xs"
+                >
+                  {(["node_count", "repository_count"] as const).map((metric) => (
+                    <button
+                      key={metric}
+                      type="button"
+                      aria-pressed={sizeMetric === metric}
+                      onClick={() => setSizeMetric(metric)}
+                      className={`rounded-full px-2.5 py-1 transition-colors ${
+                        sizeMetric === metric
+                          ? "bg-info-bg text-info-fg"
+                          : "text-fg-secondary hover:bg-surface-raised"
+                      }`}
+                    >
+                      {metric === "node_count" ? "By nodes" : "By repos"}
+                    </button>
+                  ))}
+                </div>
+              }
+            >
+              <Treemap
+                items={domainTreemapItems}
+                onSelect={(item) => onSelectDomain(item.id)}
+                ariaLabel="Domains by size"
+              />
             </Card>
           )}
 

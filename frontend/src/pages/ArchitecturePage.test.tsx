@@ -184,6 +184,32 @@ describe("ArchitecturePage", () => {
       expect(await screen.findByText("acme/notes")).toBeInTheDocument();
     });
 
+    it("renders the Ungrouped bucket in the treemap as inert, not a drill-in target", async () => {
+      vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
+      renderWithAuth();
+
+      await screen.findByRole("button", { name: /Payments/ });
+      // "Ungrouped" is shown for size context but isn't clickable — its
+      // repos are already listed separately below, and there's no
+      // "Ungrouped" domain view to navigate into.
+      expect(screen.queryByRole("button", { name: /Ungrouped/ })).not.toBeInTheDocument();
+    });
+
+    it("toggling the treemap sizing metric doesn't change which domains are shown", async () => {
+      const user = userEvent.setup();
+      vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
+      renderWithAuth();
+
+      await screen.findByRole("button", { name: /Payments/ });
+      await user.click(screen.getByRole("button", { name: "By repos" }));
+
+      expect(screen.getByRole("button", { name: "By repos" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+      expect(await screen.findByRole("button", { name: /Payments/ })).toBeInTheDocument();
+    });
+
     it("filters repositories by search", async () => {
       const user = userEvent.setup();
       vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
