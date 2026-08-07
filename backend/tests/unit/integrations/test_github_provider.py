@@ -9,7 +9,12 @@ import json
 import httpx
 import pytest
 
-from app.integrations.github import GitHubApiError, GitHubVersionControlProvider, PostedComment
+from app.integrations.github import (
+    GitHubApiError,
+    GitHubVersionControlProvider,
+    PostedComment,
+    list_repositories,
+)
 
 # `GitHubVersionControlProvider` constructs its own `httpx.AsyncClient` per
 # call rather than accepting one, so each test monkeypatches
@@ -154,3 +159,32 @@ async def test_post_pull_request_comment_raises_on_error_status(
         await provider.post_pull_request_comment(
             owner="acme", repo="order-svc", pull_number=42, body="body", access_token="tok"
         )
+
+
+@pytest.mark.asyncio
+async def test_list_repositories_includes_organization_member_affiliation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression test: `affiliation` must include `organization_member`
+    alongside `owner`/`collaborator`, or every repo a user can only see via
+    org membership (the common case for most org repos) is silently
+    dropped from the response — no error, no indication of filtering,
+    exactly the symptom reported against a real org."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/user/repos"
+        affiliation = httpx.QueryParams(request.url.query).get("affiliation")
+        assert affiliation is not None
+        assert set(affiliation.split(",")) == {"owner", "collaborator", "organization_member"}
+        return httpx.Response(status_code=200, json=[])
+
+    transport = httpx.MockTransport(handler)
+
+    class _PatchedAsyncClient(httpx.AsyncClient):
+        def __init__(self, *args: object, **kwargs: object) -> None:
+            super().__init__(*args, transport=transport, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", _PatchedAsyncClient)
+
+    result = await list_repositories("tok")
+    assert result == []

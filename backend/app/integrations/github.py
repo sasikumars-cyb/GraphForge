@@ -137,11 +137,23 @@ async def fetch_user_profile(access_token: str) -> OAuthUserProfile:
 
 async def list_repositories(access_token: str) -> list[RepositoryInfo]:
     """List repositories `access_token`'s owner has access to. Module-level
-    for the same reason as `fetch_user_profile` above — see its docstring."""
+    for the same reason as `fetch_user_profile` above — see its docstring.
+
+    `affiliation` explicitly includes `organization_member` alongside
+    `owner`/`collaborator` — GitHub's own default when the param is
+    omitted, but this call always passed it explicitly, and originally
+    without that third value. Omitting it silently hid every repo a user
+    can only see via org membership (the common case for most org repos —
+    added via a team, not individually as a per-repo collaborator), with
+    no error and no indication anything was filtered."""
     data = await _github_get(
         "/user/repos",
         access_token,
-        params={"per_page": 100, "sort": "updated", "affiliation": "owner,collaborator"},
+        params={
+            "per_page": 100,
+            "sort": "updated",
+            "affiliation": "owner,collaborator,organization_member",
+        },
     )
     return [
         RepositoryInfo(
