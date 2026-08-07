@@ -20,6 +20,8 @@ export function NodeDetailPanel({
   onClose,
   onExploreNeighbors,
   isExploringNeighbors,
+  exploreLabel = "Explore neighbors",
+  exploringLabel = "Loading neighbors…",
 }: {
   node: GraphNode;
   onClose: () => void;
@@ -31,6 +33,12 @@ export function NodeDetailPanel({
    * worse than no button). */
   onExploreNeighbors?: () => void;
   isExploringNeighbors?: boolean;
+  /** Same button, reused verbatim by the Dependency lens for "expand this
+   * node's own dependencies" — only the label needs to differ ("Explore
+   * neighbors" doesn't describe a directional expand). Defaults preserve
+   * the Architecture lens's original wording exactly. */
+  exploreLabel?: string;
+  exploringLabel?: string;
 }) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -87,7 +95,7 @@ export function NodeDetailPanel({
           disabled={isExploringNeighbors}
           className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
         >
-          {isExploringNeighbors ? "Loading neighbors…" : "Explore neighbors"}
+          {isExploringNeighbors ? exploringLabel : exploreLabel}
         </button>
       )}
 

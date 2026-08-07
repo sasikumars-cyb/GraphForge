@@ -4,6 +4,7 @@ their architecture indexing jobs / discovered graph.
 
 import asyncio
 import uuid
+from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import select
@@ -392,6 +393,18 @@ async def get_repository_graph_node_neighbors(
             "does."
         ),
     ),
+    direction: Literal["any", "outgoing", "incoming"] = Query(
+        "any",
+        description=(
+            "'any' (default, byte-for-byte the original undirected behavior) — every "
+            "existing caller keeps working unchanged. 'outgoing' follows only edges "
+            "leaving this node (what it depends on); 'incoming' follows only edges "
+            "pointing at it (what depends on it) — the Dependency lens's own two-way "
+            "toggle, now that get_neighborhood actually honors direction (see "
+            "neo4j_repository.py's own history — this parameter used to be silently "
+            "inert everywhere)."
+        ),
+    ),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> GraphResponse:
@@ -405,7 +418,7 @@ async def get_repository_graph_node_neighbors(
     types = edge_types or sorted(_ALLOWED_REL_TYPES - _CROSS_REPO_REL_TYPES)
     try:
         graph = await graph_repository.get_neighborhood(
-            str(repository.id), [node_id], types, hops
+            str(repository.id), [node_id], types, hops, direction=direction
         )
     except ValueError as exc:
         raise AppError(str(exc), status_code=400, error_code="invalid_neighborhood_request") from exc

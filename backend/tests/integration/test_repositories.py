@@ -431,6 +431,111 @@ class TestGraphNodeNeighbors:
 
         assert response.status_code == 400
 
+    async def test_direction_outgoing_follows_only_forward_edges(
+        self, db_client: AsyncClient
+    ) -> None:
+        """The Dependency lens's own toggle: seeded from b in a->b->c,
+        'outgoing' must reach c (what b depends on) but not a (what
+        depends on b)."""
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        graph_repository = Neo4jGraphRepository(get_driver())
+        a, b, c = f"{repo_id}:a", f"{repo_id}:b", f"{repo_id}:c"
+        await graph_repository.replace_repository_graph(
+            repo_id,
+            GraphPayload(
+                nodes=[
+                    GraphNode(id=a, labels=["GraphNode", "Component"]),
+                    GraphNode(id=b, labels=["GraphNode", "Component"]),
+                    GraphNode(id=c, labels=["GraphNode", "Component"]),
+                ],
+                edges=[
+                    GraphEdge(source_id=a, target_id=b, type="CALLS"),
+                    GraphEdge(source_id=b, target_id=c, type="CALLS"),
+                ],
+            ),
+        )
+
+        response = await db_client.get(
+            f"/api/v1/repositories/{repo_id}/graph/nodes/{b}/neighbors",
+            headers=headers,
+            params={"hops": 1, "direction": "outgoing"},
+        )
+
+        assert response.status_code == 200
+        assert {n["id"] for n in response.json()["nodes"]} == {b, c}
+
+    async def test_direction_incoming_follows_only_backward_edges(
+        self, db_client: AsyncClient
+    ) -> None:
+        """Same seed, opposite direction: 'incoming' must reach a (what
+        depends on b) but not c (what b depends on)."""
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        graph_repository = Neo4jGraphRepository(get_driver())
+        a, b, c = f"{repo_id}:a", f"{repo_id}:b", f"{repo_id}:c"
+        await graph_repository.replace_repository_graph(
+            repo_id,
+            GraphPayload(
+                nodes=[
+                    GraphNode(id=a, labels=["GraphNode", "Component"]),
+                    GraphNode(id=b, labels=["GraphNode", "Component"]),
+                    GraphNode(id=c, labels=["GraphNode", "Component"]),
+                ],
+                edges=[
+                    GraphEdge(source_id=a, target_id=b, type="CALLS"),
+                    GraphEdge(source_id=b, target_id=c, type="CALLS"),
+                ],
+            ),
+        )
+
+        response = await db_client.get(
+            f"/api/v1/repositories/{repo_id}/graph/nodes/{b}/neighbors",
+            headers=headers,
+            params={"hops": 1, "direction": "incoming"},
+        )
+
+        assert response.status_code == 200
+        assert {n["id"] for n in response.json()["nodes"]} == {a, b}
+
+    async def test_direction_defaults_to_any_unchanged(self, db_client: AsyncClient) -> None:
+        """No `direction` supplied — must match the original undirected
+        behavior byte-for-byte, the same regression guard already applied
+        to get_neighborhood itself."""
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_one(db_client, headers)
+
+        graph_repository = Neo4jGraphRepository(get_driver())
+        a, b, c = f"{repo_id}:a", f"{repo_id}:b", f"{repo_id}:c"
+        await graph_repository.replace_repository_graph(
+            repo_id,
+            GraphPayload(
+                nodes=[
+                    GraphNode(id=a, labels=["GraphNode", "Component"]),
+                    GraphNode(id=b, labels=["GraphNode", "Component"]),
+                    GraphNode(id=c, labels=["GraphNode", "Component"]),
+                ],
+                edges=[
+                    GraphEdge(source_id=a, target_id=b, type="CALLS"),
+                    GraphEdge(source_id=b, target_id=c, type="CALLS"),
+                ],
+            ),
+        )
+
+        response = await db_client.get(
+            f"/api/v1/repositories/{repo_id}/graph/nodes/{b}/neighbors",
+            headers=headers,
+            params={"hops": 1},
+        )
+
+        assert response.status_code == 200
+        assert {n["id"] for n in response.json()["nodes"]} == {a, b, c}
+
 
 class TestGraphCursorPagination:
     async def test_after_continues_from_the_previous_page(self, db_client: AsyncClient) -> None:
