@@ -12,6 +12,25 @@
 # docker-compose.prod.yml's, even though both files live in this directory.
 name: graphforge-dev
 
+# Explicit subnet for the default network. Without this, Compose
+# auto-assigns one from Docker's default pool (172.17.0.0/16 upward) —
+# which on a machine running a corporate VPN can land squarely inside a
+# range the VPN also routes (observed: this project's auto-picked
+# 172.20.0.0/16 exactly matched a `172.20.0.0/16 via tun0` VPN route,
+# silently blackholing every request to a container on this network from
+# the host — `docker exec` into the container worked fine throughout,
+# since that never leaves the container's own namespace; only host→container
+# traffic vanished into the tunnel). 172.23.0.0/16 is outside every
+# VPN-routed CIDR and every other Docker network on this host as of this
+# writing; if it ever collides again, `ip route show dev tun0` and
+# `docker network ls` (then `docker network inspect` each) show what to
+# steer clear of next.
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.23.0.0/16
+
 services:
   db:
     image: postgres:16-alpine
