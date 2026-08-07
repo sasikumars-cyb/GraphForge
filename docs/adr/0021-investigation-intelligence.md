@@ -397,6 +397,22 @@ to work.
   KAN-24's own precedent is the template when it's needed).
 - Changing `_select()`'s scoring formula itself, or any planner logic
   beyond the one capped additive heuristic above.
+- **Provider-level adaptive retrieval** — `recent_repeated_failure()`
+  already has the exact signature the tonight's Confluence MCP scenario
+  wants (`ProviderOutcomeEvent | None`, matches ADR §1's approved
+  interface), but nothing calls it yet. The natural call site is
+  `ConfluenceProvider.resolve_for_issue` (`app/context_pipeline/
+  providers.py`) — before attempting MCP, check
+  `recent_repeated_failure(scope=..., provider="confluence_mcp",
+  capability="documentation", within=...)` and skip straight to the REST
+  fallback tier if it returns non-`None`. This is a different, smaller
+  integration point than anything Phase 1 committed to (Phase 1 only
+  reads `repository_provider_preference` into the capped priority-boost
+  heuristic in `engine.py`; it never touches a specific provider's own
+  retry logic) — raised and deliberately left out of Phase 1's scope by
+  explicit decision, not an oversight. Tracked as a follow-up rather than
+  a ticket (no Jira MCP access in this environment to file one directly);
+  promote to a real ticket when picked up.
 
 ## Consequences
 
@@ -404,3 +420,23 @@ to work.
 - The Confluence MCP scenario from tonight becomes: investigation 2 against the same Atlassian site sees `provider_effectiveness` return MCP at ~0% weighted success, REST tiers at high weighted success, and starts cycle 1 with REST already mildly preferred — without ever querying a table from planner code, and without any single failure being able to permanently blacklist a provider (decay guarantees recoverability).
 - Explicitly not delivered by Phase 1: cross-investigation evidence reuse, human-correction learning, or any change to how `_select()` itself scores actions beyond the one additive input.
 - What Phase 1 *does* leave genuinely open for later, verified rather than assumed (section 3a): a future policy-learning pass over `investigation_provider_events` has the full candidate set, explicit step ordering, whole-state context, and both a priori and empirical cost for every decision ever made from the moment Phase 1 ships — without needing to wait for a second collection phase to start accumulating the right data first.
+
+## Post-Phase-1 addendum: observability endpoint
+
+Added after Phase 1 landed, in response to an explicit ask to validate
+the collected signal's quality before Phase 2 lets it influence
+retrieval more aggressively — not part of the originally-approved scope
+above, and deliberately still just read-only visibility, not a decision
+surface: `GET /api/v1/investigation-intelligence/summary` (admin-only,
+`app/api/v1/routers/investigation_intelligence.py`) aggregates directly
+over the two tables — provider outcome counts, provider success rate,
+confidence-improvement distribution, latency distribution, investigation
+cycles by terminal outcome, priority-boost usage rate, memory-hit rate
+(how often `priority_boost_source` shows Investigation Intelligence
+actually contributed, not just whether a boost fired at all), and
+repeated-failure grouping (the same pattern the deferred
+ConfluenceProvider integration above would act on, surfaced here purely
+for a human to look at first). Nothing in `engine.py`'s own reads changes
+— this endpoint queries the tables directly, the same way
+`calibration.py` queries `ConfidenceCalibration` directly rather than
+through a write-oriented service.

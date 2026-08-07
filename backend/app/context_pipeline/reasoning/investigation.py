@@ -31,6 +31,7 @@ from app.context_pipeline.reasoning.ledger import (
 
 if TYPE_CHECKING:
     from app.context_pipeline.reasoning.memory import WorkingContext
+    from app.investigation_intelligence.service import InvestigationIntelligenceService
 
 
 @dataclass
@@ -58,6 +59,11 @@ class SessionContext:
     # carries `db`/`run_id`/`agent_step_id`, the same three values every
     # other agent's LLM call reads them from.
     agent_context: AgentContext | None = None
+    # ADR 0021 — Investigation Intelligence. `None` for callers that never
+    # construct one (ad-hoc test fixtures, older call sites not yet
+    # migrated); every read/write site in `engine.py` must treat that as
+    # "no signal available" and degrade silently, never require it.
+    intelligence: InvestigationIntelligenceService | None = None
 
 
 @dataclass(frozen=True)

@@ -32,12 +32,15 @@ from app.agents.context_discovery.schemas import ContextDiscoveryResult
 from app.agents.llm import STAGE_CONTEXT_DISCOVERY, stage_for
 from app.context_pipeline.reasoning.engine import discover, resume
 from app.context_pipeline.reasoning.investigation import SessionContext
+from app.context_pipeline.reasoning.investigation_planner import classify_engineering_strategy
 from app.context_pipeline.reasoning.memory import WorkingContext
 from app.context_pipeline.reasoning.projection import (
     build_result,
     restore,
     to_contract_evidence,
 )
+from app.investigation_intelligence.contracts import InvestigationOutcomeEvent, InvestigationScope
+from app.investigation_intelligence.service import InvestigationIntelligenceService
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +71,53 @@ def _confidence_for(state: WorkingContext) -> Confidence:
     return Confidence(score=state.confidence, reasoning=reasoning)
 
 
+def _failure_scope(
+    state: WorkingContext | None, explicit_repositories: list[str] | None
+) -> InvestigationScope | None:
+    """Best-effort scope for a FAILED outcome — this call site has no
+    guarantee a `WorkingContext` with a `repository` fact ever came into
+    existence (the exception may have come from inside `discover()`/
+    `resume()` before one was established). Falls back to the user's own
+    explicit repository selection, when there was one; `None` (skip
+    recording) otherwise, matching every other Investigation Intelligence
+    read/write's degrade-on-ambiguity rule."""
+    if state is not None:
+        repo_facts = state.ledger.facts_of("repository")
+        if repo_facts:
+            return InvestigationScope(scope_type="repository", scope_id=repo_facts[0].subject)
+    if explicit_repositories:
+        return InvestigationScope(scope_type="repository", scope_id=explicit_repositories[0])
+    return None
+
+
+async def _record_failed_outcome(
+    *,
+    intelligence: InvestigationIntelligenceService,
+    investigation_id: str,
+    request: str,
+    state: WorkingContext | None,
+    explicit_repositories: list[str] | None,
+) -> None:
+    scope = _failure_scope(state, explicit_repositories)
+    if scope is None:
+        return
+    event = InvestigationOutcomeEvent(
+        investigation_id=investigation_id,
+        scope=scope,
+        investigation_type=classify_engineering_strategy(request),
+        cycles_used=state.metadata.iteration if state is not None else 0,
+        terminal_outcome="FAILED",
+        confidence=state.confidence if state is not None else None,
+        final_capability_scores=(
+            {a.capability: a.score for a in state.assessments} if state is not None else {}
+        ),
+        contradictions_encountered=0,
+        contradictions_resolved=0,
+        priority_boost_source_used=False,
+    )
+    await intelligence.record_investigation_outcome(event)
+
+
 class ContextDiscoveryAgent:
     """Implements IAgent for goal=discover_context.
 
@@ -82,6 +132,7 @@ class ContextDiscoveryAgent:
 
         db: AsyncSession = context.extras["db"]
         user_id: uuid.UUID | None = context.extras.get("user_id")
+        intelligence = InvestigationIntelligenceService(db)
         session = SessionContext(
             db=db,
             user_id=user_id,
@@ -89,33 +140,61 @@ class ContextDiscoveryAgent:
             model=context.model,
             stage=stage_for(context.extras, STAGE_CONTEXT_DISCOVERY),
             agent_context=context,
+            intelligence=intelligence,
         )
 
         resume_payload: dict[str, Any] | None = context.extras.get("resume")
+        explicit_repositories: list[str] | None = context.extras.get("explicit_repositories")
+        run_id = context.extras.get("run_id")
+        investigation_id = str(run_id) if run_id is not None else raw_request
+        # Best-effort partial state for the FAILED-outcome fallback below —
+        # set as soon as one exists, so a crash mid-investigation still has
+        # a `WorkingContext` to resolve a scope from (see `_failure_scope`).
+        partial_state: WorkingContext | None = None
 
-        if resume_payload is not None:
-            answer = resume_payload["answer"]
-            logger.info(
-                "context_discovery_resuming subject_id=%s question_id=%s",
-                subject_id,
-                answer["question_id"],
-            )
-            state = await resume(
-                state=restore(resume_payload["working_context"]),
-                question_id=answer["question_id"],
-                answer=answer["answer"],
-                session=session,
-            )
-        else:
-            logger.info(
-                "context_discovery_starting subject_id=%s request=%.80s", subject_id, raw_request
-            )
-            explicit_repositories: list[str] | None = context.extras.get("explicit_repositories")
-            state = await discover(
+        try:
+            if resume_payload is not None:
+                answer = resume_payload["answer"]
+                logger.info(
+                    "context_discovery_resuming subject_id=%s question_id=%s",
+                    subject_id,
+                    answer["question_id"],
+                )
+                partial_state = restore(resume_payload["working_context"])
+                state = await resume(
+                    state=partial_state,
+                    question_id=answer["question_id"],
+                    answer=answer["answer"],
+                    session=session,
+                )
+            else:
+                logger.info(
+                    "context_discovery_starting subject_id=%s request=%.80s",
+                    subject_id,
+                    raw_request,
+                )
+                state = await discover(
+                    request=raw_request,
+                    session=session,
+                    explicit_repositories=explicit_repositories,
+                )
+        except Exception:
+            # `investigate()`'s own per-action try/except already isolates
+            # a single provider's failure (see `engine.py`); anything that
+            # still reaches here is a genuine crash, the only path that
+            # produces `terminal_outcome="FAILED"` (ADR 0021 §4 — this is
+            # the second of its two write call sites, `investigate()`'s own
+            # clean exit being the first). Recorded best-effort, then
+            # re-raised unchanged — the real error path to the
+            # orchestrator is untouched.
+            await _record_failed_outcome(
+                intelligence=intelligence,
+                investigation_id=investigation_id,
                 request=raw_request,
-                session=session,
+                state=partial_state,
                 explicit_repositories=explicit_repositories,
             )
+            raise
 
         confidence = _confidence_for(state)
         question = state.next_question()

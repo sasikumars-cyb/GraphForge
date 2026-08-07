@@ -13,6 +13,9 @@ from app.api.v1.routers.engineering_sessions import router as engineering_sessio
 from app.api.v1.routers.github import router as github_router
 from app.api.v1.routers.google_drive import router as google_drive_router
 from app.api.v1.routers.health import router as health_router
+from app.api.v1.routers.investigation_intelligence import (
+    router as investigation_intelligence_router,
+)
 from app.api.v1.routers.jira import router as jira_router
 from app.api.v1.routers.knowledge import router as knowledge_router
 from app.api.v1.routers.learning import router as learning_router
@@ -50,6 +53,7 @@ api_router.include_router(knowledge_router)
 api_router.include_router(learning_router)
 api_router.include_router(parity_router)
 api_router.include_router(calibration_router)
+api_router.include_router(investigation_intelligence_router)
 api_router.include_router(jira_router)
 api_router.include_router(testrail_router)
 api_router.include_router(test_case_uploads_router)
