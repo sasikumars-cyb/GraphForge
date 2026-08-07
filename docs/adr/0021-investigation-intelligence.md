@@ -397,22 +397,45 @@ to work.
   KAN-24's own precedent is the template when it's needed).
 - Changing `_select()`'s scoring formula itself, or any planner logic
   beyond the one capped additive heuristic above.
-- **Provider-level adaptive retrieval** — `recent_repeated_failure()`
-  already has the exact signature the tonight's Confluence MCP scenario
-  wants (`ProviderOutcomeEvent | None`, matches ADR §1's approved
-  interface), but nothing calls it yet. The natural call site is
-  `ConfluenceProvider.resolve_for_issue` (`app/context_pipeline/
-  providers.py`) — before attempting MCP, check
-  `recent_repeated_failure(scope=..., provider="confluence_mcp",
-  capability="documentation", within=...)` and skip straight to the REST
-  fallback tier if it returns non-`None`. This is a different, smaller
-  integration point than anything Phase 1 committed to (Phase 1 only
-  reads `repository_provider_preference` into the capped priority-boost
-  heuristic in `engine.py`; it never touches a specific provider's own
-  retry logic) — raised and deliberately left out of Phase 1's scope by
-  explicit decision, not an oversight. Tracked as a follow-up rather than
-  a ticket (no Jira MCP access in this environment to file one directly);
-  promote to a real ticket when picked up.
+
+## Post-Phase-1 addendum: provider-level adaptive retrieval (shipped)
+
+Raised as a deliberate Phase 1 scope exclusion above, then picked up as a
+small, contained follow-up (not full ADR Phase 2 — see the observability
+addendum below for why that's still gated on real usage data first):
+`recent_repeated_failure()` is now wired into `ConfluenceProvider.
+resolve_for_issue` (`app/context_pipeline/providers.py`).
+
+One correction to the exclusion note's own worked example above: the
+provider value actually recorded for every Confluence documentation
+action is `"confluence"` (`ConfluenceInvestigator.name`, see
+`investigators.py`) — MCP and REST are never recorded as distinct
+`provider` values, since `resolve_for_issue` already tries both
+internally in a single action. `recent_repeated_failure(provider=
+"confluence_mcp", ...)` as originally sketched would never have matched
+anything; the real call reads `provider="confluence"`, answering "did
+this connection's *whole* Confluence pipeline fail recently" rather than
+"did MCP specifically fail" — still exactly the signal the ADR's org-wide
+API-token-access-toggle scenario needs, since that failure mode blocks
+MCP regardless of which issue is being searched.
+
+Behavior: before attempting MCP, checks
+`recent_repeated_failure(scope=InvestigationScope(scope_type=
+"knowledge_connection", scope_id=<connection id>), provider="confluence",
+capability="documentation", within=timedelta(hours=1))`. A recent failure
+found → try REST first; if REST succeeds, MCP is skipped entirely (the
+"1 less cycle" outcome from the original worked example). If REST also
+comes up empty, MCP still runs as normal — a skipped-once hint never
+becomes a permanent block, and the later MCP-failed→REST-fallback branch
+reuses the already-fetched REST result instead of calling it a second
+time for the same issue. `intelligence=None` (no service wired, e.g. an
+ad-hoc test fixture) reproduces the pre-existing behavior exactly —
+`recent_repeated_failure` is never called at all.
+
+`ResolvedKnowledgeAccess` gained a `connection_id: str | None = None`
+field (`app/knowledge/access_resolver.py`) to carry the `KnowledgeConnection.id`
+already loaded by `resolve_knowledge_access` through to this call site,
+rather than a second duplicate query.
 
 ## Consequences
 

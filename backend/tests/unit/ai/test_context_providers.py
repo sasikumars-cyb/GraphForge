@@ -259,7 +259,7 @@ async def test_github_provider_reports_failure_for_a_malformed_repository_refere
     assert artifact.evidence.status == "failed"
 
 
-def _access(methods=(), config=None):
+def _access(methods=(), config=None, connection_id=None):
     from app.knowledge.access_resolver import ResolvedKnowledgeAccess
 
     return ResolvedKnowledgeAccess(
@@ -267,6 +267,7 @@ def _access(methods=(), config=None):
         capability=ProviderCapability.DOCUMENTATION,
         methods=tuple(methods),
         config=config or {},
+        connection_id=connection_id,
     )
 
 
@@ -519,6 +520,253 @@ async def test_confluence_provider_reports_not_found_when_rest_fallback_searches
 
     assert artifact is not None
     assert artifact.evidence.status == "not_found"
+
+
+# ---------------------------------------------------------------------------
+# Investigation Intelligence wiring (ADR 0021's own worked example) —
+# `recent_repeated_failure()` skipping a doomed MCP attempt in favor of REST
+# ---------------------------------------------------------------------------
+
+
+def _intelligence(recent_failure=None):
+    """A minimal stand-in for `InvestigationIntelligenceService` — only
+    `recent_repeated_failure` is ever read by `ConfluenceProvider`, so
+    nothing else needs a real implementation. `recent_failure` is whatever
+    non-`None`/`None` value the read should return; the provider only
+    checks identity against `None`, never inspects the event itself."""
+    service = MagicMock()
+    service.recent_repeated_failure = AsyncMock(return_value=recent_failure)
+    return service
+
+
+@pytest.mark.asyncio
+async def test_skips_mcp_entirely_when_a_recent_failure_is_known_and_rest_succeeds() -> None:
+    """The ADR's own worked example: a recent failure for this exact
+    connection means REST is tried first: if it succeeds, the expensive
+    multi-turn MCP conversation is never even attempted."""
+    from app.agents._contract import Evidence
+
+    db = AsyncMock()
+    intelligence = _intelligence(recent_failure=object())
+    with (
+        patch(
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(
+                return_value=_access(
+                    methods=[_mcp_method(), _rest_method()],
+                    config={"base_url": "cloud-1"},
+                    connection_id="conn-1",
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context", new=AsyncMock()
+        ) as gather_mcp,
+        patch(
+            "app.context_pipeline.providers.search_confluence_rest",
+            new=AsyncMock(
+                return_value=(
+                    "NPT-30 rollback plan",
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="confluence_rest_search",
+                            summary="Searched Confluence for pages mentioning NPT-30 (1 result).",
+                            status="success",
+                        )
+                    ],
+                )
+            ),
+        ) as rest_search,
+    ):
+        artifact = await ConfluenceProvider(db, intelligence).resolve_for_issue(
+            jira_issue_key="NPT-30", task_description="fix it", model=None, stage="planning"
+        )
+
+    intelligence.recent_repeated_failure.assert_awaited_once()
+    call_kwargs = intelligence.recent_repeated_failure.call_args.kwargs
+    assert call_kwargs["scope"].scope_type == "knowledge_connection"
+    assert call_kwargs["scope"].scope_id == "conn-1"
+    assert call_kwargs["provider"] == "confluence"
+    assert call_kwargs["capability"] == "documentation"
+
+    rest_search.assert_awaited_once()
+    gather_mcp.assert_not_awaited()
+
+    assert artifact is not None
+    assert artifact.evidence.status == "success"
+    assert "NPT-30 rollback plan" in artifact.text
+
+
+@pytest.mark.asyncio
+async def test_falls_through_to_mcp_when_prefetched_rest_also_finds_nothing() -> None:
+    """A recent failure never becomes a permanent block: if the early REST
+    attempt also comes up empty, MCP still runs — and the later
+    MCP-failed-so-fall-back-to-REST branch reuses that same result instead
+    of calling `search_confluence_rest` a second time for the same issue."""
+    from app.agents._contract import Evidence
+
+    db = AsyncMock()
+    intelligence = _intelligence(recent_failure=object())
+    with (
+        patch(
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(
+                return_value=_access(
+                    methods=[_mcp_method(), _rest_method()],
+                    config={"base_url": "cloud-1"},
+                    connection_id="conn-1",
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context",
+            new=AsyncMock(
+                return_value=(
+                    None,
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="getTeamworkGraphContext",
+                            summary="permission denied",
+                            status="failed",
+                        )
+                    ],
+                )
+            ),
+        ) as gather_mcp,
+        patch(
+            "app.context_pipeline.providers.search_confluence_rest",
+            new=AsyncMock(
+                return_value=(
+                    None,
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="confluence_rest_search",
+                            summary="Searched Confluence for pages mentioning NPT-30 (0 results).",
+                            status="success",
+                        )
+                    ],
+                )
+            ),
+        ) as rest_search,
+    ):
+        artifact = await ConfluenceProvider(db, intelligence).resolve_for_issue(
+            jira_issue_key="NPT-30", task_description="fix it", model=None, stage="planning"
+        )
+
+    gather_mcp.assert_awaited_once()
+    rest_search.assert_awaited_once()  # not twice — the prefetched result is reused
+
+    # REST's own search call succeeded (it just found 0 pages) — the same
+    # "we looked everywhere, there's really nothing" outcome
+    # `test_confluence_provider_reports_not_found_when_rest_fallback_
+    # searches_but_finds_nothing` already establishes for the non-prefetch
+    # path, reached here via the reused prefetched result instead.
+    assert artifact is not None
+    assert artifact.evidence.status == "not_found"
+
+
+@pytest.mark.asyncio
+async def test_attempts_mcp_normally_when_no_recent_failure_is_known() -> None:
+    """`recent_repeated_failure` returning `None` (the common case — no
+    known recent problem) must not change anything: MCP runs first, exactly
+    as it did before Investigation Intelligence existed."""
+    from app.agents._contract import Evidence
+
+    db = AsyncMock()
+    intelligence = _intelligence(recent_failure=None)
+    with (
+        patch(
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(
+                return_value=_access(
+                    methods=[_mcp_method(), _rest_method()],
+                    config={"base_url": "cloud-1"},
+                    connection_id="conn-1",
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context",
+            new=AsyncMock(
+                return_value=(
+                    "NPT-30 design doc",
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="getTeamworkGraphContext",
+                            summary="ok",
+                            status="success",
+                        )
+                    ],
+                )
+            ),
+        ) as gather_mcp,
+        patch(
+            "app.context_pipeline.providers.search_confluence_rest", new=AsyncMock()
+        ) as rest_search,
+    ):
+        artifact = await ConfluenceProvider(db, intelligence).resolve_for_issue(
+            jira_issue_key="NPT-30", task_description="fix it", model=None, stage="planning"
+        )
+
+    gather_mcp.assert_awaited_once()
+    rest_search.assert_not_awaited()
+    assert artifact is not None
+    assert artifact.evidence.status == "success"
+
+
+@pytest.mark.asyncio
+async def test_no_intelligence_configured_behaves_exactly_as_before() -> None:
+    """`intelligence=None` (the default, and every call site until
+    `ConfluenceInvestigator` was updated) must never call
+    `recent_repeated_failure` at all — the pre-Investigation-Intelligence
+    behavior stays byte-for-byte the same when the service isn't wired
+    in."""
+    from app.agents._contract import Evidence
+
+    db = AsyncMock()
+    with (
+        patch(
+            "app.context_pipeline.providers.resolve_knowledge_access",
+            new=AsyncMock(
+                return_value=_access(
+                    methods=[_mcp_method(), _rest_method()],
+                    config={"base_url": "cloud-1"},
+                    connection_id="conn-1",
+                )
+            ),
+        ),
+        patch(
+            "app.context_pipeline.providers.gather_confluence_context",
+            new=AsyncMock(
+                return_value=(
+                    "NPT-30 design doc",
+                    [
+                        Evidence(
+                            kind="tool_call",
+                            reference="getTeamworkGraphContext",
+                            summary="ok",
+                            status="success",
+                        )
+                    ],
+                )
+            ),
+        ) as gather_mcp,
+        patch(
+            "app.context_pipeline.providers.search_confluence_rest", new=AsyncMock()
+        ) as rest_search,
+    ):
+        artifact = await ConfluenceProvider(db).resolve_for_issue(
+            jira_issue_key="NPT-30", task_description="fix it", model=None, stage="planning"
+        )
+
+    gather_mcp.assert_awaited_once()
+    rest_search.assert_not_awaited()
+    assert artifact is not None
+    assert artifact.evidence.status == "success"
 
 
 @pytest.mark.asyncio

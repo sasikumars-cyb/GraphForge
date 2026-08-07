@@ -591,7 +591,7 @@ class ConfluenceInvestigator:
         self, action: InvestigationAction, session: SessionContext, recorder: Recorder
     ) -> InvestigationOutcome:
         work_item = action.params["work_item"]
-        provider = ConfluenceProvider(session.db)
+        provider = ConfluenceProvider(session.db, session.intelligence)
         artifact = await provider.resolve_for_issue(
             jira_issue_key=work_item,
             task_description=action.params.get("task_description", work_item),

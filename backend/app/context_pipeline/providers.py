@@ -18,6 +18,7 @@ nothing in the Planning Agent, needs to change.
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -36,6 +37,8 @@ from app.context_pipeline.models import (
 )
 from app.core.redact import redact_secrets
 from app.graph.test_case_repository import ITestCaseGraphRepository
+from app.investigation_intelligence.contracts import InvestigationScope
+from app.investigation_intelligence.service import InvestigationIntelligenceService
 from app.knowledge.access_resolver import resolve_knowledge_access
 from app.knowledge.registry import Transport
 from app.tools import ToolExecutor, ToolInput
@@ -109,8 +112,21 @@ class ConfluenceProvider:
 
     capability = ProviderCapability.DOCUMENTATION
 
-    def __init__(self, db: AsyncSession) -> None:
+    # ADR 0021's own worked example, wired up: a failure recorded within
+    # this window is still "the org's API-token-access toggle is broken
+    # right now" (the observed real-world case this exists for), not
+    # meaningfully informative about whether it's broken an hour from now
+    # — this is a same-session/same-outage signal, not a long-term
+    # reputation the way `provider_effectiveness`'s 30-day half-life is.
+    _RECENT_MCP_FAILURE_WINDOW = timedelta(hours=1)
+
+    def __init__(
+        self,
+        db: AsyncSession,
+        intelligence: InvestigationIntelligenceService | None = None,
+    ) -> None:
         self._db = db
+        self._intelligence = intelligence
 
     def can_resolve(self, reference: Reference) -> bool:
         return reference.type == ReferenceType.CONFLUENCE_PAGE
@@ -159,6 +175,63 @@ class ConfluenceProvider:
         # itself only matters for the rare case of a connection configured
         # for MCP directly with no REST-shaped base_url ever recorded.
         cloud_id = access.config.get("base_url") or server_url
+
+        rest_method = next((m for m in access.methods if m.transport == Transport.REST), None)
+
+        # Investigation Intelligence (ADR 0021's own worked example): if
+        # this exact Confluence connection recently failed outright (the
+        # org-level "API token access" toggle scenario this was written
+        # for — MCP unreachable regardless of which issue is being
+        # searched), try REST first instead of paying for a multi-turn MCP
+        # conversation already known to be likely to fail. Never a hard
+        # skip — only `provider="confluence"` is ever recorded (see
+        # `ConfluenceInvestigator`; MCP/REST aren't recorded as distinct
+        # providers), so this reads the same signal `provider_
+        # effectiveness` would, just answering "recently" instead of
+        # "generally". If REST also comes up empty, MCP still runs below —
+        # a skipped-once hint must never become a permanent block (the
+        # same "no single failure blacklists a provider" guarantee
+        # `repository_provider_preference`'s decay already gives the
+        # priority-boost heuristic).
+        prefetched_rest_attempted = False
+        prefetched_rest_text: str | None = None
+        prefetched_rest_evidence: list[Evidence] = []
+        if self._intelligence is not None and access.connection_id is not None and rest_method is not None:
+            recent_failure = await self._intelligence.recent_repeated_failure(
+                scope=InvestigationScope(
+                    scope_type="knowledge_connection", scope_id=access.connection_id
+                ),
+                provider="confluence",
+                capability="documentation",
+                within=self._RECENT_MCP_FAILURE_WINDOW,
+            )
+            if recent_failure is not None:
+                prefetched_rest_attempted = True
+                prefetched_rest_text, prefetched_rest_evidence = await search_confluence_rest(
+                    base_url=rest_method.fields.get("base_url", ""),
+                    email=rest_method.fields.get("email", ""),
+                    api_token=rest_method.fields.get("api_token", ""),
+                    jira_issue_key=jira_issue_key,
+                    task_description=task_description,
+                )
+                if prefetched_rest_text:
+                    logger.info(
+                        "context_pipeline_confluence_skipped_mcp_recent_failure issue_key=%s",
+                        jira_issue_key,
+                    )
+                    primary_evidence = prefetched_rest_evidence[-1].model_copy(
+                        update={"status": "success"}
+                    )
+                    return ResolvedArtifact(
+                        provider="confluence",
+                        capability=self.capability,
+                        reference=None,
+                        title="Confluence",
+                        text=redact_secrets(prefetched_rest_text),
+                        evidence=primary_evidence,
+                        raw={"extra_evidence": prefetched_rest_evidence[:-1]},
+                    )
+
         text, evidence_entries = await gather_confluence_context(
             mcp_server_url=server_url,
             mcp_auth_token=auth_token,
@@ -201,10 +274,14 @@ class ConfluenceProvider:
             # free-text search wouldn't be answering the same question by
             # retrying.
             if status == "unavailable":
-                rest_method = next(
-                    (m for m in access.methods if m.transport == Transport.REST), None
-                )
-                if rest_method is not None:
+                rest_attempted = prefetched_rest_attempted or rest_method is not None
+                if prefetched_rest_attempted:
+                    # Already tried REST above (the recent-MCP-failure
+                    # hint fired) — reuse that result, whatever it was,
+                    # rather than calling `search_confluence_rest` a
+                    # second time for the exact same issue key.
+                    rest_text, rest_evidence = prefetched_rest_text, prefetched_rest_evidence
+                elif rest_method is not None:
                     rest_text, rest_evidence = await search_confluence_rest(
                         base_url=rest_method.fields.get("base_url", ""),
                         email=rest_method.fields.get("email", ""),
@@ -212,6 +289,9 @@ class ConfluenceProvider:
                         jira_issue_key=jira_issue_key,
                         task_description=task_description,
                     )
+                else:
+                    rest_text, rest_evidence = None, []
+                if rest_attempted:
                     evidence_entries = [*evidence_entries, *rest_evidence]
                     if rest_text:
                         logger.info(

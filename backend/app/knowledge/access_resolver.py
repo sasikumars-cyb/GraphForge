@@ -111,6 +111,14 @@ class ResolvedKnowledgeAccess:
     capability: ProviderCapability
     methods: tuple[AccessMethod, ...]
     config: dict[str, Any]
+    # The `KnowledgeConnection.id` this access was resolved from — `None`
+    # when no enabled connection exists at all (`methods` is then also
+    # empty). Already loaded as part of the row this function reads
+    # anyway; exposed here rather than making a caller that needs the
+    # connection's own identity (e.g. Investigation Intelligence's
+    # `InvestigationScope`, ADR 0021 §2) run a second, duplicate query for
+    # something already in hand.
+    connection_id: str | None = None
 
     @property
     def available(self) -> bool:
@@ -224,9 +232,13 @@ async def resolve_knowledge_access(
                 source_type,
                 row.id,
             )
-            return ResolvedKnowledgeAccess(source_type, capability, (), row.config or {})
+            return ResolvedKnowledgeAccess(
+                source_type, capability, (), row.config or {}, connection_id=str(row.id)
+            )
 
     methods = derive_access_methods(
         source_type, row.transport, capability, row.config or {}, credentials
     )
-    return ResolvedKnowledgeAccess(source_type, capability, methods, row.config or {})
+    return ResolvedKnowledgeAccess(
+        source_type, capability, methods, row.config or {}, connection_id=str(row.id)
+    )
