@@ -27,8 +27,17 @@ from app.tools.implementations.jira_tool import extract_issue_key
 # Confluence reference exists in the text — actual retrieval is anchored on
 # the Jira issue (see confluence provider), since Atlassian's MCP server has
 # no free-text search, only graph traversal from a known entity.
+#
+# `[\w~-]` in the space segment, not just `[\w-]`: Atlassian personal spaces
+# (Settings -> Personal Space, created automatically for every user) are
+# always keyed "~<accountId>" — a leading tilde `\w` alone can never match,
+# so a URL like ".../wiki/spaces/~712020.../pages/123/Some+Page" silently
+# failed to match at all before this, not just matched the wrong group.
+# Confirmed against a real one: this was reference detection dropping a
+# personal-space Confluence link entirely, indistinguishable from "the text
+# contains no Confluence link" (KAN-46).
 _CONFLUENCE_URL_RE = re.compile(
-    r"https?://[\w.-]+\.atlassian\.net/wiki/(?:spaces/[\w-]+/pages/(\d+)|display/[\w-]+/[\w%-]+)"
+    r"https?://[\w.-]+\.atlassian\.net/wiki/(?:spaces/[\w~-]+/pages/(\d+)|display/[\w-]+/[\w%-]+)"
 )
 
 # "owner/repo" with no leading github.com and no trailing #<number> — the

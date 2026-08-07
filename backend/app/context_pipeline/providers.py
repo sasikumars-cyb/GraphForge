@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.agents._contract import Evidence
 from app.agents.planning.confluence_context import gather_confluence_context
+from app.agents.planning.confluence_rest_search import search_confluence_rest
 from app.agents.planning.tools import PlanningObservation, to_evidence
 from app.agents.prompt_utils import wrap_untrusted_content
 from app.agents.text_relevance import relevance, term_weights
@@ -36,6 +37,7 @@ from app.context_pipeline.models import (
 from app.core.redact import redact_secrets
 from app.graph.test_case_repository import ITestCaseGraphRepository
 from app.knowledge.access_resolver import resolve_knowledge_access
+from app.knowledge.registry import Transport
 from app.tools import ToolExecutor, ToolInput
 from app.tools.implementations.github_tool import GitHubTool
 from app.tools.implementations.google_drive_tool import GoogleDriveTool
@@ -185,6 +187,57 @@ class ConfluenceProvider:
             # "not_found".
             any_call_succeeded = any(e.status == "success" for e in evidence_entries)
             status = "not_found" if any_call_succeeded else "unavailable"
+
+            # MCP is unreachable (not just "searched and found nothing") —
+            # the same shape of failure JiraTool.execute() already
+            # survives by falling back to REST, which sits behind a
+            # different Atlassian API entirely (plain Confluence REST, not
+            # the MCP server) and so isn't affected by whatever blocked
+            # MCP (most commonly the org-level "API token access" toggle —
+            # see confluence_rest_search's module docstring). Only
+            # attempted here, not on "not_found": a "not_found" MCP result
+            # means the graph traversal genuinely ran and turned up
+            # nothing linked to the issue, which REST's unrelated
+            # free-text search wouldn't be answering the same question by
+            # retrying.
+            if status == "unavailable":
+                rest_method = next(
+                    (m for m in access.methods if m.transport == Transport.REST), None
+                )
+                if rest_method is not None:
+                    rest_text, rest_evidence = await search_confluence_rest(
+                        base_url=rest_method.fields.get("base_url", ""),
+                        email=rest_method.fields.get("email", ""),
+                        api_token=rest_method.fields.get("api_token", ""),
+                        jira_issue_key=jira_issue_key,
+                        task_description=task_description,
+                    )
+                    evidence_entries = [*evidence_entries, *rest_evidence]
+                    if rest_text:
+                        logger.info(
+                            "context_pipeline_confluence_enriched_via_rest_fallback "
+                            "issue_key=%s",
+                            jira_issue_key,
+                        )
+                        primary_evidence = rest_evidence[-1].model_copy(
+                            update={"status": "success"}
+                        )
+                        return ResolvedArtifact(
+                            provider="confluence",
+                            capability=self.capability,
+                            reference=None,
+                            title="Confluence",
+                            text=redact_secrets(rest_text),
+                            evidence=primary_evidence,
+                            raw={"extra_evidence": evidence_entries[:-1]},
+                        )
+                    # REST also came up empty/failed — MCP's own diagnosis
+                    # ("ask your org admin") stays the actionable summary
+                    # below; the message just stops implying nothing was
+                    # attempted beyond MCP.
+                    any_rest_call_succeeded = any(e.status == "success" for e in rest_evidence)
+                    status = "not_found" if any_rest_call_succeeded else status
+
             if status == "not_found":
                 summary = "No relevant Confluence content found."
             else:
