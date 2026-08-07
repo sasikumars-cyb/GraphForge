@@ -23,8 +23,14 @@ export function NodeDetailPanel({
 }: {
   node: GraphNode;
   onClose: () => void;
-  onExploreNeighbors: () => void;
-  isExploringNeighbors: boolean;
+  /** Omitted entirely (not just a no-op) hides the button — the
+   * Architecture lens's own "seed a fresh neighborhood from this node"
+   * drill-down doesn't make sense everywhere `NodeDetailPanel` is reused
+   * (e.g. Impact Check's blast radius already *is* a neighborhood; a
+   * button that looks actionable but does nothing on click would be
+   * worse than no button). */
+  onExploreNeighbors?: () => void;
+  isExploringNeighbors?: boolean;
 }) {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
@@ -74,14 +80,16 @@ export function NodeDetailPanel({
         </div>
       )}
 
-      <button
-        type="button"
-        onClick={onExploreNeighbors}
-        disabled={isExploringNeighbors}
-        className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
-      >
-        {isExploringNeighbors ? "Loading neighbors…" : "Explore neighbors"}
-      </button>
+      {onExploreNeighbors && (
+        <button
+          type="button"
+          onClick={onExploreNeighbors}
+          disabled={isExploringNeighbors}
+          className="rounded-md bg-info-solid px-3 py-1.5 text-xs font-semibold text-black hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
+        >
+          {isExploringNeighbors ? "Loading neighbors…" : "Explore neighbors"}
+        </button>
+      )}
 
       {properties.length > 0 && (
         <div>
