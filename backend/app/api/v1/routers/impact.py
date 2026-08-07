@@ -10,16 +10,19 @@ respond to clicking a different seed node in under a second.
 itself calls under the hood — see `ImpactAnalysisAgent.build_service_
 requests`) is called directly here instead.
 
-`direction` is intentionally not exposed as a request parameter — verified
-against the real code before writing this: `ImpactAnalysisService.
-compute_blast_radius` accepts a `direction: Literal["downstream",
-"upstream"]` argument, but `graph_traversal.traverse` (the only place that
-argument could act on the underlying query) never reads it —
-`get_neighborhood`'s own Cypher is unconditionally undirected
-(`-[:REL_TYPES*1..max_hops]-`, no arrow). Exposing a UI toggle that has no
-effect on the actual traversal would be worse than not exposing one at
-all; this is a real, pre-existing gap in `compute_blast_radius` itself,
-not something this endpoint works around or silently fixes.
+`direction` is intentionally not exposed as a request parameter here.
+`ImpactAnalysisService.compute_blast_radius` does now genuinely honor its
+own `direction: Literal["downstream", "upstream"]` argument — the gap this
+comment used to describe (`graph_traversal.traverse` silently dropping it,
+`get_neighborhood`'s Cypher being unconditionally undirected regardless of
+what was asked for) was fixed directly in `get_neighborhood` itself. The
+Impact lens's blast radius stays undirected on purpose, though: a change's
+blast radius is everything that could be affected by touching the seed,
+which includes both what it calls (downstream) and what calls it
+(upstream) — collapsing that to one direction would silently under-report
+risk, not just change the shape of the graph. (The Dependency lens is
+where a direction toggle belongs — see `GET /repositories/{id}/graph/
+nodes/{node_id}/neighbors`'s own `direction` param.)
 """
 
 from __future__ import annotations

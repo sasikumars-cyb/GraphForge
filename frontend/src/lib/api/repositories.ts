@@ -93,14 +93,22 @@ export function getRepositoryGraphTypes(
   return apiFetch<NodeTypeCounts>(`/repositories/${repositoryId}/graph/types`, { token, signal });
 }
 
+export type NeighborDirection = "any" | "outgoing" | "incoming";
+
 export interface GetNodeNeighborsParams {
   hops?: number;
   edgeTypes?: string[];
+  /** "any" (default, matches every existing caller's behavior unchanged)
+   * — "outgoing" follows only edges leaving this node (what it depends
+   * on), "incoming" only edges pointing at it (what depends on it). The
+   * Dependency lens's own direction toggle. */
+  direction?: NeighborDirection;
 }
 
 /** ADR 0023 — the induced subgraph within `hops` of one node (lazy
  * expand-on-click), not the whole repository's graph. Backs the
- * Architecture page's neighborhood drill-down. */
+ * Architecture page's neighborhood drill-down and the Dependency lens's
+ * expand-on-click tree. */
 export function getRepositoryGraphNodeNeighbors(
   token: string,
   repositoryId: string,
@@ -111,6 +119,7 @@ export function getRepositoryGraphNodeNeighbors(
   const searchParams = new URLSearchParams();
   if (params.hops !== undefined) searchParams.set("hops", String(params.hops));
   for (const type of params.edgeTypes ?? []) searchParams.append("edge_types", type);
+  if (params.direction !== undefined) searchParams.set("direction", params.direction);
   const qs = searchParams.toString();
   return apiFetch<Graph>(
     `/repositories/${repositoryId}/graph/nodes/${encodeURIComponent(nodeId)}/neighbors${qs ? `?${qs}` : ""}`,

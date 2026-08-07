@@ -1,42 +1,43 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Layers, Send, RotateCcw, History } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
+import { DependencyTreeExplorer } from "../components/dependency/DependencyTreeExplorer";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { useAgentRun } from "../hooks/useAgentRun";
 import { useAuth } from "../app/auth-context";
 import { listTrackedRepositories } from "../lib/api/github";
-import type { TrackedRepository } from "../types/github";
 
+/**
+ * The Dependency lens (ARCHITECTURE_EXPERIENCE_REDESIGN.md) — leads with
+ * the expandable dependency tree (`DependencyTreeExplorer`), the same
+ * "visualization first, LLM narration on demand" shape Impact Check
+ * established for the Impact lens. The `analyze_dependency_query` agent
+ * flow this page used to lead with (a ranked-list-only report) is kept,
+ * demoted to an explicit, on-demand "Detailed report" action — appropriate
+ * for "explain this in prose, with confidence per relationship," not for
+ * the primary five-second read.
+ */
 export function DependencyQueryPage() {
   const { token } = useAuth();
-  const [repositories, setRepositories] = useState<TrackedRepository[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState("");
-  const [loadingRepos, setLoadingRepos] = useState(true);
-  const [reposError, setReposError] = useState<string | null>(null);
   const { run, isSubmitting, error, submit, reset } = useAgentRun();
 
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    listTrackedRepositories(token)
-      .then((repos) => {
-        if (!cancelled) setRepositories(repos);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setReposError(err instanceof Error ? err.message : "Could not load repositories.");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingRepos(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+  const repositoriesQuery = useQuery({
+    queryKey: ["repositories"],
+    queryFn: ({ signal }) => listTrackedRepositories(token as string, signal),
+    enabled: token !== null,
+  });
+  const repositories = repositoriesQuery.data ?? [];
+  const selectedRepo = repositories.find((r) => r.id === selectedRepoId);
+
+  function selectRepository(id: string) {
+    setSelectedRepoId(id);
+    reset();
+  }
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -58,10 +59,10 @@ export function DependencyQueryPage() {
             <Layers className="h-5 w-5 text-cat-5-fg" aria-hidden="true" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold text-fg">Dependency Query</h1>
+            <h1 className="text-xl font-semibold text-fg">Dependency</h1>
             <p className="text-sm text-fg-muted">
-              What does this repository depend on, and what depends on it — with confidence per
-              relationship. Read-only.
+              What a repository depends on, and what depends on it — an expandable tree, not a
+              list to read.
             </p>
           </div>
         </div>
@@ -75,79 +76,71 @@ export function DependencyQueryPage() {
         </Link>
       </div>
 
-      {!hasResult && (
-        <Card>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div>
-              <label
-                htmlFor="dependency-query-repo"
-                className="block text-sm font-medium text-fg-secondary"
-              >
-                Repository
-              </label>
-              {reposError ? (
-                <p className="mt-2 text-xs text-danger-fg">{reposError}</p>
-              ) : (
-                <select
-                  id="dependency-query-repo"
-                  value={selectedRepoId}
-                  onChange={(e) => setSelectedRepoId(e.target.value)}
-                  disabled={isSubmitting || loadingRepos}
-                  className="mt-2 w-full rounded-lg border border-line bg-surface-raised px-4 py-3 text-sm text-fg disabled:opacity-50"
-                  aria-required="true"
-                >
-                  <option value="">
-                    {loadingRepos ? "Loading repositories…" : "Select a repository…"}
-                  </option>
-                  {repositories.map((repo) => (
-                    <option key={repo.id} value={repo.id}>
-                      {repo.full_name}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {!loadingRepos && !reposError && repositories.length === 0 && (
-                <p className="mt-1 text-xs text-fg-muted">
-                  No tracked repositories yet — add one under Repositories first.
-                </p>
-              )}
-            </div>
+      <Card>
+        <label htmlFor="dependency-repo" className="block text-sm font-medium text-fg-secondary">
+          Repository
+        </label>
+        <select
+          id="dependency-repo"
+          value={selectedRepoId}
+          onChange={(e) => selectRepository(e.target.value)}
+          disabled={repositoriesQuery.isPending}
+          className="mt-2 w-full rounded-lg border border-line bg-surface-raised px-4 py-3 text-sm text-fg disabled:opacity-50"
+          aria-required="true"
+        >
+          <option value="">
+            {repositoriesQuery.isPending ? "Loading repositories…" : "Select a repository…"}
+          </option>
+          {repositories.map((repo) => (
+            <option key={repo.id} value={repo.id}>
+              {repo.full_name}
+            </option>
+          ))}
+        </select>
+        {repositoriesQuery.isSuccess && repositories.length === 0 && (
+          <p className="mt-1 text-xs text-fg-muted">
+            No tracked repositories yet — add one under Repositories first.
+          </p>
+        )}
+      </Card>
 
-            <div className="flex items-center gap-3">
-              <button
-                type="submit"
-                disabled={isSubmitting || !selectedRepoId}
-                className="inline-flex items-center gap-2 rounded-lg bg-cat-5-solid px-4 py-2 text-sm font-medium text-cat-5-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label="Run dependency query"
-              >
-                <Send className="h-4 w-4" aria-hidden="true" />
-                {isSubmitting ? "Analyzing…" : "Run Dependency Query"}
-              </button>
-              {isSubmitting && (
-                <span className="text-xs text-fg-muted">This may take up to a minute.</span>
-              )}
-            </div>
+      {selectedRepo && (
+        <DependencyTreeExplorer
+          key={selectedRepo.id}
+          repositoryId={selectedRepo.id}
+          repositoryName={selectedRepo.full_name}
+        />
+      )}
+
+      {selectedRepoId && !hasResult && (
+        <Card
+          title="Detailed report"
+          description="A narrated summary — verified vs. candidate relationships, confidence per edge. Slower; generated on demand."
+        >
+          <form onSubmit={handleSubmit} className="flex items-center gap-3">
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="inline-flex items-center gap-2 rounded-lg bg-cat-5-solid px-4 py-2 text-sm font-medium text-cat-5-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Send className="h-4 w-4" aria-hidden="true" />
+              {isSubmitting ? "Analyzing…" : "Generate detailed report"}
+            </button>
+            {isSubmitting && (
+              <span className="text-xs text-fg-muted">This may take up to a minute.</span>
+            )}
           </form>
+          {run && !hasResult && (
+            <div className="mt-4">
+              <RunProgress status={run.status} error={run.error_message} />
+            </div>
+          )}
+          {error && (
+            <div className="mt-4 rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
+              {error}
+            </div>
+          )}
         </Card>
-      )}
-
-      {run && !hasResult && (
-        <Card>
-          <RunProgress status={run.status} error={run.error_message} />
-        </Card>
-      )}
-
-      {error && (
-        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
-          {error}
-          <button
-            type="button"
-            onClick={reset}
-            className="ml-3 text-danger-fg underline hover:text-danger-fg"
-          >
-            Try again
-          </button>
-        </div>
       )}
 
       {hasResult && <DependencyReportView run={run} onNewAnalysis={reset} />}
@@ -156,7 +149,8 @@ export function DependencyQueryPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Report sub-component
+// Detailed report — the LLM-narrated summary, demoted to supporting
+// content generated on demand (see the page's own docstring).
 // ---------------------------------------------------------------------------
 
 function ListSection({ title, items }: { title: string; items: string[] }) {
