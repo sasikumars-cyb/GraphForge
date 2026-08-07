@@ -115,9 +115,12 @@ class GraphHopBudgetRepository(IGraphRepository):
         *,
         limit: int | None = None,
         node_types: list[str] | None = None,
+        after: str | None = None,
     ) -> GraphPayload:
         self._consume(repository_id, "get_full_graph")
-        return await self._inner.get_full_graph(repository_id, limit=limit, node_types=node_types)
+        return await self._inner.get_full_graph(
+            repository_id, limit=limit, node_types=node_types, after=after
+        )
 
     async def get_nodes_by_label(self, repository_id: str, label: str) -> list[GraphNode]:
         self._consume(repository_id, "get_nodes_by_label")

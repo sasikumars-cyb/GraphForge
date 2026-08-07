@@ -62,6 +62,12 @@ class Repository(Base):
     last_indexed_language: Mapped[str | None] = mapped_column(String(32), nullable=True)
     last_indexed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
+    # ADR 0023 — repository grouping for the Architecture summary/domain
+    # view. Manual only: nothing in this codebase infers it. NULL means
+    # "ungrouped", surfaced by the summary endpoint as its own bucket
+    # rather than treated as an error or omitted.
+    domain: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

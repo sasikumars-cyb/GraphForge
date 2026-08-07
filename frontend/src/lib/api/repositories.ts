@@ -1,4 +1,5 @@
 import { apiFetch } from "./client";
+import type { NodeTypeCounts } from "../../types/architecture";
 import type { CrossRepositoryLink, Graph, GraphEdge, IndexingJob } from "../../types/graph";
 import type { PullRequest } from "../../types/pullRequest";
 import type { LocalRepositoryCreateRequest, TrackedRepository } from "../../types/github";
@@ -25,6 +26,9 @@ export interface GetRepositoryGraphParams {
   /** Restrict to nodes carrying at least one of these labels (e.g.
    * "Service", "KafkaTopic") — omit to include every type. */
   nodeTypes?: string[];
+  /** ADR 0023 — keyset cursor: the previous page's `next_cursor`, to
+   * fetch the following page. Omit for the first page. */
+  after?: string;
 }
 
 export function getRepositoryGraph(
@@ -36,6 +40,7 @@ export function getRepositoryGraph(
   const searchParams = new URLSearchParams();
   if (params.limit !== undefined) searchParams.set("limit", String(params.limit));
   for (const type of params.nodeTypes ?? []) searchParams.append("node_types", type);
+  if (params.after !== undefined) searchParams.set("after", params.after);
   const qs = searchParams.toString();
   return apiFetch<Graph>(`/repositories/${repositoryId}/graph${qs ? `?${qs}` : ""}`, {
     token,
@@ -75,6 +80,56 @@ export function getAllCrossRepositoryEdges(
   signal?: AbortSignal,
 ): Promise<GraphEdge[]> {
   return apiFetch<GraphEdge[]>(`/repositories/cross-repository-edges`, { token, signal });
+}
+
+/** ADR 0023 — real, untruncated per-label counts for one repository.
+ * Backs filter-chip options and their real counts, replacing deriving
+ * them client-side from a possibly-`limit`-truncated graph load. */
+export function getRepositoryGraphTypes(
+  token: string,
+  repositoryId: string,
+  signal?: AbortSignal,
+): Promise<NodeTypeCounts> {
+  return apiFetch<NodeTypeCounts>(`/repositories/${repositoryId}/graph/types`, { token, signal });
+}
+
+export interface GetNodeNeighborsParams {
+  hops?: number;
+  edgeTypes?: string[];
+}
+
+/** ADR 0023 — the induced subgraph within `hops` of one node (lazy
+ * expand-on-click), not the whole repository's graph. Backs the
+ * Architecture page's neighborhood drill-down. */
+export function getRepositoryGraphNodeNeighbors(
+  token: string,
+  repositoryId: string,
+  nodeId: string,
+  params: GetNodeNeighborsParams = {},
+  signal?: AbortSignal,
+): Promise<Graph> {
+  const searchParams = new URLSearchParams();
+  if (params.hops !== undefined) searchParams.set("hops", String(params.hops));
+  for (const type of params.edgeTypes ?? []) searchParams.append("edge_types", type);
+  const qs = searchParams.toString();
+  return apiFetch<Graph>(
+    `/repositories/${repositoryId}/graph/nodes/${encodeURIComponent(nodeId)}/neighbors${qs ? `?${qs}` : ""}`,
+    { token, signal },
+  );
+}
+
+/** ADR 0023 — sets/clears a repository's `domain` (repository grouping).
+ * `domain: null` clears it. */
+export function updateRepositoryDomain(
+  token: string,
+  repositoryId: string,
+  domain: string | null,
+): Promise<TrackedRepository> {
+  return apiFetch<TrackedRepository>(`/repositories/${repositoryId}`, {
+    method: "PATCH",
+    token,
+    body: { domain },
+  });
 }
 
 export function getRepositoryServices(token: string, repositoryId: string): Promise<Graph> {

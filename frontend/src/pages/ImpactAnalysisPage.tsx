@@ -1,53 +1,65 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
 import { Radar, Send, RotateCcw, History } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
+import { NodeDetailPanel } from "../components/architecture/NodeDetailPanel";
+import { BlastRadiusGraph } from "../components/impact/BlastRadiusGraph";
+import { ImpactedNodesTable } from "../components/impact/ImpactedNodesTable";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { useAgentRun } from "../hooks/useAgentRun";
 import { useAuth } from "../app/auth-context";
+import { getBlastRadius } from "../lib/api/impact";
 import { listTrackedRepositories } from "../lib/api/github";
-import type { TrackedRepository } from "../types/github";
+import type { GraphNode } from "../types/graph";
 
+const MAX_HOPS = 2;
+
+/**
+ * Impact Check — the Impact lens (ARCHITECTURE_EXPERIENCE_REDESIGN.md).
+ * Visualization-first: selecting a repository immediately renders its
+ * blast-radius graph (a fast, deterministic call — no LLM in the way of
+ * the 5-10-second read), with the impacted-components table and node
+ * detail panel as supporting evidence beside/beneath it. The LLM-narrated
+ * executive summary (what this page used to lead with) is still here, but
+ * demoted to an explicit, on-demand secondary action — appropriate for
+ * "explain this in prose," not for the primary experience.
+ */
 export function ImpactAnalysisPage() {
   const { token } = useAuth();
-  const [repositories, setRepositories] = useState<TrackedRepository[]>([]);
   const [selectedRepoId, setSelectedRepoId] = useState("");
-  const [loadingRepos, setLoadingRepos] = useState(true);
-  const [reposError, setReposError] = useState<string | null>(null);
-  const { run, isSubmitting, error, submit, reset } = useAgentRun();
+  const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
+  const { run, isSubmitting, error: reportError, submit, reset } = useAgentRun();
 
-  useEffect(() => {
-    if (!token) return;
-    let cancelled = false;
-    listTrackedRepositories(token)
-      .then((repos) => {
-        if (!cancelled) setRepositories(repos);
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setReposError(err instanceof Error ? err.message : "Could not load repositories.");
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingRepos(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [token]);
+  const repositoriesQuery = useQuery({
+    queryKey: ["repositories"],
+    queryFn: ({ signal }) => listTrackedRepositories(token as string, signal),
+    enabled: token !== null,
+  });
+  const repositories = repositoriesQuery.data ?? [];
 
-  const handleSubmit = (e: FormEvent) => {
+  const blastRadiusQuery = useQuery({
+    queryKey: ["blast-radius", selectedRepoId, MAX_HOPS],
+    queryFn: ({ signal }) =>
+      getBlastRadius(token as string, selectedRepoId, { maxHops: MAX_HOPS }, signal),
+    enabled: token !== null && selectedRepoId !== "",
+  });
+
+  function selectRepository(id: string) {
+    setSelectedRepoId(id);
+    setSelectedNode(null);
+    reset();
+  }
+
+  function handleGenerateReport(e: FormEvent) {
     e.preventDefault();
     if (!selectedRepoId) return;
-    submit({
-      subject_reference: `repo:${selectedRepoId}`,
-      goal: "analyze_impact_analysis",
-    });
-  };
+    submit({ subject_reference: `repo:${selectedRepoId}`, goal: "analyze_impact_analysis" });
+  }
 
-  const hasResult =
+  const hasReport =
     run && (run.status === "completed" || run.status === "partial" || run.status === "failed");
 
   return (
@@ -58,10 +70,10 @@ export function ImpactAnalysisPage() {
             <Radar className="h-5 w-5 text-cat-6-fg" aria-hidden="true" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold text-fg">Impact Analysis</h1>
+            <h1 className="text-xl font-semibold text-fg">Impact Check</h1>
             <p className="text-sm text-fg-muted">
-              Compute a repository&apos;s blast radius — which repositories, APIs, databases, and
-              queues it impacts, and how confident each relationship is. Read-only.
+              A repository&apos;s blast radius, by hop distance from its own root — how directly
+              (or distantly) a change ripples outward.
             </p>
           </div>
         </div>
@@ -75,88 +87,115 @@ export function ImpactAnalysisPage() {
         </Link>
       </div>
 
-      {!hasResult && (
-        <Card>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            <div>
-              <label
-                htmlFor="impact-analysis-repo"
-                className="block text-sm font-medium text-fg-secondary"
-              >
-                Repository
-              </label>
-              {reposError ? (
-                <p className="mt-2 text-xs text-danger-fg">{reposError}</p>
-              ) : (
-                <select
-                  id="impact-analysis-repo"
-                  value={selectedRepoId}
-                  onChange={(e) => setSelectedRepoId(e.target.value)}
-                  disabled={isSubmitting || loadingRepos}
-                  className="mt-2 w-full rounded-lg border border-line bg-surface-raised px-4 py-3 text-sm text-fg disabled:opacity-50"
-                  aria-required="true"
-                >
-                  <option value="">
-                    {loadingRepos ? "Loading repositories…" : "Select a repository…"}
-                  </option>
-                  {repositories.map((repo) => (
-                    <option key={repo.id} value={repo.id}>
-                      {repo.full_name}
-                    </option>
-                  ))}
-                </select>
-              )}
-              {!loadingRepos && !reposError && repositories.length === 0 && (
-                <p className="mt-1 text-xs text-fg-muted">
-                  No tracked repositories yet — add one under Repositories first.
-                </p>
-              )}
-            </div>
+      <Card>
+        <label htmlFor="impact-repo" className="block text-sm font-medium text-fg-secondary">
+          Repository
+        </label>
+        <select
+          id="impact-repo"
+          value={selectedRepoId}
+          onChange={(e) => selectRepository(e.target.value)}
+          disabled={repositoriesQuery.isPending}
+          className="mt-2 w-full rounded-lg border border-line bg-surface-raised px-4 py-3 text-sm text-fg disabled:opacity-50"
+        >
+          <option value="">
+            {repositoriesQuery.isPending ? "Loading repositories…" : "Select a repository…"}
+          </option>
+          {repositories.map((repo) => (
+            <option key={repo.id} value={repo.id}>
+              {repo.full_name}
+            </option>
+          ))}
+        </select>
+        {repositoriesQuery.isSuccess && repositories.length === 0 && (
+          <p className="mt-1 text-xs text-fg-muted">
+            No tracked repositories yet — add one under Repositories first.
+          </p>
+        )}
+      </Card>
 
-            <div className="flex items-center gap-3">
-              <button
-                type="submit"
-                disabled={isSubmitting || !selectedRepoId}
-                className="inline-flex items-center gap-2 rounded-lg bg-cat-6-solid px-4 py-2 text-sm font-medium text-cat-6-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-                aria-label="Run impact analysis"
-              >
-                <Send className="h-4 w-4" aria-hidden="true" />
-                {isSubmitting ? "Analyzing…" : "Run Impact Analysis"}
-              </button>
-              {isSubmitting && (
-                <span className="text-xs text-fg-muted">This may take up to a minute.</span>
-              )}
+      {selectedRepoId && (
+        <Card
+          title="Blast radius"
+          description={`Within ${MAX_HOPS} hops of the repository's own root node.`}
+        >
+          {blastRadiusQuery.isPending ? (
+            <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading blast radius">
+              <div className="h-[clamp(24rem,70vh,45rem)] animate-pulse rounded-xl bg-surface" />
             </div>
+          ) : blastRadiusQuery.isError ? (
+            <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
+              Failed to compute the blast radius.
+            </div>
+          ) : blastRadiusQuery.data.graph.nodes.length === 0 ? (
+            <p className="py-8 text-center text-sm text-fg-muted">
+              This repository hasn&apos;t been indexed yet, or has no graph to compute impact from.
+            </p>
+          ) : (
+            <div className="flex flex-col gap-4">
+              <div className="flex overflow-hidden rounded-xl border border-line">
+                <div className="min-w-0 flex-1">
+                  <BlastRadiusGraph
+                    graph={blastRadiusQuery.data.graph}
+                    seedNodeId={blastRadiusQuery.data.seed_node_id}
+                    onNodeSelect={setSelectedNode}
+                    selectedNodeId={selectedNode?.id ?? null}
+                  />
+                </div>
+                {selectedNode && (
+                  <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+                )}
+              </div>
+              <ImpactedNodesTable
+                nodes={blastRadiusQuery.data.graph.nodes}
+                seedNodeId={blastRadiusQuery.data.seed_node_id}
+                selectedNodeId={selectedNode?.id ?? null}
+                onSelect={setSelectedNode}
+              />
+            </div>
+          )}
+        </Card>
+      )}
+
+      {selectedRepoId && !hasReport && (
+        <Card
+          title="Detailed report"
+          description="A narrated summary — risk assessment, confidence per relationship. Slower; generated on demand."
+        >
+          <form onSubmit={handleGenerateReport} className="flex items-center gap-3">
+            <button
+              type="submit"
+              disabled={isSubmitting}
+              className="inline-flex items-center gap-2 rounded-lg bg-cat-6-solid px-4 py-2 text-sm font-medium text-cat-6-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Send className="h-4 w-4" aria-hidden="true" />
+              {isSubmitting ? "Generating…" : "Generate detailed report"}
+            </button>
+            {isSubmitting && (
+              <span className="text-xs text-fg-muted">This may take up to a minute.</span>
+            )}
           </form>
+          {run && !hasReport && (
+            <div className="mt-4">
+              <RunProgress status={run.status} error={run.error_message} />
+            </div>
+          )}
+          {reportError && (
+            <div className="mt-4 rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
+              {reportError}
+            </div>
+          )}
         </Card>
       )}
 
-      {run && !hasResult && (
-        <Card>
-          <RunProgress status={run.status} error={run.error_message} />
-        </Card>
-      )}
-
-      {error && (
-        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
-          {error}
-          <button
-            type="button"
-            onClick={reset}
-            className="ml-3 text-danger-fg underline hover:text-danger-fg"
-          >
-            Try again
-          </button>
-        </div>
-      )}
-
-      {hasResult && <ImpactReportView run={run} onNewAnalysis={reset} />}
+      {hasReport && <ImpactReportView run={run} onNewReport={reset} />}
     </div>
   );
 }
 
 // ---------------------------------------------------------------------------
-// Report sub-component
+// Detailed report — the LLM-narrated executive summary, demoted to
+// supporting content generated on demand (see the page's own docstring).
 // ---------------------------------------------------------------------------
 
 function ListSection({ title, items }: { title: string; items: string[] }) {
@@ -176,10 +215,10 @@ function ListSection({ title, items }: { title: string; items: string[] }) {
 
 function ImpactReportView({
   run,
-  onNewAnalysis,
+  onNewReport,
 }: {
   run: NonNullable<ReturnType<typeof useAgentRun>["run"]>;
-  onNewAnalysis: () => void;
+  onNewReport: () => void;
 }) {
   const step = run.steps[0];
   const result = step?.result as Record<string, unknown> | undefined;
@@ -204,11 +243,11 @@ function ImpactReportView({
         <RunStatusBadge status={run.status} />
         <button
           type="button"
-          onClick={onNewAnalysis}
+          onClick={onNewReport}
           className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-raised hover:text-fg-secondary"
         >
           <RotateCcw className="h-3.5 w-3.5" aria-hidden="true" />
-          New Analysis
+          New Report
         </button>
       </div>
 

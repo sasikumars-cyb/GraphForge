@@ -80,7 +80,18 @@ class RepositoryResponse(BaseModel):
     private: bool
     default_branch: str
     html_url: str
+    # ADR 0023 — manual grouping only; None means ungrouped.
+    domain: str | None = None
     created_at: datetime
+
+
+class RepositoryUpdateRequest(BaseModel):
+    """Body for PATCH /repositories/{id} — currently the only mutable
+    field is `domain` (ADR 0023's repository grouping). An empty string is
+    rejected by the router rather than silently treated as null — a
+    caller clearing the field sends `null` explicitly, not `""`."""
+
+    domain: str | None = None
 
 
 class LocalRepositoryCreateRequest(BaseModel):

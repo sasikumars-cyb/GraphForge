@@ -27,6 +27,10 @@ export interface Graph {
   // codebase stays valid without being touched.
   truncated?: boolean;
   total_node_count?: number | null;
+  // ADR 0023 — pass as the `after` param to fetch the next page when
+  // `truncated` is true. `null`/absent on the last page or an unbounded
+  // response.
+  next_cursor?: string | null;
 }
 
 /** Mirrors backend/app/schemas/indexing.py's `CrossRepositoryLinkResponse`. */

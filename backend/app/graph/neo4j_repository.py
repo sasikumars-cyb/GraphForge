@@ -152,6 +152,7 @@ class Neo4jGraphRepository(IGraphRepository):
         *,
         limit: int | None = None,
         node_types: list[str] | None = None,
+        after: str | None = None,
     ) -> GraphPayload:
         """The `OPTIONAL MATCH`'s target used to require `m.repository_id =
         $repository_id`, which structurally excludes every cross-repository
@@ -175,21 +176,29 @@ class Neo4jGraphRepository(IGraphRepository):
         set — the same shape `get_neighborhood` below already uses, so a
         repository with a huge edge fan-out can never inflate the
         node-selection query, and an excluded type is never read off disk.
-        `limit=None, node_types=None` (the default) is the original,
-        unbounded query, byte-for-byte — every existing caller that passes
-        neither keeps today's exact behavior.
+        `limit=None, node_types=None, after=None` (the default) is the
+        original, unbounded query, byte-for-byte — every existing caller
+        that passes none of the three keeps today's exact behavior.
+
+        `after` (ADR 0023) — a real keyset cursor, not an `OFFSET`: the
+        last node `id` from a previous page, since the bounded query is
+        already `ORDER BY n.id`. Supplying `after` alone (no explicit
+        `limit`/`node_types`) still switches to the bounded path — a
+        cursor has no meaning against the unbounded query, which returns
+        everything in one shot.
         """
         if node_types is not None:
             unknown = set(node_types) - _ALLOWED_LABELS
             if unknown:
                 raise ValueError(f"Unknown node type(s): {sorted(unknown)}")
 
-        if limit is None and node_types is None:
+        if limit is None and node_types is None and after is None:
             return await self._get_full_graph_unbounded(repository_id)
         return await self._get_full_graph_bounded(
             repository_id,
             limit=min(limit, _MAX_FULL_GRAPH_LIMIT) if limit is not None else _MAX_FULL_GRAPH_LIMIT,
             node_types=node_types,
+            after=after,
         )
 
     async def _get_full_graph_unbounded(self, repository_id: str) -> GraphPayload:
@@ -228,38 +237,60 @@ class Neo4jGraphRepository(IGraphRepository):
         return GraphPayload(nodes=list(nodes_by_id.values()), edges=edges)
 
     async def _get_full_graph_bounded(
-        self, repository_id: str, *, limit: int, node_types: list[str] | None
+        self,
+        repository_id: str,
+        *,
+        limit: int,
+        node_types: list[str] | None,
+        after: str | None = None,
     ) -> GraphPayload:
         label_filter = "AND any(l IN labels(n) WHERE l IN $node_types)" if node_types else ""
+        # `n.id > $after` relies on the same `ORDER BY n.id` every page
+        # already uses — a real keyset cursor.
+        cursor_filter = "AND n.id > $after" if after else ""
 
         async with self._driver.session() as session:
             # Pass 1: the node set itself — capped and (optionally)
-            # label-filtered inside Cypher, not after fetching everything.
-            # Ordered by id for a deterministic, stable-across-requests
-            # selection (not true keyset pagination, but consistent enough
-            # that re-running the same request returns the same page).
+            # label-/cursor-filtered inside Cypher, not after fetching
+            # everything. `LIMIT $limit + 1` is a peek-ahead: whether a
+            # page after this one exists depends on whether anything is
+            # left past `after` the cursor filter (a repository-wide
+            # `count()` can't answer that once `after` has already
+            # skipped some rows — it would still report the same grand
+            # total on the last page as on the first), so the cheapest
+            # correct check is fetching one extra row and seeing if it
+            # showed up, then dropping it before returning.
             node_result = await session.run(
                 f"""
                 MATCH (n {{repository_id: $repository_id}})
-                WHERE true {label_filter}
+                WHERE true {label_filter} {cursor_filter}
                 RETURN n
                 ORDER BY n.id
-                LIMIT $limit
+                LIMIT $peek_limit
                 """,
                 repository_id=repository_id,
                 node_types=node_types,
-                limit=limit,
+                after=after,
+                peek_limit=limit + 1,
             )
             node_records = [record async for record in node_result]
+            has_more = len(node_records) > limit
+            if has_more:
+                node_records = node_records[:limit]
             nodes_by_id = {rec["n"]["id"]: node_from_value(rec["n"]) for rec in node_records}
             node_ids = list(nodes_by_id.keys())
+            next_cursor = node_ids[-1] if has_more and node_ids else None
 
-            # Only pay for a count() when the node query actually filled the
-            # page — fewer results than `limit` already proves nothing was
-            # cut off, no second query needed to know that.
-            truncated = False
+            # `total_node_count` is the true repository-wide total for this
+            # `node_types` filter (unaffected by `after`) — a stable
+            # denominator a frontend can show as "page N of ~total"
+            # without it shrinking as the cursor advances. Only fetched
+            # when there's genuinely more to report on (`has_more`); a
+            # page that wasn't cut off has already proven its own count
+            # is the total, no second query needed.
+            truncated = has_more
             total_node_count = len(node_ids)
-            if len(node_ids) == limit:
+            if has_more:
                 count_result = await session.run(
                     f"""
                     MATCH (n {{repository_id: $repository_id}})
@@ -271,10 +302,11 @@ class Neo4jGraphRepository(IGraphRepository):
                 )
                 count_record = await count_result.single()
                 total_node_count = int(count_record["total"]) if count_record else len(node_ids)
-                truncated = total_node_count > len(node_ids)
 
             if not node_ids:
-                return GraphPayload(truncated=truncated, total_node_count=total_node_count)
+                return GraphPayload(
+                    truncated=truncated, total_node_count=total_node_count, next_cursor=next_cursor
+                )
 
             # Pass 2: edges among only the selected node set — mirrors
             # `get_neighborhood`'s own two-pass shape below. An edge to a
@@ -319,6 +351,7 @@ class Neo4jGraphRepository(IGraphRepository):
             edges=edges,
             truncated=truncated,
             total_node_count=total_node_count,
+            next_cursor=next_cursor,
         )
 
     async def get_kafka_topic_edges(self, repository_id: str) -> list[GraphEdge]:
@@ -356,6 +389,61 @@ class Neo4jGraphRepository(IGraphRepository):
             records = [record async for record in result]
 
         return [node_from_value(record["n"]) for record in records]
+
+    async def get_type_counts(self, repository_id: str) -> dict[str, int]:
+        """ADR 0023 — real, server-side node-type counts for one
+        repository: every label present and its true count, never
+        truncated. Replaces deriving filter-chip options client-side from
+        a possibly-`limit`-truncated `get_full_graph` load (the exact gap
+        the earlier UX audit flagged), at the cost of one aggregate query
+        instead of zero — uses the existing `graph_node_repository_id`
+        index for its `WHERE`, so this stays cheap even on a large
+        repository.
+
+        The base `GraphNode` label is excluded — every node carries it,
+        so it's never a meaningful filter option, only a count offset."""
+        async with self._driver.session() as session:
+            result = await session.run(
+                f"""
+                MATCH (n:`{_BASE_LABEL}` {{repository_id: $repository_id}})
+                UNWIND [l IN labels(n) WHERE l <> '{_BASE_LABEL}'] AS label
+                RETURN label, count(*) AS count
+                """,
+                repository_id=repository_id,
+            )
+            records = [record async for record in result]
+        return {record["label"]: int(record["count"]) for record in records}
+
+    async def get_type_counts_for_repositories(
+        self, repository_ids: list[str]
+    ) -> dict[str, dict[str, int]]:
+        """The same per-label counts as `get_type_counts`, for every
+        repository in `repository_ids` at once — one Neo4j round trip
+        instead of N, backing `GET /architecture/summary`'s per-repository
+        `node_counts_by_label`. A `repository_id` with no nodes at all
+        (never indexed, or indexed to nothing) is simply absent from the
+        returned dict rather than present with an empty inner dict — the
+        caller distinguishes "never indexed" from "indexed" via the
+        Postgres `IndexingJob` side of the summary, not from this."""
+        if not repository_ids:
+            return {}
+        async with self._driver.session() as session:
+            result = await session.run(
+                f"""
+                MATCH (n:`{_BASE_LABEL}`)
+                WHERE n.repository_id IN $repository_ids
+                UNWIND [l IN labels(n) WHERE l <> '{_BASE_LABEL}'] AS label
+                RETURN n.repository_id AS repository_id, label, count(*) AS count
+                """,
+                repository_ids=repository_ids,
+            )
+            records = [record async for record in result]
+
+        counts_by_repository: dict[str, dict[str, int]] = {}
+        for record in records:
+            repo_counts = counts_by_repository.setdefault(record["repository_id"], {})
+            repo_counts[record["label"]] = int(record["count"])
+        return counts_by_repository
 
     async def has_graph(self, repository_id: str) -> bool:
         async with self._driver.session() as session:
