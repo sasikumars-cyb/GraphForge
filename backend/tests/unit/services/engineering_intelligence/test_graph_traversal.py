@@ -4,6 +4,8 @@ stay pure against in-memory `GraphPayload`s."""
 
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 
 from app.graph.interfaces import IGraphRepository
@@ -16,7 +18,7 @@ pytestmark = pytest.mark.asyncio
 class _FakeGraphRepository(IGraphRepository):
     def __init__(self, neighborhood: GraphPayload) -> None:
         self._neighborhood = neighborhood
-        self.get_neighborhood_calls: list[tuple[str, list[str], list[str], int]] = []
+        self.get_neighborhood_calls: list[tuple[str, list[str], list[str], int, str]] = []
 
     async def replace_repository_graph(self, repository_id: str, graph: GraphPayload) -> None:
         raise NotImplementedError
@@ -52,8 +54,12 @@ class _FakeGraphRepository(IGraphRepository):
         seed_node_ids: list[str],
         edge_types: list[str],
         max_hops: int,
+        *,
+        direction: Literal["any", "outgoing", "incoming"] = "any",
     ) -> GraphPayload:
-        self.get_neighborhood_calls.append((repository_id, seed_node_ids, edge_types, max_hops))
+        self.get_neighborhood_calls.append(
+            (repository_id, seed_node_ids, edge_types, max_hops, direction)
+        )
         return self._neighborhood
 
 
@@ -105,7 +111,25 @@ async def test_traverse_passes_arguments_through_unchanged() -> None:
         max_hops=3,
     )
 
-    assert fake.get_neighborhood_calls == [("repo-1", ["seed"], ["CALLS_SERVICE"], 3)]
+    assert fake.get_neighborhood_calls == [("repo-1", ["seed"], ["CALLS_SERVICE"], 3, "any")]
+
+
+async def test_traverse_forwards_a_real_direction_not_just_the_default() -> None:
+    """Regression test for the bug this module's own docstring used to
+    misdescribe: `direction` must reach `get_neighborhood`, not be
+    silently dropped."""
+    fake = _FakeGraphRepository(GraphPayload())
+
+    await traverse(
+        fake,
+        repository_id="repo-1",
+        seed_node_ids=["seed"],
+        edge_types=["CALLS_SERVICE"],
+        max_hops=3,
+        direction="outgoing",
+    )
+
+    assert fake.get_neighborhood_calls == [("repo-1", ["seed"], ["CALLS_SERVICE"], 3, "outgoing")]
 
 
 async def test_traverse_short_circuits_on_empty_seeds_without_querying() -> None:

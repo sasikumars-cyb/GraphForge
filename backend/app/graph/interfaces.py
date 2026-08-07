@@ -8,6 +8,7 @@ here, no change to the indexer or the API routers.
 """
 
 from abc import ABC, abstractmethod
+from typing import Literal
 
 from app.graph.models import GraphEdge, GraphNode, GraphPayload
 
@@ -131,9 +132,19 @@ class IGraphRepository(ABC):
         seed_node_ids: list[str],
         edge_types: list[str],
         max_hops: int,
+        *,
+        direction: Literal["any", "outgoing", "incoming"] = "any",
     ) -> GraphPayload:
         """The induced subgraph within `max_hops` of `seed_node_ids`,
-        traversing only `edge_types` (either direction).
+        traversing only `edge_types`.
+
+        `direction="any"` (the default — every existing caller that omits
+        it keeps this exact behavior) traverses either direction: a caller
+        of X is exactly as relevant to X's neighborhood as something X
+        calls. `"outgoing"`/`"incoming"` restrict to one direction for a
+        caller that specifically needs it — e.g. "what does X depend on"
+        (outgoing) vs. "what depends on X" (incoming) are genuinely
+        different questions a single undirected walk can't answer.
 
         This is the hop-bounded traversal primitive `get_full_graph` is
         not: cost scales with the size of the neighborhood actually

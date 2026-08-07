@@ -119,7 +119,9 @@ async def test_get_neighborhood_counts_as_a_single_call_regardless_of_max_hops()
     await repo.get_neighborhood("repo-1", ["seed-1"], ["CALLS"], max_hops=5)
 
     assert repo.hops_used("repo-1") == 1
-    inner.get_neighborhood.assert_called_once_with("repo-1", ["seed-1"], ["CALLS"], 5)
+    inner.get_neighborhood.assert_called_once_with(
+        "repo-1", ["seed-1"], ["CALLS"], 5, direction="any"
+    )
 
 
 @pytest.mark.asyncio

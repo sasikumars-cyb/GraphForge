@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from typing import Literal
 
 from app.core.exceptions import AppError
 from app.graph.interfaces import IGraphRepository
@@ -154,6 +155,8 @@ class GraphHopBudgetRepository(IGraphRepository):
         seed_node_ids: list[str],
         edge_types: list[str],
         max_hops: int,
+        *,
+        direction: Literal["any", "outgoing", "incoming"] = "any",
     ) -> GraphPayload:
         # Counts as a single call regardless of `max_hops` — the whole
         # point of this primitive (see its own docstring on
@@ -165,7 +168,7 @@ class GraphHopBudgetRepository(IGraphRepository):
         # is available.
         self._consume(repository_id, "get_neighborhood")
         return await self._inner.get_neighborhood(
-            repository_id, seed_node_ids, edge_types, max_hops
+            repository_id, seed_node_ids, edge_types, max_hops, direction=direction
         )
 
 

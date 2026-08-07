@@ -8,7 +8,7 @@ never from request input.
 """
 
 from itertools import groupby
-from typing import Any
+from typing import Any, Literal
 
 from neo4j import AsyncDriver
 
@@ -508,6 +508,8 @@ class Neo4jGraphRepository(IGraphRepository):
         seed_node_ids: list[str],
         edge_types: list[str],
         max_hops: int,
+        *,
+        direction: Literal["any", "outgoing", "incoming"] = "any",
     ) -> GraphPayload:
         if not seed_node_ids or not edge_types:
             return GraphPayload()
@@ -516,13 +518,40 @@ class Neo4jGraphRepository(IGraphRepository):
                 f"max_hops must be an integer in [1, {_MAX_NEIGHBORHOOD_HOPS}], got {max_hops!r}."
             )
         rel_pattern = "|".join(f"`{validate_rel_type(t)}`" for t in dict.fromkeys(edge_types))
+        # `direction="any"` (the default) is the original, undirected
+        # pattern, byte-for-byte — every existing caller that doesn't pass
+        # `direction` keeps today's exact behavior (see the docstring
+        # below this arrow-selection for why undirected was the original,
+        # deliberate choice, not an oversight). "outgoing"/"incoming" add
+        # a real directed traversal for callers that need one — the
+        # Dependency lens's own "depends on" vs. "depended on by" is
+        # exactly two different directions over the same edge types, which
+        # nothing before this parameter existed could actually express:
+        # `ImpactAnalysisService.compute_blast_radius`'s own `direction`
+        # argument was silently inert until this parameter existed for it
+        # to forward to (found by reading `graph_traversal.traverse`'s
+        # real body, not assumed from its docstring's claim).
+        # Cypher's directed-pattern syntax puts the arrowhead on one side
+        # only: `-[...]->`  (outgoing) or `<-[...]-` (incoming); `-[...]-`
+        # (any) has none. Building the three literal forms explicitly
+        # rather than string-composing the arrow avoids a subtly wrong
+        # pattern for the "incoming" case (arrowhead belongs on the left).
+        pattern = {
+            "any": f"-[:{rel_pattern}*1..{max_hops}]-",
+            "outgoing": f"-[:{rel_pattern}*1..{max_hops}]->",
+            "incoming": f"<-[:{rel_pattern}*1..{max_hops}]-",
+        }[direction]
 
         async with self._driver.session() as session:
             # Pass 1: every node within max_hops of any seed, via the
-            # allowed edge types, either direction — undirected traversal
-            # is deliberate here (a caller of X is exactly as relevant to
-            # X's neighborhood as something X calls; direction is
-            # preserved per-edge in pass 2 below for anyone who needs it).
+            # allowed edge types. `direction="any"` traverses either
+            # direction — deliberate for the general "neighborhood"
+            # abstraction (a caller of X is exactly as relevant to X's
+            # neighborhood as something X calls; direction is preserved
+            # per-edge in pass 2 below for anyone who needs it) —
+            # `"outgoing"`/`"incoming"` restrict to one direction for a
+            # caller that specifically needs it (e.g. Dependency's
+            # "depends on" vs. "depended on by").
             # `hop_distance` is the minimum over every seed and every path,
             # so a node reachable both at 1 hop from one seed and 3 hops
             # from another reports 1.
@@ -542,7 +571,7 @@ class Neo4jGraphRepository(IGraphRepository):
                 f"""
                 MATCH (a:`{_BASE_LABEL}` {{repository_id: $repository_id}})
                 WHERE a.id IN $seed_ids
-                MATCH p = (a)-[:{rel_pattern}*1..{max_hops}]-(b:`{_BASE_LABEL}`)
+                MATCH p = (a){pattern}(b:`{_BASE_LABEL}`)
                 WHERE NOT b.id IN $seed_ids
                 WITH b, min(length(p)) AS hop_distance
                 RETURN b, hop_distance

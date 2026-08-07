@@ -175,3 +175,88 @@ async def test_multiple_seeds_take_minimum_hop_distance(
     by_id = {n.id: n for n in result.nodes}
     # C is 1 hop from D (a seed) even though it's 2 hops from A.
     assert by_id[f"{repository_id}:C"].properties["hop_distance"] == 1
+
+
+async def test_direction_any_is_the_default_and_matches_omitting_it(
+    repo: Neo4jGraphRepository, repository_id: str
+) -> None:
+    # Regression guard for the new `direction` parameter: not passing it
+    # at all must behave identically to passing "any" explicitly — no
+    # existing caller's behavior may change.
+    await repo.replace_repository_graph(repository_id, _chain_graph(repository_id))
+
+    implicit = await repo.get_neighborhood(
+        repository_id, seed_node_ids=[f"{repository_id}:C"], edge_types=["CALLS"], max_hops=1
+    )
+    explicit = await repo.get_neighborhood(
+        repository_id,
+        seed_node_ids=[f"{repository_id}:C"],
+        edge_types=["CALLS"],
+        max_hops=1,
+        direction="any",
+    )
+
+    assert {n.id for n in implicit.nodes} == {n.id for n in explicit.nodes} == {
+        f"{repository_id}:B",
+        f"{repository_id}:C",
+        f"{repository_id}:D",
+    }
+
+
+async def test_direction_outgoing_follows_only_forward_edges(
+    repo: Neo4jGraphRepository, repository_id: str
+) -> None:
+    # Seeded from C in A->B->C->D->E: "outgoing" must reach D and E (what
+    # C calls, transitively) but never B or A (what calls C).
+    await repo.replace_repository_graph(repository_id, _chain_graph(repository_id))
+
+    result = await repo.get_neighborhood(
+        repository_id,
+        seed_node_ids=[f"{repository_id}:C"],
+        edge_types=["CALLS"],
+        max_hops=2,
+        direction="outgoing",
+    )
+
+    node_ids = {n.id for n in result.nodes}
+    assert node_ids == {f"{repository_id}:C", f"{repository_id}:D", f"{repository_id}:E"}
+
+
+async def test_direction_incoming_follows_only_backward_edges(
+    repo: Neo4jGraphRepository, repository_id: str
+) -> None:
+    # Same seed, opposite direction: "incoming" must reach A and B (what
+    # calls C, transitively) but never D or E (what C calls).
+    await repo.replace_repository_graph(repository_id, _chain_graph(repository_id))
+
+    result = await repo.get_neighborhood(
+        repository_id,
+        seed_node_ids=[f"{repository_id}:C"],
+        edge_types=["CALLS"],
+        max_hops=2,
+        direction="incoming",
+    )
+
+    node_ids = {n.id for n in result.nodes}
+    assert node_ids == {f"{repository_id}:C", f"{repository_id}:B", f"{repository_id}:A"}
+
+
+async def test_direction_outgoing_reports_correct_hop_distance(
+    repo: Neo4jGraphRepository, repository_id: str
+) -> None:
+    await repo.replace_repository_graph(repository_id, _chain_graph(repository_id))
+
+    result = await repo.get_neighborhood(
+        repository_id,
+        seed_node_ids=[f"{repository_id}:A"],
+        edge_types=["CALLS"],
+        max_hops=3,
+        direction="outgoing",
+    )
+
+    by_id = {n.id: n for n in result.nodes}
+    assert by_id[f"{repository_id}:A"].properties["hop_distance"] == 0
+    assert by_id[f"{repository_id}:B"].properties["hop_distance"] == 1
+    assert by_id[f"{repository_id}:C"].properties["hop_distance"] == 2
+    assert by_id[f"{repository_id}:D"].properties["hop_distance"] == 3
+    assert f"{repository_id}:E" not in by_id
