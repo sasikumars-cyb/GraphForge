@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search } from "lucide-react";
+import { Search, X } from "lucide-react";
 import { Card } from "../Card";
 import { EmptyState, SampleGraph } from "../EmptyState";
 import { DependencyGraph } from "../graph/DependencyGraph";
@@ -194,8 +194,11 @@ export function RepositoryGraphExplorer({
       }
     >
       {isLoading ? (
-        <div className="flex min-h-48 items-center justify-center text-sm text-fg-muted">
-          Loading graph…
+        // Matches MetricsPage's/the landing page's own skeleton convention
+        // rather than plain "Loading…" text.
+        <div className="flex flex-col gap-3" aria-busy="true" aria-label="Loading graph">
+          <div className="h-8 w-64 animate-pulse rounded-md bg-surface-raised" />
+          <div className="h-[clamp(20rem,70vh,45rem)] animate-pulse rounded-xl bg-surface" />
         </div>
       ) : !graph || graph.nodes.length === 0 ? (
         <EmptyState
@@ -256,10 +259,26 @@ export function RepositoryGraphExplorer({
                 type="text"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Escape" && query) {
+                    e.stopPropagation();
+                    setQuery("");
+                  }
+                }}
                 placeholder="Find a loaded node…"
                 aria-label="Search loaded nodes"
-                className="w-full rounded-md border border-line-strong bg-canvas py-1.5 pl-8 pr-3 text-xs text-fg-secondary placeholder-fg-subtle focus:outline-none focus:ring-1 focus:ring-info-fg"
+                className="w-full rounded-md border border-line-strong bg-canvas py-1.5 pl-8 pr-7 text-xs text-fg-secondary placeholder-fg-subtle focus:outline-none focus:ring-1 focus:ring-info-fg"
               />
+              {query && (
+                <button
+                  type="button"
+                  onClick={() => setQuery("")}
+                  aria-label="Clear search"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-fg-muted hover:text-fg-secondary"
+                >
+                  <X className="h-3.5 w-3.5" aria-hidden="true" />
+                </button>
+              )}
             </div>
           </div>
 

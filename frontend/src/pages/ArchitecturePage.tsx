@@ -71,8 +71,13 @@ export function ArchitecturePage() {
       )}
 
       {summaryQuery.isPending ? (
-        <div className="flex min-h-48 items-center justify-center text-sm text-fg-muted">
-          Loading architecture summary…
+        // Matches MetricsPage's own skeleton convention — a stat-bar shape
+        // plus a couple of card-shaped blocks, not the plain "Loading…"
+        // text this page shipped with initially.
+        <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading architecture summary">
+          <div className="h-20 animate-pulse rounded-xl bg-surface" />
+          <div className="h-40 animate-pulse rounded-xl bg-surface" />
+          <div className="h-40 animate-pulse rounded-xl bg-surface" />
         </div>
       ) : summaryQuery.isError ? (
         <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">

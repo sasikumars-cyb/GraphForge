@@ -264,6 +264,25 @@ describe("ArchitecturePage", () => {
       expect(await screen.findByTestId("dependency-graph")).toHaveTextContent("2 nodes");
       expect(screen.getByRole("navigation", { name: "Breadcrumb" })).toHaveTextContent("billing");
     });
+
+    it("Escape closes the node detail panel", async () => {
+      const user = userEvent.setup();
+      vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
+      vi.mocked(repositoriesApi.getRepositoryGraphTypes).mockResolvedValue({ counts: {} });
+      vi.mocked(repositoriesApi.getRepositoryGraph).mockResolvedValue(REPO_GRAPH);
+      renderWithAuth();
+
+      await user.click(await screen.findByText("acme/notes"));
+      await screen.findByTestId("dependency-graph");
+      await user.click(screen.getByRole("button", { name: "select billing" }));
+      expect(await screen.findByRole("heading", { name: "billing" })).toBeInTheDocument();
+
+      await user.keyboard("{Escape}");
+
+      await waitFor(() =>
+        expect(screen.queryByRole("heading", { name: "billing" })).not.toBeInTheDocument(),
+      );
+    });
   });
 
   it("has no detectable accessibility violations (KAN-38)", async () => {

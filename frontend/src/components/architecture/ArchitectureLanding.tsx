@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { AlertTriangle, Folder, Search } from "lucide-react";
+import { AlertTriangle, Folder, Search, X } from "lucide-react";
 import { Card } from "../Card";
 import { StatusBadge } from "../StatusBadge";
 import type { ArchitectureRepositorySummary, ArchitectureSummary } from "../../types/architecture";
@@ -80,10 +80,26 @@ export function ArchitectureLanding({
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && query) {
+              e.stopPropagation(); // don't let Escape bubble to anything else while there's still text to clear
+              setQuery("");
+            }
+          }}
           placeholder="Find a repository or domain…"
           aria-label="Search repositories and domains"
-          className="w-full rounded-lg border border-line-strong bg-canvas py-2.5 pl-10 pr-3 text-sm text-fg placeholder-fg-subtle focus:outline-none focus:ring-1 focus:ring-info-fg"
+          className="w-full rounded-lg border border-line-strong bg-canvas py-2.5 pl-10 pr-9 text-sm text-fg placeholder-fg-subtle focus:outline-none focus:ring-1 focus:ring-info-fg"
         />
+        {query && (
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            aria-label="Clear search"
+            className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-fg-muted hover:text-fg-secondary"
+          >
+            <X className="h-4 w-4" aria-hidden="true" />
+          </button>
+        )}
       </div>
 
       {matchingRepositories !== null ? (

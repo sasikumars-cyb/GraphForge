@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { X } from "lucide-react";
 import { StatusBadge } from "../StatusBadge";
 import { primaryLabel, resolveLabelColors } from "../graph/graphLabels";
@@ -9,7 +10,11 @@ const HIDDEN_PROPERTY_KEYS = new Set(["repository_id", "name"]);
  * (not a modal — the graph stays visible and interactive behind it) for
  * whatever node is currently selected in `DependencyGraph`. `name` and
  * `repository_id` are surfaced as the panel's own title/subtitle rather
- * than repeated in the property list below. */
+ * than repeated in the property list below.
+ *
+ * Escape closes it — the same convention `CommandPalette` (this app's
+ * other transient overlay) already establishes, not a new one invented
+ * here. */
 export function NodeDetailPanel({
   node,
   onClose,
@@ -21,6 +26,14 @@ export function NodeDetailPanel({
   onExploreNeighbors: () => void;
   isExploringNeighbors: boolean;
 }) {
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onClose]);
+
   const label = primaryLabel(node.labels);
   const colors = resolveLabelColors(label);
   const name = String(node.properties.name ?? node.id);
