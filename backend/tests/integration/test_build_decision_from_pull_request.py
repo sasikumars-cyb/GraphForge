@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Literal
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -72,7 +73,13 @@ class _FakeGraphRepository(IGraphRepository):
         raise NotImplementedError
 
     async def get_neighborhood(
-        self, repository_id: str, seed_node_ids: list[str], edge_types: list[str], max_hops: int
+        self,
+        repository_id: str,
+        seed_node_ids: list[str],
+        edge_types: list[str],
+        max_hops: int,
+        *,
+        direction: Literal["any", "outgoing", "incoming"] = "any",
     ) -> GraphPayload:
         return self._neighborhood
 

@@ -37,6 +37,12 @@ _IMPACT_EDGE_TYPES = [
 ]
 
 
+_DIRECTION_TO_NEO4J: dict[str, Literal["outgoing", "incoming"]] = {
+    "downstream": "outgoing",
+    "upstream": "incoming",
+}
+
+
 async def compute_blast_radius(
     db: AsyncSession,
     graph_repository: IGraphRepository,
@@ -45,12 +51,24 @@ async def compute_blast_radius(
     direction: Literal["downstream", "upstream"] = "downstream",
     max_hops: int = 2,
 ) -> BlastRadius:
+    """`direction` is now real — previously accepted but silently
+    ignored, since `graph_traversal.traverse` had no direction logic of
+    its own despite its docstring's claim (found while building the
+    Dependency lens; fixed at the source — `get_neighborhood` — not
+    re-implemented here). "downstream" (the default — "what does this
+    change affect") now correctly walks only outgoing edges from the
+    seed; "upstream" ("what would affect this if it changed") walks only
+    incoming ones. Every existing caller left at the default sees a
+    narrower, more correct blast radius than before (outgoing-only,
+    rather than every direction mixed together and labeled "downstream"
+    regardless)."""
     neighborhood = await graph_traversal.traverse(
         graph_repository,
         repository_id=entity.repository_id,
         seed_node_ids=[entity.node_id],
         edge_types=_IMPACT_EDGE_TYPES,
         max_hops=max_hops,
+        direction=_DIRECTION_TO_NEO4J[direction],
     )
 
     impacted_repositories: set[str] = set()
