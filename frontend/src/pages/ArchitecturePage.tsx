@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { ArchitectureBreadcrumbs } from "../components/architecture/ArchitectureBreadcrumbs";
 import { ArchitectureDomainView } from "../components/architecture/ArchitectureDomainView";
 import { ArchitectureLanding } from "../components/architecture/ArchitectureLanding";
@@ -8,6 +8,7 @@ import type { ArchitectureView } from "../components/architecture/types";
 import { EmptyState, SampleGraph } from "../components/EmptyState";
 import { useAuth } from "../app/auth-context";
 import { getArchitectureSummary } from "../lib/api/architecture";
+import { updateRepositoryDomain } from "../lib/api/repositories";
 import { primaryLabel } from "../components/graph/graphLabels";
 import type { ArchitectureRepositorySummary } from "../types/architecture";
 import type { GraphNode } from "../types/graph";
@@ -27,6 +28,7 @@ import type { GraphNode } from "../types/graph";
  */
 export function ArchitecturePage() {
   const { token } = useAuth();
+  const queryClient = useQueryClient();
   const [view, setView] = useState<ArchitectureView>({ level: "landing" });
 
   const summaryQuery = useQuery({
@@ -34,6 +36,24 @@ export function ArchitecturePage() {
     queryFn: ({ signal }) => getArchitectureSummary(token as string, signal),
     enabled: token !== null,
   });
+
+  async function saveDomain(repositoryId: string, domain: string | null) {
+    if (!token) return;
+    await updateRepositoryDomain(token, repositoryId, domain);
+    // The summary drives both the landing page's domain grouping and the
+    // breadcrumb trail — refetch rather than patch the cache by hand so
+    // `domains[]`'s aggregate counts (which this single-repository update
+    // can shift) stay correct too.
+    await queryClient.invalidateQueries({ queryKey: ["architecture-summary"] });
+    // Keep the current view's own `domain` in sync so the breadcrumb and
+    // this same editor reflect the save immediately, without waiting on
+    // the (already in-flight) summary refetch above.
+    setView((current) =>
+      current.level === "repository" || current.level === "neighborhood"
+        ? { ...current, domain }
+        : current,
+    );
+  }
 
   function selectRepository(repo: ArchitectureRepositorySummary) {
     setView({
@@ -112,6 +132,8 @@ export function ArchitecturePage() {
           repositoryName={view.repositoryName}
           mode={{ kind: "full" }}
           onExploreNeighbors={exploreNeighbors}
+          domain={view.domain}
+          onDomainChange={(domain) => saveDomain(view.repositoryId, domain)}
         />
       ) : (
         <RepositoryGraphExplorer
