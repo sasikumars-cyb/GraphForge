@@ -13,6 +13,7 @@ import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
 import type { Graph, GraphNode as GraphNodeType } from "../../types/graph";
 import { primaryLabel, resolveLabelColors } from "./graphLabels";
+import { LAYER_ORDER, LAYER_LABELS, layerForLabel } from "./architectureLayers";
 import { useTheme } from "../../theme/theme-context";
 
 const NODE_WIDTH = 190;
@@ -246,6 +247,182 @@ function layoutGraph(
   return { nodes: [...groupNodes, ...childNodes], edges };
 }
 
+const LAYER_GAP = 56;
+
+function styledFlowNode(
+  graphNode: GraphNodeType,
+  x: number,
+  y: number,
+  groupId: string,
+  label: string,
+  colors: ReturnType<typeof resolveLabelColors>,
+  name: string,
+): Node {
+  return {
+    id: graphNode.id,
+    parentId: groupId,
+    extent: "parent",
+    position: { x, y },
+    width: NODE_WIDTH,
+    height: NODE_HEIGHT,
+    data: {
+      label: (
+        <div>
+          <div style={{ fontSize: 10, opacity: 0.75 }}>{label}</div>
+          <div style={{ fontWeight: 600 }}>{name}</div>
+        </div>
+      ),
+    },
+    style: {
+      background: colors.background,
+      border: `var(--gf-node-border-width, 1px) solid ${colors.border}`,
+      borderRadius: 8,
+      width: NODE_WIDTH,
+      color: colors.text,
+      fontSize: 12,
+      padding: 8,
+    },
+    sourcePosition: Position.Right,
+    targetPosition: Position.Left,
+  };
+}
+
+/**
+ * The Architecture lens's own extension (ARCHITECTURE_EXPERIENCE_REDESIGN
+ * .md): "horizontal bands (service / data / code), not a flat mixed-type
+ * force layout." Each tier gets its own independent dagre LR layout (so
+ * request flow still reads left-to-right *within* a band) stacked into a
+ * dedicated vertical band, top to bottom in `LAYER_ORDER` — reusing the
+ * exact clustering-box mechanism `layoutGraph` above already uses for
+ * multi-repository grouping, keyed by tier instead of repository. A
+ * cross-tier edge (e.g. a service node with an edge straight to a data
+ * node, skipping the code tier) is drawn exactly like any other edge, so
+ * it visually cuts across a band it doesn't touch — the "architectural
+ * smell" read the design doc calls out, for free, from the band structure
+ * alone.
+ */
+function layoutGraphByLayer(graph: Graph): { nodes: Node[]; edges: Edge[] } {
+  const edges: Edge[] = graph.edges.map((edge, index) => ({
+    id: `${edge.source_id}->${edge.target_id}-${edge.type}-${index}`,
+    source: edge.source_id,
+    target: edge.target_id,
+    label: edge.type,
+    animated: edge.type === "PRODUCES_TO" || edge.type === "CONSUMES_FROM",
+    markerEnd: { type: MarkerType.ArrowClosed, color: "var(--gf-graph-edge)" },
+    style: { stroke: "var(--gf-graph-edge)", strokeWidth: 1.5 },
+    labelStyle: { fill: "var(--gf-graph-edge-label)", fontSize: 10 },
+  }));
+
+  const nodesByLayer = new Map<string, GraphNodeType[]>();
+  for (const node of graph.nodes) {
+    const layer = layerForLabel(primaryLabel(node.labels));
+    const bucket = nodesByLayer.get(layer) ?? [];
+    bucket.push(node);
+    nodesByLayer.set(layer, bucket);
+  }
+
+  const groupNodes: Node[] = [];
+  const childNodes: Node[] = [];
+  let yOffset = 0;
+
+  for (const layer of LAYER_ORDER) {
+    const layerNodes = nodesByLayer.get(layer);
+    if (!layerNodes || layerNodes.length === 0) continue;
+
+    const nodeIds = new Set(layerNodes.map((n) => n.id));
+    // Only this tier's own internal edges drive its internal layout — a
+    // cross-tier edge still renders (it's part of `edges` above, built
+    // from the whole graph), it just doesn't influence where either end
+    // sits *within* its own band.
+    const layerEdges = graph.edges.filter((e) => nodeIds.has(e.source_id) && nodeIds.has(e.target_id));
+
+    const g = new dagre.graphlib.Graph();
+    g.setGraph({ rankdir: "LR", nodesep: 40, ranksep: 110 });
+    g.setDefaultEdgeLabel(() => ({}));
+    for (const node of layerNodes) g.setNode(node.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
+    for (const e of layerEdges) g.setEdge(e.source_id, e.target_id);
+    dagre.layout(g);
+
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    const positioned = layerNodes.map((node) => {
+      const pos = g.node(node.id);
+      const absoluteX = pos.x - NODE_WIDTH / 2;
+      const absoluteY = pos.y - NODE_HEIGHT / 2;
+      minX = Math.min(minX, absoluteX);
+      maxX = Math.max(maxX, absoluteX + NODE_WIDTH);
+      minY = Math.min(minY, absoluteY);
+      maxY = Math.max(maxY, absoluteY + NODE_HEIGHT);
+      return { node, absoluteX, absoluteY };
+    });
+
+    const groupId = `layer:${layer}`;
+    const groupWidth = maxX - minX + GROUP_PADDING * 2;
+    const groupHeight = maxY - minY + GROUP_PADDING * 2 + 20;
+
+    groupNodes.push({
+      id: groupId,
+      type: "group",
+      position: { x: 0, y: yOffset },
+      width: groupWidth,
+      height: groupHeight,
+      style: {
+        width: groupWidth,
+        height: groupHeight,
+        background: "var(--gf-graph-cluster)",
+        border: "1px dashed var(--gf-graph-cluster-line)",
+        borderRadius: 12,
+      },
+      data: {},
+      selectable: false,
+      draggable: false,
+    });
+    groupNodes.push({
+      id: `${groupId}-label`,
+      type: "default",
+      parentId: groupId,
+      extent: "parent",
+      position: { x: 8, y: 4 },
+      data: { label: LAYER_LABELS[layer] },
+      style: {
+        background: "transparent",
+        border: "none",
+        color: "var(--gf-fg-muted)",
+        fontSize: 11,
+        fontWeight: 700,
+        padding: 0,
+        width: "auto",
+      },
+      selectable: false,
+      draggable: false,
+      connectable: false,
+    });
+
+    for (const { node, absoluteX, absoluteY } of positioned) {
+      const label = primaryLabel(node.labels);
+      const colors = resolveLabelColors(label);
+      const name = String(node.properties.name ?? node.id);
+      childNodes.push(
+        styledFlowNode(
+          node,
+          absoluteX - minX + GROUP_PADDING,
+          absoluteY - minY + GROUP_PADDING + 20,
+          groupId,
+          label,
+          colors,
+          name,
+        ),
+      );
+    }
+
+    yOffset += groupHeight + LAYER_GAP;
+  }
+
+  return { nodes: [...groupNodes, ...childNodes], edges };
+}
+
 const OVERVIEW_NODE_WIDTH = 220;
 const OVERVIEW_NODE_HEIGHT = 120;
 const OVERVIEW_COLUMNS = 4;
@@ -409,6 +586,13 @@ interface DependencyGraphProps {
    * (e.g. closing the detail panel) without needing a ref/imperative
    * handle into this component. */
   selectedNodeId?: string | null;
+  /** "repository" (default, byte-for-byte the original behavior — every
+   * existing caller keeps working unchanged) groups by owning repository
+   * when more than one is present. "layer" groups by architecture tier
+   * instead (the Architecture lens's own horizontal service/code/data
+   * bands) — mutually exclusive with repository grouping; a single-
+   * repository view has nothing to group by repository anyway. */
+  viewMode?: "repository" | "layer";
 }
 
 export function DependencyGraph({
@@ -416,11 +600,12 @@ export function DependencyGraph({
   repositoryNameById,
   onNodeSelect,
   selectedNodeId: controlledSelectedNodeId,
+  viewMode = "repository",
 }: DependencyGraphProps) {
   const { theme } = useTheme();
   const { nodes: baseNodes, edges: baseEdges } = useMemo(
-    () => layoutGraph(graph, repositoryNameById),
-    [graph, repositoryNameById],
+    () => (viewMode === "layer" ? layoutGraphByLayer(graph) : layoutGraph(graph, repositoryNameById)),
+    [graph, repositoryNameById, viewMode],
   );
   // Group/label pseudo-nodes (clustering boxes) aren't real graph nodes and
   // are excluded from click-to-highlight - only actual components/topics/

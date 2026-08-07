@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Search, X } from "lucide-react";
+import { Layers, Search, X } from "lucide-react";
 import { Card } from "../Card";
 import { EmptyState, SampleGraph } from "../EmptyState";
 import { DependencyGraph } from "../graph/DependencyGraph";
@@ -88,6 +88,12 @@ export function RepositoryGraphExplorer({
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [isExploringNeighbors, setIsExploringNeighbors] = useState(false);
   const [isSavingDomain, setIsSavingDomain] = useState(false);
+  // The Architecture lens's own layer bands (ARCHITECTURE_EXPERIENCE_
+  // REDESIGN.md) — off by default (byte-for-byte the original layout),
+  // full-repository mode only: a neighborhood is already small/hop-scoped
+  // enough that "which tier does this belong to" isn't the question it
+  // exists to answer the way a whole repository's shape is.
+  const [groupByLayer, setGroupByLayer] = useState(false);
 
   async function handleDomainSave(next: string | null) {
     if (!onDomainChange) return;
@@ -273,6 +279,21 @@ export function RepositoryGraphExplorer({
                 )}
               </div>
             )}
+            {mode.kind === "full" && (
+              <button
+                type="button"
+                aria-pressed={groupByLayer}
+                onClick={() => setGroupByLayer((current) => !current)}
+                className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors ${
+                  groupByLayer
+                    ? "border-info-line bg-info-bg text-info-fg"
+                    : "border-line text-fg-secondary hover:border-line-strong"
+                }`}
+              >
+                <Layers className="h-3.5 w-3.5" aria-hidden="true" />
+                Group by layer
+              </button>
+            )}
             <div className="relative ml-auto w-full max-w-xs">
               <Search
                 className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg-muted"
@@ -328,6 +349,7 @@ export function RepositoryGraphExplorer({
                 graph={displayedGraph ?? graph}
                 onNodeSelect={setSelectedNode}
                 selectedNodeId={selectedNode?.id ?? null}
+                viewMode={mode.kind === "full" && groupByLayer ? "layer" : "repository"}
               />
             </div>
             {selectedNode && (

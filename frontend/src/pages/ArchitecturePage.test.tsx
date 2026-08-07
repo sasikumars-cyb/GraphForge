@@ -30,11 +30,13 @@ vi.mock("../components/graph/DependencyGraph", () => ({
   DependencyGraph: ({
     graph,
     onNodeSelect,
+    viewMode,
   }: {
     graph: { nodes: GraphNode[] };
     onNodeSelect?: (node: GraphNode | null) => void;
+    viewMode?: "repository" | "layer";
   }) => (
-    <div data-testid="dependency-graph">
+    <div data-testid="dependency-graph" data-view-mode={viewMode ?? "repository"}>
       {graph.nodes.length} nodes
       {graph.nodes.map((n) => (
         <button key={n.id} onClick={() => onNodeSelect?.(n)}>
@@ -260,6 +262,26 @@ describe("ArchitecturePage", () => {
         "repo-2",
         expect.objectContaining({ limit: 500 }),
         expect.anything(),
+      );
+    });
+
+    it("'Group by layer' toggles the Architecture lens's layer-band view, off by default", async () => {
+      const user = userEvent.setup();
+      vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
+      vi.mocked(repositoriesApi.getRepositoryGraphTypes).mockResolvedValue({ counts: { Module: 12 } });
+      vi.mocked(repositoriesApi.getRepositoryGraph).mockResolvedValue(REPO_GRAPH);
+      renderWithAuth();
+
+      await user.click(await screen.findByText("acme/notes"));
+      const graphEl = await screen.findByTestId("dependency-graph");
+      expect(graphEl).toHaveAttribute("data-view-mode", "repository");
+
+      await user.click(screen.getByRole("button", { name: "Group by layer" }));
+
+      expect(screen.getByTestId("dependency-graph")).toHaveAttribute("data-view-mode", "layer");
+      expect(screen.getByRole("button", { name: "Group by layer" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
       );
     });
 
