@@ -10,6 +10,7 @@ makes no assumption about *whose* GitHub OAuth App is configured — that's
 user's own personal OAuth App, never a company-owned one.
 """
 
+import logging
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -24,6 +25,8 @@ from app.integrations.interfaces import (
     OAuthUserProfile,
     RepositoryInfo,
 )
+
+logger = logging.getLogger(__name__)
 
 _AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 _TOKEN_URL = "https://github.com/login/oauth/access_token"
@@ -89,6 +92,72 @@ async def _github_get(
     return response.json()
 
 
+# GitHub hard-caps `per_page` at 100 regardless of what's requested — a
+# single `_github_get` call against a paginated list endpoint (like
+# `/user/repos`) silently returns only the first 100 items, with nothing
+# in the response itself signaling that more exist unless the caller
+# follows the `Link: rel="next"` header GitHub attaches. 50 pages is
+# 5,000 items — comfortably past any real org's repo count, kept as a
+# defensive ceiling so a pagination bug on GitHub's side (or a genuinely
+# pathological account) can't turn one "list my repos" call into an
+# unbounded request loop.
+_MAX_PAGINATED_PAGES = 50
+
+
+async def _github_get_all_pages(
+    path: str,
+    access_token: str | None,
+    params: dict[str, str | int] | None = None,
+) -> list[Any]:
+    """Like `_github_get`, but follows GitHub's `Link: rel="next"` header
+    until exhausted (or `_MAX_PAGINATED_PAGES` is hit) instead of
+    returning only the first page. For any endpoint whose result can
+    plausibly exceed one page — today, `list_repositories`'s `/user/repos`
+    call, the one that silently truncated an org's repo list to the first
+    100 (sorted by `updated`) before this existed."""
+    headers = dict(_API_HEADERS)
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+
+    results: list[Any] = []
+    url = f"{_API_BASE}{path}"
+    request_params: dict[str, str | int] | None = dict(params) if params else None
+
+    async with httpx.AsyncClient() as client:
+        for _ in range(_MAX_PAGINATED_PAGES):
+            response = await client.get(url, headers=headers, params=request_params)
+            if response.is_error:
+                raise GitHubApiError(
+                    f"GitHub API request to {path} failed with status {response.status_code}: "
+                    f"{response.text}"
+                )
+            page = response.json()
+            if not isinstance(page, list):
+                # Every paginated GitHub list endpoint returns a JSON
+                # array — a differently-shaped body means this helper was
+                # pointed at something that isn't one. Defensive, not
+                # expected to ever trigger for a correct call site.
+                return page
+            results.extend(page)
+
+            next_link = response.links.get("next")
+            if next_link is None:
+                break
+            url = next_link["url"]
+            # The `next` URL GitHub returns already carries every query
+            # param (including `per_page`) baked in — passing the
+            # original `params` again on top would be redundant at best.
+            request_params = None
+        else:
+            logger.warning(
+                "github_pagination_ceiling_hit path=%s max_pages=%d",
+                path,
+                _MAX_PAGINATED_PAGES,
+            )
+
+    return results
+
+
 async def _fetch_primary_verified_email(access_token: str) -> str | None:
     """`/user/emails` (requires the `user:email` scope) — GitHub's own
     recommended fallback for when `/user` doesn't include `email` (see
@@ -137,11 +206,28 @@ async def fetch_user_profile(access_token: str) -> OAuthUserProfile:
 
 async def list_repositories(access_token: str) -> list[RepositoryInfo]:
     """List repositories `access_token`'s owner has access to. Module-level
-    for the same reason as `fetch_user_profile` above — see its docstring."""
-    data = await _github_get(
+    for the same reason as `fetch_user_profile` above — see its docstring.
+
+    `affiliation` explicitly includes `organization_member` alongside
+    `owner`/`collaborator` — GitHub's own default when the param is
+    omitted, but this call always passed it explicitly, and originally
+    without that third value. Omitting it silently hid every repo a user
+    can only see via org membership (the common case for most org repos —
+    added via a team, not individually as a per-repo collaborator), with
+    no error and no indication anything was filtered.
+
+    Paginated via `_github_get_all_pages` — a single `_github_get` call
+    here would silently cap the result at the first 100 repos (GitHub's
+    `per_page` maximum), which for any org with more than 100 repos
+    quietly hid the rest with no error and no indication of truncation."""
+    data = await _github_get_all_pages(
         "/user/repos",
         access_token,
-        params={"per_page": 100, "sort": "updated", "affiliation": "owner,collaborator"},
+        params={
+            "per_page": 100,
+            "sort": "updated",
+            "affiliation": "owner,collaborator,organization_member",
+        },
     )
     return [
         RepositoryInfo(
