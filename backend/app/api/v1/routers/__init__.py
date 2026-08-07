@@ -14,6 +14,7 @@ from app.api.v1.routers.engineering_sessions import router as engineering_sessio
 from app.api.v1.routers.github import router as github_router
 from app.api.v1.routers.google_drive import router as google_drive_router
 from app.api.v1.routers.health import router as health_router
+from app.api.v1.routers.impact import router as impact_router
 from app.api.v1.routers.investigation_intelligence import (
     router as investigation_intelligence_router,
 )
@@ -43,6 +44,7 @@ api_router.include_router(google_drive_router)
 api_router.include_router(oauth_apps_router)
 api_router.include_router(repositories_router)
 api_router.include_router(architecture_router)
+api_router.include_router(impact_router)
 api_router.include_router(pull_requests_router)
 api_router.include_router(ai_analysis_router)
 api_router.include_router(ai_workspace_router)
