@@ -38,6 +38,12 @@ export interface TrackedRepository {
   private: boolean;
   default_branch: string;
   html_url: string;
+  // ADR 0023 — manual repository grouping; null/absent means ungrouped.
+  // Optional (not just nullable) rather than required so the many
+  // existing test fixtures across this codebase that construct a
+  // TrackedRepository without it don't all need updating for a field
+  // most of them have no reason to care about.
+  domain?: string | null;
   created_at: string;
 }
 

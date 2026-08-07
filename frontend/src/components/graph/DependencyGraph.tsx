@@ -11,7 +11,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import dagre from "@dagrejs/dagre";
-import type { Graph } from "../../types/graph";
+import type { Graph, GraphNode as GraphNodeType } from "../../types/graph";
 import { primaryLabel, resolveLabelColors } from "./graphLabels";
 import { useTheme } from "../../theme/theme-context";
 
@@ -398,9 +398,25 @@ export function RepositoryOverviewGraph({
 interface DependencyGraphProps {
   graph: Graph;
   repositoryNameById?: Record<string, string>;
+  /** ADR 0023 — fired whenever a real node (not a cluster box) is
+   * clicked, in addition to the existing internal highlight-on-click
+   * behavior. Optional and purely additive: every existing caller that
+   * doesn't pass it keeps today's behavior exactly. Used by the
+   * Architecture page's node detail panel. */
+  onNodeSelect?: (node: GraphNodeType | null) => void;
+  /** Controlled selection — when provided, this (not internal state)
+   * drives which node is highlighted. Lets a parent clear the selection
+   * (e.g. closing the detail panel) without needing a ref/imperative
+   * handle into this component. */
+  selectedNodeId?: string | null;
 }
 
-export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphProps) {
+export function DependencyGraph({
+  graph,
+  repositoryNameById,
+  onNodeSelect,
+  selectedNodeId: controlledSelectedNodeId,
+}: DependencyGraphProps) {
   const { theme } = useTheme();
   const { nodes: baseNodes, edges: baseEdges } = useMemo(
     () => layoutGraph(graph, repositoryNameById),
@@ -410,7 +426,14 @@ export function DependencyGraph({ graph, repositoryNameById }: DependencyGraphPr
   // are excluded from click-to-highlight - only actual components/topics/
   // endpoints participate.
   const realNodeIds = useMemo(() => new Set(graph.nodes.map((n) => n.id)), [graph]);
-  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [internalSelectedNodeId, setInternalSelectedNodeId] = useState<string | null>(null);
+  const isControlled = controlledSelectedNodeId !== undefined;
+  const selectedNodeId = isControlled ? controlledSelectedNodeId : internalSelectedNodeId;
+  const setSelectedNodeId = (next: string | null | ((current: string | null) => string | null)) => {
+    const resolved = typeof next === "function" ? next(selectedNodeId) : next;
+    if (!isControlled) setInternalSelectedNodeId(resolved);
+    onNodeSelect?.(resolved ? (graph.nodes.find((n) => n.id === resolved) ?? null) : null);
+  };
 
   // Recomputed only when the selection (or the base layout) changes - not on
   // every render - so clicking around a large graph stays cheap.
