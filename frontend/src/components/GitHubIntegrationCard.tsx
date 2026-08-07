@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { GitBranch, Loader2, Plus } from "lucide-react";
 import { OAuthAppCredentialFields } from "./OAuthAppCredentialFields";
+import { RepositoryPickerList } from "./RepositoryPickerList";
 import { StatusBadge } from "./StatusBadge";
 import { useAuth } from "../app/auth-context";
 import { ApiError } from "../lib/api/client";
@@ -184,18 +185,6 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
     });
   }
 
-  function toggleRepo(id: string) {
-    setSelectedIds((previous) => {
-      const next = new Set(previous);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }
-
   async function handleSaveSelection() {
     if (!token || !availableRepos) return;
     setIsSaving(true);
@@ -302,26 +291,11 @@ export function GitHubIntegrationCard({ onSaved }: { onSaved?: () => void } = {}
           ) : !availableRepos || availableRepos.length === 0 ? (
             <p className="text-sm text-fg-muted">No repositories found for this GitHub account.</p>
           ) : (
-            <ul className="max-h-72 divide-y divide-line-muted overflow-y-auto">
-              {availableRepos.map((repo) => (
-                <li key={repo.provider_repo_id}>
-                  <label className="flex cursor-pointer items-center gap-3 py-2">
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(repo.provider_repo_id)}
-                      onChange={() => toggleRepo(repo.provider_repo_id)}
-                      className="h-4 w-4 rounded border-line-strong bg-canvas text-info-fg "
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-sm text-fg-secondary">
-                        {repo.full_name}
-                      </span>
-                    </span>
-                    {repo.private && <StatusBadge label="Private" tone="neutral" />}
-                  </label>
-                </li>
-              ))}
-            </ul>
+            <RepositoryPickerList
+              repos={availableRepos}
+              selectedIds={selectedIds}
+              onChangeSelected={setSelectedIds}
+            />
           )}
         </div>
       )}
