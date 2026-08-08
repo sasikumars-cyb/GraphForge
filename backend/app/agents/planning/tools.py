@@ -98,8 +98,25 @@ class GetIndexedRepositoriesTool:
                 health.repository_id: health
                 for health in await self._health_service.for_repositories(all_repos)
             }
+            # `full_name` ("owner/name", e.g. "sasikumars-cyb/prompt-library")
+            # is the canonical repository identity everywhere a claim gets
+            # checked against ground truth — `generate_code`'s own prompt
+            # instructs the LLM to cite repositories in that exact format
+            # (see code_generation/prompts/generate_code.md), and
+            # `code_generation.verification._is_well_formed` requires it.
+            # `name`/`owner` are kept too — unchanged, still bare — because
+            # existing bare-name consumers (repository_filter matching
+            # below, clarification option display, narrative text) already
+            # work correctly against them and are out of scope here; adding
+            # `full_name` alongside them, not replacing them, is what keeps
+            # this a data fix rather than a wider behavior change.
             indexed: list[dict[str, str]] = [
-                {"id": str(repo.id), "name": repo.name, "owner": repo.owner}
+                {
+                    "id": str(repo.id),
+                    "name": repo.name,
+                    "owner": repo.owner,
+                    "full_name": repo.full_name,
+                }
                 for repo in all_repos
                 if health_by_repo_id[repo.id].status == GraphHealthStatus.HEALTHY
             ]
@@ -115,6 +132,7 @@ class GetIndexedRepositoriesTool:
                     "id": str(repo.id),
                     "name": repo.name,
                     "owner": repo.owner,
+                    "full_name": repo.full_name,
                     "status": health_by_repo_id[repo.id].status.value,
                     "latest_job_status": health_by_repo_id[repo.id].latest_job_status,
                 }

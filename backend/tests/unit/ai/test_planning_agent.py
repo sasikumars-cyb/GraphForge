@@ -545,6 +545,7 @@ async def test_get_indexed_repos_with_indexed_repos() -> None:
     mock_repo1.id = "uuid-1"
     mock_repo1.name = "order-service"
     mock_repo1.owner = "acme"
+    mock_repo1.full_name = "acme/order-service"
 
     # Mock db.execute().scalars().all() returning [repo1]
     mock_result = MagicMock()
@@ -563,6 +564,40 @@ async def test_get_indexed_repos_with_indexed_repos() -> None:
     assert obs.tool_name == "get_indexed_repositories"
     assert len(obs.data["indexed_repositories"]) == 1
     assert obs.data["indexed_repositories"][0]["name"] == "order-service"
+
+
+@pytest.mark.asyncio
+async def test_get_indexed_repos_full_name_is_canonical_owner_slash_name() -> None:
+    """Root-cause regression: `GetIndexedRepositoriesTool` used to return
+    only bare `name`/`owner` as two separate fields, never combined —
+    every downstream consumer that needed one identity string (Planning's
+    `repositories_consulted`, its `repository_usage` verification) read
+    bare `name` alone, silently dropping the owner. `full_name` must be
+    exactly the canonical "owner/name" GitHub identity, read straight from
+    the already-correct `Repository.full_name` column, not reconstructed."""
+    mock_db = AsyncMock()
+    mock_repo = MagicMock()
+    mock_repo.id = "uuid-1"
+    mock_repo.name = "prompt-library"
+    mock_repo.owner = "sasikumars-cyb"
+    mock_repo.full_name = "sasikumars-cyb/prompt-library"
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [mock_repo]
+    mock_db.execute.return_value = mock_result
+
+    mock_graph_repo = AsyncMock()
+    mock_graph_repo.has_graph = AsyncMock(return_value=True)
+
+    tool = GetIndexedRepositoriesTool(
+        db=mock_db, graph_repository=mock_graph_repo, user_id="user-1"
+    )
+    obs = await tool.execute()
+
+    repo = obs.data["indexed_repositories"][0]
+    assert repo["name"] == "prompt-library"
+    assert repo["owner"] == "sasikumars-cyb"
+    assert repo["full_name"] == "sasikumars-cyb/prompt-library"
 
 
 @pytest.mark.asyncio
@@ -1218,6 +1253,7 @@ async def test_planning_agent_graph_context_used_true_when_graph_has_data() -> N
     mock_repo.id = "repo-uuid-1"
     mock_repo.name = "order-service"
     mock_repo.owner = "acme"
+    mock_repo.full_name = "acme/order-service"
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = [mock_repo]
     mock_db.execute.return_value = mock_result
@@ -1393,8 +1429,10 @@ def _make_two_repo_context() -> tuple[AgentContext, MagicMock]:
     # single-repo fixtures above.
     mock_target_repo = MagicMock(id="repo-target", owner="acme")
     mock_target_repo.name = "ds-team-apc-svc"
+    mock_target_repo.full_name = "acme/ds-team-apc-svc"
     mock_other_repo = MagicMock(id="repo-other", owner="acme")
     mock_other_repo.name = "ds-team-gpc-svc"
+    mock_other_repo.full_name = "acme/ds-team-gpc-svc"
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = [mock_target_repo, mock_other_repo]
     mock_db.execute.return_value = mock_result
@@ -1462,9 +1500,12 @@ async def test_planning_agent_repository_usage_verified_false_on_misattributed_f
             "kafka_topics_involved": [],
             "risk_considerations": [],
             "graph_context_used": True,
+            # Canonical "owner/name" form — the format generate_code's own
+            # prompt (and, per this fix, `indexed_repo_names`/
+            # `per_repo_pool`) require repository_usage claims to use.
             "repository_usage": [
                 {
-                    "name": "ds-team-apc-svc",
+                    "name": "acme/ds-team-apc-svc",
                     "purpose": "Widget processing",
                     "files_affected": ["other_repo/other_repo_only_component.py"],
                 }
@@ -1492,6 +1533,406 @@ async def test_planning_agent_repository_usage_verified_false_on_misattributed_f
     assert any(
         "other_repo_only_component.py" in w and "ds-team-gpc-svc" in w for w in warnings
     ), f"expected a file-misattribution warning naming the real owner, got: {warnings}"
+
+
+# ---------------------------------------------------------------------------
+# Repository identity normalization regression tests (KAN — P1 finding from
+# the auto-execution live-QA pass: `repositories_consulted` used to carry
+# only the bare repository name, so a `repository_usage` claim cited in the
+# canonical "owner/name" form generate_code's own prompt requires would be
+# reported as "not found among indexed repositories" even when it was
+# exactly the repository this run traversed.)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_repository_usage_in_canonical_form_passes_verification() -> None:
+    """The exact scenario the live P0 test surfaced: a `repository_usage`
+    claim in "owner/name" form, for a repository this run's own graph
+    traversal genuinely returned, with file claims that genuinely belong to
+    it, must verify cleanly — no "not found among indexed repositories"
+    warning, no file-misattribution warning."""
+    context, mock_graph_repo = _make_two_repo_context()
+
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Fix the widget.",
+            "implementation_steps": [],
+            "affected_components": ["ZulutronManifestWidget"],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": True,
+            "repository_usage": [
+                {
+                    "name": "acme/ds-team-apc-svc",
+                    "purpose": "Widget processing",
+                    "files_affected": ["target_repo/zulutron_manifest_widget.py"],
+                }
+            ],
+        }
+    )
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    usage = output.result["repository_usage"][0]
+    assert usage["verified"] is True, "a correctly-cited, correctly-owned claim must verify"
+    warnings = output.result["verification_warnings"]
+    assert not any(
+        "cited in repository_usage was not found" in w for w in warnings
+    ), (
+        "a canonically-cited, genuinely-indexed repository must not be "
+        f"flagged unindexed: {warnings}"
+    )
+    assert not any(
+        "likely misattributed" in w for w in warnings
+    ), f"a genuinely-owned file must not be flagged misattributed: {warnings}"
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_repository_usage_wrong_owner_does_not_pass() -> None:
+    """Canonical identity is owner+name together, not name alone: citing the
+    real repository *name* under a different owner must not verify — that
+    would mean the matcher only ever checked the name half of the identity."""
+    context, mock_graph_repo = _make_two_repo_context()
+
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Fix the widget.",
+            "implementation_steps": [],
+            "affected_components": [],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": True,
+            "repository_usage": [
+                {
+                    "name": "wrong-owner/ds-team-apc-svc",
+                    "purpose": "Widget processing",
+                    "files_affected": [],
+                }
+            ],
+        }
+    )
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    warnings = output.result["verification_warnings"]
+    assert any(
+        "wrong-owner/ds-team-apc-svc" in w and "cited in repository_usage was not found" in w
+        for w in warnings
+    ), f"a real repository name under the wrong owner must not verify: {warnings}"
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_repository_usage_wrong_repository_does_not_pass() -> None:
+    """A repository that was never indexed at all — right-shaped name,
+    wrong everything — must not verify."""
+    context, mock_graph_repo = _make_two_repo_context()
+
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Fix the widget.",
+            "implementation_steps": [],
+            "affected_components": [],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": True,
+            "repository_usage": [
+                {
+                    "name": "acme/nonexistent-repo",
+                    "purpose": "Widget processing",
+                    "files_affected": [],
+                }
+            ],
+        }
+    )
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    warnings = output.result["verification_warnings"]
+    assert any(
+        "acme/nonexistent-repo" in w and "cited in repository_usage was not found" in w
+        for w in warnings
+    ), f"a never-indexed repository must not verify: {warnings}"
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_bare_repository_name_is_not_silently_canonical() -> None:
+    """The fix must not weaken verification to accommodate a malformed
+    identity: a `repository_usage` claim in bare form (no owner) is not the
+    canonical identity this run's `indexed_repo_names` now carries, and
+    must not be silently treated as equivalent to it — the same discipline
+    `code_generation.verification._is_well_formed` already applies (rejects
+    anything without exactly one "/") at the next stage.
+
+    Note: `usage.name in ranked_repo_names` (bare, sourced from Context
+    Discovery and deliberately left untouched by this fix) still assigns a
+    `stars` estimate for a bare name — that pre-existing, out-of-scope
+    behavior is unrelated to `verified`. The thing this fix actually
+    guarantees is that `indexed_repo_names` — the set `name_indexed`, and
+    therefore `usage.verified`, is computed against — is canonical-only, so
+    a bare name never counts as indexed for verification purposes."""
+    context, mock_graph_repo = _make_two_repo_context()
+
+    llm_response = json.dumps(
+        {
+            "executive_summary": "Fix the widget.",
+            "implementation_steps": [],
+            "affected_components": [],
+            "kafka_topics_involved": [],
+            "risk_considerations": [],
+            "graph_context_used": True,
+            "repository_usage": [
+                {
+                    "name": "ds-team-apc-svc",  # bare — no owner
+                    "purpose": "Widget processing",
+                    "files_affected": ["target_repo/zulutron_manifest_widget.py"],
+                }
+            ],
+        }
+    )
+
+    with (
+        patch("app.tools.implementations.neo4j_tool.get_driver", return_value=MagicMock()),
+        patch(
+            "app.tools.implementations.neo4j_tool.Neo4jGraphRepository",
+            return_value=mock_graph_repo,
+        ),
+        patch("app.agents.planning.agent._call_llm", new=AsyncMock(return_value=llm_response)),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    usage = output.result["repository_usage"][0]
+    assert usage["verified"] is False, (
+        "a bare repository name must not be silently accepted as the "
+        f"canonical identity: {usage}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Entity-mismatch wiring regression tests: `check_entity_mismatch` must be
+# called against the actually-selected/target repository, never an
+# arbitrary top-ranked candidate from the full Context Discovery survey
+# (`ranked_repo_names[0]`) — the exact P0 finding: a real run's objective
+# contained "ONLY" (a false-positive token, covered separately in
+# test_verification.py) checked against `ranked_repo_names[0]`, which
+# happened to be a repository entirely unrelated to the actual objective.
+# ---------------------------------------------------------------------------
+
+
+def _context_discovery_result_with_divergent_ranking(
+    display_name: str,
+) -> dict[str, Any]:
+    """A multi-repository Context Discovery result where the top-ranked
+    candidate (`ranked_repository_names[0]`) is deliberately NOT the
+    repository that ends up selected — exactly the shape a real multi-
+    repository survey produces when Context Discovery consults many
+    repositories but only confirms one as the actual target."""
+    return {
+        "enriched_text": display_name,
+        "indexed_repositories": [
+            {
+                "id": "r1",
+                "name": "ds-team-apc-c2m-rcs-svc",
+                "owner": "acme",
+                "full_name": "acme/ds-team-apc-c2m-rcs-svc",
+            },
+            {
+                "id": "r2",
+                "name": "ds-team-gpc-c2m-rcs-svc",
+                "owner": "acme",
+                "full_name": "acme/ds-team-gpc-c2m-rcs-svc",
+            },
+        ],
+        "graph_components": [],
+        "graph_topics": [],
+        # Top-ranked ("survey order") deliberately differs from selected.
+        "ranked_repository_names": ["ds-team-apc-c2m-rcs-svc", "ds-team-gpc-c2m-rcs-svc"],
+        "repositories": [
+            {"name": "ds-team-apc-c2m-rcs-svc", "selected": False},
+            {"name": "ds-team-gpc-c2m-rcs-svc", "selected": True},
+        ],
+        "graph_available": True,
+        "graph_has_data": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_entity_mismatch_uses_selected_repo_not_top_ranked() -> None:
+    """The exact P0 bug: the top-ranked repo ('other-tenant-svc') does not
+    contain the ticket's GPC token, but the actually-*selected* target
+    ('ds-team-gpc-svc') does. Checking against `ranked_repo_names[0]` (the
+    old behavior) would have produced a false-positive mismatch warning
+    here; checking against the selected repository must not."""
+    context = _make_planning_context(display_name="Soco_C2M_GPC_RCS -> fix the widget")
+    context.extras["workflow"] = MagicMock()
+    context_discovery_result = _context_discovery_result_with_divergent_ranking(
+        context.subject.display_name
+    )
+
+    with (
+        patch(
+            "app.agents.planning.agent.get_stage_result",
+            return_value=context_discovery_result,
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_make_llm_response()),
+        ),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    warnings = output.result["verification_warnings"]
+    assert not any("entity/tenant-shaped token" in w for w in warnings), warnings
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_entity_mismatch_still_fires_when_selected_repo_lacks_token() -> None:
+    """The fix must not simply disable the check: when the ticket's token
+    is genuinely absent from the *selected* repository too (here neither
+    candidate contains APC), the mismatch warning must still fire."""
+    context = _make_planning_context(display_name="Soco_C2M_APC_RCS -> fix the widget")
+    context.extras["workflow"] = MagicMock()
+    context_discovery_result = _context_discovery_result_with_divergent_ranking(
+        context.subject.display_name
+    )
+
+    with (
+        patch(
+            "app.agents.planning.agent.get_stage_result",
+            return_value=context_discovery_result,
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_make_llm_response()),
+        ),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    warnings = output.result["verification_warnings"]
+    assert any("entity/tenant-shaped token" in w and "APC" in w for w in warnings), warnings
+    findings = output.result["verification_findings"]
+    assert any(
+        f["category"] == "repository_identity_mismatch" for f in findings
+    ), findings
+
+
+@pytest.mark.asyncio
+async def test_planning_agent_end_to_end_prompt_library_only_objective_no_false_positive() -> None:
+    """E: reproduces the exact real P0 scenario that surfaced both bugs
+    together — objective containing "ONLY" ('This must be the ONLY
+    change...'), targeting sasikumars-cyb/prompt-library, with 17
+    repositories Context Discovery consulted but only prompt-library
+    actually selected. Expected: no 'ingestion-framework' (or any other
+    unrelated repo) false positive, canonical repository identity
+    end-to-end, and no repository-identity-mismatch finding of any kind
+    for this genuinely clean scenario."""
+    display_name = (
+        "In the sasikumars-cyb/prompt-library repository, add a single-line "
+        "module-level docstring to the top of prompt_library/registry.py "
+        "stating what the file does. This must be the ONLY change: no logic "
+        "changes, no other files touched, no dependency changes, no deletions."
+    )
+    context = _make_planning_context(display_name=display_name)
+    context.extras["workflow"] = MagicMock()
+
+    consulted_repo_names = [
+        "streaming-pipeline",
+        "ingestion-framework",
+        "db-migrations",
+        "shipping-service-java",
+        "warehouse-jobs",
+        "shared-java-sdk",
+        "payment-service-java",
+        "prompt-library",
+        "llm-gateway",
+        "agent-runtime",
+        "analytics-pipeline-python",
+        "notification-service-python",
+        "customer-service-python",
+        "shared-python-sdk",
+        "inventory-service-python",
+        "order-service-python",
+        "etl-core",
+    ]
+    context_discovery_result = {
+        "enriched_text": display_name,
+        "indexed_repositories": [
+            {
+                "id": f"r-{name}",
+                "name": name,
+                "owner": "sasikumars-cyb",
+                "full_name": f"sasikumars-cyb/{name}",
+            }
+            for name in consulted_repo_names
+        ],
+        "graph_components": [],
+        "graph_topics": [],
+        # "ingestion-framework" ranks ahead of "prompt-library" in the
+        # broader survey order — exactly the real run's shape — but only
+        # prompt-library is actually selected as the target.
+        "ranked_repository_names": consulted_repo_names,
+        "repositories": [
+            {"name": name, "selected": name == "prompt-library"}
+            for name in consulted_repo_names
+        ],
+        "graph_available": True,
+        "graph_has_data": False,
+    }
+
+    with (
+        patch(
+            "app.agents.planning.agent.get_stage_result",
+            return_value=context_discovery_result,
+        ),
+        patch(
+            "app.agents.planning.agent._call_llm",
+            new=AsyncMock(return_value=_make_llm_response()),
+        ),
+    ):
+        agent = PlanningAgent()
+        output = await agent.run(context)
+
+    warnings = output.result["verification_warnings"]
+    assert not any("ingestion-framework" in w for w in warnings), warnings
+    assert not any("entity/tenant-shaped token" in w for w in warnings), warnings
+    findings = output.result["verification_findings"]
+    assert not any(f["category"] == "repository_identity_mismatch" for f in findings), findings
+
+    # Canonical repository identity end-to-end.
+    assert output.result["repositories_consulted"] == [
+        f"sasikumars-cyb/{name}" for name in consulted_repo_names
+    ]
+    assert output.result["target_repositories"] == ["prompt-library"]
 
 
 @pytest.mark.asyncio

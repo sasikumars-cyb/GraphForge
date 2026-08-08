@@ -75,8 +75,17 @@ class TestRepositoryDiscoveryTool:
                 health.repository_id: health
                 for health in await self._health_service.for_repositories(all_repos)
             }
+            # `full_name` ("owner/name") is the canonical repository
+            # identity — see `planning/tools.py`'s `GetIndexedRepositoriesTool`
+            # for the full rationale. `name`/`owner` kept, unchanged, for
+            # existing bare-name consumers.
             indexed: list[dict[str, str]] = [
-                {"id": str(repo.id), "name": repo.name, "owner": repo.owner}
+                {
+                    "id": str(repo.id),
+                    "name": repo.name,
+                    "owner": repo.owner,
+                    "full_name": repo.full_name,
+                }
                 for repo in all_repos
                 if health_by_repo_id[repo.id].status == GraphHealthStatus.HEALTHY
             ]

@@ -134,6 +134,32 @@ async def test_repository_discovery_with_indexed_repos() -> None:
 
 
 @pytest.mark.asyncio
+async def test_repository_discovery_full_name_is_canonical_owner_slash_name() -> None:
+    """Same identity-normalization regression as Planning's
+    `GetIndexedRepositoriesTool` — this class duplicates its dict shape,
+    so it needed the identical fix."""
+    mock_db = AsyncMock()
+    mock_repo = MagicMock()
+    mock_repo.id = "uuid-1"
+    mock_repo.name = "prompt-library"
+    mock_repo.owner = "sasikumars-cyb"
+    mock_repo.full_name = "sasikumars-cyb/prompt-library"
+
+    mock_result = MagicMock()
+    mock_result.scalars.return_value.all.return_value = [mock_repo]
+    mock_db.execute.return_value = mock_result
+
+    mock_graph_repo = AsyncMock()
+    mock_graph_repo.has_graph = AsyncMock(return_value=True)
+
+    tool = TestRepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo)
+    obs = await tool.execute()
+
+    repo = obs.data["indexed_repositories"][0]
+    assert repo["full_name"] == "sasikumars-cyb/prompt-library"
+
+
+@pytest.mark.asyncio
 async def test_repository_discovery_none_indexed() -> None:
     mock_db = AsyncMock()
     mock_repo = MagicMock()
@@ -543,6 +569,7 @@ async def test_testing_agent_happy_path() -> None:
     mock_repo.id = "repo-uuid-1"
     mock_repo.name = "order-service"
     mock_repo.owner = "acme"
+    mock_repo.full_name = "acme/order-service"
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = [mock_repo]
     mock_db.execute.return_value = mock_result
@@ -574,11 +601,25 @@ async def test_testing_agent_happy_path() -> None:
     assert len(output.result["automation_candidates"]) == 1
     assert len(output.result["manual_validations"]) == 1
 
+    # Repository identity regression: repositories_consulted must be the
+    # canonical "owner/name" identity, not the bare repository name.
+    assert output.result["repositories_consulted"] == ["acme/order-service"]
+
     # Confidence
     assert 0.0 <= output.confidence.score <= 1.0
     assert output.confidence.score > 0.7
     assert output.agent_id == "testing"
     assert output.prompt_version == "1.2"
+
+    # Readiness-guardrail regression: the "this is a test PLAN, not an
+    # execution" disclaimer must never appear in verification_warnings (a
+    # true-on-every-run statement of fact is not a verification finding —
+    # see app.agents.verification's module docstring) — it lives in
+    # execution_status_note instead, which is always populated and does
+    # not participate in blocking classification.
+    assert not any("test PLAN" in w for w in output.result["verification_warnings"])
+    assert "test PLAN" in output.result["execution_status_note"]
+    assert "not" in output.result["execution_status_note"].lower()
 
 
 @pytest.mark.asyncio

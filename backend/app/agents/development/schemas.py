@@ -96,6 +96,10 @@ class DevelopmentPlan(BaseModel):
     # See app.agents.verification. Empty when nothing was flagged.
     verification_warnings: list[str] = Field(default_factory=list)
 
+    # Classified counterpart to verification_warnings above — see
+    # PlanningResult.verification_findings for the field's shape/intent.
+    verification_findings: list[dict[str, str | bool]] = Field(default_factory=list)
+
     # Structured counterpart, populated by this agent's OWN independent
     # call to app.agents.component_grounding.check_test_used_as_production
     # against the same graph_components it already reads from Context
