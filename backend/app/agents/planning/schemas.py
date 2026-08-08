@@ -189,6 +189,14 @@ class PlanningResult(BaseModel):
     # See app.agents.verification.
     verification_warnings: list[str] = Field(default_factory=list)
 
+    # Classified counterpart to verification_warnings above — one entry per
+    # warning, same order, each tagged with the category it was produced
+    # with (see app.agents.verification.VerificationFinding). This is what
+    # Engineering Review/Documentation Planning actually key their blocking
+    # decision off; verification_warnings stays plain prose for anything
+    # that only ever needs to display the message text.
+    verification_findings: list[dict[str, str | bool]] = Field(default_factory=list)
+
     # Structured counterpart to verification_warnings above, populated only
     # by app.agents.component_grounding.check_test_used_as_production — a
     # claim (test class named as production code) that was rejected or

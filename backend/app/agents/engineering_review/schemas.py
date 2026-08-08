@@ -116,7 +116,17 @@ class EngineeringReadinessReport(BaseModel):
     # Deterministic verification_warnings carried forward from Planning/
     # Development/Testing (see app.agents.verification) — never generated
     # by this agent's own LLM call, only read from the stages that
-    # produced them and used to override an over-optimistic "ready" verdict.
+    # produced them. Includes informational/non-blocking entries too, kept
+    # for visibility; see `blocking_verification_warnings` for the subset
+    # that actually drives the "ready" override below.
     prior_verification_warnings: list[str] = Field(default_factory=list)
+
+    # The subset of prior_verification_warnings classified `blocking` (see
+    # app.agents.verification.VerificationFinding) — this, not the mere
+    # presence of prior_verification_warnings, is what forces
+    # readiness_status to "needs_revision" when the LLM said "ready".
+    # Empty whenever every prior finding was informational/non-blocking or
+    # there were no prior findings at all.
+    blocking_verification_warnings: list[str] = Field(default_factory=list)
 
     prompt_version: str = "1.0"

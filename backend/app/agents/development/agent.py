@@ -425,8 +425,14 @@ class DevelopmentAgent:
             logger.error("development_agent_llm_failed error=%s", str(exc))
             raise
 
-        # Back-fill repositories_consulted
-        plan.repositories_consulted = [r["name"] for r in indexed_repos]
+        # Back-fill repositories_consulted — the canonical "owner/name"
+        # identity, matching the format `repository_usage` claims and
+        # `generate_code` are both required to use (see
+        # `RepositoryDiscoveryTool`'s docstring in development/tools.py).
+        # `.get(...)` falls back to the bare name for an `indexed_repos`
+        # entry read from a Context Discovery result persisted before this
+        # field existed — never a KeyError on old data.
+        plan.repositories_consulted = [r.get("full_name") or r["name"] for r in indexed_repos]
 
         # Never trust the LLM's self-reported graph_context_used — derive it
         # from what the tools actually returned.
@@ -438,12 +444,19 @@ class DevelopmentAgent:
         # membership, no source-code parsing, applies to any repo language.
         # ------------------------------------------------------------------
         evidence_pool = verification.build_evidence_pool(
-            [r["name"] for r in indexed_repos],
+            [r.get("full_name") or r["name"] for r in indexed_repos],
             [c.get("name", "") for c in components_obs.data.get("components", [])],
             [c.get("file_path", "") for c in components_obs.data.get("components", [])],
             [t.get("name", "") for t in components_obs.data.get("kafka_topics", [])],
         )
         verification_warnings: list[str] = []
+        verification_findings: list[verification.VerificationFinding] = []
+
+        def _warn(message: str, category: str) -> None:
+            verification_warnings.append(message)
+            verification_findings.append(
+                verification.VerificationFinding(message=message, category=category)
+            )
 
         # ------------------------------------------------------------------
         # Independent grounding (see app.agents.component_grounding): this
@@ -497,7 +510,8 @@ class DevelopmentAgent:
             plan.reusable_implementations = corrected_reuse
 
         if component_warnings:
-            verification_warnings.extend(w.message for w in component_warnings)
+            for w in component_warnings:
+                _warn(w.message, "component_misattribution")
             evidence.append(
                 Evidence(
                     kind="tool_call",
@@ -513,18 +527,21 @@ class DevelopmentAgent:
 
         repo_check = verification.verify_claims([r.name for r in plan.repositories], evidence_pool)
         for name in repo_check.unverified:
-            verification_warnings.append(
+            _warn(
                 f"Repository '{name}' cited in this plan was not found among the "
-                "repositories this run's graph traversal actually returned — unverified."
+                "repositories this run's graph traversal actually returned — unverified.",
+                "repository_not_found",
             )
         for comp in plan.components:
             comp_check = verification.verify_claims([comp.name, comp.file_path], evidence_pool)
             for claim in comp_check.unverified:
-                verification_warnings.append(
+                _warn(
                     f"Component claim '{claim}' (for '{comp.name}') does not appear in "
-                    "this run's indexed graph data — unverified."
+                    "this run's indexed graph data — unverified.",
+                    "component_not_found",
                 )
         plan.verification_warnings = verification_warnings
+        plan.verification_findings = [f.to_dict() for f in verification_findings]
         plan.component_warnings = to_contract_warnings(component_warnings)
         if verification_warnings:
             evidence.append(

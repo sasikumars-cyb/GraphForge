@@ -33,6 +33,7 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.agents import verification
 from app.agents._contract import (
     AgentContext,
     AgentOutput,
@@ -84,34 +85,38 @@ _MAX_BLUEPRINT_CONTEXT_CHARS = 24_000
 # LLM's `documentation_impact` still drives its own domain output (which
 # docs to update), it just no longer drives confidence. A fully-verified
 # run (all three prior stages present, none of them flagged a deterministic
-# verification problem) scores 1.0; each missing stage or existing warning
-# set lowers it.
+# BLOCKING verification problem) scores 1.0; each missing stage or existing
+# blocking finding set lowers it. An informational-only finding (e.g.
+# Testing's plan-vs-execution disclaimer) does NOT lower this — see
+# app.agents.verification.VerificationFinding.blocking; presence-only
+# gating here previously meant no workflow could ever score the full 0.2
+# for this weight, since that disclaimer is on every Testing result.
 _CONFIDENCE_WEIGHTS: dict[str, float] = {
     "planning_context_available": 0.3,
     "development_context_available": 0.3,
     "testing_context_available": 0.2,
-    "no_prior_verification_warnings": 0.2,
+    "no_blocking_verification_findings": 0.2,
 }
 
 
-def _collect_verification_warnings(
+def _collect_verification_findings(
     planning_result: dict[str, Any] | None,
     development_result: dict[str, Any] | None,
     testing_result: dict[str, Any] | None,
-) -> list[str]:
-    """Pull each stage's own deterministic `verification_warnings` — never
-    re-derived or judged by this agent's LLM call, just read straight out
-    of the stored stage results. Same pattern as
-    engineering_review/agent.py's identically-named helper."""
-    warnings: list[str] = []
-    for label, result in (
-        ("Planning", planning_result),
-        ("Development", development_result),
-        ("Testing", testing_result),
-    ):
-        for w in (result or {}).get("verification_warnings", []) or []:
-            warnings.append(f"[{label}] {w}")
-    return warnings
+) -> list[dict[str, str | bool]]:
+    """Pull each stage's own deterministic, classified verification
+    findings — never re-derived or judged by this agent's LLM call, just
+    read straight out of the stored stage results. Same pattern as
+    engineering_review/agent.py's identically-named helper (see
+    app.agents.verification.collect_verification_findings for the shared
+    implementation, including the legacy/unmigrated fallback)."""
+    return verification.collect_verification_findings(
+        [
+            ("Planning", planning_result),
+            ("Development", development_result),
+            ("Testing", testing_result),
+        ]
+    )
 
 
 def _scan_narrative_for_component_mentions(
@@ -328,9 +333,13 @@ class DocumentationPlanningAgent:
             context_discovery_result or {}
         ).get("graph_components") or []
 
-        prior_verification_warnings = _collect_verification_warnings(
+        verification_findings = _collect_verification_findings(
             planning_result, development_result, testing_result
         )
+        prior_verification_warnings = [
+            f"[{f['label']}] {f['message']}" for f in verification_findings
+        ]
+        blocking_findings = [f for f in verification_findings if f["blocking"]]
         blueprint_context = _build_blueprint_context(
             context.subject.display_name,
             planning_result,
@@ -400,6 +409,7 @@ class DocumentationPlanningAgent:
             raise
 
         plan.prior_verification_warnings = prior_verification_warnings
+        plan.prior_verification_findings = verification_findings
 
         # Independent grounding (not inherited from Planning/Development/
         # Testing's own warnings): this agent's own narrative text is
@@ -443,7 +453,7 @@ class DocumentationPlanningAgent:
                     "planning_context_available": planning_result is not None,
                     "development_context_available": development_result is not None,
                     "testing_context_available": testing_result is not None,
-                    "no_prior_verification_warnings": not prior_verification_warnings,
+                    "no_blocking_verification_findings": not blocking_findings,
                 },
                 weights=_CONFIDENCE_WEIGHTS,
             )

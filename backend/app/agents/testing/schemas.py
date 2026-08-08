@@ -122,9 +122,27 @@ class TestPlan(BaseModel):
 
     # Deterministic, non-LLM warnings: components/repositories cited above
     # that do not appear in this run's own tool-returned evidence. See
-    # app.agents.verification. Always includes a note that this is a test
-    # PLAN, not executed test results — nothing here was actually run.
+    # app.agents.verification. The "this is a test PLAN, not executed test
+    # results" disclaimer is NOT in this list — it's a true-on-every-run
+    # statement of fact, not a claim checked against evidence, so it lives
+    # in `execution_status_note` below instead (see that field's docstring
+    # for why keeping it here made "ready" unreachable for every workflow).
     verification_warnings: list[str] = Field(default_factory=list)
+
+    # Classified counterpart to verification_warnings above — see
+    # PlanningResult.verification_findings for the field's shape/intent.
+    verification_findings: list[dict[str, str | bool]] = Field(default_factory=list)
+
+    # Always populated: a test plan is a proposal, never a report of what
+    # actually ran. Kept as its own field (informational, never a
+    # `verification_warnings`/`verification_findings` entry) precisely so
+    # its permanent presence can never affect readiness or confidence —
+    # see app.agents.verification's module docstring, point 3.
+    execution_status_note: str = (
+        "This is a test PLAN produced by an LLM — no test in it has actually "
+        "been executed. Regression/integration/edge-case results below are "
+        "proposed coverage, not verified pass/fail outcomes."
+    )
 
     # Structured counterpart, populated by this agent's OWN independent
     # call to app.agents.component_grounding.check_test_used_as_production.

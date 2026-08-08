@@ -28,14 +28,151 @@ Two independent checks live here, both deliberately blind to source code:
 Neither check requires a schema migration or a new parser: (1) only reads
 `Repository.name`/`full_name`, already indexed for every repository; (2)
 only reads the observation data tools already return this run.
+
+3. Structured warning classification (`VerificationFinding`,
+   `NON_BLOCKING_CATEGORIES`). Every `verification_warnings` entry any
+   Planning/Development/Testing check below produces is also recorded as a
+   `VerificationFinding` with a `category`, tagged at the point it's
+   produced — never inferred later from its message text. Downstream
+   readiness gates (Engineering Review, Documentation Planning) key their
+   blocking decision off `VerificationFinding.blocking`, not off whether
+   the warning list is merely non-empty: a real run found that an always-
+   present informational disclaimer ("this is a test PLAN, not an
+   execution") permanently made `readiness_status: "ready"` unreachable for
+   every workflow, because presence-only gating cannot distinguish "nothing
+   is wrong" from "something informational was said." `blocking` defaults
+   to True for any category not explicitly listed in
+   `NON_BLOCKING_CATEGORIES` — a new check that forgets to classify itself,
+   or a category typo, fails closed (blocks) rather than silently passing.
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.agents.normalization import normalize_path, normalize_text, squash, tokenize
+
+# ---------------------------------------------------------------------------
+# 0. Structured warning classification
+# ---------------------------------------------------------------------------
+
+# The exhaustive set of categories that must NEVER block readiness — every
+# category not listed here is treated as blocking, including one nobody has
+# thought to classify yet (see module docstring point 3). This is
+# deliberately an allowlist, not a denylist: a denylist would default new/
+# unknown categories to non-blocking, exactly the silent-pass failure mode
+# this mechanism exists to prevent.
+NON_BLOCKING_CATEGORIES = frozenset(
+    {
+        # A statement of fact about the stage itself (e.g. "this is an
+        # unexecuted test plan"), true on every run regardless of outcome —
+        # never a claim checked against evidence and found wanting, so it
+        # can never indicate a real problem with this particular run.
+        "informational",
+    }
+)
+
+# Every category any producer in this codebase currently assigns — kept
+# here (rather than only inline at each call site) as the single place a
+# reviewer can see the full taxonomy and confirm no blocking category was
+# accidentally left out of the classification. Informative only; the
+# runtime blocking decision is `category not in NON_BLOCKING_CATEGORIES`,
+# not membership in this set.
+BLOCKING_CATEGORIES = frozenset(
+    {
+        "repository_not_found",
+        "repository_identity_mismatch",
+        "component_not_found",
+        "component_misattribution",
+        "scope_ambiguity",
+        # Assigned by the collector (see engineering_review/agent.py and
+        # documentation_planning/agent.py) to any warning read back from a
+        # stage result persisted before this classification existed, or
+        # from a producer that sets `verification_warnings` without also
+        # setting the matching `verification_findings` entry — fails
+        # closed rather than silently dropping an unclassified warning
+        # from the blocking decision.
+        "unclassified_legacy",
+    }
+)
+
+
+@dataclass(frozen=True)
+class VerificationFinding:
+    """One `verification_warnings` entry, classified at the point it's
+    produced. `category` drives whether it can block readiness (see
+    `NON_BLOCKING_CATEGORIES` above) — `blocking` is derived, never set
+    independently, so a category and its blocking behavior can never drift
+    apart from each other.
+    """
+
+    message: str
+    category: str = "unclassified_legacy"
+
+    @property
+    def blocking(self) -> bool:
+        return self.category not in NON_BLOCKING_CATEGORIES
+
+    def to_dict(self) -> dict[str, str | bool]:
+        """Plain-dict shape for storage in a stage result (see
+        `PlanningResult.verification_findings` and its Development/Testing
+        equivalents) — persisted stage results are already dicts end to
+        end, so this avoids coupling this module to any one agent's
+        pydantic schema."""
+        return {"message": self.message, "category": self.category, "blocking": self.blocking}
+
+
+def collect_verification_findings(
+    stage_results: list[tuple[str, dict[str, Any] | None]],
+) -> list[dict[str, str | bool]]:
+    """Read every named stage's classified findings into one flat,
+    label-prefixed list — the single implementation Engineering Review and
+    Documentation Planning both call, replacing what used to be two
+    near-identical `_collect_verification_warnings` copies that only ever
+    read the unstructured `verification_warnings` text.
+
+    `stage_results` is `[(label, result_dict_or_None), ...]` in the order
+    the stages ran, e.g. `[("Planning", planning_result),
+    ("Development", development_result), ("Testing", testing_result)]`.
+
+    For each stage: prefers `result["verification_findings"]` (the
+    classified form each producer now writes). Falls back to
+    `result["verification_warnings"]` — present on every already-persisted
+    workflow run from before this classification existed, and on any
+    future producer that forgets to populate the structured field — with
+    every entry classified `"unclassified_legacy"`, which is a blocking
+    category (see `NON_BLOCKING_CATEGORIES`): unmigrated data blocks
+    exactly as it always did, it is never silently dropped from the
+    blocking decision just because it lacks the new metadata.
+    """
+    collected: list[dict[str, str | bool]] = []
+    for label, result in stage_results:
+        result = result or {}
+        structured = result.get("verification_findings")
+        if structured:
+            for item in structured:
+                collected.append(
+                    {
+                        "label": label,
+                        "message": str(item.get("message", "")),
+                        "category": str(item.get("category", "unclassified_legacy")),
+                        "blocking": bool(item.get("blocking", True)),
+                    }
+                )
+        else:
+            for message in result.get("verification_warnings") or []:
+                collected.append(
+                    {
+                        "label": label,
+                        "message": message,
+                        "category": "unclassified_legacy",
+                        "blocking": True,
+                    }
+                )
+    return collected
+
 
 # ---------------------------------------------------------------------------
 # 1. Entity / tenant mismatch detection
@@ -96,6 +233,42 @@ _GENERIC_ACRONYM_STOPWORDS = frozenset(
     }
 )
 
+# Ordinary English words, written in caps for emphasis in ticket/requirement
+# text ("This must be the ONLY change", "MUST NOT modify any other file"),
+# match the same 2-6-uppercase-letter shape as a genuine tenant/business-unit
+# code by pure coincidence. A real run flagged the literal word "ONLY" —
+# from the ticket's own "This must be the ONLY change" — as an unmatched
+# entity token, checked against an unrelated repository.
+#
+# Rather than hand-picking one offending word at a time as each new false
+# positive is reported (an unbounded, always-behind stopword list), this is
+# a representative set of common short English function/emphasis words —
+# the vocabulary that actually shows up in *this* codebase's kind of ticket
+# text (constraints, quantifiers, modals, conjunctions), not a general-
+# purpose dictionary. Genuine tenant/business-unit codes (APC, GPC, PSEG,
+# MPC) are not ordinary English words; this check exists to tell "written
+# in caps for emphasis" apart from "looks like a business-unit code"
+# without caring which specific word triggered it.
+_COMMON_ENGLISH_WORDS = frozenset(
+    {
+        "A", "I", "AM", "AN", "AS", "AT", "BE", "BY", "DO", "GO", "IF", "IN", "IS", "IT",
+        "MY", "NO", "OF", "ON", "OR", "SO", "TO", "UP", "US", "WE",
+        "ALL", "ANY", "ARE", "BOTH", "BUT", "CAN", "DID", "DOES", "DONE", "EACH",
+        "END", "FEW", "FOR", "FROM", "HAD", "HAS", "HAVE", "HER", "HIM", "HIS",
+        "HOW", "INTO", "ITS", "JUST", "LESS", "MANY", "MAY", "MIGHT", "MORE", "MOST",
+        "MUCH", "MUST", "NEVER", "NONE", "NOR", "NOT", "NOW", "OFF", "ONCE",
+        "ONLY", "ONTO", "OUR", "OUT", "OVER", "OWN", "PER", "SAME", "SHALL", "SHOULD",
+        "SINCE", "SOME", "SUCH", "THAN", "THAT", "THE", "THEIR", "THEM", "THEN",
+        "THERE", "THESE", "THEY", "THIS", "THOSE", "THUS", "TOO", "UNTIL", "VERY",
+        "WAS", "WERE", "WHAT", "WHEN", "WHERE", "WHICH", "WHILE", "WHO", "WHOSE",
+        "WHY", "WILL", "WITH", "WITHIN", "WITHOUT", "WOULD", "YET", "YOU", "YOUR",
+        "ABOVE", "AFTER", "AGAIN", "AGAINST", "ALSO", "ALWAYS", "AMONG", "BEFORE",
+        "BEING", "BELOW", "BETWEEN", "DOING", "DOWN", "DURING", "EITHER", "EVERY",
+        "HAVING", "HERE", "NEITHER", "OTHER", "TOGETHER", "UNDER", "UNLESS",
+        "ACROSS", "AROUND", "BECAUSE", "BEHIND",
+    }
+)
+
 
 # The literal boilerplate `app.agents.prompt_utils.wrap_untrusted_content`
 # fences fetched Jira/GitHub/Confluence content with — always a single
@@ -125,7 +298,13 @@ def _extract_acronym_tokens(text: str) -> set[str]:
     """
     cleaned = _TICKET_KEY_RE.sub(" ", _WRAPPER_MARKER_RE.sub(" ", text))
     tokens = _TOKEN_SPLIT_PATTERN.split(cleaned)
-    return {t for t in tokens if _ACRONYM_SHAPE.match(t) and t not in _GENERIC_ACRONYM_STOPWORDS}
+    return {
+        t
+        for t in tokens
+        if _ACRONYM_SHAPE.match(t)
+        and t not in _GENERIC_ACRONYM_STOPWORDS
+        and t not in _COMMON_ENGLISH_WORDS
+    }
 
 
 def _name_tokens(name: str) -> set[str]:
@@ -142,33 +321,54 @@ def _ordered_name_tokens(name: str) -> tuple[str, ...]:
     return tuple(t for t in re.split(r"[^a-zA-Z0-9]+", name.lower()) if t)
 
 
-def check_entity_mismatch(ticket_text: str, selected_repo_name: str) -> str | None:
-    """Warn when the ticket names an entity/tenant-shaped token that the
-    top-selected repository's own name does not contain.
+def check_entity_mismatch(
+    ticket_text: str, selected_repo_names: str | list[str]
+) -> str | None:
+    """Warn when the ticket names an entity/tenant-shaped token that none
+    of the *actually selected* target repositories' names contain.
+
+    `selected_repo_names` accepts either a single repository name (kept for
+    backward compatibility with existing callers) or a list — a multi-repo
+    plan's token is only flagged when it's absent from *every* selected
+    repository's name; present in any one of them is a match. Callers must
+    pass the real target/selected repositories here, never an arbitrary
+    top-ranked candidate from a broader survey — checking against a
+    repository the plan was never actually going to touch produces a
+    warning with nothing to do with the actual change (a real run flagged
+    'ingestion-framework' this way while the objective named a completely
+    different, explicitly selected repository).
 
     Returns None (no-op) whenever the ticket has no acronym-shaped token at
     all — this is the common case, and the check must never block or alter
     repository selection for an ordinary ticket. It only fires in the
     narrow situation this was built for: a ticket that does carry such a
-    token, matched against a repo whose name carries none of them.
+    token, matched against repositories whose names carry none of them.
 
     Not a general "does this ticket match this repo" solver — see the
     module docstring for what this deliberately does not catch.
     """
-    if not selected_repo_name:
+    names = [selected_repo_names] if isinstance(selected_repo_names, str) else list(
+        selected_repo_names
+    )
+    names = [n for n in names if n]
+    if not names:
         return None
     ticket_tokens = _extract_acronym_tokens(ticket_text)
     if not ticket_tokens:
         return None
-    repo_tokens = _name_tokens(selected_repo_name)
+    repo_tokens: set[str] = set()
+    for name in names:
+        repo_tokens |= _name_tokens(name)
     unmatched = {t for t in ticket_tokens if t.lower() not in repo_tokens}
     if not unmatched:
         return None
     plural = "s" if len(unmatched) != 1 else ""
+    names_str = ", ".join(f"'{n}'" for n in names)
+    repo_word = "repository name" if len(names) == 1 else "repository names"
     return (
         f"Ticket references entity/tenant-shaped token{plural} "
-        f"{', '.join(sorted(unmatched))} not found in the selected repository "
-        f"name '{selected_repo_name}'. Repository name similarity does not "
+        f"{', '.join(sorted(unmatched))} not found in the selected {repo_word} "
+        f"{names_str}. Repository name similarity does not "
         "guarantee entity identity — verify this is the correct "
         "tenant/business-unit repository before proceeding."
     )

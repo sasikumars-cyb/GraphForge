@@ -326,6 +326,75 @@ async def test_documentation_planning_agent_confidence_drops_with_verification_w
     assert output.confidence.score < 1.0
 
 
+async def test_documentation_planning_agent_confidence_unaffected_by_informational_findings() -> (
+    None
+):
+    """D: an informational-only finding (e.g. Testing's plan-vs-execution
+    disclaimer, classified `category="informational"`) must NOT lower
+    confidence — only a genuine `blocking` finding may. Root cause this
+    locks in: that disclaimer used to live in plain `verification_warnings`
+    unconditionally on every Testing run, which meant no workflow could
+    ever score the full `no_blocking_verification_findings` weight."""
+    testing_with_note = _testing_result()
+    testing_with_note["verification_findings"] = [
+        {
+            "message": "This is a test PLAN produced by an LLM — no test in it "
+            "has actually been executed.",
+            "category": "informational",
+            "blocking": False,
+        }
+    ]
+    workflow = _make_workflow(
+        [
+            _make_run("planning", "completed", _planning_result()),
+            _make_run("development", "completed", _development_result()),
+            _make_run("testing", "completed", testing_with_note),
+        ]
+    )
+    context = _make_context(workflow=workflow)
+
+    with patch(
+        "app.agents.documentation_planning.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(documentation_impact="high")),
+    ):
+        output = await DocumentationPlanningAgent().run(context)
+
+    assert output.confidence.score == 1.0
+    assert any("test PLAN" in w for w in output.result["prior_verification_warnings"])
+
+
+async def test_documentation_planning_agent_confidence_still_drops_with_blocking_finding() -> None:
+    """D: a genuinely classified `blocking` finding must still lower
+    confidence — the fix must not accidentally make every finding
+    non-blocking."""
+    planning_with_finding = _planning_result()
+    planning_with_finding["verification_findings"] = [
+        {
+            "message": "Repository 'billing-service' cited in this plan was not "
+            "found among the repositories this run's graph traversal actually "
+            "returned — unverified.",
+            "category": "repository_not_found",
+            "blocking": True,
+        }
+    ]
+    workflow = _make_workflow(
+        [
+            _make_run("planning", "completed", planning_with_finding),
+            _make_run("development", "completed", _development_result()),
+            _make_run("testing", "completed", _testing_result()),
+        ]
+    )
+    context = _make_context(workflow=workflow)
+
+    with patch(
+        "app.agents.documentation_planning.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(documentation_impact="high")),
+    ):
+        output = await DocumentationPlanningAgent().run(context)
+
+    assert output.confidence.score < 1.0
+
+
 # ---------------------------------------------------------------------------
 # Full structured artifacts reach the LLM prompt, not a truncated summary.
 # ---------------------------------------------------------------------------

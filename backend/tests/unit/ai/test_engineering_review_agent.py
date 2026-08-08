@@ -327,7 +327,222 @@ async def test_engineering_review_agent_confidence_penalized_by_verification_war
     assert output.result["readiness_status"] == "needs_revision"
     # base 0.6 - min(0.2, 0.05*2) = 0.5
     assert output.confidence.score == 0.5
-    assert "carried-forward deterministic verification warning" in output.confidence.reasoning
+    assert (
+        "carried-forward deterministic blocking verification warning" in output.confidence.reasoning
+    )
+
+
+# ---------------------------------------------------------------------------
+# Structured warning classification — the readiness guardrail must key off
+# `VerificationFinding.blocking`, never off "any prior finding is present".
+# Root cause: Testing's own "this is a test PLAN, not an execution"
+# disclaimer used to live in `verification_warnings` unconditionally, on
+# every single run, which made `readiness_status: "ready"` permanently
+# unreachable for any workflow — this section locks in the fix.
+# ---------------------------------------------------------------------------
+
+
+def _finding(message: str, category: str) -> dict[str, str | bool]:
+    from app.agents.verification import NON_BLOCKING_CATEGORIES
+
+    return {
+        "message": message,
+        "category": category,
+        "blocking": category not in NON_BLOCKING_CATEGORIES,
+    }
+
+
+@pytest.mark.asyncio
+async def test_engineering_review_agent_ready_when_no_findings_at_all() -> None:
+    """C1: nothing flagged by any stage — "ready" must remain reachable."""
+    context = _make_context(workflow=_full_workflow())
+
+    with patch(
+        "app.agents.engineering_review.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(readiness_status="ready")),
+    ):
+        output = await EngineeringReviewAgent().run(context)
+
+    assert output.result["readiness_status"] == "ready"
+    assert output.result["blocking_verification_warnings"] == []
+
+
+@pytest.mark.asyncio
+async def test_engineering_review_agent_ready_when_only_informational_findings() -> None:
+    """C2: an informational-only finding (e.g. Testing's plan-vs-execution
+    disclaimer, classified `category="informational"`) must NOT force a
+    downgrade — "ready" must still be reachable. This is the exact bug: an
+    always-present informational note made "ready" unreachable for every
+    workflow before this classification existed."""
+    testing_with_note = _testing_result()
+    testing_with_note["verification_findings"] = [
+        _finding(
+            "This is a test PLAN produced by an LLM — no test in it has "
+            "actually been executed.",
+            "informational",
+        )
+    ]
+    workflow = _make_workflow(
+        [
+            _make_run("planning", "completed", _planning_result()),
+            _make_run("development", "completed", _development_result()),
+            _make_run("testing", "completed", testing_with_note),
+            _make_run("documentation_planning", "completed", _documentation_planning_result()),
+        ]
+    )
+    context = _make_context(workflow=workflow)
+
+    with patch(
+        "app.agents.engineering_review.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(readiness_status="ready")),
+    ):
+        output = await EngineeringReviewAgent().run(context)
+
+    assert output.result["readiness_status"] == "ready"
+    assert output.result["blocking_verification_warnings"] == []
+    # Still visible for a human reviewer, just not blocking.
+    assert any("test PLAN" in w for w in output.result["prior_verification_warnings"])
+
+
+@pytest.mark.asyncio
+async def test_engineering_review_agent_downgrades_on_genuine_repository_warning() -> None:
+    """C3: a real, classified `repository_not_found` finding must still
+    force a downgrade even when combined with informational noise."""
+    planning_with_findings = _planning_result()
+    planning_with_findings["verification_findings"] = [
+        _finding(
+            "Repository 'billing-service' cited in this plan was not found "
+            "among the repositories this run's graph traversal actually "
+            "returned — unverified.",
+            "repository_not_found",
+        )
+    ]
+    testing_with_note = _testing_result()
+    testing_with_note["verification_findings"] = [
+        _finding("This is a test PLAN, not an execution.", "informational")
+    ]
+    workflow = _make_workflow(
+        [
+            _make_run("planning", "completed", planning_with_findings),
+            _make_run("development", "completed", _development_result()),
+            _make_run("testing", "completed", testing_with_note),
+            _make_run("documentation_planning", "completed", _documentation_planning_result()),
+        ]
+    )
+    context = _make_context(workflow=workflow)
+
+    with patch(
+        "app.agents.engineering_review.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(readiness_status="ready")),
+    ):
+        output = await EngineeringReviewAgent().run(context)
+
+    assert output.result["readiness_status"] == "needs_revision"
+    assert any("billing-service" in w for w in output.result["blocking_verification_warnings"])
+    assert not any(
+        "test PLAN" in w for w in output.result["blocking_verification_warnings"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_engineering_review_agent_downgrades_on_genuine_component_warning() -> None:
+    """C4: a real, classified `component_misattribution`/`component_not_found`
+    finding must still force a downgrade."""
+    development_with_findings = _development_result()
+    development_with_findings["verification_findings"] = [
+        _finding(
+            "File 'src/main/RateLimiterService.java' claimed for "
+            "'payment-service' is indexed under 'billing-service' — likely "
+            "misattributed to the wrong repository.",
+            "component_misattribution",
+        )
+    ]
+    workflow = _make_workflow(
+        [
+            _make_run("planning", "completed", _planning_result()),
+            _make_run("development", "completed", development_with_findings),
+            _make_run("testing", "completed", _testing_result()),
+            _make_run("documentation_planning", "completed", _documentation_planning_result()),
+        ]
+    )
+    context = _make_context(workflow=workflow)
+
+    with patch(
+        "app.agents.engineering_review.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(readiness_status="ready")),
+    ):
+        output = await EngineeringReviewAgent().run(context)
+
+    assert output.result["readiness_status"] == "needs_revision"
+    assert any(
+        "misattributed" in w for w in output.result["blocking_verification_warnings"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_engineering_review_agent_downgrades_on_unknown_category() -> None:
+    """C5: fail-closed — a category nobody has classified as non-blocking
+    yet must still block, never silently pass. Simulates a future producer
+    that introduces a new category without updating
+    NON_BLOCKING_CATEGORIES."""
+    planning_with_findings = _planning_result()
+    planning_with_findings["verification_findings"] = [
+        {
+            "message": "Some brand-new kind of check flagged something.",
+            "category": "some_future_category_nobody_classified",
+            "blocking": True,
+        }
+    ]
+    workflow = _make_workflow(
+        [
+            _make_run("planning", "completed", planning_with_findings),
+            _make_run("development", "completed", _development_result()),
+            _make_run("testing", "completed", _testing_result()),
+            _make_run("documentation_planning", "completed", _documentation_planning_result()),
+        ]
+    )
+    context = _make_context(workflow=workflow)
+
+    with patch(
+        "app.agents.engineering_review.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(readiness_status="ready")),
+    ):
+        output = await EngineeringReviewAgent().run(context)
+
+    assert output.result["readiness_status"] == "needs_revision"
+    assert output.result["blocking_verification_warnings"] != []
+
+
+@pytest.mark.asyncio
+async def test_engineering_review_agent_legacy_unclassified_warning_still_blocks() -> None:
+    """Backward compatibility / fail-closed: a stage result persisted
+    before this classification existed (only `verification_warnings`,
+    no `verification_findings`) must still block — exactly as it did
+    before this fix, never silently dropped from the blocking decision."""
+    planning_legacy = _planning_result()
+    planning_legacy["verification_warnings"] = [
+        "Repository 'billing-service' cited in this plan was not found."
+    ]
+    # Deliberately no "verification_findings" key — simulates data
+    # persisted before this classification existed.
+    workflow = _make_workflow(
+        [
+            _make_run("planning", "completed", planning_legacy),
+            _make_run("development", "completed", _development_result()),
+            _make_run("testing", "completed", _testing_result()),
+            _make_run("documentation_planning", "completed", _documentation_planning_result()),
+        ]
+    )
+    context = _make_context(workflow=workflow)
+
+    with patch(
+        "app.agents.engineering_review.agent._call_llm",
+        new=AsyncMock(return_value=_make_llm_response(readiness_status="ready")),
+    ):
+        output = await EngineeringReviewAgent().run(context)
+
+    assert output.result["readiness_status"] == "needs_revision"
+    assert output.result["blocking_verification_warnings"] != []
 
 
 # ---------------------------------------------------------------------------

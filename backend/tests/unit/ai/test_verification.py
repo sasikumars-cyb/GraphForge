@@ -71,6 +71,58 @@ class TestCheckEntityMismatch:
         )
         assert check_entity_mismatch(wrapped, "ds-databricks-some-other-dataingest") is None
 
+    def test_ignores_common_english_emphasis_words(self):
+        # Regression test: a real run's ticket text — "This must be the
+        # ONLY change: no logic changes, no other files touched, no
+        # dependency changes, no deletions" — flagged the literal word
+        # "ONLY" as an unmatched entity/tenant token, checked against a
+        # repository the objective never even named. Ordinary English
+        # words written in caps for emphasis must never be mistaken for a
+        # business-unit code, regardless of which specific word it is.
+        assert (
+            check_entity_mismatch(
+                "This must be the ONLY change: no logic changes, no other files "
+                "touched, no dependency changes, no deletions.",
+                "sasikumars-cyb/prompt-library",
+            )
+            is None
+        )
+
+    def test_ignores_other_common_emphasis_words(self):
+        for word in ("MUST", "NOT", "ALL", "ANY", "EACH", "NEVER", "ALWAYS"):
+            assert (
+                check_entity_mismatch(
+                    f"You {word} keep this change minimal.", "some-repo"
+                )
+                is None
+            ), word
+
+    def test_accepts_list_of_selected_repositories(self):
+        # The real fix: callers must be able to pass every actually-
+        # selected/target repository, not just one — a token present in
+        # ANY of them is a match, not just the first.
+        assert (
+            check_entity_mismatch(
+                "Soco_C2M_APC_RCS -> bug",
+                [
+                    "ds-databricks-soco-gpc-c2m-rcs-dataingest",
+                    "ds-databricks-soco-apc-c2m-rcs-dataingest",
+                ],
+            )
+            is None
+        )
+
+    def test_flags_mismatch_against_every_selected_repository(self):
+        warning = check_entity_mismatch(
+            "Soco_C2M_APC_RCS -> bug",
+            ["ds-databricks-soco-gpc-c2m-rcs-dataingest", "ds-databricks-other-dataingest"],
+        )
+        assert warning is not None
+        assert "APC" in warning
+
+    def test_empty_list_is_no_op(self):
+        assert check_entity_mismatch("Soco_C2M_APC_RCS ticket", []) is None
+
     def test_still_flags_real_tenant_token_inside_wrapped_content(self):
         # The fix above must not blind the check to genuine content —
         # only to the wrapper's own scaffolding around it.

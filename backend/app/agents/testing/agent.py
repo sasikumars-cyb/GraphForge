@@ -529,8 +529,11 @@ class TestPlanningAgent:
             logger.error("testing_agent_llm_failed error=%s", str(exc))
             raise
 
-        # Back-fill repositories_consulted
-        test_plan.repositories_consulted = [r["name"] for r in indexed_repos]
+        # Back-fill repositories_consulted — canonical "owner/name" identity,
+        # same rationale as planning/development (see
+        # `TestRepositoryDiscoveryTool`'s docstring in testing/tools.py).
+        # `.get(...)` falls back to the bare name for pre-fix persisted data.
+        test_plan.repositories_consulted = [r.get("full_name") or r["name"] for r in indexed_repos]
 
         # Never trust the LLM's self-reported graph_context_used — derive it
         # from what the tools actually returned.
@@ -544,21 +547,31 @@ class TestPlanningAgent:
         # result, and nothing downstream should mistake one for the other.
         # ------------------------------------------------------------------
         evidence_pool = verification.build_evidence_pool(
-            [r["name"] for r in indexed_repos],
+            [r.get("full_name") or r["name"] for r in indexed_repos],
             [c.get("name", "") for c in components_obs.data.get("components", [])],
             [c.get("file_path", "") for c in components_obs.data.get("components", [])],
             [t.get("name", "") for t in components_obs.data.get("kafka_topics", [])],
         )
-        verification_warnings: list[str] = [
-            "This is a test PLAN produced by an LLM — no test in it has actually "
-            "been executed. Regression/integration/edge-case results below are "
-            "proposed coverage, not verified pass/fail outcomes."
-        ]
+        # `execution_status_note` (schemas.py) carries the "this is a plan,
+        # not an execution" disclaimer instead of this list — see that
+        # field's docstring. verification_warnings/verification_findings
+        # below are reserved for actual claim-vs-evidence checks, never a
+        # true-on-every-run statement of fact.
+        verification_warnings: list[str] = []
+        verification_findings: list[verification.VerificationFinding] = []
+
+        def _warn(message: str, category: str) -> None:
+            verification_warnings.append(message)
+            verification_findings.append(
+                verification.VerificationFinding(message=message, category=category)
+            )
+
         repo_check = verification.verify_claims(test_plan.affected_repositories, evidence_pool)
         for name in repo_check.unverified:
-            verification_warnings.append(
+            _warn(
                 f"Repository '{name}' cited in this test plan was not found among the "
-                "repositories this run's graph traversal actually returned — unverified."
+                "repositories this run's graph traversal actually returned — unverified.",
+                "repository_not_found",
             )
 
         # ------------------------------------------------------------------
@@ -610,7 +623,8 @@ class TestPlanningAgent:
                 kept_integration_tests.append(it)
             test_plan.integration_tests = kept_integration_tests
         if component_warnings:
-            verification_warnings.extend(w.message for w in component_warnings)
+            for w in component_warnings:
+                _warn(w.message, "component_misattribution")
             evidence.append(
                 Evidence(
                     kind="tool_call",
@@ -633,20 +647,22 @@ class TestPlanningAgent:
         unique_component_claims = list(dict.fromkeys(c for c in test_plan_claims if c))
         comp_check = verification.verify_claims(unique_component_claims, evidence_pool)
         for name in comp_check.unverified:
-            verification_warnings.append(
+            _warn(
                 f"Component '{name}' referenced in this test plan does not appear in "
-                "this run's indexed graph data — unverified."
+                "this run's indexed graph data — unverified.",
+                "component_not_found",
             )
         test_plan.verification_warnings = verification_warnings
+        test_plan.verification_findings = [f.to_dict() for f in verification_findings]
         test_plan.component_warnings = to_contract_warnings(component_warnings)
         evidence.append(
             Evidence(
                 kind="tool_call",
                 reference="claim_verification",
                 summary=(
-                    f"Test plan verification: {len(verification_warnings) - 1} claim(s) "
-                    "unverified against this run's own tool evidence (plan-vs-execution "
-                    "distinction always noted)."
+                    f"Test plan verification: {len(verification_warnings)} claim(s) "
+                    "unverified against this run's own tool evidence. This is a "
+                    "PLAN, not an execution — see execution_status_note."
                 ),
             )
         )

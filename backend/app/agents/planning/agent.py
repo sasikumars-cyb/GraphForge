@@ -664,18 +664,41 @@ class PlanningAgent:
 
         # ------------------------------------------------------------------
         # Deterministic, non-LLM verification (see app.agents.verification):
-        # entity/tenant mismatch on the top-ranked repository, and a real
-        # evidence pool this run's own tools returned, used below to check
-        # the LLM's specific claims before showing them to a reviewer.
+        # entity/tenant mismatch on the actually-selected target
+        # repositories, and a real evidence pool this run's own tools
+        # returned, used below to check the LLM's specific claims before
+        # showing them to a reviewer.
+        #
+        # Every warning appended below goes through `_warn`, which records
+        # it in both the plain-text `verification_warnings` (unchanged
+        # shape/content for any existing reader) and the classified
+        # `verification_findings` (what Engineering Review/Documentation
+        # Planning actually key their blocking decision off) — a single
+        # append site per warning means the two can never drift apart.
         # ------------------------------------------------------------------
         verification_warnings: list[str] = []
+        verification_findings: list[verification.VerificationFinding] = []
+
+        def _warn(message: str, category: str) -> None:
+            verification_warnings.append(message)
+            verification_findings.append(
+                verification.VerificationFinding(message=message, category=category)
+            )
+
         # Structured counterpart populated below by
         # check_test_used_as_production — see PlanningResult.component_warnings.
         component_warnings: list[Any] = []
-        if ranked_repo_names:
-            mismatch = verification.check_entity_mismatch(task_description, ranked_repo_names[0])
+        # The real target, not an arbitrary top-ranked candidate from the
+        # full survey — `ranked_repo_names[0]` could be any of the (up to)
+        # 17 repositories Context Discovery merely consulted, unrelated to
+        # what this plan is actually about. Falls back to the top-ranked
+        # candidate only when nothing was selected at all (nothing better
+        # to check against in that case).
+        entity_check_targets = selected_repo_names or ranked_repo_names[:1]
+        if entity_check_targets:
+            mismatch = verification.check_entity_mismatch(task_description, entity_check_targets)
             if mismatch:
-                verification_warnings.append(mismatch)
+                _warn(mismatch, "repository_identity_mismatch")
                 evidence.append(
                     Evidence(
                         kind="tool_call",
@@ -690,7 +713,7 @@ class PlanningAgent:
                 )
 
         evidence_pool = verification.build_evidence_pool(
-            [r["name"] for r in indexed_repos],
+            [r.get("full_name") or r["name"] for r in indexed_repos],
             [c.get("name", "") for c in graph_components],
             [c.get("file_path", "") for c in graph_components],
             [t.get("name", "") for t in graph_topics],
@@ -717,6 +740,22 @@ class PlanningAgent:
             )
             for repo, comps in components_by_repo.items()
         }
+        # `components_by_repo`/`per_repo_pool` are keyed by the bare
+        # repository name `graph_components` itself carries (unchanged —
+        # `target_repos` below and Context Discovery's own
+        # `ranked_repository_names` are bare too, and must stay consistent
+        # with it). `repository_usage` claims, however, are required to
+        # cite the canonical "owner/name" form (see `GetIndexedRepositoriesTool`'s
+        # docstring in planning/tools.py) — so a lookup by `usage.name`
+        # would otherwise silently miss its own repository's real pool.
+        # Alias each pool under its canonical form too, from the one place
+        # that already knows the bare-name -> full-name mapping, rather
+        # than changing what any producer emits.
+        for r in indexed_repos:
+            full = r.get("full_name")
+            bare = r.get("name")
+            if full and bare and full != bare and bare in per_repo_pool:
+                per_repo_pool.setdefault(full, per_repo_pool[bare])
 
         def _owning_repo(claim: str, exclude: Collection[str] | None) -> str | None:
             """Which OTHER indexed repository's own pool actually supports
@@ -870,8 +909,15 @@ class PlanningAgent:
             estimated_cost_usd=llm_metadata.get("estimated_cost_usd"),
         )
 
-        # Back-fill repositories_consulted from the graph traversal
-        planning_result.repositories_consulted = [r["name"] for r in indexed_repos]
+        # Back-fill repositories_consulted from the graph traversal — the
+        # canonical "owner/name" identity, matching the format
+        # `repository_usage` claims and `generate_code` are both required
+        # to use (see `GetIndexedRepositoriesTool`'s docstring in
+        # planning/tools.py for why bare `name` used to be read here and
+        # why that was wrong).
+        planning_result.repositories_consulted = [
+            r.get("full_name") or r["name"] for r in indexed_repos
+        ]
         planning_result.target_repositories = list(selected_repo_names)
 
         # Never trust the LLM's self-reported graph_context_used — derive it
@@ -890,17 +936,18 @@ class PlanningAgent:
         # when the name is indexed AND every file claim checked out; it
         # fails closed (see schemas.py) rather than defaulting to trusted.
         # ------------------------------------------------------------------
-        indexed_repo_names = {r["name"] for r in indexed_repos}
+        indexed_repo_names = {r.get("full_name") or r["name"] for r in indexed_repos}
         verified_file_paths: list[str] = []
         for usage in planning_result.repository_usage:
             name_indexed = usage.name in indexed_repo_names
             if usage.name in ranked_repo_names:
                 usage.stars = stars_for_rank(ranked_repo_names.index(usage.name))
             elif not name_indexed:
-                verification_warnings.append(
+                _warn(
                     f"Repository '{usage.name}' cited in repository_usage was not "
                     "found among the repositories this run's graph traversal actually "
-                    "returned — treat its stars/reuse estimate as unverified."
+                    "returned — treat its stars/reuse estimate as unverified.",
+                    "repository_not_found",
                 )
 
             files_check = verification.verify_claims(
@@ -910,15 +957,17 @@ class PlanningAgent:
             for path in files_check.unverified:
                 owner = _owning_repo(path, exclude={usage.name})
                 if owner:
-                    verification_warnings.append(
+                    _warn(
                         f"File '{path}' claimed for '{usage.name}' is indexed under "
                         f"'{owner}', not '{usage.name}' — likely misattributed to the "
-                        "wrong repository."
+                        "wrong repository.",
+                        "component_misattribution",
                     )
                 else:
-                    verification_warnings.append(
+                    _warn(
                         f"File '{path}' claimed for '{usage.name}' does not appear in "
-                        "this run's indexed component data — unverified."
+                        "this run's indexed component data — unverified.",
+                        "component_not_found",
                     )
             usage.verified = name_indexed and files_check.all_verified
 
@@ -926,7 +975,7 @@ class PlanningAgent:
             planning_result.executive_summary, planning_result.repository_usage
         )
         if reuse_mismatch:
-            verification_warnings.append(reuse_mismatch)
+            _warn(reuse_mismatch, "scope_ambiguity")
 
         # `affected_components` is plan-wide rather than per-repository, so
         # it's checked against the *union* of every confirmed target
@@ -958,7 +1007,8 @@ class PlanningAgent:
         if test_as_prod_warnings:
             planning_result.affected_components = corrected_components
             component_warnings.extend(test_as_prod_warnings)
-            verification_warnings.extend(w.message for w in test_as_prod_warnings)
+            for w in test_as_prod_warnings:
+                _warn(w.message, "component_misattribution")
             evidence.append(
                 Evidence(
                     kind="tool_call",
@@ -978,16 +1028,18 @@ class PlanningAgent:
         for name in components_check.unverified:
             owner = _owning_repo(name, exclude=target_repos)
             if owner:
-                verification_warnings.append(
+                _warn(
                     f"Affected component '{name}' is indexed under '{owner}', not "
                     f"under any of the target repositories "
                     f"({', '.join(target_repos) or 'none'}) — likely misattributed to "
-                    "the wrong repository."
+                    "the wrong repository.",
+                    "component_misattribution",
                 )
             else:
-                verification_warnings.append(
+                _warn(
                     f"Affected component '{name}' does not appear in this run's graph "
-                    "traversal results — unverified."
+                    "traversal results — unverified.",
+                    "component_not_found",
                 )
 
         # Repository-shaped tokens the plan's own narrative names but that
@@ -1007,14 +1059,16 @@ class PlanningAgent:
         for token in verification.find_unindexed_sibling_references(
             narrative_text, [r["name"] for r in indexed_repos]
         ):
-            verification_warnings.append(
+            _warn(
                 f"Plan references '{token}', which matches the naming pattern of "
                 "indexed repositories but is not itself indexed — verify whether "
                 "this repository exists and needs indexing before treating it as "
-                "available."
+                "available.",
+                "repository_not_found",
             )
 
         planning_result.verification_warnings = verification_warnings
+        planning_result.verification_findings = [f.to_dict() for f in verification_findings]
         planning_result.component_warnings = to_contract_warnings(component_warnings)
         if verification_warnings:
             evidence.append(
