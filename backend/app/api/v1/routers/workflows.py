@@ -552,30 +552,34 @@ def _build_projection_input(
     evidence_package = EvidencePackage(
         **cd_result.get("evidence_package", {}),
     )
-    # The synthesis LLM's own scratch reasoning, persisted verbatim inside
-    # the resumable `WorkingContext` dump (`working_memory.derived.
-    # investigation_workspace` — see `reasoning.understanding.synthesize_
-    # engineering_understanding`'s docstring) rather than projected into
-    # `ContextDiscoveryResult` at write time the way `engineering_
-    # understanding` is. Read here, not recomputed — this is the same
-    # already-persisted JSON `get_understanding` already loaded via
-    # `cd_result`, just reaching one level deeper into it. Tolerates a
-    # result persisted before this field existed (`{}` degrades to an empty
-    # workspace, matching every other `.get(..., {})` in this function).
+    # The synthesis LLM's own scratch reasoning (hypotheses, contradictions,
+    # and the code-authored `investigation_history` log the mapper checks
+    # for a degraded synthesis pass). Projected as its own top-level key by
+    # `projection.build_result` unconditionally — see that function's own
+    # comment. Falls back to the older `working_memory.derived.
+    # investigation_workspace` path only for results persisted before that
+    # top-level key existed (a paused run's `working_memory` dump still
+    # carries it); once every such old run has completed or expired, that
+    # fallback stops ever matching. Tolerates a result with neither (`{}`
+    # degrades to an empty workspace, matching every other `.get(..., {})`
+    # in this function).
     working_memory_derived: dict[str, Any] = (cd_result.get("working_memory") or {}).get(
         "derived", {}
     )
+    raw_workspace = cd_result.get("investigation_workspace") or working_memory_derived.get(
+        "investigation_workspace"
+    )
     try:
-        workspace = InvestigationWorkspace(
-            **(working_memory_derived.get("investigation_workspace") or {}),
-        )
+        workspace = InvestigationWorkspace(**(raw_workspace or {}))
     except Exception:
         # Malformed/foreign-shaped persisted data must degrade to "no
         # reasoning to show," never 500 the whole understanding endpoint —
         # same discipline as every other best-effort read in this file.
         workspace = InvestigationWorkspace()
     investigation_priority: dict[str, float] = (
-        working_memory_derived.get("investigation_priority") or {}
+        cd_result.get("investigation_priority")
+        or working_memory_derived.get("investigation_priority")
+        or {}
     )
 
     original_request: str = cd_result.get("original_request", "")

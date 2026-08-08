@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router-dom";
@@ -283,7 +283,8 @@ function makeUnderstandingDto(
     expected_outcome: "Calls retry with exponential backoff.",
     repository_summary: { primary: "payment-service", supporting: [], ownership: [] },
     architecture_summary: "payment-service calls the ledger service directly.",
-    relevant_areas: [{ name: "Retry handling", components: ["RetryHandler"] }],
+    relevant_areas: [{ name: "Retry handling", components: ["RetryHandler"], total: 1 }],
+    files_to_review: [],
     known_constraints: ["Must not exceed 3 retries."],
     missing_information: ["Design docs for the retry policy"],
     unknowns: [{ category: "unknown", description: "Design docs for the retry policy" }],
@@ -450,13 +451,128 @@ describe("ContextExplorerPanel", () => {
     expect(screen.getByText(/Must not exceed 3 retries\./)).toBeInTheDocument();
   });
 
+  it("P1 regression: Files to Review reads the curated files_to_review field, not raw graph_components", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(
+      makeUnderstandingDto({ files_to_review: ["soco_ingest/src/transforms/rate_association.py"] }),
+    );
+    renderWithAuth(
+      <ContextExplorerPanel
+        workflowId="w1"
+        result={makeResult({
+          // The real-world bug shape: the raw component list is entirely
+          // test files. If "Files to Review" fell back to reading this,
+          // it would show test_export_rate_association.py, not the real
+          // production file — exactly the audit's finding.
+          graph_components: [{ name: "test_export_rate_association", file_path: "tests/test_export_rate_association.py" }],
+        })}
+        onOverridden={vi.fn()}
+      />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    expect(
+      screen.getByText("soco_ingest/src/transforms/rate_association.py"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("tests/test_export_rate_association.py"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("P1/P2 regression: an empty files_to_review shows an honest empty state, never a raw graph_components dump", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(
+      makeUnderstandingDto({ files_to_review: [] }),
+    );
+    renderWithAuth(
+      <ContextExplorerPanel
+        workflowId="w1"
+        result={makeResult({
+          // The blocked/low-confidence investigation shape from the live
+          // QA: curation legitimately found nothing to recommend, but
+          // graph_components still has raw (mostly test) entries. The old
+          // fallback would render every one of these; the fix must not.
+          graph_components: [
+            { name: "test_ts04_start_datetime", file_path: "tests/unittest/test_ts04.py" },
+            { name: "test_ts11_update_datetime", file_path: "tests/unittest/test_ts11.py" },
+          ],
+        })}
+        onOverridden={vi.fn()}
+      />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    expect(screen.getByText("No clearly relevant files identified.")).toBeInTheDocument();
+    expect(
+      screen.getByText(/did not identify a production file with sufficient evidence/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("tests/unittest/test_ts04.py")).not.toBeInTheDocument();
+    expect(screen.queryByText("tests/unittest/test_ts11.py")).not.toBeInTheDocument();
+  });
+
+  it("P1 regression: Relevant Areas shows tier counts, and collapses Tests by default", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(
+      makeUnderstandingDto({
+        relevant_areas: [
+          { name: "Production Code", components: ["rate_association.py"], total: 1 },
+          {
+            name: "Tests",
+            components: Array.from({ length: 12 }, (_, i) => `test_${i}`),
+            total: 340,
+          },
+        ],
+      }),
+    );
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    await userEvent.click(screen.getByText("Advanced Details"));
+
+    // Production Code is open by default; its count is visible without
+    // any further interaction. Scoped to the area's own heading (not a
+    // bare `getByText("1")`) because the Knowledge Ledger and Investigation
+    // Timeline nodes above it can legitimately show their own "1"s too.
+    expect(screen.getByText("rate_association.py")).toBeVisible();
+    const productionCodeHeading = screen.getByText("Production Code").parentElement;
+    expect(productionCodeHeading).not.toBeNull();
+    expect(within(productionCodeHeading as HTMLElement).getByText("1")).toBeInTheDocument();
+
+    // Tests is collapsed by default (a secondary tier) — its own items
+    // aren't visible until expanded, but the honest total (340, not just
+    // the 12 shown once opened) is visible immediately.
+    expect(screen.getByText("340")).toBeInTheDocument();
+    expect(screen.queryByText(/test_0/)).not.toBeVisible();
+    await userEvent.click(screen.getByText("Tests"));
+    expect(screen.getByText(/test_0/)).toBeVisible();
+    expect(screen.getByText(/and 328 more/)).toBeInTheDocument();
+  });
+
   it("preserves the readiness verdict, in the engine's own words", async () => {
     renderWithAuth(
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
     expect(screen.getByText("PARTIAL")).toBeInTheDocument();
-    expect(screen.getByText("72% confidence")).toBeInTheDocument();
+    // The confidence gauge (ReasoningOverview) carries the percentage as
+    // its accessible name rather than combined visible text, since the
+    // digits and the "%" are two separately-styled DOM nodes.
+    expect(screen.getByRole("img", { name: "72% confidence" })).toBeInTheDocument();
+  });
+
+  it("P3 regression: never renders NaN% confidence when no completed result exists yet", async () => {
+    // The awaiting_input live-QA shape: the in-flight AgentStep.result has
+    // no confidence score yet (mid-clarification, nothing completed) —
+    // `Math.round(undefined * 100)` used to silently render "NaN%".
+    renderWithAuth(
+      <ContextExplorerPanel
+        workflowId="w1"
+        result={makeResult({ confidence: undefined as unknown as number })}
+        onOverridden={vi.fn()}
+      />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    expect(screen.getByRole("img", { name: "Confidence not yet available" })).toBeInTheDocument();
+    expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
   });
 
   it("hides Debug's implementation internals by default", async () => {
@@ -646,7 +762,15 @@ describe("ContextExplorerPanel", () => {
     const legacy = makeResult({ discovery_report: undefined as never });
     renderWithAuth(<ContextExplorerPanel workflowId="w1" result={legacy} onOverridden={vi.fn()} />);
 
-    expect(await screen.findByText("Network error")).toBeInTheDocument();
+    // P2 regression: the raw backend error text used to render verbatim
+    // ("No completed context discovery result for this workflow"),
+    // directly contradicting the readiness/confidence line shown right
+    // below it (which is real — sourced from `result`, always present).
+    // The message must now say plainly that a result *does* exist.
+    const banner = await screen.findByText(/Couldn.t load the full engineering understanding/);
+    expect(banner).toBeInTheDocument();
+    expect(banner.textContent).toContain("Network error");
+    expect(screen.queryByText("Network error", { exact: true })).not.toBeInTheDocument();
     // The readiness verdict comes from `result`, not the understanding
     // fetch, so it still renders even when Engineering Understanding fails.
     expect(screen.getByText("PARTIAL")).toBeInTheDocument();
@@ -734,7 +858,6 @@ describe("ReasoningSection", () => {
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    await userEvent.click(screen.getByText("Investigation Reasoning"));
     expect(
       screen.getByText(/No competing hypotheses or contradictions were needed/),
     ).toBeInTheDocument();
@@ -772,7 +895,6 @@ describe("ReasoningSection", () => {
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    await userEvent.click(screen.getByText("Investigation Reasoning"));
 
     // Rendered twice by design — once in the "Strongest explanation"
     // summary line, once as the hypothesis card's own description.
@@ -831,7 +953,6 @@ describe("ReasoningSection", () => {
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    await userEvent.click(screen.getByText("Investigation Reasoning"));
     expect(
       screen.getByText(
         (_content, element) =>
@@ -879,7 +1000,6 @@ describe("ReasoningSection", () => {
     await screen.findByText("Add retry backoff for flaky downstream calls");
     // The open-contradiction count is visible in the collapsed summary too.
     expect(screen.getByText("1 contradiction (1 open)")).toBeInTheDocument();
-    await userEvent.click(screen.getByText("Investigation Reasoning"));
     expect(screen.getByText("Open — being investigated")).toBeInTheDocument();
     expect(screen.getByText("Ticket description: 'retries are already on'")).toBeInTheDocument();
     expect(screen.getByText("RetryHandler.java has no retry annotation")).toBeInTheDocument();
@@ -917,7 +1037,6 @@ describe("ReasoningSection", () => {
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
     expect(screen.getByText("1 contradiction (resolved)")).toBeInTheDocument();
-    await userEvent.click(screen.getByText("Investigation Reasoning"));
     expect(screen.getByText("Resolved")).toBeInTheDocument();
     expect(
       screen.getByText(/The newer design doc is authoritative/),
@@ -974,11 +1093,12 @@ describe("ReasoningSection", () => {
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
     expect(screen.getByText("3 contradictions (2 open)")).toBeInTheDocument();
-    await userEvent.click(screen.getByText("Investigation Reasoning"));
     expect(screen.getAllByText("Resolved")).toHaveLength(1);
     expect(screen.getAllByText("Open — being investigated")).toHaveLength(2);
-    expect(screen.getByText("What GraphForge investigated next")).toBeInTheDocument();
-    expect(screen.getByText("Architecture")).toBeInTheDocument();
+    // "Next investigation" moved out of ReasoningSection into
+    // `UnknownsAndNext` (Reasoning Story node 6) so it isn't shown twice —
+    // see that component's own tests for its heading/label text.
+    expect(screen.getByText("Investigating next: Architecture")).toBeInTheDocument();
   });
 
   it("shows the degraded notice when synthesis fell back to a deterministic summary", async () => {
@@ -1003,7 +1123,6 @@ describe("ReasoningSection", () => {
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    await userEvent.click(screen.getByText("Investigation Reasoning"));
     expect(screen.getByText(/didn't complete cleanly/)).toBeInTheDocument();
   });
 });

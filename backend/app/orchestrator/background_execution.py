@@ -47,10 +47,12 @@ scratch on the same Run/AgentStep row.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import uuid
 from collections.abc import Awaitable, Callable
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from sqlalchemy import select
@@ -533,6 +535,84 @@ async def recover_orphaned_runs(db: AsyncSession) -> int:
             [str(r.id) for r in orphaned],
         )
     return len(orphaned)
+
+
+# P2 — orphan-run detection for a process that never restarted at all: the
+# specific real-incident shape `recover_orphaned_runs` above can't reach.
+# That function only catches a Run whose *job* is no longer queued/leased —
+# it trusts a "leased" job to mean the run is still genuinely progressing.
+# But a job stays "leased" for as long as the worker process that claimed
+# it is alive, even if the `asyncio.create_task()` running the actual
+# agent work inside it has already died silently (an exception that
+# escaped every handler in `RunCoordinator`/`_execute_run_task` without
+# ever reaching a terminal Run status — see `RunCoordinator._commit_or_
+# fail`'s own docstring for the specific bug this was found from, now
+# fixed there; this sweep is the generic backstop for the *next* one).
+#
+# A time threshold, not job-lease state, is what actually catches that:
+# Context Discovery's own budgets (MAX_CYCLES, the mid-loop/final
+# synthesis call caps) mean a genuine run essentially never takes this
+# long in practice, so a generous ceiling stays a safe, conservative
+# signal rather than a false-positive risk against a merely slow run.
+STALE_RUN_THRESHOLD = timedelta(minutes=20)
+
+
+async def fail_stale_running_runs(
+    db: AsyncSession, *, older_than: timedelta = STALE_RUN_THRESHOLD
+) -> int:
+    """Mark any Run stuck at status="running" for longer than `older_than`
+    as failed — the truthful state a user-facing "This appears to have
+    stalled" reads from, instead of an indefinite spinner. Never touches
+    "queued" (that's `recover_orphaned_runs`'s and the job queue's own
+    lease-expiry's job, both keyed on real job state, not wall-clock
+    time) or "awaiting_input" (a human genuinely may take longer than
+    `older_than` to answer a clarification question — that is not
+    staleness). Returns the number of runs failed, for logging/
+    observability, exactly like `recover_orphaned_runs`.
+    """
+    cutoff = datetime.now(UTC) - older_than
+    result = await db.execute(
+        select(Run).where(Run.status == "running", Run.started_at < cutoff)
+    )
+    stale = list(result.scalars().all())
+    if not stale:
+        return 0
+
+    for run in stale:
+        run.status = "failed"
+        run.error_message = (
+            f"This investigation appears to have stalled (no update in over "
+            f"{int(older_than.total_seconds() // 60)} minutes) and was automatically marked as "
+            "failed. Please try again."
+        )
+        run.completed_at = datetime.now(UTC)
+
+    await db.commit()
+    logger.warning(
+        "failed_stale_running_runs count=%d run_ids=%s",
+        len(stale),
+        [str(r.id) for r in stale],
+    )
+    return len(stale)
+
+
+async def run_stale_run_sweep_forever(
+    stop_event: asyncio.Event, *, interval: timedelta = timedelta(minutes=5)
+) -> None:
+    """The periodic counterpart to `recover_orphaned_runs` (startup-only) —
+    started as its own background task from `app.main`'s lifespan,
+    mirroring `Worker.run_forever`'s own shape exactly (a stop event, a
+    fresh session per iteration, exceptions logged and swallowed so one
+    bad sweep can't kill the loop). Runs until `stop_event` is set.
+    """
+    while not stop_event.is_set():
+        try:
+            async with AsyncSessionLocal() as db:
+                await fail_stale_running_runs(db)
+        except Exception:
+            logger.exception("stale_run_sweep_failed")
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(stop_event.wait(), timeout=interval.total_seconds())
 
 
 def cancel_run(run_id: uuid.UUID) -> bool:

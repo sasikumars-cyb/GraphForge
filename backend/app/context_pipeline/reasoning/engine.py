@@ -345,7 +345,18 @@ async def _apply_memory_priority_boost(state: WorkingContext, session: SessionCo
     scope = _repository_scope(state)
     if scope is None:
         return
-    memory_keys: set[str] = set()
+    # A `list`, never a `set` — `state.derived` is persisted verbatim as
+    # part of `WorkingContext.model_dump()` (see `projection.build_result`'s
+    # `working_memory` field), which is written into a JSON/JSONB column.
+    # A `set` here previously reached `json.dumps` and raised `TypeError:
+    # Object of type set is not JSON serializable` — not on every run, only
+    # once this boost had ever fired for a given (scope, capability), which
+    # is exactly what made it look intermittent rather than a straightforward
+    # bug. Every value `state.derived` ever holds must be JSON-serializable
+    # by construction; see `app.database.session`'s `json_serializer` for
+    # the second, independent line of defense against this same class of
+    # mistake reaching persistence again.
+    memory_keys: list[str] = []
     blended: dict[str, float] = {}
     for capability, live_value in live_boost.items():
         memory_value = 0.0
@@ -359,8 +370,8 @@ async def _apply_memory_priority_boost(state: WorkingContext, session: SessionCo
                     "investigation_intelligence_priority_boost_failed capability=%s", capability
                 )
                 memory_value = 0.0
-        if memory_value:
-            memory_keys.add(capability)
+        if memory_value and capability not in memory_keys:
+            memory_keys.append(capability)
         blended[capability] = min(1.0, live_value + memory_value * 0.15)
     state.derived["investigation_priority"] = blended
     state.derived["_intelligence_boost_keys"] = memory_keys
@@ -369,7 +380,7 @@ async def _apply_memory_priority_boost(state: WorkingContext, session: SessionCo
 def _priority_boost_source(state: WorkingContext, capability: str, boost_applied: float) -> str:
     if not boost_applied:
         return "none"
-    memory_keys: set[str] = state.derived.get("_intelligence_boost_keys") or set()
+    memory_keys: list[str] = state.derived.get("_intelligence_boost_keys") or []
     return "both" if capability in memory_keys else "live_llm"
 
 
@@ -517,8 +528,27 @@ _STEP_LABELS: dict[str, str] = {
     "user": "Recording your answer",
 }
 
+# P2 fix — `RequestParseInvestigator` genuinely runs up to four distinct
+# passes over the request (see its own module docstring: the raw text,
+# then retrieved ticket/doc content, then indexed repository names, then
+# tracked-but-unindexed ones), but every one of them shares `provider=
+# "request_parser"`, so `_STEP_LABELS` alone rendered all four as the
+# identical "Parsing the request" — a real user watching the live
+# checklist reasonably read that as the UI being stuck re-running the
+# same step, not four different ones. Keyed on `action.key` (each pass's
+# own distinct name — see `RequestParseInvestigator.propose`), checked
+# before the provider-level fallback above.
+_REQUEST_PARSER_STEP_LABELS: dict[str, str] = {
+    "parse_request": "Parsing the request",
+    "parse_retrieved_content": "Checking retrieved content for references",
+    "match_repository_names": "Matching indexed repository names",
+    "match_tracked_repository_names": "Checking tracked repository names",
+}
+
 
 def _step_label(action: InvestigationAction) -> str:
+    if action.provider == "request_parser":
+        return _REQUEST_PARSER_STEP_LABELS.get(action.key, "Parsing the request")
     return _STEP_LABELS.get(action.provider, f"Checking {action.provider}")
 
 

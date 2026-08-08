@@ -174,7 +174,16 @@ const STATUS_CONFIG: Record<
   completed: { label: "Completed", tone: "success" },
   failed: { label: "Failed", tone: "danger" },
   running: { label: "In Progress", tone: "info" },
-  awaiting_approval: { label: "In Progress", tone: "info" },
+  // P0-2 fix — this used to read "In Progress" with the same `info` tone
+  // as `running`, above, making a stage that hasn't been dispatched at
+  // all (current_stage has advanced, but no Run exists for it yet — the
+  // workflow is sitting at the approval gate) indistinguishable from one
+  // an agent is actively executing. `current_stage` advancing immediately
+  // on stage completion is intentional (see `workflow_service.
+  // advance_workflow` — it's the dispatch *target* `/continue` reads, not
+  // a claim that dispatch already happened); the bug was purely this
+  // label lying about what that pointer means until a human acts on it.
+  awaiting_approval: { label: "Awaiting Approval", tone: "warning" },
   awaiting_clarification: { label: "Needs Your Input", tone: "warning" },
   // Never actually looked up directly — workflowStatusDisplay() always
   // branches before reaching here for this phase — but every WorkflowPhase

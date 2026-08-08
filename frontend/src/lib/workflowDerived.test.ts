@@ -467,4 +467,18 @@ describe("workflowStatusDisplay", () => {
       tone: "danger",
     });
   });
+
+  it("P0-2 regression: never labels 'awaiting_approval' the same as 'running'", () => {
+    // The real reported bug: current_stage advances to the next stage
+    // immediately on completion (see workflow_service.advance_workflow —
+    // that pointer move is intentional, it's what /continue dispatches
+    // against), but no Run exists for it yet until a human approves. This
+    // used to render "In Progress" — identical text and tone to a stage
+    // an agent is actually executing — with no way to tell the two apart.
+    const awaitingApproval = workflowStatusDisplay({ status: "in_progress" }, "awaiting_approval");
+    const running = workflowStatusDisplay({ status: "in_progress" }, "running");
+    expect(awaitingApproval.label).not.toBe(running.label);
+    expect(awaitingApproval).toEqual({ label: "Awaiting Approval", tone: "warning" });
+    expect(running).toEqual({ label: "In Progress", tone: "info" });
+  });
 });

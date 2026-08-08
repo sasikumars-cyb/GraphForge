@@ -39,9 +39,11 @@ from app.context_pipeline.reasoning.engine import (
     MAX_CLARIFICATION_ROUNDS,
     MAX_CYCLES,
     MAX_MID_LOOP_SYNTHESIS_CALLS,
+    _apply_memory_priority_boost,
     _resync,
     _select,
     _settle_claims,
+    _step_label,
     discover,
     resume,
 )
@@ -701,6 +703,34 @@ async def test_transcript_narrates_intent_before_each_observation() -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_step_label_distinguishes_every_request_parser_pass() -> None:
+    """P2 regression — the four real, distinct RequestParseInvestigator
+    passes used to all render as the identical 'Parsing the request' in
+    the live checklist, reading as the UI stuck repeating one step."""
+    def _action(key: str) -> InvestigationAction:
+        return InvestigationAction(
+            provider="request_parser", key=key, intent="", targets="work_item"
+        )
+
+    labels = {
+        key: _step_label(_action(key))
+        for key in [
+            "parse_request",
+            "parse_retrieved_content",
+            "match_repository_names",
+            "match_tracked_repository_names",
+        ]
+    }
+    assert len(set(labels.values())) == len(labels), f"labels collided: {labels}"
+
+
+def test_step_label_falls_back_honestly_for_an_unknown_request_parser_key() -> None:
+    action = InvestigationAction(
+        provider="request_parser", key="some_future_pass", intent="", targets="work_item"
+    )
+    assert _step_label(action) == "Parsing the request"
+
+
 @pytest.mark.asyncio
 async def test_progress_sink_reports_a_step_active_then_done() -> None:
     from app.orchestrator.live_progress import LiveProgress
@@ -739,6 +769,65 @@ async def test_progress_sink_reports_a_step_active_then_done() -> None:
     # placeholder — never fabricated progress.
     assert all(c.max_iterations == MAX_CYCLES for c in calls)
     assert all(c.iteration >= 1 for c in calls)
+
+
+class _StubIntelligence:
+    """Duck-typed stand-in for `InvestigationIntelligenceService` — returns a
+    fixed, non-zero preference so `_apply_memory_priority_boost` actually
+    exercises the branch that populates `_intelligence_boost_keys`, without
+    needing a real Postgres-backed history seeded to produce one."""
+
+    def __init__(self, value: float) -> None:
+        self._value = value
+
+    async def repository_provider_preference(self, *, scope, capability) -> float:  # noqa: ANN001
+        return self._value
+
+
+@pytest.mark.asyncio
+async def test_memory_priority_boost_never_persists_a_raw_set() -> None:
+    """P0-1 regression — the real production incident. `_intelligence_
+    boost_keys` used to be a Python `set`, which reached `json.dumps` when
+    `WorkingContext.model_dump()` (== the persisted `working_memory` field)
+    was written to a JSON/JSONB column, raising `TypeError: Object of type
+    set is not JSON serializable`. Every value `state.derived` can hold
+    must round-trip through `json.dumps` cleanly — this test constructs the
+    exact condition that used to produce a `set` (a non-zero memory
+    preference for a capability with a live boost) and asserts the whole
+    `WorkingContext` still serializes."""
+    import json
+
+    ledger = Ledger()
+    repo_ev = ledger.add_evidence(
+        provider="graph", action="get_indexed_repositories", outcome="success", summary="1 found"
+    )
+    ledger.add_fact(
+        kind="repository",
+        subject="payment-service",
+        provider="graph",
+        evidence_id=repo_ev.evidence_id,
+        value={"name": "payment-service"},
+    )
+    state = WorkingContext(ledger=ledger)
+    state.derived["investigation_priority"] = {"architecture": 0.4, "documentation": 0.2}
+
+    session = SessionContext(
+        db=None,  # type: ignore[arg-type]
+        user_id=None,
+        intelligence=_StubIntelligence(0.6),
+    )
+
+    await _apply_memory_priority_boost(state, session)
+
+    boost_keys = state.derived["_intelligence_boost_keys"]
+    assert isinstance(boost_keys, list)
+    assert not isinstance(boost_keys, set)
+    assert "architecture" in boost_keys
+
+    # The real regression check: the entire persisted shape must be
+    # JSON-serializable, exactly as it will be when written to the
+    # `working_memory` JSONB column via `projection.build_result`.
+    json.dumps(state.model_dump())
 
 
 @pytest.mark.asyncio

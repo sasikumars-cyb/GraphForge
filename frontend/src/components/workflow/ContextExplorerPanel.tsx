@@ -1,12 +1,5 @@
 import { useEffect, useState } from "react";
-import {
-  AlertTriangle,
-  CheckCircle2,
-  Loader2,
-  PenLine,
-  Terminal,
-  X,
-} from "lucide-react";
+import { AlertTriangle, Loader2, PenLine, Terminal, X } from "lucide-react";
 import { Card } from "../Card";
 import type {
   ContextDiscoveryResult,
@@ -16,11 +9,30 @@ import type {
 import { fetchUnderstanding, overrideStageResult } from "../../lib/api/workflows";
 import { useAuth } from "../../app/auth-context";
 import { RepositorySelector } from "./RepositorySelector";
-import { CompletionStatusBadge, SectionHeading } from "./EngineeringUnderstandingPanel";
+import { SectionHeading } from "./EngineeringUnderstandingPanel";
 import { InvestigationSummary } from "./InvestigationSummary";
 import { AdvancedDetailsSection } from "./AdvancedDetailsSection";
+import { ReasoningOverview } from "./ReasoningOverview";
+import { InvestigationTimeline } from "./InvestigationTimeline";
+import { KnowledgeLedger } from "./KnowledgeLedger";
 import { ReasoningSection } from "./ReasoningSection";
+import { UnknownsAndNext } from "./UnknownsAndNext";
 import { DebugPanel } from "./DebugPanel";
+
+/** `result.confidence` is a real number only once Context Discovery has
+ * actually produced a scored result. While a run is still `awaiting_input`
+ * (mid-clarification, no completed discovery result yet), `ContextExplorerPanel`
+ * is still mounted from the in-flight `AgentStep.result` — see
+ * `WorkflowPage`'s `discoveryResult` — so `confidence` can be `undefined`/
+ * `null` here. `Math.round(undefined * 100)` silently renders "NaN%", which
+ * reads as a real (nonsensical) score rather than "not computed yet." P3
+ * fix: format defensively and say so honestly instead. */
+function formatConfidence(confidence: number | null | undefined): string {
+  if (typeof confidence !== "number" || Number.isNaN(confidence)) {
+    return "Confidence not yet available";
+  }
+  return `${Math.round(confidence * 100)}% confidence`;
+}
 
 interface ContextExplorerPanelProps {
   workflowId: string;
@@ -167,37 +179,27 @@ export function ContextExplorerPanel({
           <div className="rounded-lg border border-warning-line/30 bg-warning-bg px-3 py-2.5">
             <p className="flex items-center gap-1.5 text-xs text-warning-fg">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              {understandingError}
+              {/* P2 fix — this used to render the raw backend error message
+                  verbatim (e.g. "No completed context discovery result for
+                  this workflow"), which directly contradicts the readiness/
+                  confidence line rendered right below it: `result` (this
+                  component's own prop) is always real, completed data —
+                  this component never mounts without it — so a failure
+                  fetching the *separate*, richer `/understanding` DTO is
+                  never "there is no result," only "the fuller analysis
+                  didn't load." Same underlying error, honest framing. */}
+              Couldn&apos;t load the full engineering understanding — the readiness and evidence
+              below are still accurate. ({understandingError})
             </p>
           </div>
         )}
-        {/* Planning Readiness — the answer to "is Planning ready?", one of
-            Level 1's nine questions, placed first rather than left to
-            trail below two collapsible sections. Sourced from `result`
-            (not the understanding fetch) so it still renders even if that
-            fetch fails — unchanged resilience from before this reorder. */}
-        <div className="flex items-center gap-2 rounded-lg border border-line-muted bg-surface-raised px-3 py-2">
-          <span
-            className={`flex items-center gap-1 text-xs font-semibold ${
-              result.readiness === "READY"
-                ? "text-success-fg"
-                : result.readiness === "PARTIAL"
-                  ? "text-warning-fg"
-                  : "text-danger-fg"
-            }`}
-          >
-            {result.readiness === "READY" ? (
-              <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-            ) : (
-              <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
-            )}
-            {result.readiness}
-          </span>
-          <span className="text-xs text-fg-muted">
-            {Math.round(result.confidence * 100)}% confidence
-          </span>
-          <CompletionStatusBadge status={result.completion_status} />
-        </div>
+        {/* Node 1 of the investigation story: "what was it trying to
+            determine, and how sure is it?" Sourced from `result` (always
+            present) plus `understanding` (nullable — this node degrades
+            gracefully while the async fetch is loading or if it failed,
+            same resilience contract the rest of this panel already
+            follows). Replaces the old plain readiness pill. */}
+        <ReasoningOverview result={result} understanding={understanding} />
 
         {/* BUDGET_EXHAUSTED is the one completion_status that must never
             read like a normal readiness banner — the audit's own finding
@@ -213,8 +215,9 @@ export function ContextExplorerPanel({
               avenue was exhausted.
             </p>
             <p className="mt-1 pl-5 text-[11px] text-warning-fg/80">
-              What's below reflects what it found in the time it had, at {Math.round(result.confidence * 100)}%
-              confidence and {result.readiness.toLowerCase()} readiness. See Missing Information
+              What's below reflects what it found in the time it had, at{" "}
+              {formatConfidence(result.confidence)} and {result.readiness.toLowerCase()} readiness.
+              See Missing Information
               and Unknowns in Advanced Details for exactly what's still open.
             </p>
           </div>
@@ -222,6 +225,15 @@ export function ContextExplorerPanel({
 
         {understanding && (
           <>
+            {/* Node 2: what it investigated, in order. */}
+            <InvestigationTimeline
+              steps={result.discovery_report?.investigation ?? []}
+              nextInvestigation={understanding.reasoning_summary.next_investigation}
+            />
+
+            {/* Node 3: what it believes, and how sure — not one number. */}
+            <KnowledgeLedger understanding={understanding} />
+
             <InvestigationSummary result={result} understanding={understanding} />
 
             {/* Repository Selector — an adjustment to the narrative above,
@@ -241,7 +253,16 @@ export function ContextExplorerPanel({
               onExpand={handleExpandDebug}
             />
 
+            {/* Node 4/5: why it believes that, and what contradicts it. */}
             <ReasoningSection summary={understanding.reasoning_summary} />
+
+            {/* Node 6: what's still unknown, and what's next — closes the
+                narrative loop the timeline's dashed "next" row opens. */}
+            <UnknownsAndNext
+              missingInformation={understanding.missing_information}
+              unknowns={understanding.unknowns}
+              nextInvestigation={understanding.reasoning_summary.next_investigation}
+            />
 
             <DebugPanel
               bundle={debugBundle}

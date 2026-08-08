@@ -47,10 +47,26 @@ class RepositorySummaryDTO(BaseModel):
 
 
 class AreaClusterDTO(BaseModel):
-    """One logical area grouping related components."""
+    """One logical area grouping related components.
+
+    Since P1 (the audit's Context Delivery finding), grouped by the same
+    ranked, budget-bounded *tier* the curated `EvidencePackage` already
+    computes (Production Code / Architecture Dependencies / Reusable
+    Components / Tests) rather than by graph topic against the raw,
+    uncurated component list — the old grouping had no ranking at all, so
+    a cluster with hundreds of members rendered as an unbroken wall of
+    names with the one file that actually mattered not even guaranteed to
+    be among them. `components` is still capped for display; `total` is
+    the honest full count behind it, the same "N shown, M more" contract
+    `_map_evidence_summary` already uses elsewhere in this mapper.
+    """
 
     name: str
     components: list[str] = Field(default_factory=list)
+    # The real count this cluster's tier has, before the display cap —
+    # 0 or absent (falls back to len(components) at the read site) for a
+    # DTO built before this field existed.
+    total: int = 0
 
 
 class UnknownItemDTO(BaseModel):
@@ -179,6 +195,15 @@ class EngineeringUnderstandingDTO(BaseModel):
     )
     architecture_summary: str = ""
     relevant_areas: list[AreaClusterDTO] = Field(default_factory=list)
+    # The concrete file paths an engineer should open first — ranked,
+    # deduped, capped, sourced from the curated `EvidencePackage`'s
+    # `must_modify` tier (falling back to `architecture_dependency` only
+    # if that tier alone can't fill the cap). Replaces the frontend's own
+    # `extractFilePaths(graph_components)`, which read the raw, unranked
+    # component list and could — and did, on a real investigation — list
+    # only test files while omitting the actual root-cause production
+    # file the Engineering Summary named in the same breath.
+    files_to_review: list[str] = Field(default_factory=list)
     known_constraints: list[str] = Field(default_factory=list)
     missing_information: list[str] = Field(default_factory=list)
     unknowns: list[UnknownItemDTO] = Field(default_factory=list)

@@ -219,7 +219,12 @@ class TestHappyPath:
 
         body = resp.json()
         areas = body["relevant_areas"]
-        assert any(a["name"] == "OrderEvents" for a in areas)
+        # Tier-based (Production Code / Architecture / Reusable Components /
+        # Tests), sourced from the curated evidence_package — not the old
+        # graph-topic grouping. `_cd_result()`'s one evidence item is tier
+        # "must_modify".
+        production = next(a for a in areas if a["name"] == "Production Code")
+        assert "OrderConsumer" in production["components"]
 
     async def test_evidence_summary_populated(
         self, app_client: AsyncClient,
@@ -258,6 +263,178 @@ class TestHappyPath:
 
         body = resp.json()
         assert body["planning_assessment"]["status"] == "READY"
+
+
+# ---------------------------------------------------------------------------
+# Tests — P1 regression: degraded reasoning must survive to the API response
+#
+# The live-QA finding: a real `ContextDiscoverySynthesisError` (provider
+# timeout) was correctly recorded by `understanding.synthesize_engineering_
+# understanding` as a "synthesis degraded to a deterministic summary" history
+# entry, but `projection.build_result` only projected `investigation_
+# workspace` inside `working_memory`, which is itself only populated while a
+# run is paused (`question is not None`) — so a *completed* run's degraded
+# signal was silently discarded before ever reaching the mapper, and the API
+# always reported `degraded: false`, regardless of what synthesis actually
+# did. Fixed by projecting `investigation_workspace`/`investigation_priority`
+# as their own unconditional top-level keys. These tests exercise the real
+# parsing boundary (`_build_projection_input`) through the full HTTP
+# endpoint, the same layer the original bug lived in.
+# ---------------------------------------------------------------------------
+
+
+class TestReasoningDegradedPropagation:
+    async def test_a_degraded_synthesis_is_exposed_as_degraded_true(
+        self, app_client: AsyncClient,
+    ) -> None:
+        cd_result = _cd_result(
+            investigation_workspace={
+                "investigation_history": [
+                    "Cycle 1: synthesis degraded to a deterministic summary over 3 "
+                    "evidence record(s).",
+                ],
+            },
+        )
+        with (
+            patch(
+                "app.services.workflow_service.get_workflow",
+                new_callable=AsyncMock,
+                return_value=_mock_workflow(),
+            ),
+            patch(
+                "app.api.v1.routers.workflows.get_stage_result",
+                return_value=cd_result,
+            ),
+        ):
+            resp = await app_client.get(_URL)
+
+        body = resp.json()
+        assert body["reasoning_summary"]["degraded"] is True
+
+    async def test_a_successful_synthesis_history_entry_is_not_degraded(
+        self, app_client: AsyncClient,
+    ) -> None:
+        cd_result = _cd_result(
+            investigation_workspace={
+                "investigation_history": [
+                    "Cycle 1: re-synthesized over 3 evidence record(s) — 1 hypothesis/es, "
+                    "0 unresolved contradiction(s).",
+                ],
+            },
+        )
+        with (
+            patch(
+                "app.services.workflow_service.get_workflow",
+                new_callable=AsyncMock,
+                return_value=_mock_workflow(),
+            ),
+            patch(
+                "app.api.v1.routers.workflows.get_stage_result",
+                return_value=cd_result,
+            ),
+        ):
+            resp = await app_client.get(_URL)
+
+        body = resp.json()
+        assert body["reasoning_summary"]["degraded"] is False
+
+    async def test_no_reasoning_at_all_is_the_honest_empty_state_not_degraded(
+        self, app_client: AsyncClient,
+    ) -> None:
+        """A request too thin to have hypotheses (`has_reasoning=False`) is a
+        different, equally real outcome from a failed synthesis pass
+        (`degraded=True`) — neither must be mislabeled as the other."""
+        cd_result = _cd_result()  # no investigation_workspace key at all
+        with (
+            patch(
+                "app.services.workflow_service.get_workflow",
+                new_callable=AsyncMock,
+                return_value=_mock_workflow(),
+            ),
+            patch(
+                "app.api.v1.routers.workflows.get_stage_result",
+                return_value=cd_result,
+            ),
+        ):
+            resp = await app_client.get(_URL)
+
+        body = resp.json()
+        assert body["reasoning_summary"]["degraded"] is False
+        assert body["reasoning_summary"]["has_reasoning"] is False
+
+    async def test_legacy_results_still_read_degraded_from_working_memory(
+        self, app_client: AsyncClient,
+    ) -> None:
+        """Backward compatibility: a result persisted before the top-level
+        `investigation_workspace` key existed only carries it inside
+        `working_memory.derived` (and only while paused) — must still be
+        read correctly rather than silently dropped."""
+        cd_result = _cd_result(
+            working_memory={
+                "derived": {
+                    "investigation_workspace": {
+                        "investigation_history": [
+                            "Cycle 1: synthesis degraded to a deterministic summary "
+                            "over 1 evidence record(s).",
+                        ],
+                    },
+                },
+            },
+        )
+        with (
+            patch(
+                "app.services.workflow_service.get_workflow",
+                new_callable=AsyncMock,
+                return_value=_mock_workflow(),
+            ),
+            patch(
+                "app.api.v1.routers.workflows.get_stage_result",
+                return_value=cd_result,
+            ),
+        ):
+            resp = await app_client.get(_URL)
+
+        body = resp.json()
+        assert body["reasoning_summary"]["degraded"] is True
+
+    async def test_top_level_key_takes_precedence_over_stale_working_memory(
+        self, app_client: AsyncClient,
+    ) -> None:
+        """When both are present, the unconditional top-level projection is
+        the current write path and must win over the working_memory copy."""
+        cd_result = _cd_result(
+            investigation_workspace={
+                "investigation_history": [
+                    "Cycle 2: re-synthesized over 5 evidence record(s) — 1 "
+                    "hypothesis/es, 0 unresolved contradiction(s).",
+                ],
+            },
+            working_memory={
+                "derived": {
+                    "investigation_workspace": {
+                        "investigation_history": [
+                            "Cycle 1: synthesis degraded to a deterministic summary "
+                            "over 1 evidence record(s).",
+                        ],
+                    },
+                },
+            },
+        )
+        with (
+            patch(
+                "app.services.workflow_service.get_workflow",
+                new_callable=AsyncMock,
+                return_value=_mock_workflow(),
+            ),
+            patch(
+                "app.api.v1.routers.workflows.get_stage_result",
+                return_value=cd_result,
+            ),
+        ):
+            resp = await app_client.get(_URL)
+
+        body = resp.json()
+        assert body["reasoning_summary"]["degraded"] is False
 
 
 # ---------------------------------------------------------------------------

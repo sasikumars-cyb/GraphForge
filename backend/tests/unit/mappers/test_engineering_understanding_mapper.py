@@ -196,13 +196,17 @@ class TestCompleteInput:
         assert "gateway → IdP" in complete_dto.architecture_summary
 
     def test_relevant_areas(self, complete_dto):
+        # Tier-based (Production Code / Architecture / Reusable Components /
+        # Tests), sourced from the curated EvidencePackage — not the raw
+        # graph_topics/graph_components grouping this DTO no longer reads.
         assert len(complete_dto.relevant_areas) >= 1
-        auth_area = next(
-            a
-            for a in complete_dto.relevant_areas
-            if a.name == "Authentication"
+        production = next(
+            a for a in complete_dto.relevant_areas if a.name == "Production Code"
         )
-        assert "AuthController" in auth_area.components
+        assert "AuthController" in production.components
+
+    def test_files_to_review(self, complete_dto):
+        assert complete_dto.files_to_review == []  # _evidence_item has no path by default
 
     def test_known_constraints(self, complete_dto):
         assert "Must support SAML 2.0" in complete_dto.known_constraints
@@ -293,65 +297,66 @@ class TestRepositoryMapping:
 
 
 class TestAreaGrouping:
-    """Area grouping → topic-based clusters + 'Other' for unmatched."""
+    """Area grouping → tiered clusters from the curated EvidencePackage,
+    ranked and capped — the P1 fix for the audit's "hundreds of ungrouped
+    test-function names" finding."""
 
-    def test_groups_by_topic(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="Auth")],
-                graph_components=[
-                    ComponentProjection(name="LoginCtrl", topic="Auth"),
-                    ComponentProjection(name="SessionMgr", topic="Auth"),
-                ],
-            )
+    def test_groups_by_tier(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item("LoginCtrl", "must_modify"),
+                _evidence_item("SessionMgr", "must_modify"),
+                _evidence_item("test_login", "relevant_test"),
+            ],
         )
-        assert len(dto.relevant_areas) == 1
-        assert dto.relevant_areas[0].name == "Auth"
-        assert set(dto.relevant_areas[0].components) == {
-            "LoginCtrl",
-            "SessionMgr",
-        }
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        names = {a.name for a in dto.relevant_areas}
+        assert names == {"Production Code", "Tests"}
+        production = next(a for a in dto.relevant_areas if a.name == "Production Code")
+        assert set(production.components) == {"LoginCtrl", "SessionMgr"}
+        tests = next(a for a in dto.relevant_areas if a.name == "Tests")
+        assert tests.components == ["test_login"]
 
-    def test_case_insensitive_matching(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="Authentication")],
-                graph_components=[
-                    ComponentProjection(
-                        name="Ctrl", topic="authentication",
-                    ),
-                ],
-            )
+    def test_every_tier_gets_its_own_honest_label(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item("A", "must_modify"),
+                _evidence_item("B", "architecture_dependency"),
+                _evidence_item("C", "reusable_component"),
+                _evidence_item("D", "relevant_test"),
+            ],
         )
-        assert dto.relevant_areas[0].name == "Authentication"
-        assert "Ctrl" in dto.relevant_areas[0].components
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        labels = [a.name for a in dto.relevant_areas]
+        # Fixed order: must_modify, architecture_dependency,
+        # reusable_component, relevant_test (same order curate() emits).
+        assert labels == [
+            "Production Code",
+            "Architecture",
+            "Reusable Components",
+            "Tests",
+        ]
 
-    def test_unmatched_goes_to_other(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="Auth")],
-                graph_components=[
-                    ComponentProjection(
-                        name="Orphan", topic="nonexistent",
-                    ),
-                ],
-            )
-        )
-        other = next(a for a in dto.relevant_areas if a.name == "Other")
-        assert "Orphan" in other.components
+    def test_a_tier_with_zero_items_is_omitted_not_shown_empty(self):
+        evidence = EvidencePackage(items=[_evidence_item("A", "must_modify")])
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert [a.name for a in dto.relevant_areas] == ["Production Code"]
 
-    def test_topic_with_no_components_still_appears(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="EmptyTopic")],
-                graph_components=[],
-            )
-        )
-        assert any(a.name == "EmptyTopic" for a in dto.relevant_areas)
-
-    def test_empty_topics_and_components(self):
+    def test_empty_evidence_package(self):
         dto = map_to_dto(_minimal_input())
         assert dto.relevant_areas == []
+
+    def test_a_large_tier_is_capped_with_an_honest_total(self):
+        # The exact real-world shape the audit found: hundreds of test
+        # functions in one tier. Must be capped for display, never dumped
+        # as a wall of text, with the true count always stated alongside.
+        evidence = EvidencePackage(
+            items=[_evidence_item(f"test_{i}", "relevant_test") for i in range(340)],
+        )
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        tests = next(a for a in dto.relevant_areas if a.name == "Tests")
+        assert len(tests.components) <= 12
+        assert tests.total == 340
 
 
 class TestUnknownCategorisation:
@@ -646,62 +651,14 @@ class TestNextStep:
 # ---------------------------------------------------------------------------
 
 
-class TestDuplicateTopics:
-    """Duplicate topics (case-insensitive) → last wins for canonical name."""
-
-    def test_duplicate_topic_same_case(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[
-                    TopicProjection(name="Auth"),
-                    TopicProjection(name="Auth"),
-                ],
-                graph_components=[
-                    ComponentProjection(name="Ctrl", topic="Auth"),
-                ],
-            )
-        )
-        auth_areas = [a for a in dto.relevant_areas if a.name == "Auth"]
-        assert len(auth_areas) == 1
-        assert "Ctrl" in auth_areas[0].components
-
-    def test_duplicate_topic_different_case(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[
-                    TopicProjection(name="Auth"),
-                    TopicProjection(name="auth"),
-                ],
-                graph_components=[
-                    ComponentProjection(name="Ctrl", topic="AUTH"),
-                ],
-            )
-        )
-        # Components should be grouped under one cluster
-        total_components = sum(
-            len(a.components) for a in dto.relevant_areas
-        )
-        ctrl_found = any(
-            "Ctrl" in a.components for a in dto.relevant_areas
-        )
-        assert total_components == 1
-        assert ctrl_found
-
-
 class TestUnicode:
-    """Unicode characters in topics, components, and unknowns."""
+    """Unicode characters in components, and unknowns."""
 
-    def test_unicode_topic_and_component(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="認証")],
-                graph_components=[
-                    ComponentProjection(name="ログインCtrl", topic="認証"),
-                ],
-            )
-        )
-        assert dto.relevant_areas[0].name == "認証"
-        assert "ログインCtrl" in dto.relevant_areas[0].components
+    def test_unicode_component_name(self):
+        evidence = EvidencePackage(items=[_evidence_item("ログインCtrl", "must_modify")])
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        production = next(a for a in dto.relevant_areas if a.name == "Production Code")
+        assert "ログインCtrl" in production.components
 
     def test_unicode_unknowns(self):
         u = EngineeringUnderstanding(
@@ -749,62 +706,76 @@ class TestDeterministicOrdering:
         assert all(r == results[0] for r in results)
 
 
-class TestEmptyComponentNames:
-    """Components with empty names are silently skipped."""
-
-    def test_empty_name_skipped(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="Auth")],
-                graph_components=[
-                    ComponentProjection(name="", topic="Auth"),
-                    ComponentProjection(name="Valid", topic="Auth"),
-                ],
-            )
-        )
-        auth_area = next(
-            a for a in dto.relevant_areas if a.name == "Auth"
-        )
-        assert auth_area.components == ["Valid"]
-
-    def test_all_empty_names(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="Auth")],
-                graph_components=[
-                    ComponentProjection(name="", topic="Auth"),
-                ],
-            )
-        )
-        auth_area = next(
-            a for a in dto.relevant_areas if a.name == "Auth"
-        )
-        assert auth_area.components == []
-
-
 class TestLargeGraphs:
     """Large input sets process correctly without issues."""
 
-    def test_many_topics_and_components(self):
-        topics = [
-            TopicProjection(name=f"Topic{i}") for i in range(100)
-        ]
-        components = [
-            ComponentProjection(
-                name=f"Comp{i}_{j}", topic=f"Topic{i}",
-            )
-            for i in range(100)
-            for j in range(10)
-        ]
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=topics,
-                graph_components=components,
-            )
+    def test_many_components_across_every_tier(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item(f"Comp{i}", "must_modify" if i % 2 == 0 else "relevant_test")
+                for i in range(1000)
+            ],
         )
-        assert len(dto.relevant_areas) == 100
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert len(dto.relevant_areas) == 2
         for area in dto.relevant_areas:
-            assert len(area.components) == 10
+            assert area.total == 500
+            assert len(area.components) <= 12
+
+
+class TestFilesToReview:
+    """files_to_review → ranked production file paths, never test paths."""
+
+    def test_reads_must_modify_paths(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item("rate_association", "must_modify", path="soco/rate_association.py"),
+            ],
+        )
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert dto.files_to_review == ["soco/rate_association.py"]
+
+    def test_never_includes_test_or_reusable_paths(self):
+        # The exact real-world bug: "Files to Review" used to list only
+        # test files because it read the raw, unranked component list.
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item("test_rate_association", "relevant_test", path="tests/test_ra.py"),
+                _evidence_item("string_utils", "reusable_component", path="soco/utils.py"),
+                _evidence_item("rate_association", "must_modify", path="soco/rate_association.py"),
+            ],
+        )
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert dto.files_to_review == ["soco/rate_association.py"]
+
+    def test_falls_back_to_architecture_dependency_to_fill_the_cap(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item("a", "must_modify", path="a.py"),
+                _evidence_item("b", "architecture_dependency", path="b.py"),
+            ],
+        )
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert dto.files_to_review == ["a.py", "b.py"]
+
+    def test_deduplicates_and_caps_at_eight(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item(f"item{i}", "must_modify", path=f"path{i % 5}.py")
+                for i in range(20)
+            ],
+        )
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert dto.files_to_review == [f"path{i}.py" for i in range(5)]
+
+    def test_items_without_a_path_are_skipped(self):
+        evidence = EvidencePackage(items=[_evidence_item("no_path", "must_modify")])
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert dto.files_to_review == []
+
+    def test_empty_evidence_package(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.files_to_review == []
 
     def test_many_evidence_items(self):
         evidence = EvidencePackage(

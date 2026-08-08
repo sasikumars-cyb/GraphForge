@@ -644,8 +644,15 @@ export interface RepositorySummaryDTO {
 }
 
 export interface AreaClusterDTO {
+  /** Now a curated-evidence tier label ("Production Code", "Architecture",
+   * "Reusable Components", "Tests") — not a graph topic. */
   name: string;
+  /** Ranked, capped for display — see `total` for the real count. */
   components: string[];
+  /** The tier's real size before the display cap. Optional — absent for
+   * a DTO from before this field existed; read sites fall back to
+   * `components.length` in that case. */
+  total?: number;
 }
 
 export interface UnknownItemDTO {
@@ -735,6 +742,11 @@ export interface EngineeringUnderstandingDTO {
   repository_summary: RepositorySummaryDTO;
   architecture_summary: string;
   relevant_areas: AreaClusterDTO[];
+  /** Ranked, deduped production file paths — sourced from the curated
+   * evidence package's must_modify tier. Replaces the old client-side
+   * `extractFilePaths(result.graph_components)`, which read the raw,
+   * unranked component list and could surface only test files. */
+  files_to_review: string[];
   known_constraints: string[];
   missing_information: string[];
   unknowns: UnknownItemDTO[];

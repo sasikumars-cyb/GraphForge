@@ -171,3 +171,19 @@ class ContextDiscoveryResult(BaseModel):
     # The engine's `WorkingContext`, dumped verbatim. The resume path
     # (`reasoning.projection.restore`) rebuilds from this and nothing else.
     working_memory: dict[str, Any] = Field(default_factory=dict)
+
+    # The synthesis LLM's own scratch reasoning (hypotheses, contradictions,
+    # and — critically — `investigation_history`, the code-authored log
+    # `engineering_understanding_mapper._map_reasoning` greps for a failed
+    # synthesis pass) and the capability-priority boost it derived. Projected
+    # unconditionally by `reasoning.projection.build_result`, unlike
+    # `working_memory` above (which is only carried while a run is paused —
+    # see that field's own comment). These two *must* be declared here: a
+    # field `build_result` returns but this model doesn't declare is silently
+    # dropped by `ContextDiscoveryResult.model_validate(...)` before it's
+    # ever persisted — which is exactly how the P1 "degraded reasoning
+    # reported as fine" bug survived the first fix attempt at the projection
+    # layer alone. See `reasoning.understanding.InvestigationWorkspace` for
+    # the full shape.
+    investigation_workspace: dict[str, Any] = Field(default_factory=dict)
+    investigation_priority: dict[str, float] = Field(default_factory=dict)
