@@ -143,6 +143,7 @@ function makeResult(overrides: Partial<ContextDiscoveryResult> = {}): ContextDis
     prompt_version: "4.0",
     goal: "Add retry backoff",
     readiness: "PARTIAL",
+    completion_status: "PARTIAL",
     confidence: 0.72,
     capability_confidence: { repository: 1, architecture: 0.29 },
     clarification_rounds: 0,
@@ -298,6 +299,19 @@ function makeUnderstandingDto(
     confidence_explanation: "Completed: Code understanding. Outstanding: Architecture.",
     documentation_status: "Documentation requirements not yet satisfied.",
     next_step: "Resolve blocking issues: design docs missing",
+    completion_status: "PARTIAL",
+    reasoning_summary: {
+      has_reasoning: false,
+      degraded: false,
+      hypotheses: [],
+      contradictions: [],
+      open_contradiction_count: 0,
+      resolved_contradiction_count: 0,
+      strongest_hypothesis_id: null,
+      dead_ends: [],
+      next_investigation: [],
+      last_update: "",
+    },
     debug_bundle: null,
     ...overrides,
   };
@@ -636,5 +650,360 @@ describe("ContextExplorerPanel", () => {
     // The readiness verdict comes from `result`, not the understanding
     // fetch, so it still renders even when Engineering Understanding fails.
     expect(screen.getByText("PARTIAL")).toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// completion_status — the audit's "budget exhaustion reads identically to
+// completion" finding. The backend is the sole source of truth; these tests
+// only check the frontend renders whatever it was sent, unchanged.
+// ---------------------------------------------------------------------------
+
+describe("ContextExplorerPanel / completion status", () => {
+  beforeEach(() => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(makeUnderstandingDto());
+  });
+
+  it("shows no extra badge and no budget banner for a genuine completion", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel
+        workflowId="w1"
+        result={makeResult({ readiness: "READY", completion_status: "COMPLETED" })}
+        onOverridden={vi.fn()}
+      />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    expect(screen.queryByText("Stopped at cycle limit")).not.toBeInTheDocument();
+    expect(screen.queryByText("Every automated avenue tried")).not.toBeInTheDocument();
+    expect(screen.queryByText(/reached its cycle limit/)).not.toBeInTheDocument();
+  });
+
+  it("never shows the genuine-exhaustion phrasing for a budget cutoff, and explains what happened instead", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel
+        workflowId="w1"
+        result={makeResult({ readiness: "PARTIAL", completion_status: "BUDGET_EXHAUSTED" })}
+        onOverridden={vi.fn()}
+      />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    expect(screen.getByText("Stopped at cycle limit")).toBeInTheDocument();
+    expect(
+      screen.getByText(/reached its cycle limit — not because every avenue was exhausted/),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/^I've gathered everything I can on my own/)).not.toBeInTheDocument();
+  });
+
+  it("shows the providers-exhausted badge distinctly from a budget cutoff", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel
+        workflowId="w1"
+        result={makeResult({ readiness: "BLOCKED", completion_status: "PROVIDERS_EXHAUSTED" })}
+        onOverridden={vi.fn()}
+      />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    expect(screen.getByText("Every automated avenue tried")).toBeInTheDocument();
+    expect(screen.queryByText("Stopped at cycle limit")).not.toBeInTheDocument();
+  });
+
+  it("shows no extra badge for BLOCKED — the readiness badge already says it", async () => {
+    renderWithAuth(
+      <ContextExplorerPanel
+        workflowId="w1"
+        result={makeResult({ readiness: "BLOCKED", completion_status: "BLOCKED" })}
+        onOverridden={vi.fn()}
+      />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    expect(screen.queryByText("Stopped at cycle limit")).not.toBeInTheDocument();
+    expect(screen.queryByText("Every automated avenue tried")).not.toBeInTheDocument();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Reasoning section — hypotheses, contradictions, next-investigation.
+// ---------------------------------------------------------------------------
+
+describe("ReasoningSection", () => {
+  it("shows an honest empty state when nothing was reasoned about", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(makeUnderstandingDto());
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    await userEvent.click(screen.getByText("Investigation Reasoning"));
+    expect(
+      screen.getByText(/No competing hypotheses or contradictions were needed/),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a single hypothesis as strongest, with its evidence collapsed behind a toggle", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(
+      makeUnderstandingDto({
+        reasoning_summary: {
+          has_reasoning: true,
+          degraded: false,
+          hypotheses: [
+            {
+              id: "hyp_0",
+              description: "The retry loop lacks backoff entirely.",
+              status: "supported",
+              confidence: 0.82,
+              supporting_evidence: ["RetryHandler.java has no delay between attempts"],
+              contradicting_evidence: [],
+              is_strongest: true,
+            },
+          ],
+          contradictions: [],
+          open_contradiction_count: 0,
+          resolved_contradiction_count: 0,
+          strongest_hypothesis_id: "hyp_0",
+          dead_ends: [],
+          next_investigation: [],
+          last_update: "Cycle 2: re-synthesized over 4 evidence record(s) — 1 hypothesis/es.",
+        },
+      }),
+    );
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    await userEvent.click(screen.getByText("Investigation Reasoning"));
+
+    // Rendered twice by design — once in the "Strongest explanation"
+    // summary line, once as the hypothesis card's own description.
+    expect(screen.getAllByText("The retry loop lacks backoff entirely.").length).toBe(2);
+    expect(screen.getByText("Strongest")).toBeInTheDocument();
+    expect(screen.getByText("82%")).toBeInTheDocument();
+    // The strongest hypothesis starts expanded — its evidence is visible
+    // without an extra click.
+    expect(screen.getByText(/RetryHandler\.java has no delay between attempts/)).toBeVisible();
+    expect(screen.getByText("Hide evidence")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Hide evidence"));
+    expect(await screen.findByText("Show evidence")).toBeInTheDocument();
+    expect(
+      screen.queryByText(/RetryHandler\.java has no delay between attempts/),
+    ).not.toBeInTheDocument();
+  });
+
+  it("marks the highest-confidence non-rejected hypothesis strongest among several", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(
+      makeUnderstandingDto({
+        reasoning_summary: {
+          has_reasoning: true,
+          degraded: false,
+          hypotheses: [
+            {
+              id: "hyp_0",
+              description: "Eliminated: caching layer.",
+              status: "rejected",
+              confidence: 0.95,
+              supporting_evidence: [],
+              contradicting_evidence: [],
+              is_strongest: false,
+            },
+            {
+              id: "hyp_1",
+              description: "Missing backoff configuration.",
+              status: "supported",
+              confidence: 0.7,
+              supporting_evidence: [],
+              contradicting_evidence: [],
+              is_strongest: true,
+            },
+          ],
+          contradictions: [],
+          open_contradiction_count: 0,
+          resolved_contradiction_count: 0,
+          strongest_hypothesis_id: "hyp_1",
+          dead_ends: [],
+          next_investigation: [],
+          last_update: "",
+        },
+      }),
+    );
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    await userEvent.click(screen.getByText("Investigation Reasoning"));
+    expect(
+      screen.getByText(
+        (_content, element) =>
+          element?.tagName.toLowerCase() === "p" &&
+          element.textContent === "Strongest explanation: Missing backoff configuration.",
+      ),
+    ).toBeInTheDocument();
+    // The rejected hypothesis must never be labelled strongest, however
+    // high its own confidence was before elimination.
+    expect(screen.queryByText("Eliminated: caching layer.")).toBeInTheDocument();
+    const rejectedCard = screen.getByText("Eliminated: caching layer.").closest("div");
+    expect(rejectedCard?.textContent).not.toContain("Strongest");
+  });
+
+  it("renders one unresolved contradiction as open, with evidence on both sides", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(
+      makeUnderstandingDto({
+        reasoning_summary: {
+          has_reasoning: true,
+          degraded: false,
+          hypotheses: [],
+          contradictions: [
+            {
+              id: "contra_0",
+              description: "Ticket says retries are enabled; code shows none configured.",
+              evidence_for: ["Ticket description: 'retries are already on'"],
+              evidence_against: ["RetryHandler.java has no retry annotation"],
+              resolved: false,
+              resolution_note: "",
+            },
+          ],
+          open_contradiction_count: 1,
+          resolved_contradiction_count: 0,
+          strongest_hypothesis_id: null,
+          dead_ends: [],
+          next_investigation: [],
+          last_update: "",
+        },
+      }),
+    );
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    // The open-contradiction count is visible in the collapsed summary too.
+    expect(screen.getByText("1 contradiction (1 open)")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Investigation Reasoning"));
+    expect(screen.getByText("Open — being investigated")).toBeInTheDocument();
+    expect(screen.getByText("Ticket description: 'retries are already on'")).toBeInTheDocument();
+    expect(screen.getByText("RetryHandler.java has no retry annotation")).toBeInTheDocument();
+  });
+
+  it("renders a resolved contradiction distinctly, with its resolution note", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(
+      makeUnderstandingDto({
+        reasoning_summary: {
+          has_reasoning: true,
+          degraded: false,
+          hypotheses: [],
+          contradictions: [
+            {
+              id: "contra_0",
+              description: "Two docs disagreed on the retry limit.",
+              evidence_for: [],
+              evidence_against: [],
+              resolved: true,
+              resolution_note: "The newer design doc is authoritative — 3 retries confirmed.",
+            },
+          ],
+          open_contradiction_count: 0,
+          resolved_contradiction_count: 1,
+          strongest_hypothesis_id: null,
+          dead_ends: [],
+          next_investigation: [],
+          last_update: "",
+        },
+      }),
+    );
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    expect(screen.getByText("1 contradiction (resolved)")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Investigation Reasoning"));
+    expect(screen.getByText("Resolved")).toBeInTheDocument();
+    expect(
+      screen.getByText(/The newer design doc is authoritative/),
+    ).toBeInTheDocument();
+  });
+
+  it("renders multiple contradictions with a mixed resolved/open count", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(
+      makeUnderstandingDto({
+        reasoning_summary: {
+          has_reasoning: true,
+          degraded: false,
+          hypotheses: [],
+          contradictions: [
+            {
+              id: "contra_0",
+              description: "a",
+              evidence_for: [],
+              evidence_against: [],
+              resolved: true,
+              resolution_note: "",
+            },
+            {
+              id: "contra_1",
+              description: "b",
+              evidence_for: [],
+              evidence_against: [],
+              resolved: false,
+              resolution_note: "",
+            },
+            {
+              id: "contra_2",
+              description: "c",
+              evidence_for: [],
+              evidence_against: [],
+              resolved: false,
+              resolution_note: "",
+            },
+          ],
+          open_contradiction_count: 2,
+          resolved_contradiction_count: 1,
+          strongest_hypothesis_id: null,
+          dead_ends: [],
+          next_investigation: [
+            { capability: "architecture", label: "Architecture", priority: 0.4 },
+          ],
+          last_update: "",
+        },
+      }),
+    );
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    expect(screen.getByText("3 contradictions (2 open)")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Investigation Reasoning"));
+    expect(screen.getAllByText("Resolved")).toHaveLength(1);
+    expect(screen.getAllByText("Open — being investigated")).toHaveLength(2);
+    expect(screen.getByText("What GraphForge investigated next")).toBeInTheDocument();
+    expect(screen.getByText("Architecture")).toBeInTheDocument();
+  });
+
+  it("shows the degraded notice when synthesis fell back to a deterministic summary", async () => {
+    vi.mocked(workflowsApi.fetchUnderstanding).mockReset();
+    vi.mocked(workflowsApi.fetchUnderstanding).mockResolvedValue(
+      makeUnderstandingDto({
+        reasoning_summary: {
+          has_reasoning: false,
+          degraded: true,
+          hypotheses: [],
+          contradictions: [],
+          open_contradiction_count: 0,
+          resolved_contradiction_count: 0,
+          strongest_hypothesis_id: null,
+          dead_ends: [],
+          next_investigation: [],
+          last_update: "Cycle 1: synthesis degraded to a deterministic summary over 3 evidence record(s).",
+        },
+      }),
+    );
+    renderWithAuth(
+      <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
+    );
+    await screen.findByText("Add retry backoff for flaky downstream calls");
+    await userEvent.click(screen.getByText("Investigation Reasoning"));
+    expect(screen.getByText(/didn't complete cleanly/)).toBeInTheDocument();
   });
 });

@@ -28,7 +28,10 @@ from app.agents.review_adapter import resolve_pr_subject
 from app.api.v1.dependencies import get_current_user
 from app.context.resolvers.freetext import resolve as resolve_freetext
 from app.context_pipeline.reasoning.curation import EvidencePackage
-from app.context_pipeline.reasoning.understanding import EngineeringUnderstanding
+from app.context_pipeline.reasoning.understanding import (
+    EngineeringUnderstanding,
+    InvestigationWorkspace,
+)
 from app.core.exceptions import AppError, NotFoundError
 from app.core.rate_limit import check_rate_limit
 from app.core.request_context import set_workflow_context
@@ -153,6 +156,14 @@ class WorkflowStageResponse(BaseModel):
     label: str
     status: str  # "completed" | "running" | "failed" | "pending"
     run_id: str | None
+    # Best-effort live checklist for a `status == "running"` stage — see
+    # `app.orchestrator.live_progress`. Always `None` for any other status
+    # (nothing left to show once a run has actually finished, and the
+    # persisted transcript is the real record at that point) and for a run
+    # that never wrote one (not every agent opts in, and a run from before
+    # this column existed never will have one) — both read identically as
+    # "no live progress," never as an error.
+    live_progress: dict[str, Any] | None = None
 
 
 class WorkflowDetailResponse(BaseModel):
@@ -251,6 +262,11 @@ def _build_stages(workflow: Workflow) -> list[WorkflowStageResponse]:
                 label=workflow_service.STAGE_LABELS[stage],
                 status=stage_status,
                 run_id=str(matched_run.id) if matched_run is not None else None,
+                live_progress=(
+                    matched_run.live_progress
+                    if matched_run is not None and stage_status == "running"
+                    else None
+                ),
             )
         )
     return stages
@@ -536,10 +552,42 @@ def _build_projection_input(
     evidence_package = EvidencePackage(
         **cd_result.get("evidence_package", {}),
     )
+    # The synthesis LLM's own scratch reasoning, persisted verbatim inside
+    # the resumable `WorkingContext` dump (`working_memory.derived.
+    # investigation_workspace` — see `reasoning.understanding.synthesize_
+    # engineering_understanding`'s docstring) rather than projected into
+    # `ContextDiscoveryResult` at write time the way `engineering_
+    # understanding` is. Read here, not recomputed — this is the same
+    # already-persisted JSON `get_understanding` already loaded via
+    # `cd_result`, just reaching one level deeper into it. Tolerates a
+    # result persisted before this field existed (`{}` degrades to an empty
+    # workspace, matching every other `.get(..., {})` in this function).
+    working_memory_derived: dict[str, Any] = (cd_result.get("working_memory") or {}).get(
+        "derived", {}
+    )
+    try:
+        workspace = InvestigationWorkspace(
+            **(working_memory_derived.get("investigation_workspace") or {}),
+        )
+    except Exception:
+        # Malformed/foreign-shaped persisted data must degrade to "no
+        # reasoning to show," never 500 the whole understanding endpoint —
+        # same discipline as every other best-effort read in this file.
+        workspace = InvestigationWorkspace()
+    investigation_priority: dict[str, float] = (
+        working_memory_derived.get("investigation_priority") or {}
+    )
 
     original_request: str = cd_result.get("original_request", "")
     raw_readiness = cd_result.get("readiness", "BLOCKED")
     readiness = raw_readiness if raw_readiness in ("READY", "PARTIAL", "BLOCKED") else "BLOCKED"
+    raw_completion_status = cd_result.get("completion_status", "PARTIAL")
+    completion_status = (
+        raw_completion_status
+        if raw_completion_status
+        in ("COMPLETED", "BUDGET_EXHAUSTED", "PROVIDERS_EXHAUSTED", "BLOCKED", "PARTIAL")
+        else "PARTIAL"
+    )
     blocking_reasons: list[str] = cd_result.get("blocking_reasons") or []
 
     # Typed graph projections from raw dicts
@@ -601,8 +649,11 @@ def _build_projection_input(
     return ProjectionInput(
         understanding=understanding,
         evidence_package=evidence_package,
+        workspace=workspace,
+        investigation_priority=investigation_priority,
         original_request=original_request,
         readiness=readiness,
+        completion_status=completion_status,
         blocking_reasons=blocking_reasons,
         graph_topics=graph_topics,
         graph_components=graph_components,

@@ -137,6 +137,14 @@ class ContextDiscoveryResult(BaseModel):
     # are satisfied, never from a confidence threshold. See
     # `reasoning.memory.WorkingContext.readiness`.
     readiness: str = "BLOCKED"
+    # COMPLETED / BUDGET_EXHAUSTED / PROVIDERS_EXHAUSTED / BLOCKED / PARTIAL
+    # — *why* investigation stopped, an axis distinct from `readiness` (which
+    # says whether there's enough). See `reasoning.memory.WorkingContext.
+    # completion_status` for the derivation and precedence; this field is a
+    # plain string, not a Literal, purely so a result persisted before this
+    # field existed still deserializes (it defaults to "PARTIAL" here, the
+    # same conservative default `readiness` already uses).
+    completion_status: str = "PARTIAL"
     # Necessity-weighted mean of the per-capability scores below, excluding
     # capabilities that don't apply to this request. Every input is
     # evidence-derived; no LLM self-report contributes to it.

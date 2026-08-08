@@ -1,5 +1,6 @@
-import { FileQuestion, Layers } from "lucide-react";
+import { Clock, FileQuestion, Layers, Search } from "lucide-react";
 import type React from "react";
+import type { CompletionStatus } from "../../types/agent";
 
 // ---------------------------------------------------------------------------
 // Shared building blocks for every disclosure level of Context Explorer
@@ -85,4 +86,30 @@ export function MissingInformation({ items }: { items: string[] }) {
       <BulletList items={items} />
     </section>
   );
+}
+
+/** Only rendered for the two `completion_status` values that say something
+ * `readiness` alone doesn't: BUDGET_EXHAUSTED and PROVIDERS_EXHAUSTED. For
+ * COMPLETED/PARTIAL/BLOCKED, the existing readiness badge already reads as
+ * exactly that word, so a second identical-looking chip beside it would be
+ * decoration, not information — the audit's own "don't add visuals that
+ * don't answer a real question faster than text" rule applied to itself. */
+export function CompletionStatusBadge({ status }: { status: CompletionStatus }) {
+  if (status === "BUDGET_EXHAUSTED") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-warning-bg px-2 py-0.5 text-[10px] font-semibold text-warning-fg">
+        <Clock className="h-3 w-3 shrink-0" aria-hidden="true" />
+        Stopped at cycle limit
+      </span>
+    );
+  }
+  if (status === "PROVIDERS_EXHAUSTED") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-accent-bg px-2 py-0.5 text-[10px] font-semibold text-accent-fg">
+        <Search className="h-3 w-3 shrink-0" aria-hidden="true" />
+        Every automated avenue tried
+      </span>
+    );
+  }
+  return null;
 }

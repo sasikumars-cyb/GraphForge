@@ -13,7 +13,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from app.context_pipeline.reasoning.curation import EvidencePackage
-from app.context_pipeline.reasoning.understanding import EngineeringUnderstanding
+from app.context_pipeline.reasoning.memory import CompletionStatus
+from app.context_pipeline.reasoning.understanding import (
+    EngineeringUnderstanding,
+    InvestigationWorkspace,
+)
 
 # ---------------------------------------------------------------------------
 # Shared types
@@ -70,6 +74,77 @@ class PlanningAssessmentDTO(BaseModel):
     reasons: list[PlanningFactorDTO] = Field(default_factory=list)
 
 
+class HypothesisDTO(BaseModel):
+    """One competing explanation the synthesis LLM considered — see
+    `reasoning.understanding.Hypothesis`, the domain model this presentation
+    shape is projected from (never duplicated logic, only re-shaped for
+    display: `id` and `is_strongest` are added, nothing else changes)."""
+
+    id: str
+    description: str
+    status: Literal["supported", "rejected", "unknown"]
+    confidence: float
+    supporting_evidence: list[str] = Field(default_factory=list)
+    contradicting_evidence: list[str] = Field(default_factory=list)
+    # The single highest-confidence non-rejected hypothesis, at most one
+    # `True` across the whole list — computed by the mapper, never by the
+    # LLM (an LLM self-declaring its own leading hypothesis is exactly the
+    # kind of unearned assertion this whole system is built to avoid).
+    is_strongest: bool = False
+
+
+class ContradictionDTO(BaseModel):
+    """One conflict the synthesis LLM flagged rather than silently averaged
+    away — see `reasoning.understanding.Contradiction`."""
+
+    id: str
+    description: str
+    evidence_for: list[str] = Field(default_factory=list)
+    evidence_against: list[str] = Field(default_factory=list)
+    resolved: bool = False
+    resolution_note: str = ""
+
+
+class NextInvestigationDTO(BaseModel):
+    """One capability the engine's own priority boost currently favors —
+    see `reasoning.understanding.capability_priority` /
+    `reasoning.investigation_planner.plan_priority_boost`, the exact
+    deterministic signal `engine._select` reads to break ties. This is a
+    read of what already happened (the boost that was live when this
+    investigation last reasoned), not a live recomputation."""
+
+    capability: str
+    label: str
+    priority: float
+
+
+class ReasoningSummaryDTO(BaseModel):
+    """Projection of `reasoning.understanding.InvestigationWorkspace` (plus
+    the sibling `investigation_priority` boost) for the Context Explorer's
+    Reasoning view. `has_reasoning=False` means the synthesis LLM produced
+    no hypotheses or contradictions this run (e.g. a request with nothing
+    to investigate) — genuinely different from `degraded=True`, which means
+    synthesis *ran* but the call itself failed or returned something
+    invalid and the engine fell back to a deterministic, evidence-only
+    summary (see `understanding._deterministic_understanding`)."""
+
+    has_reasoning: bool = False
+    degraded: bool = False
+    hypotheses: list[HypothesisDTO] = Field(default_factory=list)
+    contradictions: list[ContradictionDTO] = Field(default_factory=list)
+    open_contradiction_count: int = 0
+    resolved_contradiction_count: int = 0
+    strongest_hypothesis_id: str | None = None
+    dead_ends: list[str] = Field(default_factory=list)
+    next_investigation: list[NextInvestigationDTO] = Field(default_factory=list)
+    # The most recent entry of `InvestigationWorkspace.investigation_
+    # history` — code-authored, factual narration ("Cycle 3: re-synthesized
+    # over 12 evidence record(s) — ..."), never LLM prose. One line, so the
+    # Reasoning section can show "as of" context without repeating the full
+    # history inline.
+    last_update: str = ""
+
+
 class DebugBundleDTO(BaseModel):
     """Execution internals — only populated when ``debug=true``."""
 
@@ -115,6 +190,13 @@ class EngineeringUnderstandingDTO(BaseModel):
     confidence_explanation: str = ""
     documentation_status: str = ""
     next_step: str = ""
+    # Why investigation stopped — an axis distinct from `planning_assessment.
+    # status` (readiness: is there enough) — see `reasoning.memory.
+    # WorkingContext.completion_status`. Defaults to "PARTIAL", the same
+    # conservative default the underlying persisted field uses for a result
+    # written before this field existed.
+    completion_status: CompletionStatus = "PARTIAL"
+    reasoning_summary: ReasoningSummaryDTO = Field(default_factory=ReasoningSummaryDTO)
     debug_bundle: DebugBundleDTO | None = None
 
 
@@ -168,10 +250,21 @@ class ProjectionInput(BaseModel):
     # Pre-parsed domain models
     understanding: EngineeringUnderstanding
     evidence_package: EvidencePackage
+    # The synthesis LLM's own scratch reasoning — hypotheses, contradictions,
+    # dead ends. Parsed by the caller from `working_memory.derived.
+    # investigation_workspace` (see `understanding.synthesize_engineering_
+    # understanding`'s docstring on why Planning never reads this but the
+    # Context Explorer's Reasoning view now does). Reusing the existing
+    # domain model directly, not a second copy of its shape.
+    workspace: InvestigationWorkspace = Field(default_factory=InvestigationWorkspace)
+    # `working_memory.derived.investigation_priority` — the same capability
+    # boost dict `engine._select` reads at selection time.
+    investigation_priority: dict[str, float] = Field(default_factory=dict)
 
     # Extracted from ContextDiscoveryResult by caller
     original_request: str = ""
     readiness: Readiness = "BLOCKED"
+    completion_status: CompletionStatus = "PARTIAL"
     blocking_reasons: list[str] = Field(default_factory=list)
     graph_topics: list[TopicProjection] = Field(default_factory=list)
     graph_components: list[ComponentProjection] = Field(default_factory=list)

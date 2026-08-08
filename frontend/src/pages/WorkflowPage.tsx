@@ -4,6 +4,7 @@ import { GitMerge, Send, Clapperboard } from "lucide-react";
 import { Card } from "../components/Card";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { PipelineGraph } from "../components/workflow/PipelineGraph";
+import { LiveProgressChecklist } from "../components/workflow/LiveProgressChecklist";
 import { WorkflowHeader } from "../components/workflow/WorkflowHeader";
 import { ApprovalGateBanner } from "../components/workflow/ApprovalGateBanner";
 import { WorkflowApprovalBanner } from "../components/workflow/WorkflowApprovalBanner";
@@ -345,6 +346,11 @@ export function WorkflowPage() {
           selectedRunId={selectedRunId}
           onSelectStage={setSelectedRunId}
         />
+        {currentStageInfo?.status === "running" && currentStageInfo.live_progress && (
+          <div className="mt-3">
+            <LiveProgressChecklist progress={currentStageInfo.live_progress} />
+          </div>
+        )}
       </Card>
 
       {showReplay && (

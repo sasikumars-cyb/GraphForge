@@ -40,6 +40,30 @@ from app.context_pipeline.reasoning.ledger import Ledger
 
 Readiness = Literal["READY", "PARTIAL", "BLOCKED"]
 
+# Why the investigation actually stopped — an axis distinct from `Readiness`
+# (readiness says "is there enough"; this says "why did looking stop"). Added
+# after an audit found the engine's own narration collapsing "ran out of
+# cycles" and "genuinely nothing left to try" into the same sentence — see
+# `WorkingContext.completion_status` for the precedence that derives one from
+# the other, and `_verdict_line` in engine.py for the narration this gates.
+#
+#   COMPLETED          — every applicable capability satisfied (READY).
+#   BUDGET_EXHAUSTED    — hit `MAX_CYCLES` while investigators still had
+#                          candidates or requirements were still unmet. The
+#                          one case that must never be narrated as "I've
+#                          gathered everything I can."
+#   PROVIDERS_EXHAUSTED — every investigator genuinely declined further work
+#                          and a human is now being asked (a pending
+#                          clarification question exists).
+#   BLOCKED             — a required capability is unsatisfied, no further
+#                          automated avenue exists, and no question would
+#                          help either — remediation outside the tool only.
+#   PARTIAL             — every required capability is satisfied; only
+#                          optional/recommended context is missing.
+CompletionStatus = Literal[
+    "COMPLETED", "BUDGET_EXHAUSTED", "PROVIDERS_EXHAUSTED", "BLOCKED", "PARTIAL"
+]
+
 GapStatus = Literal[
     # Nothing has closed this yet; the engine may still investigate or ask.
     "open",
@@ -63,6 +87,7 @@ TranscriptKind = Literal["intent", "observation", "question", "answer", "conclus
 # function it is paired with (see capabilities.Capability).
 __all__ = [
     "ClarificationQuestion",
+    "CompletionStatus",
     "DiscoveryMetadata",
     "GapStatus",
     "KnowledgeGap",
@@ -167,6 +192,15 @@ class DiscoveryMetadata(BaseModel):
     # `_MAX_MID_LOOP_SYNTHESIS_CALLS`) so "understanding drives
     # investigation" doesn't mean an unbounded LLM call per cycle.
     synthesis_calls: int = 0
+    # Set by `engine.investigate()` when its own `while` loop exits because
+    # `iteration` reached `max_cycles`, not because either internal `break`
+    # fired (nothing left unmet, or no investigator proposed anything).
+    # Reset to False at the top of every `investigate()` call, so a resumed
+    # run that finishes inside its own fresh budget correctly clears a flag
+    # set during an earlier, budget-cut pass. The sole input `completion_
+    # status` needs beyond what `readiness`/`providers_exhausted`/
+    # `next_question()` already track.
+    cycle_budget_exhausted: bool = False
 
 
 class WorkingContext(BaseModel):
@@ -203,6 +237,44 @@ class WorkingContext(BaseModel):
     @property
     def confidence(self) -> float:
         return overall_confidence(self.assessments)
+
+    @property
+    def completion_status(self) -> CompletionStatus:
+        """Why the investigation actually stopped — derived, like
+        `readiness`, never stored independently of the state it reads.
+
+        Precedence (first match wins), each condition read off state this
+        class already tracks:
+
+        1. `readiness == "READY"` — every applicable capability satisfied.
+           Takes priority over every other signal, including a budget flag
+           that happened to also be set on the very cycle that finished the
+           job (see engine.py's own note on that edge case): if the work is
+           actually done, that is always the headline, regardless of how
+           close to the cycle ceiling it finished.
+        2. `metadata.cycle_budget_exhausted` — the loop hit `MAX_CYCLES`
+           with real work still on the table. Distinct from every other
+           unsatisfied state below because more budget, not more evidence,
+           is what it needs.
+        3. `next_question() is not None` — every investigator genuinely
+           declined further work and a human is now being asked. This *is*
+           "providers exhausted" in the most literal, load-bearing sense:
+           it's the exact precondition `next_question()` itself requires.
+        4. `readiness == "BLOCKED"` — a required capability remains
+           unsatisfied with no further automated avenue and no question
+           that would help either (see `_conclude`'s `unresolvable` path).
+        5. Otherwise `"PARTIAL"` — every required capability is satisfied;
+           only optional/recommended context is missing.
+        """
+        if self.readiness == "READY":
+            return "COMPLETED"
+        if self.metadata.cycle_budget_exhausted:
+            return "BUDGET_EXHAUSTED"
+        if self.next_question() is not None:
+            return "PROVIDERS_EXHAUSTED"
+        if self.readiness == "BLOCKED":
+            return "BLOCKED"
+        return "PARTIAL"
 
     def assessment_for(self, capability: str) -> CapabilityAssessment | None:
         return next((a for a in self.assessments if a.capability == capability), None)

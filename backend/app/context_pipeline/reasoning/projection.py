@@ -135,6 +135,7 @@ def build_discovery_report(state: WorkingContext) -> dict[str, Any]:
     """
     return {
         "readiness": state.readiness,
+        "completion_status": state.completion_status,
         "confidence": state.confidence,
         "headline": _headline(state),
         "transcript": [e.model_dump() for e in state.transcript.entries],
@@ -500,6 +501,7 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         # --- readiness / confidence --------------------------------------
         "goal": state.metadata.goal,
         "readiness": state.readiness,
+        "completion_status": state.completion_status,
         "confidence": state.confidence,
         "capability_confidence": {a.capability: a.score for a in state.assessments},
         "clarification_rounds": state.metadata.clarification_rounds,

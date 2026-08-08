@@ -11,7 +11,12 @@ from __future__ import annotations
 import pytest
 
 from app.context_pipeline.reasoning.curation import EvidenceItem, EvidencePackage
-from app.context_pipeline.reasoning.understanding import EngineeringUnderstanding
+from app.context_pipeline.reasoning.understanding import (
+    Contradiction,
+    EngineeringUnderstanding,
+    Hypothesis,
+    InvestigationWorkspace,
+)
 from app.mappers.engineering_understanding_mapper import map_to_dto
 from app.schemas.engineering_understanding import (
     CapabilityFactor,
@@ -823,3 +828,249 @@ class TestLargeGraphs:
         dto = map_to_dto(_minimal_input(understanding=u))
         assert len(dto.unknowns) == 500
         assert all(x.category == "unknown" for x in dto.unknowns)
+
+
+# ---------------------------------------------------------------------------
+# reasoning_summary — hypotheses/contradictions projection
+# ---------------------------------------------------------------------------
+
+
+class TestReasoningSummaryEmpty:
+    """No workspace at all → an honest empty state, never a crash."""
+
+    def test_has_reasoning_false(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.reasoning_summary.has_reasoning is False
+
+    def test_no_hypotheses_or_contradictions(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.reasoning_summary.hypotheses == []
+        assert dto.reasoning_summary.contradictions == []
+
+    def test_degraded_false_by_default(self):
+        """Genuinely nothing to reason about is NOT the same as a failed
+        synthesis call — both must be distinguishable, and the default
+        (empty workspace, no notes) must read as the former."""
+        dto = map_to_dto(_minimal_input())
+        assert dto.reasoning_summary.degraded is False
+
+    def test_strongest_hypothesis_id_none(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.reasoning_summary.strongest_hypothesis_id is None
+
+
+class TestReasoningSummaryHypotheses:
+    def test_no_hypotheses(self):
+        workspace = InvestigationWorkspace(hypotheses=[])
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.hypotheses == []
+        assert dto.reasoning_summary.strongest_hypothesis_id is None
+
+    def test_one_hypothesis_is_strongest(self):
+        workspace = InvestigationWorkspace(
+            hypotheses=[
+                Hypothesis(description="X causes Y", status="supported", confidence=0.8),
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert len(dto.reasoning_summary.hypotheses) == 1
+        assert dto.reasoning_summary.hypotheses[0].id == "hyp_0"
+        assert dto.reasoning_summary.hypotheses[0].is_strongest is True
+        assert dto.reasoning_summary.strongest_hypothesis_id == "hyp_0"
+
+    def test_strongest_is_highest_confidence_among_non_rejected(self):
+        workspace = InvestigationWorkspace(
+            hypotheses=[
+                Hypothesis(description="weak", status="unknown", confidence=0.3),
+                Hypothesis(description="strong", status="supported", confidence=0.9),
+                Hypothesis(description="medium", status="unknown", confidence=0.6),
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        strongest = next(h for h in dto.reasoning_summary.hypotheses if h.is_strongest)
+        assert strongest.description == "strong"
+        assert dto.reasoning_summary.strongest_hypothesis_id == "hyp_1"
+        # Exactly one hypothesis is ever flagged strongest.
+        assert sum(1 for h in dto.reasoning_summary.hypotheses if h.is_strongest) == 1
+
+    def test_a_high_confidence_rejected_hypothesis_is_never_strongest(self):
+        """A hypothesis the model itself eliminated must never be crowned
+        "strongest" just because it once scored high before rejection."""
+        workspace = InvestigationWorkspace(
+            hypotheses=[
+                Hypothesis(description="eliminated", status="rejected", confidence=0.95),
+                Hypothesis(description="survives", status="unknown", confidence=0.4),
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        strongest = next(h for h in dto.reasoning_summary.hypotheses if h.is_strongest)
+        assert strongest.description == "survives"
+
+    def test_all_rejected_means_no_strongest(self):
+        workspace = InvestigationWorkspace(
+            hypotheses=[
+                Hypothesis(description="a", status="rejected", confidence=0.9),
+                Hypothesis(description="b", status="rejected", confidence=0.7),
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.strongest_hypothesis_id is None
+        assert all(not h.is_strongest for h in dto.reasoning_summary.hypotheses)
+
+    def test_supporting_and_contradicting_evidence_pass_through(self):
+        workspace = InvestigationWorkspace(
+            hypotheses=[
+                Hypothesis(
+                    description="X",
+                    status="unknown",
+                    confidence=0.5,
+                    supporting_evidence=["ticket says X", "PR #12 implements X"],
+                    contradicting_evidence=["doc says not-X"],
+                )
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        h = dto.reasoning_summary.hypotheses[0]
+        assert h.supporting_evidence == ["ticket says X", "PR #12 implements X"]
+        assert h.contradicting_evidence == ["doc says not-X"]
+        assert dto.reasoning_summary.has_reasoning is True
+
+
+class TestReasoningSummaryContradictions:
+    def test_no_contradictions(self):
+        workspace = InvestigationWorkspace(contradictions=[])
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.contradictions == []
+        assert dto.reasoning_summary.open_contradiction_count == 0
+        assert dto.reasoning_summary.resolved_contradiction_count == 0
+
+    def test_one_unresolved_contradiction(self):
+        workspace = InvestigationWorkspace(
+            contradictions=[
+                Contradiction(
+                    description="Ticket says X, code does Y",
+                    evidence_for=["ticket text"],
+                    evidence_against=["current implementation"],
+                    resolved=False,
+                )
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert len(dto.reasoning_summary.contradictions) == 1
+        c = dto.reasoning_summary.contradictions[0]
+        assert c.id == "contra_0"
+        assert c.resolved is False
+        assert dto.reasoning_summary.open_contradiction_count == 1
+        assert dto.reasoning_summary.resolved_contradiction_count == 0
+
+    def test_one_resolved_contradiction(self):
+        workspace = InvestigationWorkspace(
+            contradictions=[
+                Contradiction(
+                    description="Two docs disagreed",
+                    resolved=True,
+                    resolution_note="Newer doc confirmed as authoritative.",
+                )
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.resolved_contradiction_count == 1
+        assert dto.reasoning_summary.open_contradiction_count == 0
+        assert dto.reasoning_summary.contradictions[0].resolution_note == (
+            "Newer doc confirmed as authoritative."
+        )
+
+    def test_multiple_contradictions_mixed_resolution(self):
+        workspace = InvestigationWorkspace(
+            contradictions=[
+                Contradiction(description="a", resolved=True),
+                Contradiction(description="b", resolved=False),
+                Contradiction(description="c", resolved=False),
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert len(dto.reasoning_summary.contradictions) == 3
+        assert dto.reasoning_summary.resolved_contradiction_count == 1
+        assert dto.reasoning_summary.open_contradiction_count == 2
+        assert [c.id for c in dto.reasoning_summary.contradictions] == [
+            "contra_0",
+            "contra_1",
+            "contra_2",
+        ]
+
+
+class TestReasoningSummaryDegraded:
+    def test_degraded_detected_from_history_entry(self):
+        workspace = InvestigationWorkspace(
+            reasoning_notes=[
+                "Synthesis call failed or returned an invalid response; falling back to a "
+                "deterministic, evidence-only summary."
+            ],
+            investigation_history=[
+                "Cycle 1: synthesis degraded to a deterministic summary over 3 evidence record(s)."
+            ],
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.degraded is True
+
+    def test_last_update_reflects_final_history_entry(self):
+        workspace = InvestigationWorkspace(
+            investigation_history=[
+                "Cycle 1: re-synthesized over 2 evidence record(s) — 1 hypothesis/es.",
+                "Cycle 2: re-synthesized over 5 evidence record(s) — 2 hypothesis/es.",
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.last_update == (
+            "Cycle 2: re-synthesized over 5 evidence record(s) — 2 hypothesis/es."
+        )
+
+
+class TestReasoningSummaryDeadEndsAndNextInvestigation:
+    def test_dead_ends_pass_through(self):
+        workspace = InvestigationWorkspace(
+            dead_ends=["Ruled out: caching layer — no cache in path."]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.dead_ends == [
+            "Ruled out: caching layer — no cache in path."
+        ]
+
+    def test_next_investigation_ranked_highest_first(self):
+        dto = map_to_dto(
+            _minimal_input(
+                investigation_priority={"architecture": 0.4, "documentation": 0.9, "work_item": 0.1}
+            )
+        )
+        labels = [i.capability for i in dto.reasoning_summary.next_investigation]
+        assert labels == ["documentation", "architecture", "work_item"]
+        assert dto.reasoning_summary.next_investigation[0].label == "Documentation"
+
+    def test_unknown_capability_key_is_dropped_not_crashed(self):
+        dto = map_to_dto(
+            _minimal_input(investigation_priority={"not_a_real_capability": 0.9})
+        )
+        assert dto.reasoning_summary.next_investigation == []
+
+    def test_next_investigation_empty_by_default(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.reasoning_summary.next_investigation == []
+
+
+# ---------------------------------------------------------------------------
+# completion_status — pass-through, source of truth stays the backend
+# ---------------------------------------------------------------------------
+
+
+class TestCompletionStatus:
+    @pytest.mark.parametrize(
+        "status",
+        ["COMPLETED", "BUDGET_EXHAUSTED", "PROVIDERS_EXHAUSTED", "BLOCKED", "PARTIAL"],
+    )
+    def test_passes_through_unchanged(self, status):
+        dto = map_to_dto(_minimal_input(completion_status=status))
+        assert dto.completion_status == status
+
+    def test_defaults_to_partial(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.completion_status == "PARTIAL"

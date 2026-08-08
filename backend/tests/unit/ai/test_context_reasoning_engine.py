@@ -37,7 +37,9 @@ from app.context_pipeline.reasoning.capabilities import (
 from app.context_pipeline.reasoning.curation import EvidencePackage
 from app.context_pipeline.reasoning.engine import (
     MAX_CLARIFICATION_ROUNDS,
+    MAX_CYCLES,
     MAX_MID_LOOP_SYNTHESIS_CALLS,
+    _resync,
     _select,
     _settle_claims,
     discover,
@@ -54,7 +56,11 @@ from app.context_pipeline.reasoning.investigators import (
     RequestParseInvestigator,
 )
 from app.context_pipeline.reasoning.ledger import FactKind, Ledger
-from app.context_pipeline.reasoning.memory import KnowledgeGap, WorkingContext
+from app.context_pipeline.reasoning.memory import (
+    ClarificationQuestion,
+    KnowledgeGap,
+    WorkingContext,
+)
 from app.context_pipeline.reasoning.projection import build_result, to_contract_evidence
 from app.context_pipeline.reasoning.understanding import _build_grounding_text
 from app.tools.interfaces import ToolResult
@@ -685,6 +691,73 @@ async def test_transcript_narrates_intent_before_each_observation() -> None:
     assert kinds[-1] == "conclusion"
     # Intent always precedes the observation it explains.
     assert kinds.index("intent") < kinds.index("observation")
+
+
+# ---------------------------------------------------------------------------
+# Live progress — best-effort, out-of-band checkpoints (app.orchestrator.
+# live_progress). `session.progress_sink` is `None` in every other test in
+# this file via `_session()`'s default — these are the only two that
+# exercise it being set.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_progress_sink_reports_a_step_active_then_done() -> None:
+    from app.orchestrator.live_progress import LiveProgress
+
+    calls: list[LiveProgress] = []
+
+    async def sink(progress: LiveProgress) -> None:
+        calls.append(progress)
+
+    session = SessionContext(db=None, user_id=None, progress_sink=sink)  # type: ignore[arg-type]
+    state = await discover(
+        request="Add a rate limiter to payment-service",
+        session=session,
+        investigators=[
+            FakeInvestigator(
+                "graph",
+                repositories=["payment-service"],
+                components=[("RateLimiter", "payment-service")],
+            )
+        ],
+    )
+
+    assert state.readiness == "READY"
+    assert len(calls) >= 2
+
+    active_labels = {s.label for c in calls for s in c.steps if s.status == "active"}
+    assert "Investigating the architecture" in active_labels
+
+    # At least one checkpoint reports every step it lists as done — the
+    # graph action's own completion.
+    fully_done = [c for c in calls if c.steps and all(s.status == "done" for s in c.steps)]
+    assert fully_done
+    assert any(s.label == "Investigating the architecture" for s in fully_done[-1].steps)
+
+    # `max_iterations` is always the real budget this run used, not a
+    # placeholder — never fabricated progress.
+    assert all(c.max_iterations == MAX_CYCLES for c in calls)
+    assert all(c.iteration >= 1 for c in calls)
+
+
+@pytest.mark.asyncio
+async def test_progress_sink_is_optional_and_never_required() -> None:
+    # `_session()` constructs no sink — confirms discover() runs unchanged
+    # (and never crashes) when nothing is listening, the documented
+    # "nothing to report to" case every other test in this file relies on.
+    state = await discover(
+        request="Add a rate limiter",
+        session=_session(),
+        investigators=[
+            FakeInvestigator(
+                "graph",
+                repositories=["payment-service"],
+                components=[("RateLimiter", "payment-service")],
+            )
+        ],
+    )
+    assert state.readiness == "READY"
 
 
 @pytest.mark.asyncio
@@ -1465,6 +1538,227 @@ def test_budget_exhaustion_is_not_reported_as_an_unreachable_graph() -> None:
         s for s in architecture.signals if s.label == "Knowledge graph queried without errors"
     )
     assert reachable.satisfied is True, "an internal budget is not a broken graph"
+
+
+# ---------------------------------------------------------------------------
+# completion_status — why investigation stopped, distinct from readiness.
+# Direct WorkingContext construction (mirroring engine._resync) rather than
+# a full discover() run, for the same reason the capability-signal tests
+# above build a bare Ledger: it isolates the property under test from
+# unrelated investigator-scheduling details.
+# ---------------------------------------------------------------------------
+
+
+def _resynced_state(ledger: Ledger) -> WorkingContext:
+    _resync(WorkingContext(ledger=ledger))  # exercise the real resync hooks
+    state = WorkingContext(ledger=ledger)
+    _resync(state)
+    state.refresh_assessments()
+    return state
+
+
+def _ledger_with_repository_and_architecture(*, with_work_item: bool = False) -> Ledger:
+    """A ledger satisfying both required capabilities (repository,
+    architecture) — the same minimal shape `GraphInvestigator` produces for
+    a single indexed repository with one traversed component."""
+    ledger = Ledger()
+    repo_ev = ledger.add_evidence(
+        provider="graph", action="get_indexed_repositories", outcome="success", summary="1 found"
+    )
+    ledger.add_fact(
+        kind="repository",
+        subject="payment-service",
+        provider="graph",
+        evidence_id=repo_ev.evidence_id,
+        value={"name": "payment-service"},
+    )
+    traversal_ev = ledger.add_evidence(
+        provider="graph",
+        action=capabilities.GRAPH_TRAVERSAL_ACTION,
+        outcome="success",
+        summary="traversed",
+    )
+    ledger.add_fact(
+        kind="component",
+        subject="RateLimiter",
+        provider="graph",
+        evidence_id=traversal_ev.evidence_id,
+        value={"name": "RateLimiter", "repository": "payment-service"},
+    )
+    if with_work_item:
+        # Gives `documentation` an anchor (necessity "recommended" instead
+        # of "not_applicable") without ever satisfying it — the PARTIAL case.
+        wi_ev = ledger.add_evidence(
+            provider="jira", action="fetch_work_item:PROJ-1", outcome="success", summary="fetched"
+        )
+        ledger.add_fact(
+            kind="work_item",
+            subject="PROJ-1",
+            provider="jira",
+            evidence_id=wi_ev.evidence_id,
+            value={},
+        )
+    return ledger
+
+
+class TestCompletionStatus:
+    """The `completion_status` derived property, plain-Ledger-construction
+    style — precedence order first, then each terminal value in isolation."""
+
+    def test_completed_when_every_applicable_capability_is_satisfied(self) -> None:
+        state = _resynced_state(_ledger_with_repository_and_architecture())
+        assert state.readiness == "READY"
+        assert state.completion_status == "COMPLETED"
+
+    def test_ready_beats_a_stray_budget_flag(self) -> None:
+        """The one real edge case `completion_status`'s docstring calls out:
+        the final in-loop action satisfies everything on the very last
+        permitted cycle. `readiness == READY` must still win."""
+        state = _resynced_state(_ledger_with_repository_and_architecture())
+        state.metadata.cycle_budget_exhausted = True
+        assert state.completion_status == "COMPLETED"
+
+    def test_partial_when_only_a_recommended_capability_is_unmet(self) -> None:
+        state = _resynced_state(
+            _ledger_with_repository_and_architecture(with_work_item=True)
+        )
+        assert state.readiness == "PARTIAL"
+        assert state.completion_status == "PARTIAL"
+
+    def test_blocked_when_a_required_capability_is_unmet_and_nothing_is_pending(self) -> None:
+        state = WorkingContext(ledger=Ledger())  # nothing at all: repository unsatisfied
+        state.refresh_assessments()
+        assert state.readiness == "BLOCKED"
+        assert state.next_question() is None
+        assert state.completion_status == "BLOCKED"
+
+    def test_providers_exhausted_when_a_question_is_pending(self) -> None:
+        state = WorkingContext(ledger=Ledger())
+        state.refresh_assessments()
+        state.metadata.providers_exhausted = True
+        state.gaps.append(
+            KnowledgeGap(
+                gap_id="gap_repository",
+                capability="repository",
+                summary="The repository could not be determined.",
+                why="Planning needs to know which service this touches.",
+                severity="blocking",
+                status="open",
+                question=ClarificationQuestion(
+                    question_id="gap_repository",
+                    question="Which repository should I use?",
+                    why="Nothing matched.",
+                ),
+            )
+        )
+        assert state.readiness == "BLOCKED"
+        assert state.next_question() is not None
+        assert state.completion_status == "PROVIDERS_EXHAUSTED"
+
+    def test_budget_exhausted_beats_providers_exhausted_and_blocked(self) -> None:
+        """Budget is checked before the pending-question/blocked branches —
+        the more specific, more actionable truth ("give me another run") is
+        surfaced ahead of the generic "a human is needed" framing when both
+        happen to be true at once."""
+        state = WorkingContext(ledger=Ledger())
+        state.refresh_assessments()
+        state.metadata.providers_exhausted = True
+        state.metadata.cycle_budget_exhausted = True
+        state.gaps.append(
+            KnowledgeGap(
+                gap_id="gap_repository",
+                capability="repository",
+                summary="The repository could not be determined.",
+                why="Planning needs to know which service this touches.",
+                severity="blocking",
+                status="open",
+                question=ClarificationQuestion(
+                    question_id="gap_repository",
+                    question="Which repository should I use?",
+                    why="Nothing matched.",
+                ),
+            )
+        )
+        assert state.completion_status == "BUDGET_EXHAUSTED"
+
+    def test_budget_exhausted_beats_blocked_with_no_question(self) -> None:
+        state = WorkingContext(ledger=Ledger())
+        state.refresh_assessments()
+        state.metadata.cycle_budget_exhausted = True
+        assert state.readiness == "BLOCKED"
+        assert state.completion_status == "BUDGET_EXHAUSTED"
+
+
+@pytest.mark.asyncio
+async def test_cycle_budget_exhausted_flag_set_by_a_real_run_that_never_runs_dry() -> None:
+    """An investigator that always has one more (distinct) thing to propose
+    — nothing ever satisfies `documentation`, so the loop never breaks
+    early and must run every one of its `MAX_CYCLES` cycles, then report
+    the ceiling honestly rather than as generic exhaustion."""
+
+    class NeverSatisfied:
+        name = "bottomless"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def propose(self, state: WorkingContext) -> list[InvestigationAction]:
+            self.calls += 1
+            return [
+                InvestigationAction(
+                    provider=self.name,
+                    key=f"try_{self.calls}",
+                    intent="always something left to try",
+                    targets="documentation",
+                    cost=1,
+                )
+            ]
+
+        async def run(
+            self, action: InvestigationAction, session: SessionContext, recorder: Recorder
+        ) -> InvestigationOutcome:
+            recorder.evidence("not_found", "nothing here either")
+            return InvestigationOutcome(observation="nothing found", yielded=False)
+
+    investigator = NeverSatisfied()
+
+    # A resolved work item gives `documentation` a real anchor (necessity
+    # "recommended", not "not_applicable") so it stays in `unmet()` for the
+    # whole run and genuinely forces every cycle to run.
+    class WorkItemSeed:
+        name = "jira_anchor"
+
+        def propose(self, state: WorkingContext) -> list[InvestigationAction]:
+            if state.ledger.attempted(self.name, "seed"):
+                return []
+            return [
+                InvestigationAction(
+                    provider=self.name, key="seed", intent="seed", targets="work_item", cost=0
+                )
+            ]
+
+        async def run(
+            self, action: InvestigationAction, session: SessionContext, recorder: Recorder
+        ) -> InvestigationOutcome:
+            ev = recorder.evidence("success", "seeded a work item")
+            recorder.fact("work_item", "PROJ-1", value={}, evidence=ev)
+            return InvestigationOutcome(observation="seeded", yielded=True)
+
+    state = await discover(
+        request="Document the payment flow",
+        session=_session(),
+        investigators=[WorkItemSeed(), investigator],
+    )
+
+    assert state.metadata.iteration == MAX_CYCLES
+    assert state.metadata.cycle_budget_exhausted is True
+    assert state.completion_status == "BUDGET_EXHAUSTED"
+    assert state.readiness != "READY"
+    # The audit's own finding: this exact sentence must never appear when
+    # the cycle ceiling, not genuine exhaustion, is why the loop stopped.
+    conclusion = next(e for e in reversed(state.transcript.entries) if e.kind == "conclusion")
+    assert "I've gathered everything I can on my own" not in conclusion.text
+    assert "cycle limit" in conclusion.text
 
 
 def test_architecture_remediation_does_not_blame_a_healthy_graph() -> None:

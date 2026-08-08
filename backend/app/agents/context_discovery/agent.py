@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,10 +42,24 @@ from app.context_pipeline.reasoning.projection import (
 )
 from app.investigation_intelligence.contracts import InvestigationOutcomeEvent, InvestigationScope
 from app.investigation_intelligence.service import InvestigationIntelligenceService
+from app.orchestrator.live_progress import LiveProgress, write_live_progress
 
 logger = logging.getLogger(__name__)
 
 _PROMPT_VERSION = "4.0"
+
+
+def _live_progress_sink(run_id: Any) -> Callable[[LiveProgress], Awaitable[None]]:
+    """Bind the checkpoint writer to this run's id — a plain closure, not a
+    class, since it has exactly one piece of state and one job. See
+    `app.orchestrator.live_progress`'s own docstring for why this writes
+    through a separate session rather than the one this agent run is
+    already using."""
+
+    async def _sink(progress: LiveProgress) -> None:
+        await write_live_progress(uuid.UUID(str(run_id)), progress)
+
+    return _sink
 
 
 def _confidence_for(state: WorkingContext) -> Confidence:
@@ -133,6 +148,7 @@ class ContextDiscoveryAgent:
         db: AsyncSession = context.extras["db"]
         user_id: uuid.UUID | None = context.extras.get("user_id")
         intelligence = InvestigationIntelligenceService(db)
+        run_id = context.extras.get("run_id")
         session = SessionContext(
             db=db,
             user_id=user_id,
@@ -141,11 +157,16 @@ class ContextDiscoveryAgent:
             stage=stage_for(context.extras, STAGE_CONTEXT_DISCOVERY),
             agent_context=context,
             intelligence=intelligence,
+            # `None` for any caller with no real `run_id` (ad-hoc test
+            # fixtures, older call sites) — `engine.py` already treats a
+            # `None` sink as "nothing to report to" and skips the call
+            # entirely, so this closure only ever needs to exist for a real
+            # workflow-stage run. See `app.orchestrator.live_progress`.
+            progress_sink=_live_progress_sink(run_id) if run_id is not None else None,
         )
 
         resume_payload: dict[str, Any] | None = context.extras.get("resume")
         explicit_repositories: list[str] | None = context.extras.get("explicit_repositories")
-        run_id = context.extras.get("run_id")
         investigation_id = str(run_id) if run_id is not None else raw_request
         # Best-effort partial state for the FAILED-outcome fallback below —
         # set as soon as one exists, so a crash mid-investigation still has

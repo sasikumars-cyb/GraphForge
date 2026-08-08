@@ -30,6 +30,8 @@ Mapping validation table
 - confidence_explanation ← factors (completed/outstanding prose)
 - documentation_status ← pass-through (caller-derived)
 - next_step ← pass-through (caller-derived)
+- completion_status ← pass-through (caller-derived, see WorkingContext.completion_status)
+- reasoning_summary ← workspace + investigation_priority (hypotheses/contradictions/next-up)
 - debug_bundle ← pass-through (None when include_debug=False)
 """
 
@@ -38,16 +40,26 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import get_args
 
+from app.context_pipeline.reasoning import capabilities as capability_registry
 from app.context_pipeline.reasoning.curation import EvidencePackage, Tier
+from app.context_pipeline.reasoning.understanding import (
+    Contradiction,
+    Hypothesis,
+    InvestigationWorkspace,
+)
 from app.schemas.engineering_understanding import (
     AreaClusterDTO,
     CapabilityFactor,
     ComponentProjection,
+    ContradictionDTO,
     EngineeringUnderstandingDTO,
+    HypothesisDTO,
+    NextInvestigationDTO,
     PlanningAssessmentDTO,
     PlanningFactorDTO,
     ProjectionInput,
     Readiness,
+    ReasoningSummaryDTO,
     RepositorySummaryDTO,
     TopicProjection,
     UnknownItemDTO,
@@ -137,6 +149,8 @@ def map_to_dto(
         p.blocking_reasons,
     )
 
+    reasoning_summary = _map_reasoning(p.workspace, p.investigation_priority)
+
     return EngineeringUnderstandingDTO(
         business_goal=business_goal,
         current_situation=current_situation,
@@ -153,6 +167,8 @@ def map_to_dto(
         confidence_explanation=confidence_explanation,
         documentation_status=p.documentation_status,
         next_step=p.next_step,
+        completion_status=p.completion_status,
+        reasoning_summary=reasoning_summary,
         debug_bundle=p.debug_bundle if include_debug else None,
     )
 
@@ -250,6 +266,122 @@ def _map_evidence_summary(evidence: EvidencePackage) -> list[str]:
         )
 
     return lines
+
+
+def _map_hypothesis(index: int, hypothesis: Hypothesis, *, is_strongest: bool) -> HypothesisDTO:
+    return HypothesisDTO(
+        id=f"hyp_{index}",
+        description=hypothesis.description,
+        status=hypothesis.status,
+        confidence=hypothesis.confidence,
+        supporting_evidence=list(hypothesis.supporting_evidence),
+        contradicting_evidence=list(hypothesis.contradicting_evidence),
+        is_strongest=is_strongest,
+    )
+
+
+def _map_contradiction(index: int, contradiction: Contradiction) -> ContradictionDTO:
+    return ContradictionDTO(
+        id=f"contra_{index}",
+        description=contradiction.description,
+        evidence_for=list(contradiction.evidence_for),
+        evidence_against=list(contradiction.evidence_against),
+        resolved=contradiction.resolved,
+        resolution_note=contradiction.resolution_note,
+    )
+
+
+def _strongest_hypothesis_index(hypotheses: list[Hypothesis]) -> int | None:
+    """The single highest-confidence non-rejected hypothesis, or `None` when
+    every hypothesis was rejected (or there are none) — never a bare
+    argmax over the raw list, which would happily crown a rejected
+    hypothesis "strongest" just because it once scored a high confidence
+    before being eliminated."""
+    best_index: int | None = None
+    best_confidence = -1.0
+    for index, hypothesis in enumerate(hypotheses):
+        if hypothesis.status == "rejected":
+            continue
+        if hypothesis.confidence > best_confidence:
+            best_confidence = hypothesis.confidence
+            best_index = index
+    return best_index
+
+
+def _map_next_investigation(priority: dict[str, float]) -> list[NextInvestigationDTO]:
+    """Ranked, highest priority first. Skips any label `capability_priority`
+    might have emitted that isn't a real, registered capability — the same
+    "an unlisted capability cannot be acted on" discipline `reasoning.
+    understanding._KNOWN_CAPABILITIES` already applies before this dict is
+    ever built; re-checked here purely so a stale/foreign key in an older
+    persisted run can never crash this projection."""
+    items: list[NextInvestigationDTO] = []
+    for capability_key, value in priority.items():
+        capability = capability_registry.get(capability_key)
+        if capability is None:
+            continue
+        items.append(
+            NextInvestigationDTO(
+                capability=capability_key,
+                label=capability.label,
+                priority=round(max(0.0, min(1.0, value)), 4),
+            )
+        )
+    items.sort(key=lambda item: item.priority, reverse=True)
+    return items
+
+
+def _map_reasoning(
+    workspace: InvestigationWorkspace,
+    investigation_priority: dict[str, float],
+) -> ReasoningSummaryDTO:
+    """Project the synthesis LLM's own scratch reasoning into the Context
+    Explorer's Reasoning view. Pure — the same determinism guarantee every
+    other helper in this module holds.
+
+    `degraded` is read off `investigation_history`'s own code-authored
+    entries (never LLM prose) rather than inferred from an empty hypothesis
+    list, so a request that's legitimately too thin to have hypotheses
+    (`has_reasoning=False`) is never mislabeled as a failure
+    (`degraded=True`) — those are different, both real, outcomes.
+    """
+    strongest_index = _strongest_hypothesis_index(workspace.hypotheses)
+    hypotheses = [
+        _map_hypothesis(i, h, is_strongest=(i == strongest_index))
+        for i, h in enumerate(workspace.hypotheses)
+    ]
+    contradictions = [_map_contradiction(i, c) for i, c in enumerate(workspace.contradictions)]
+    resolved_count = sum(1 for c in contradictions if c.resolved)
+
+    # `investigation_history` is code-authored (see `understanding.
+    # _history_entry`), never LLM prose — the literal phrase "synthesis
+    # degraded to a deterministic summary" is written there, and only
+    # there, exactly when a synthesis round fell back
+    # (`understanding.synthesize_engineering_understanding`'s `except`
+    # branch). Checking `reasoning_notes` instead would be checking the
+    # LLM's own text, which is never written on the fallback path at all —
+    # the fallback constructs a fresh `InvestigationWorkspace` whose only
+    # note is a fixed string, but it's `investigation_history` that carries
+    # the reliable, per-round signal across multiple synthesis rounds.
+    degraded = any(
+        "synthesis degraded" in entry.lower() for entry in workspace.investigation_history
+    )
+    last_update = workspace.investigation_history[-1] if workspace.investigation_history else ""
+
+    return ReasoningSummaryDTO(
+        has_reasoning=bool(hypotheses or contradictions),
+        degraded=degraded,
+        hypotheses=hypotheses,
+        contradictions=contradictions,
+        open_contradiction_count=len(contradictions) - resolved_count,
+        resolved_contradiction_count=resolved_count,
+        strongest_hypothesis_id=(
+            f"hyp_{strongest_index}" if strongest_index is not None else None
+        ),
+        dead_ends=list(workspace.dead_ends),
+        next_investigation=_map_next_investigation(investigation_priority),
+        last_update=last_update,
+    )
 
 
 def _map_planning(

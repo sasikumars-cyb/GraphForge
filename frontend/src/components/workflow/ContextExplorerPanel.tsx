@@ -16,9 +16,10 @@ import type {
 import { fetchUnderstanding, overrideStageResult } from "../../lib/api/workflows";
 import { useAuth } from "../../app/auth-context";
 import { RepositorySelector } from "./RepositorySelector";
-import { SectionHeading } from "./EngineeringUnderstandingPanel";
+import { CompletionStatusBadge, SectionHeading } from "./EngineeringUnderstandingPanel";
 import { InvestigationSummary } from "./InvestigationSummary";
 import { AdvancedDetailsSection } from "./AdvancedDetailsSection";
+import { ReasoningSection } from "./ReasoningSection";
 import { DebugPanel } from "./DebugPanel";
 
 interface ContextExplorerPanelProps {
@@ -195,7 +196,29 @@ export function ContextExplorerPanel({
           <span className="text-xs text-fg-muted">
             {Math.round(result.confidence * 100)}% confidence
           </span>
+          <CompletionStatusBadge status={result.completion_status} />
         </div>
+
+        {/* BUDGET_EXHAUSTED is the one completion_status that must never
+            read like a normal readiness banner — the audit's own finding
+            was that a cycle-budget cutoff used to be indistinguishable
+            from genuine exhaustion. This is the explicit, first-screen
+            correction: what stopped it, that it isn't "everything was
+            tried," and where to look for what's still unknown. */}
+        {result.completion_status === "BUDGET_EXHAUSTED" && (
+          <div className="rounded-lg border border-warning-line/40 bg-warning-bg px-3 py-2.5">
+            <p className="flex items-start gap-1.5 text-xs font-medium text-warning-fg">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              Investigation stopped because it reached its cycle limit — not because every
+              avenue was exhausted.
+            </p>
+            <p className="mt-1 pl-5 text-[11px] text-warning-fg/80">
+              What's below reflects what it found in the time it had, at {Math.round(result.confidence * 100)}%
+              confidence and {result.readiness.toLowerCase()} readiness. See Missing Information
+              and Unknowns in Advanced Details for exactly what's still open.
+            </p>
+          </div>
+        )}
 
         {understanding && (
           <>
@@ -217,6 +240,9 @@ export function ContextExplorerPanel({
               error={debugError}
               onExpand={handleExpandDebug}
             />
+
+            <ReasoningSection summary={understanding.reasoning_summary} />
+
             <DebugPanel
               bundle={debugBundle}
               isLoading={isLoadingDebug}
