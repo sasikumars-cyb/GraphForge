@@ -74,6 +74,29 @@ class ContextDiscoverySynthesisError(AppError):
 
 HypothesisStatus = Literal["supported", "rejected", "unknown"]
 
+HypothesisSubjectKind = Literal["repository", "file", "component"]
+
+
+class HypothesisSubjectEntity(BaseModel):
+    """The structured, exact-match-only identity of a hypothesis's claim —
+    ADR 0025 §7/§8. Set ONLY when the hypothesis's own `description` is
+    itself an existence/location/attribution assertion about one specific
+    named repository, file, or component (e.g. "the handler is defined in
+    app/api/routes.py") — never for a causal, behavioral, predictive, or
+    "why does this happen" hypothesis (e.g. "concurrent ingestion runs may
+    race"), regardless of whether such a hypothesis names or discusses a
+    repository/file/component in its prose. `kind` and `name` are always
+    both present or the whole field is `None` — there is no partial state.
+    This is the one piece of data that lets a hypothesis ever become
+    `VERIFIED`/`UNVERIFIED` downstream instead of permanently
+    `NOT_CHECKED` (see `app.agents.report_generation.data_plumbing.
+    map_verification_status_for_subject_entity`); it is deliberately
+    narrow so a claim-type mistake here can only ever produce a missed
+    correlation, never a false one."""
+
+    kind: HypothesisSubjectKind
+    name: str
+
 
 class Hypothesis(BaseModel):
     """One competing explanation for the behavior in question. A real
@@ -86,6 +109,10 @@ class Hypothesis(BaseModel):
     contradicting_evidence: list[str] = Field(default_factory=list)
     confidence: float = 0.0
     status: HypothesisStatus = "unknown"
+    # ADR 0025 — optional, structured, exact-match-only. See
+    # HypothesisSubjectEntity's own docstring for exactly when this may be
+    # set. `None` is the correct, common case for most real hypotheses.
+    subject_entity: HypothesisSubjectEntity | None = None
 
 
 class Contradiction(BaseModel):
@@ -215,6 +242,21 @@ scored 0 (useless) to 1 (highly valuable): "work_item" (re-reading/clarifying th
 "repository" (confirming which repository owns this), "architecture" (graph/dependency \
 traversal), "documentation" (Confluence/design docs). Do not invent other labels — an \
 unlisted capability cannot be acted on.
+11. For each hypothesis, set `subject_entity` ONLY when the hypothesis's `description` IS \
+ITSELF an existence, location, or attribution claim about one specific named repository, \
+file, or component — i.e. it asserts WHERE something is or WHICH named thing owns it, and \
+nothing more. Example that qualifies: "The handler is defined in app/api/routes.py" -> \
+{"kind": "file", "name": "app/api/routes.py"}. Examples that do NOT qualify, even though \
+they name or discuss a repository/file/component: "Concurrent ingestion runs may race and \
+both write an active record" (a behavior/causation claim); "PaymentGatewayV1 is only \
+referenced by 3 legacy call sites, all already migrated" (a reasoning/assessment claim, not \
+a location claim); any hypothesis about WHY something happens, WHETHER something is safe, or \
+WHAT the impact of a change would be. When in doubt, leave `subject_entity` null — a missed \
+opportunity to link a hypothesis to a verification check is far preferable to a wrong one, \
+and most real hypotheses correctly have no `subject_entity` at all. `name` must be copied \
+exactly as it appears in the evidence given below (a real file path, component name, or \
+repository name already named in this investigation) — never a paraphrase or a guess at \
+what it might be called.
 
 Respond with a single JSON object and nothing else (no markdown fences), with exactly two \
 top-level keys.
@@ -222,7 +264,9 @@ top-level keys.
 "workspace" — your internal working notes, never shown to Planning directly:
 {
   "hypotheses": [{"description": str, "supporting_evidence": [str], "contradicting_evidence": \
-[str], "confidence": float, "status": "supported" | "rejected" | "unknown"}],
+[str], "confidence": float, "status": "supported" | "rejected" | "unknown", "subject_entity": \
+{"kind": "repository" | "file" | "component", "name": str} | null — see rule 11, null for \
+almost every hypothesis}],
   "open_questions": [str],
   "unknowns": [str],
   "dead_ends": [str — hypotheses you considered and eliminated, and why],

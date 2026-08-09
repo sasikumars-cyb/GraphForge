@@ -94,12 +94,26 @@ export interface KnowledgeSectionVM {
   unknown_truncated_count: number;
 }
 
+/** ADR 0025 §7 — a hypothesis's structured, exact-match-only claim
+ * subject. `null` for the vast majority of real hypotheses (only set
+ * when the hypothesis's own claim is itself an existence/location/
+ * attribution assertion — never for a causal/behavioral one). Not
+ * rendered directly anywhere today; present for contract fidelity with
+ * the backend and any future debugging/display need. */
+export type SubjectEntityKind = "repository" | "file" | "component";
+
+export interface SubjectEntity {
+  kind: SubjectEntityKind;
+  name: string;
+}
+
 export interface HypothesisEntry {
   statement: string;
   status: SynthesisStatus;
   confidence: number;
   supporting_evidence: string[];
   contradicting_evidence: string[];
+  subject_entity?: SubjectEntity | null;
 }
 
 export interface HypothesisVM {

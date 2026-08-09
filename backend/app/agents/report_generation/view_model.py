@@ -258,21 +258,26 @@ def _build_knowledge(bundles: dict[str, StageStepData | None]) -> KnowledgeSecti
 def _build_hypotheses(
     bundles: dict[str, StageStepData | None], ledger_rows: list[LedgerRow]
 ) -> HypothesesSectionVM:
-    """ADR §6/§8: `map_hypotheses` for the entries; each hypothesis's
+    """ADR 0024 §6/§8: `map_hypotheses` for the entries; each hypothesis's
     `verification_status` is looked up by matching a Knowledge Ledger
-    row's `source_field` (`reasoning_summary.hypotheses[i]`) — a real,
-    correct positional match (see `TestBuildHypotheses::
+    row's `source_field` (`reasoning_summary.hypotheses[i]`) — a
+    positional match (see `TestBuildHypotheses::
     test_correlation_mechanism_works_if_a_matching_ledger_row_ever_exists`
-    in test_report_view_model.py), but one with no real caller today:
-    `map_knowledge_ledger_rows` (Phase 1, unchanged) hardcodes
-    `verification_status=None` on every hypothesis-sourced row it builds
-    — a hypothesis is never independently code-checked in this codebase
-    yet, by Phase 1's own explicit design, not a Phase 2 gap. So every
-    real hypothesis renders `NOT_CHECKED` today (see
-    `TestRealPipelineNeverCorrelatesHypothesisVerification`, which proves
-    this against the real `map_knowledge_ledger_rows`, not a hand-built
-    fixture) — the honest reading of "no verification row exists for this
-    claim," not a placeholder. ADR 0024 §7 documents this correction.
+    in test_report_view_model.py).
+
+    **Updated for ADR 0025 (Phase 3):** this lookup now has a real
+    caller. `map_knowledge_ledger_rows` correlates a hypothesis-sourced
+    row's `verification_status` via `map_verification_status_for_
+    subject_entity` whenever the hypothesis carries a claim-type-gated,
+    exact-match `subject_entity` — see that function's own docstring
+    (data_plumbing.py) for the precise, tested condition (ADR 0025 §8/
+    §9a). Most hypotheses still correctly resolve to `NOT_CHECKED` — a
+    hypothesis with no `subject_entity`, or one that doesn't exactly
+    match a real check, never correlates
+    (`TestHypothesesWithoutSubjectEntityNeverCorrelate` in
+    test_report_view_model.py) — but `SUPPORTED+VERIFIED`/`SUPPORTED+
+    UNVERIFIED` are no longer structurally impossible, proven against a
+    real live workflow (see the Phase 3 release report).
 
     Sorted by confidence, descending (§8 — "why does it believe the
     strongest hypothesis" answered by position), capped at

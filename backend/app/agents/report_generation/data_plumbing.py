@@ -49,6 +49,8 @@ from app.agents.report_generation.contracts import (
     RiskSeverity,
     ScopeFileEntry,
     SectionAvailability,
+    SubjectEntity,
+    SubjectEntityKind,
     SynthesisRunState,
     SynthesisStatus,
     TimelineEntry,
@@ -302,6 +304,76 @@ def map_verification_status_from_finding(_finding: dict[str, Any]) -> Verificati
     return VerificationStatus.UNVERIFIED
 
 
+def _parse_subject_entity(raw: dict[str, Any] | None) -> SubjectEntity | None:
+    """Source: `Hypothesis.subject_entity` (app.context_pipeline.reasoning.
+    understanding.HypothesisSubjectEntity) — ADR 0025 §7. `kind`/`name`
+    must both be present and `kind` must be one of the three real values;
+    anything else (missing field, unrecognized kind, malformed shape)
+    parses as `None` — the same fail-safe-to-NOT_CHECKED posture as every
+    other partial/malformed input in this module. Never guesses a kind
+    from `name`'s shape."""
+    if not raw:
+        return None
+    kind_raw = raw.get("kind")
+    name_raw = raw.get("name")
+    if not isinstance(kind_raw, str) or not isinstance(name_raw, str) or not name_raw:
+        return None
+    try:
+        kind = SubjectEntityKind(kind_raw)
+    except ValueError:
+        return None
+    return SubjectEntity(kind=kind, name=name_raw)
+
+
+def map_verification_status_for_subject_entity(
+    subject_entity: SubjectEntity | None,
+    planning_bundle: StageStepData | None,
+) -> VerificationStatus | None:
+    """ADR 0025 §7/§8/§9a — the ONLY function permitted to turn a
+    hypothesis's `verification_status` into anything other than `None`
+    (rendered as `NOT_CHECKED`). Returns `None` unless ALL of §8's
+    conditions hold; never a guess, never a default other than `None`.
+
+    Scope of this implementation (a real constraint found while building
+    this, not anticipated in the ADR): only `kind="repository"` is
+    correlated. Planning's `repository_usage[]` is the only place in this
+    codebase that persists a real, structured, per-item verified/
+    unverified signal (`RepositoryUsage.verified: bool`) — traced across
+    Development's `AffectedRepository` and Testing's `affected_
+    repositories`, neither carries an equivalent per-file or per-
+    component verified flag; only free-text `verification_findings[]`
+    messages exist at that granularity, and matching against prose text
+    is exactly the mechanism ADR 0025 §4 (Option B) rejects. A
+    `kind="file"`/`"component"` `subject_entity` is schema-valid (a
+    hypothesis may legitimately have one) but always resolves to `None`
+    here today — the honest, correct answer given no real structured
+    per-item signal exists to check it against, matrix row 10's own
+    reasoning applied to a currently-missing data source rather than a
+    currently-unavailable stage.
+
+    Fail-closed on conflicting signals (§8 addendum, §9a row 9): if more
+    than one `repository_usage[]` entry exactly matches `subject_entity.
+    name`, any `verified=False` among them makes the result UNVERIFIED,
+    even if another matching entry was `verified=True`.
+    """
+    if subject_entity is None:
+        return None
+    if subject_entity.kind != SubjectEntityKind.REPOSITORY:
+        return None
+    if planning_bundle is None:
+        return None
+    matches = [
+        usage
+        for usage in (planning_bundle.result.get("repository_usage") or [])
+        if usage.get("name") == subject_entity.name
+    ]
+    if not matches:
+        return None
+    if any(not usage.get("verified") for usage in matches):
+        return VerificationStatus.UNVERIFIED
+    return VerificationStatus.VERIFIED
+
+
 def map_knowledge_ledger_rows(
     planning_bundle: StageStepData | None,
     development_bundle: StageStepData | None = None,
@@ -311,9 +383,7 @@ def map_knowledge_ledger_rows(
     """Builds the two-axis Knowledge Ledger (Report V2 design, point 2 —
     rows are never bucketed into 'confirmed'/'unresolved'; each keeps its
     own independent synthesis_status/verification_status pair, and most
-    rows populate only one of the two axes — a hypothesis and a
-    verification check are claims about different things unless a future
-    phase deliberately correlates them, which this function does not do).
+    rows populate only one of the two axes).
 
     Sources, each verbatim from the named stage's persisted result:
     - Planning's `repository_usage[]` -> one row per entry,
@@ -327,8 +397,15 @@ def map_knowledge_ledger_rows(
       always `None`.
     - Context Discovery's `reasoning_summary.hypotheses[]` (via
       `map_hypotheses`) -> one row per hypothesis, synthesis_status via
-      `map_synthesis_status`, verification_status always `None` (a
-      hypothesis is reasoning, never a code-run check).
+      `map_synthesis_status`. `verification_status` is `None` for almost
+      every hypothesis (a hypothesis is reasoning, never a code-run check
+      — Phase 1's original design, unchanged) — ADR 0025 adds the one
+      narrow exception: `map_verification_status_for_subject_entity`
+      correlates a hypothesis to Planning's own `repository_usage[]`
+      when, and only when, the hypothesis carries a claim-type-gated,
+      exact-match `subject_entity` (see that function's own docstring for
+      the precise, tested condition — never a scope-only or textual
+      match).
     """
     rows: list[LedgerRow] = []
     hypotheses, _, _ = map_hypotheses(context_discovery_bundle)
@@ -339,7 +416,9 @@ def map_knowledge_ledger_rows(
                 source_stage="context_discovery",
                 source_field=f"reasoning_summary.hypotheses[{i}]",
                 synthesis_status=hypothesis.status,
-                verification_status=None,
+                verification_status=map_verification_status_for_subject_entity(
+                    hypothesis.subject_entity, planning_bundle
+                ),
             )
         )
     if planning_bundle is not None:
@@ -494,6 +573,7 @@ def map_hypotheses(
             confidence=float(h.get("confidence") or 0.0),
             supporting_evidence=[str(x) for x in h.get("supporting_evidence") or []],
             contradicting_evidence=[str(x) for x in h.get("contradicting_evidence") or []],
+            subject_entity=_parse_subject_entity(h.get("subject_entity")),
         )
         for h in raw
     ]
