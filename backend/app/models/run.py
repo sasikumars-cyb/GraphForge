@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
@@ -64,6 +65,18 @@ class Run(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued")
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Best-effort, out-of-band checkpoint of a still-running investigation's
+    # current activity — see app.orchestrator.live_progress. Written by a
+    # SEPARATE short-lived session/transaction from the one this run's own
+    # execution commits through, specifically so a checkpoint write can
+    # never participate in (or block on) the main run's transaction. NULL
+    # for every run that doesn't opt in (everything except a live
+    # context_discovery run today) and for any run from before this column
+    # existed — both read identically as "nothing to show", never an error.
+    # Shape: {"iteration": int, "max_iterations": int, "steps": [{"label":
+    # str, "status": "done" | "active"}]}.
+    live_progress: Mapped[dict[str, Any] | None] = mapped_column(JSONB, nullable=True)
 
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

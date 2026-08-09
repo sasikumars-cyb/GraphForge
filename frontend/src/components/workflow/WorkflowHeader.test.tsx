@@ -78,3 +78,33 @@ describe("WorkflowHeader — Est. remaining / duration freeze on every terminal 
     expect(screen.getByText(/calculating/)).toBeInTheDocument();
   });
 });
+
+describe("WorkflowHeader — P0-2 regression: awaiting-approval must never read as active work", () => {
+  it("shows 'Awaiting Approval', not 'In Progress', for the exact PROT-5754 reproduction", () => {
+    // Context Discovery just completed (READY, 92%); current_stage has
+    // already advanced to "planning" (the /continue dispatch target), but
+    // no Planning run has been created yet — status stays "in_progress"
+    // the whole time a Planning-type workflow sits at this gate. The bug:
+    // this state used to render "In Progress" with a climbing duration,
+    // identical to a stage an agent was genuinely executing.
+    renderHeader(
+      makeWorkflow({
+        title: "Update Rate Associations for SOCO C2M",
+        current_stage: "planning",
+        status: "in_progress",
+        stages: [
+          {
+            stage: "context_discovery",
+            label: "Context Discovery",
+            status: "completed",
+            run_id: "run-1",
+          },
+          { stage: "planning", label: "Planning", status: "pending", run_id: null },
+        ],
+      }),
+      "awaiting_approval",
+    );
+    expect(screen.getByText("Awaiting Approval")).toBeInTheDocument();
+    expect(screen.queryByText("In Progress")).not.toBeInTheDocument();
+  });
+});

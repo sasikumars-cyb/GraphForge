@@ -135,6 +135,7 @@ def build_discovery_report(state: WorkingContext) -> dict[str, Any]:
     """
     return {
         "readiness": state.readiness,
+        "completion_status": state.completion_status,
         "confidence": state.confidence,
         "headline": _headline(state),
         "transcript": [e.model_dump() for e in state.transcript.entries],
@@ -500,6 +501,7 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         # --- readiness / confidence --------------------------------------
         "goal": state.metadata.goal,
         "readiness": state.readiness,
+        "completion_status": state.completion_status,
         "confidence": state.confidence,
         "capability_confidence": {a.capability: a.score for a in state.assessments},
         "clarification_rounds": state.metadata.clarification_rounds,
@@ -518,6 +520,23 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         ),
         # --- the human-facing report -------------------------------------
         "discovery_report": build_discovery_report(state),
+        # The synthesis LLM's own scratch reasoning (hypotheses,
+        # contradictions, and — critically — `investigation_history`, the
+        # code-authored log `_map_reasoning` greps for the literal string
+        # "synthesis degraded" to detect a failed synthesis pass). Projected
+        # as its own top-level key, unconditionally, same as
+        # `engineering_understanding` above — *not* gated on `question is
+        # not None` the way `working_memory` below is. It used to be
+        # readable only via `working_memory.derived.investigation_workspace`,
+        # which is deliberately omitted once discovery finishes (see that
+        # field's own comment) — meaning a completed run's degraded-
+        # synthesis signal was silently discarded before the mapper ever
+        # saw it, and every completed investigation reported `degraded=
+        # False` regardless of what synthesis actually did. See the P1
+        # regression this fixes: a real LLM timeout was shown to the user
+        # as "no competing hypotheses were needed."
+        "investigation_workspace": state.derived.get("investigation_workspace") or {},
+        "investigation_priority": state.derived.get("investigation_priority") or {},
         # --- the full working memory, for resume -------------------------
         # Only carried while the run is actually paused. It exists so a resumed
         # run continues from real state rather than a lossy reconstruction of
@@ -528,7 +547,9 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         # Omitted once discovery has finished, because nothing reads it then and
         # it is a second full copy of the ledger already projected into
         # `graph_components`/`discovery_report`. On a large monorepo that is
-        # thousands of duplicated rows in every persisted AgentStep.
+        # thousands of duplicated rows in every persisted AgentStep. (Reasoning
+        # state specifically no longer depends on this — see
+        # `investigation_workspace` above.)
         "working_memory": state.model_dump() if question is not None else {},
     }
 

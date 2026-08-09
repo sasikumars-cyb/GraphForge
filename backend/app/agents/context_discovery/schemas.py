@@ -137,6 +137,14 @@ class ContextDiscoveryResult(BaseModel):
     # are satisfied, never from a confidence threshold. See
     # `reasoning.memory.WorkingContext.readiness`.
     readiness: str = "BLOCKED"
+    # COMPLETED / BUDGET_EXHAUSTED / PROVIDERS_EXHAUSTED / BLOCKED / PARTIAL
+    # — *why* investigation stopped, an axis distinct from `readiness` (which
+    # says whether there's enough). See `reasoning.memory.WorkingContext.
+    # completion_status` for the derivation and precedence; this field is a
+    # plain string, not a Literal, purely so a result persisted before this
+    # field existed still deserializes (it defaults to "PARTIAL" here, the
+    # same conservative default `readiness` already uses).
+    completion_status: str = "PARTIAL"
     # Necessity-weighted mean of the per-capability scores below, excluding
     # capabilities that don't apply to this request. Every input is
     # evidence-derived; no LLM self-report contributes to it.
@@ -163,3 +171,19 @@ class ContextDiscoveryResult(BaseModel):
     # The engine's `WorkingContext`, dumped verbatim. The resume path
     # (`reasoning.projection.restore`) rebuilds from this and nothing else.
     working_memory: dict[str, Any] = Field(default_factory=dict)
+
+    # The synthesis LLM's own scratch reasoning (hypotheses, contradictions,
+    # and — critically — `investigation_history`, the code-authored log
+    # `engineering_understanding_mapper._map_reasoning` greps for a failed
+    # synthesis pass) and the capability-priority boost it derived. Projected
+    # unconditionally by `reasoning.projection.build_result`, unlike
+    # `working_memory` above (which is only carried while a run is paused —
+    # see that field's own comment). These two *must* be declared here: a
+    # field `build_result` returns but this model doesn't declare is silently
+    # dropped by `ContextDiscoveryResult.model_validate(...)` before it's
+    # ever persisted — which is exactly how the P1 "degraded reasoning
+    # reported as fine" bug survived the first fix attempt at the projection
+    # layer alone. See `reasoning.understanding.InvestigationWorkspace` for
+    # the full shape.
+    investigation_workspace: dict[str, Any] = Field(default_factory=dict)
+    investigation_priority: dict[str, float] = Field(default_factory=dict)

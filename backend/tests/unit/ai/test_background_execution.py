@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from datetime import timedelta
 
 import pytest
 
@@ -258,3 +259,74 @@ async def test_generate_title_task_swallows_generate_title_exception(monkeypatch
     from app.models.workflow import Workflow
 
     await background_execution._generate_title_task(Workflow, uuid.uuid4(), "Some objective", None)
+
+
+# ---------------------------------------------------------------------------
+# P2 — periodic stale-run sweep loop shape (see `fail_stale_running_runs`
+# for the actual query/marking logic, covered by its own integration test).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_stale_run_sweep_runs_at_least_once_then_stops_on_the_stop_event(monkeypatch):
+    calls = 0
+
+    async def fake_fail_stale_running_runs(db) -> int:  # noqa: ANN001
+        nonlocal calls
+        calls += 1
+        return 0
+
+    monkeypatch.setattr(
+        background_execution, "fail_stale_running_runs", fake_fail_stale_running_runs
+    )
+
+    stop_event = asyncio.Event()
+
+    async def _stop_after_first_iteration():
+        # Give the sweep loop's first iteration a chance to run before
+        # asking it to stop — the loop checks the event once per cycle.
+        await asyncio.sleep(0)
+        stop_event.set()
+
+    await asyncio.gather(
+        background_execution.run_stale_run_sweep_forever(
+            stop_event, interval=timedelta(seconds=60)
+        ),
+        _stop_after_first_iteration(),
+    )
+
+    assert calls >= 1
+
+
+@pytest.mark.asyncio
+async def test_stale_run_sweep_swallows_a_failed_iteration_and_keeps_looping(monkeypatch):
+    calls = 0
+
+    async def flaky_fail_stale_running_runs(db) -> int:  # noqa: ANN001
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("db hiccup")
+        return 0
+
+    monkeypatch.setattr(
+        background_execution, "fail_stale_running_runs", flaky_fail_stale_running_runs
+    )
+
+    stop_event = asyncio.Event()
+
+    async def _stop_after_two_iterations():
+        while calls < 2:
+            await asyncio.sleep(0)
+        stop_event.set()
+
+    # A near-zero interval so the second iteration fires immediately after
+    # the first one's exception is swallowed, without a real 5-minute wait.
+    await asyncio.gather(
+        background_execution.run_stale_run_sweep_forever(
+            stop_event, interval=timedelta(milliseconds=1)
+        ),
+        _stop_after_two_iterations(),
+    )
+
+    assert calls >= 2

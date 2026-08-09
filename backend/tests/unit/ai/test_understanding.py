@@ -16,6 +16,7 @@ import pytest
 from app.context_pipeline.reasoning.investigation import SessionContext
 from app.context_pipeline.reasoning.ledger import Ledger
 from app.context_pipeline.reasoning.memory import WorkingContext
+from app.context_pipeline.reasoning.projection import build_result
 from app.context_pipeline.reasoning.understanding import (
     Contradiction,
     EngineeringUnderstanding,
@@ -223,6 +224,186 @@ async def test_malformed_json_response_also_degrades_gracefully():
     understanding = state.derived["engineering_understanding"]
     assert understanding["primary_repository"] == "etl-core"
     assert any("failed" in u.lower() for u in understanding["remaining_unknowns"])
+
+
+# ---------------------------------------------------------------------------
+# P1 regression — the degraded signal must survive into `investigation_
+# history`, the one field `engineering_understanding_mapper._map_reasoning`
+# actually checks (see that function's own docstring on why it's the code-
+# authored log, never the LLM's prose, that's trusted). This is layer 2 of
+# the full failure -> UI trace; layers 3-5 (projection, API parsing boundary,
+# mapper output) are covered in test_context_discovery_invariants.py and
+# test_understanding_endpoint.py::TestReasoningDegradedPropagation.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_writes_the_degraded_history_entry_the_mapper_greps_for():
+    """Reproduces the exact live-QA failure: `invoke_llm_json` raising a
+    provider timeout (any exception reaches the same `except Exception`
+    branch — see `synthesize_engineering_understanding`'s docstring on never
+    raising) must leave a literal "synthesis degraded" entry in
+    `investigation_history`, not just a human-readable note somewhere else."""
+    state = _state_with_ticket_and_components()
+
+    with patch(
+        "app.context_pipeline.reasoning.understanding.invoke_llm_json",
+        new=AsyncMock(side_effect=TimeoutError("AI provider request timed out.")),
+    ):
+        await synthesize_engineering_understanding(state, _empty_session())  # must not raise
+
+    history = state.derived["investigation_workspace"]["investigation_history"]
+    assert any("synthesis degraded" in entry.lower() for entry in history)
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_response_also_writes_the_degraded_history_entry():
+    state = _state_with_ticket_and_components()
+
+    with patch(
+        "app.context_pipeline.reasoning.understanding.invoke_llm_json",
+        new=AsyncMock(return_value="not valid json at all"),
+    ):
+        await synthesize_engineering_understanding(state, _empty_session())
+
+    history = state.derived["investigation_workspace"]["investigation_history"]
+    assert any("synthesis degraded" in entry.lower() for entry in history)
+
+
+@pytest.mark.asyncio
+async def test_a_successful_synthesis_never_writes_a_degraded_history_entry():
+    """The inverse of the two tests above — confirms the signal is
+    specific to failure, not a string that shows up on every round."""
+    state = _state_with_ticket_and_components()
+    raw_response = """{
+        "workspace": {"hypotheses": [], "open_questions": [], "unknowns": [],
+            "dead_ends": [], "candidate_repositories": [], "candidate_architecture": [],
+            "reasoning_notes": []},
+        "understanding": {"business_objective": "", "current_behavior": "",
+            "desired_behavior": "", "primary_repository": "etl-core",
+            "supporting_repositories": [], "implementation_ownership": [],
+            "architecture_relationships": [], "reusable_components": [],
+            "dependencies": [], "risks": [], "constraints": [],
+            "validated_assumptions": [], "rejected_assumptions": [],
+            "remaining_unknowns": [], "confidence": {"overall": 0.5},
+            "engineering_insights": []}
+    }"""
+
+    with patch(
+        "app.context_pipeline.reasoning.understanding.invoke_llm_json",
+        new=AsyncMock(return_value=raw_response),
+    ):
+        await synthesize_engineering_understanding(state, _empty_session())
+
+    history = state.derived["investigation_workspace"]["investigation_history"]
+    assert not any("synthesis degraded" in entry.lower() for entry in history)
+
+
+# ---------------------------------------------------------------------------
+# P1 regression, layer 3 — `projection.build_result` must expose the
+# degraded signal unconditionally, not only while the run is paused. This is
+# the actual fix: `build_result` used to fold `investigation_workspace` only
+# into `working_memory`, which is deliberately `{}` once discovery finishes
+# (`question is None`) — meaning a *completed* run's degraded state was
+# discarded before the mapper ever got a chance to see it. These reproduce
+# that exact "completed, not paused" shape.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_build_result_exposes_degraded_state_for_a_completed_non_paused_run():
+    state = _state_with_ticket_and_components()
+    assert state.next_question() is None, "fixture must be a completed, non-paused state"
+
+    with patch(
+        "app.context_pipeline.reasoning.understanding.invoke_llm_json",
+        new=AsyncMock(side_effect=TimeoutError("AI provider request timed out.")),
+    ):
+        await synthesize_engineering_understanding(state, _empty_session())
+
+    result = build_result(state)
+
+    # The bug: `working_memory` is correctly empty for a completed run...
+    assert result["working_memory"] == {}
+    # ...but the degraded signal must still be readable from its own
+    # unconditional top-level key regardless.
+    history = result["investigation_workspace"]["investigation_history"]
+    assert any("synthesis degraded" in entry.lower() for entry in history)
+
+
+@pytest.mark.asyncio
+async def test_the_degraded_state_survives_the_real_agent_persistence_path():
+    """The regression this guards: `build_result(state)` returning the right
+    dict was not sufficient — `app.agents.context_discovery.agent` persists
+    via `ContextDiscoveryResult.model_validate(build_result(state))`, and a
+    field `build_result` returns but `ContextDiscoveryResult` doesn't declare
+    is silently dropped by Pydantic before it's ever written to the DB. The
+    other `build_result`-level tests above call `build_result` directly and
+    would not have caught this — this test exercises the exact call the real
+    agent makes."""
+    from app.agents.context_discovery.schemas import ContextDiscoveryResult
+
+    state = _state_with_ticket_and_components()
+    assert state.next_question() is None
+
+    with patch(
+        "app.context_pipeline.reasoning.understanding.invoke_llm_json",
+        new=AsyncMock(side_effect=TimeoutError("AI provider request timed out.")),
+    ):
+        await synthesize_engineering_understanding(state, _empty_session())
+
+    persisted = ContextDiscoveryResult.model_validate(build_result(state))
+    history = persisted.investigation_workspace.get("investigation_history", [])
+    assert any("synthesis degraded" in entry.lower() for entry in history)
+
+
+@pytest.mark.asyncio
+async def test_build_result_also_exposes_investigation_priority_unconditionally():
+    state = _state_with_ticket_and_components()
+
+    with patch(
+        "app.context_pipeline.reasoning.understanding.invoke_llm_json",
+        new=AsyncMock(side_effect=TimeoutError("AI provider request timed out.")),
+    ):
+        await synthesize_engineering_understanding(state, _empty_session())
+
+    result = build_result(state)
+    assert result["investigation_priority"] == state.derived["investigation_priority"]
+
+
+@pytest.mark.asyncio
+async def test_build_result_still_carries_working_memory_while_genuinely_paused():
+    """The fix must not regress the resume path: while a run is actually
+    paused awaiting a clarification answer, `working_memory` must still be
+    the full dump `restore()` needs."""
+    state = _state_with_ticket_and_components()
+    state.metadata.providers_exhausted = True
+    from app.context_pipeline.reasoning.capabilities import ClarificationQuestion
+    from app.context_pipeline.reasoning.memory import KnowledgeGap
+
+    # Build a minimal answerable blocking gap so `next_question()` returns
+    # something (see `WorkingContext.next_question`'s own contract).
+    state.gaps.append(
+        KnowledgeGap(
+            gap_id="repository",
+            capability="repository",
+            summary="Which repository should I use?",
+            why="No repository could be resolved from the request.",
+            severity="blocking",
+            status="open",
+            recommended_action=["Pick a repository"],
+            question=ClarificationQuestion(
+                question_id="q1",
+                question="Which repository should I use for this work?",
+                why="No repository could be resolved from the request.",
+                options=["repo-a", "repo-b"],
+            ),
+        )
+    )
+
+    result = build_result(state)
+    assert result["unresolved_questions"], "fixture must actually be paused"
+    assert result["working_memory"] != {}
 
 
 def test_render_engineering_understanding_text_is_empty_for_a_blank_object():
