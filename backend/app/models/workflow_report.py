@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import DateTime, ForeignKey, String, Text, Uuid, func
+from sqlalchemy import JSON, DateTime, ForeignKey, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database.base import Base
@@ -53,7 +53,24 @@ class WorkflowReport(Base):
     # client-side inside a sandboxed iframe, never trusted as same-origin
     # markup (see frontend/src/pages/ReportsPage.tsx). Null until status
     # moves to "completed".
+    #
+    # Report V2 Phase 2 (ADR 0024): kept only as a plain-text/legacy
+    # fallback (a short LLM-authored summary, never the primary rendering
+    # path) — the frontend's real Reports page renders `view_model`
+    # below through real deterministic components, not this HTML blob.
+    # Never null-but-view_model-present or vice versa in a Phase-2-era
+    # row; both are set together by the report_generation agent.
     html_content: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # `app.agents.report_generation.view_model.ReportViewModel`, serialized
+    # (dataclasses.asdict + enum .value coercion — see
+    # `view_model.to_json_dict`). The authoritative, deterministic
+    # representation of the report — every structural decision (which
+    # hypotheses appear, what synthesis/verification badges show, whether
+    # a section is available/degraded/unavailable) was already made
+    # before this JSON was produced; nothing downstream reinterprets it.
+    # Null for any report generated before this column existed.
+    view_model: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
 

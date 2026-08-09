@@ -565,6 +565,11 @@ async def synthesize_engineering_understanding(
             ),
         ]
         state.derived["investigation_workspace"] = workspace.model_dump()
+        # Nothing was ever gathered, so no synthesis call was even
+        # attempted — this is "not applicable," not "failed." See
+        # `reasoning.projection._resolve_synthesis_run_state` / ADR 0024
+        # §11 for the full four-state model this feeds.
+        state.derived["investigation_workspace_run_state"] = "not_run"
         state.derived["engineering_understanding"] = _deterministic_understanding(
             state, package, ticket_sections
         ).model_dump()
@@ -610,6 +615,11 @@ async def synthesize_engineering_understanding(
     ]
 
     state.derived["investigation_workspace"] = workspace.model_dump()
+    # See the zero-evidence branch above for "not_run" — this is the other
+    # two of the three raw states `_resolve_synthesis_run_state` reads;
+    # "completed_empty" vs "completed" is resolved downstream from the
+    # workspace's own list lengths, not decided here.
+    state.derived["investigation_workspace_run_state"] = "failed" if degraded else "completed"
     state.derived["engineering_understanding"] = understanding.model_dump()
     state.derived["investigation_priority"] = plan_priority_boost(
         capability_priority(workspace), graph
