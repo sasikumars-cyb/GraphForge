@@ -198,13 +198,14 @@ class TestBuildHypotheses:
 
     def test_correlation_mechanism_works_if_a_matching_ledger_row_ever_exists(self):
         # MECHANISM test only, using a hand-built LedgerRow — this proves
-        # `_build_hypotheses`'s positional-match code is correct *if* it
-        # were ever handed a hypothesis-sourced ledger row carrying a
-        # verification_status. It does NOT prove today's real pipeline
-        # ever produces such a row — see
-        # TestRealPipelineNeverCorrelatesHypothesisVerification below,
-        # which uses the actual `map_knowledge_ledger_rows` and shows it
-        # currently never does, by explicit design.
+        # `_build_hypotheses`'s positional-match code is correct in
+        # isolation. As of ADR 0025 (Phase 3), the real pipeline DOES
+        # produce such a row for a claim-type-gated, exact-match
+        # `subject_entity` — see `test_hypothesis_verification_
+        # correlation.py` for that real path, and
+        # TestHypothesesWithoutSubjectEntityNeverCorrelate below for the
+        # (still real, still true) case of a hypothesis with no
+        # `subject_entity`, which never correlates.
         from app.agents.report_generation.contracts import LedgerRow
 
         cd = self._cd_with_hypotheses(
@@ -229,39 +230,37 @@ class TestBuildHypotheses:
         assert by_statement["unchecked"] is None  # renders as NOT_CHECKED, never inferred
 
 
-class TestRealPipelineNeverCorrelatesHypothesisVerification:
+class TestHypothesesWithoutSubjectEntityNeverCorrelate:
     """Traces reasoning_summary -> map_knowledge_ledger_rows (the REAL
-    function, not a hand-built LedgerRow) -> _build_hypotheses, to prove
-    what the previous test only assumed: today's actual pipeline can
-    never produce a hypothesis with `verification_status` other than
-    `None` (rendered as NOT_CHECKED) — regardless of what verification
-    data exists elsewhere in the same workflow.
+    function, not a hand-built LedgerRow) -> _build_hypotheses.
 
-    Root cause, traced in `map_knowledge_ledger_rows`'s own body
-    (data_plumbing.py): every `LedgerRow` it builds from
-    `reasoning_summary.hypotheses[]` hardcodes `verification_status=None`
-    — stated explicitly in that function's own docstring ("a hypothesis
-    is reasoning, never a code-run check"). This is Phase 1's own
-    intentional design boundary, not a Phase 2 regression or a missing
-    edge case: Phase 1 deliberately did not correlate a hypothesis to an
-    independent verification check, and nothing in Phase 2 added that
-    correlation either — `_build_hypotheses`'s positional-match code
-    (proven correct in isolation above) is reachable machinery with no
-    real caller that ever feeds it a matching row.
+    **Updated for ADR 0025 (Phase 3).** Before Phase 3, this class's
+    tests proved correlation was universally impossible — `map_knowledge_
+    ledger_rows` hardcoded `verification_status=None` on every hypothesis
+    row, unconditionally. That is no longer true: `map_verification_
+    status_for_subject_entity` (data_plumbing.py) now correlates a
+    hypothesis to Planning's `repository_usage[]` when it carries a
+    claim-type-gated, exact-match `subject_entity` — see
+    `test_hypothesis_verification_correlation.py` for that positive path,
+    proven row-by-row against ADR 0025 §9a's False Positive Matrix.
 
-    Net effect: SUPPORTED+VERIFIED and SUPPORTED+UNVERIFIED cannot occur
-    on a real hypothesis card today. Every real hypothesis renders
-    NOT_CHECKED, always. This is a real, currently-open product gap
-    against the two-axis Knowledge Ledger's own stated purpose — flagged
-    here explicitly rather than worked around, per instruction not to
-    fabricate a correlation mechanism in this pass.
+    What THIS class still proves, and will always remain true: a
+    hypothesis with **no** `subject_entity` — the correct, common case
+    for any hypothesis that isn't itself an existence/attribution claim —
+    never correlates to anything, no matter how closely its prose
+    resembles a verification finding's text, and no matter what
+    verification data exists elsewhere in the same workflow. Text
+    similarity was never, and is still never, a path to `VERIFIED`.
     """
 
     def test_even_with_matching_verification_findings_text_no_correlation_occurs(self):
         # A verification_findings entry whose message is byte-for-byte the
         # same claim as a hypothesis's statement — the most favorable case
-        # a correlation heuristic could hope for — still produces zero
-        # correlation, because none is attempted.
+        # a text-similarity heuristic could hope for — still produces zero
+        # correlation, because the hypothesis has no subject_entity and
+        # verification_findings is never consulted for correlation at all
+        # (only repository_usage is — see map_verification_status_for_
+        # subject_entity's own docstring).
         claim_text = "The handler is in payment_service.py"
         cd = SimpleNamespace(
             result={
@@ -303,10 +302,13 @@ class TestRealPipelineNeverCorrelatesHypothesisVerification:
         section = vm._build_hypotheses(_bundles(context_discovery=cd), ledger_rows)
         assert section.items[0].verification_status is None  # NOT_CHECKED — always, today
 
-    def test_real_pipeline_never_produces_verified_or_unverified_on_a_hypothesis(self):
+    def test_hypotheses_without_subject_entity_stay_not_checked_even_with_real_verified_data(self):
         # Same assertion, built the way build_report_view_model actually
         # builds it (through the full ledger-rows aggregation, not a
-        # hand-picked subset) — the definitive, lowest-layer proof.
+        # hand-picked subset). `planning` below has a REAL verified
+        # repository_usage entry for "acme/repo" — proving the mere
+        # presence of verified data elsewhere in the workflow still isn't
+        # enough; only an exact subject_entity match activates it.
         cd = SimpleNamespace(
             result={
                 "reasoning_summary": {

@@ -121,6 +121,25 @@ class LedgerRow:
     verification_status: VerificationStatus | None
 
 
+class SubjectEntityKind(StrEnum):
+    REPOSITORY = "repository"
+    FILE = "file"
+    COMPONENT = "component"
+
+
+@dataclass(frozen=True)
+class SubjectEntity:
+    """A hypothesis's structured, exact-match-only claim subject — ADR
+    0025 §7/§8. Mirrors `app.context_pipeline.reasoning.understanding.
+    HypothesisSubjectEntity` one-to-one, kept as a separate type for the
+    same reason `SynthesisRunState` mirrors its own upstream Literal
+    rather than importing it (report_generation depends on context_
+    pipeline's *output*, never the reverse)."""
+
+    kind: SubjectEntityKind
+    name: str
+
+
 @dataclass(frozen=True)
 class HypothesisEntry:
     """One hypothesis from Context Discovery's
@@ -130,13 +149,20 @@ class HypothesisEntry:
     `contradicting_evidence` are prose (see that model's own fields) —
     NOT stable Evidence IDs; a report renders them as text, never as a
     graph edge to a specific Evidence item, because no such stable
-    reference exists in the source data (Report V2 design, point 3)."""
+    reference exists in the source data (Report V2 design, point 3).
+
+    `subject_entity` is `None` for the vast majority of real hypotheses
+    (see `HypothesisSubjectEntity`'s own docstring for exactly when it's
+    set) — it is the one field ADR 0025's correlation pass
+    (`map_verification_status_for_subject_entity`) reads to ever produce
+    anything other than `NOT_CHECKED`."""
 
     statement: str
     status: SynthesisStatus
     confidence: float
     supporting_evidence: list[str]
     contradicting_evidence: list[str]
+    subject_entity: SubjectEntity | None = None
 
 
 @dataclass(frozen=True)
