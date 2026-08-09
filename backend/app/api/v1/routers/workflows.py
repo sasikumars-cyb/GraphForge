@@ -456,10 +456,11 @@ def _workflow_stage_finalizer(workflow_id: uuid.UUID) -> OnComplete:
 
 def _report_finalizer(report_id: uuid.UUID) -> OnComplete:
     """Build the on_complete callback for the report_generation agent's
-    run — persists {"title", "html"} from the completed AgentStep's result
-    into the WorkflowReport row this run was dispatched for. Runs in the
-    background task's own DB session, same pattern as
-    _workflow_stage_finalizer above.
+    run — persists {"title", "html", "view_model"} from the completed
+    AgentStep's result into the WorkflowReport row this run was dispatched
+    for. `view_model` (ADR 0024) is what the frontend actually renders;
+    `html` is kept only as a fallback. Runs in the background task's own
+    DB session, same pattern as _workflow_stage_finalizer above.
     """
 
     async def _finalize(db: AsyncSession, run: Run) -> None:
@@ -494,15 +495,21 @@ def _report_finalizer(report_id: uuid.UUID) -> OnComplete:
         step = step_result.scalar_one_or_none()
         result = step.result if step else {}
         html = result.get("html")
-        if not html:
+        view_model = result.get("view_model")
+        # Report V2 Phase 2 (ADR 0024): `view_model` is the authoritative
+        # field the frontend renders — `html` is kept only as a fallback
+        # (see report_generation/agent.py's `_fallback_html`). A report
+        # missing both means the agent produced nothing usable at all.
+        if not html and not view_model:
             report.status = "failed"
-            report.error_message = "Report generation completed with no HTML content."
+            report.error_message = "Report generation completed with no content."
             report.completed_at = datetime.now(UTC)
             await db.commit()
             return
 
         report.title = result.get("title") or report.title
         report.html_content = html
+        report.view_model = view_model
         report.status = "completed"
         report.completed_at = datetime.now(UTC)
         await db.commit()

@@ -82,6 +82,16 @@ class ContextDiscoveryResult(BaseModel):
     # produced this) is deliberately NOT projected here — it must never
     # reach Planning; it stays in the persisted WorkingContext only.
     engineering_understanding: dict[str, Any] = Field(default_factory=dict)
+    # The report-safe hypotheses/contradictions projection (Report V2) —
+    # `reasoning.projection.build_reasoning_summary`. Unlike
+    # `investigation_workspace` above, this is deliberately allowed to
+    # reach a downstream report: it carries only `hypotheses`/
+    # `contradictions` (via the real Hypothesis/Contradiction models,
+    # never hand-reshaped) plus the reasoning `iteration` they were
+    # produced at — never the workspace's other internal-scratch fields.
+    # `{}` when there was nothing to project (see that function's
+    # docstring for every case this covers).
+    reasoning_summary: dict[str, Any] = Field(default_factory=dict)
     # Every indexed repository in relevance order, best first. A *ranking*, not
     # a claim of ownership — Planning reads it positionally (star ratings, and
     # `[0]` as the target for its component-ownership verification), so it stays

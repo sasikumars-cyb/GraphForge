@@ -1,0 +1,89 @@
+{
+  "_provenance": "Captured verbatim from a real, standalone Context Discovery run (workflow 4e64b47a-5f4a-43bd-a860-a5f1e6c3fd98, run faf48d4d-8d0f-46f1-ac7f-c44b71b2e649) against the real repository sasikumars-cyb/prompt-library, using the same objective as workflow 74f8b66a-1e0f-4845-bc97-b63fc7e1ce82 (2026-08-09) \u2014 real DeepSeek synthesis LLM call (deepseek-v4-flash), real persistence path (reasoning.projection.build_reasoning_summary -> ContextDiscoveryResult.reasoning_summary -> AgentStep.result). NOT hand-written or synthetic. See the Report V2 upstream reasoning-persistence decision report for the full trace. Updated for Phase 2: synthesis_state=\"completed\" added, reflecting that this run genuinely completed (not degraded) \u2014 same real capture, no new run needed.",
+  "reasoning_summary": {
+    "hypotheses": [
+      {
+        "description": "The change bumps a timeout in the agent-runtime application code (API route or repository summary agent) to make the reasoning-summary regression check pass.",
+        "supporting_evidence": [
+          "The request name explicitly says 'timeout-bump'.",
+          "The architecture evidence names agent-runtime components as 'must modify': app/api/routes.py, app/agents/repository_summary_agent.py, and the summarize_repository function.",
+          "agent-runtime is the only repository candidate identified."
+        ],
+        "contradicting_evidence": [
+          "No actual timeout constant, configuration value, or call-site using a timeout appears anywhere in the retrieved evidence.",
+          "The retrieved content is only the ticket title; no diff, PR, or test failure output was available."
+        ],
+        "confidence": 0.15,
+        "status": "unknown"
+      },
+      {
+        "description": "The change bumps a timeout inside the test test_repository_summary_calls_llm_gateway so the LLM gateway call is given more time during the regression check.",
+        "supporting_evidence": [
+          "The test is listed under 'must modify'.",
+          "The test name indicates it exercises the LLM gateway call, and the ticket title refers to a regression check.",
+          "Timeout bumps often address flaky tests that fail when a real LLM gateway is slow."
+        ],
+        "contradicting_evidence": [
+          "The test name contains no reference to timeout, and no test source was retrieved.",
+          "The 'must modify' list also includes non-test components, suggesting the change is not purely in the test."
+        ],
+        "confidence": 0.1,
+        "status": "unknown"
+      },
+      {
+        "description": "The change bumps a timeout defined in app/core/config.py (Settings) that controls the LLM gateway call timeout used by the repository summary agent.",
+        "supporting_evidence": [
+          "Settings appears in the dependency graph within 2 hops of a request-named component.",
+          "The request is about a timeout bump, and central configuration is the natural place for a timeout value."
+        ],
+        "contradicting_evidence": [
+          "No specific configuration field or timeout attribute is named in the retrieved evidence.",
+          "Settings is not in the 'must modify' list; it only appears as a 2-hop dependency."
+        ],
+        "confidence": 0.1,
+        "status": "unknown"
+      },
+      {
+        "description": "The timeout that needs bumping lives in a CI pipeline or regression-check harness, not in the application source or tests.",
+        "supporting_evidence": [
+          "The ticket title says 'regression-check', which could refer to a scheduled CI regression job.",
+          "'Timeout-bump' is a common CI operation when a job exceeds its wall-clock limit."
+        ],
+        "contradicting_evidence": [
+          "No CI configuration files, workflow definitions, or runner settings were present in the retrieved architecture evidence.",
+          "All named components are Python application/test components in agent-runtime."
+        ],
+        "confidence": 0.08,
+        "status": "unknown"
+      },
+      {
+        "description": "CheckpointManager in the streaming-pipeline repository is the owner of this change because its name contains 'check'.",
+        "supporting_evidence": [
+          "The architecture graph included checkpoint_manager components because the name/path 'closely matches the request's own wording'."
+        ],
+        "contradicting_evidence": [
+          "The checkpoint components received only 12% and 11% confidence, far below the agent-runtime components.",
+          "The request terms are 'reasoning-summary' and 'timeout-bump'; the checkpoint manager has no evident relation to either.",
+          "agent-runtime is the only repository candidate suggested by the investigation."
+        ],
+        "confidence": 0.0,
+        "status": "rejected"
+      }
+    ],
+    "contradictions": [
+      {
+        "description": "The ticket title implies a concrete timeout exists that must be bumped, yet no timeout variable, constant, or configuration field appears anywhere in the retrieved evidence.",
+        "evidence_for": [
+          "Title contains 'timeout-bump'."
+        ],
+        "evidence_against": [
+          "All curated architecture evidence for agent-runtime lists routes, agent, and test components, but none expose a timeout setting; no such symbol was indexed."
+        ],
+        "resolved": false,
+        "resolution_note": "Cannot resolve without more evidence, such as the ticket description or a diff. This contradiction lowers confidence in all implementation hypotheses."
+      }
+    ],
+    "iteration": 5,
+    "synthesis_state": "completed"
+  }
+}

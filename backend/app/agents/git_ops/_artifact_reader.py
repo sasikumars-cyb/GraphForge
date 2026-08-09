@@ -7,6 +7,7 @@ that need structured data (not text summaries) from prior stage results.
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol, runtime_checkable
 
@@ -58,6 +59,19 @@ class HasRuns(Protocol):
     def runs(self) -> Sequence[_HasStageRun]: ...
 
 
+def _find_latest_completed_step(workflow: HasRuns, stage: str) -> _HasStepResult | None:
+    """The single place that decides "which step counts" for a stage —
+    both `get_stage_result()` and `get_stage_step_data()` below call this,
+    so the two can never disagree about which run/step a stage's data
+    comes from."""
+    for run in sorted(workflow.runs, key=lambda r: r.created_at, reverse=True):
+        if run.workflow_stage == stage and run.status == "completed":
+            step = run.steps[0] if run.steps else None
+            if step and step.result:
+                return step
+    return None
+
+
 def get_stage_result(workflow: HasRuns, stage: str) -> dict[str, Any] | None:
     """Return the *effective* result dict for the most recent completed
     run of `stage`, or None if no completed run exists for that stage.
@@ -76,12 +90,59 @@ def get_stage_result(workflow: HasRuns, stage: str) -> dict[str, Any] | None:
     not added to `_HasStepResult`'s Protocol, so structural test fakes
     that predate this field keep satisfying the Protocol unchanged.
     """
-    for run in sorted(workflow.runs, key=lambda r: r.created_at, reverse=True):
-        if run.workflow_stage == stage and run.status == "completed":
-            step = run.steps[0] if run.steps else None
-            if step and step.result:
-                override = getattr(step, "human_override", None)
-                if override:
-                    return {**step.result, **override}
-                return dict(step.result)
-    return None
+    step = _find_latest_completed_step(workflow, stage)
+    if step is None:
+        return None
+    override = getattr(step, "human_override", None)
+    if override:
+        return {**step.result, **override}
+    return dict(step.result)
+
+
+@dataclass(frozen=True)
+class StageStepData:
+    """The full picture Report V2's data plumbing needs for one stage —
+    `result` (same effective, override-merged dict `get_stage_result()`
+    returns), plus its sibling `evidence`/confidence columns that no
+    existing reader has asked for before this. See app.agents.
+    report_generation.data_plumbing for what normalizes this into
+    ReportViewModel-shaped values; this dataclass only carries the raw
+    columns, unchanged, so the normalization layer's own tests can
+    construct one by hand without touching the database."""
+
+    result: dict[str, Any]
+    evidence: list[dict[str, Any]]
+    confidence_score: float | None
+    confidence_reasoning: str | None
+
+
+def get_stage_step_data(workflow: HasRuns, stage: str) -> StageStepData | None:
+    """Like `get_stage_result()`, but returns the full `StageStepData`
+    (result + evidence + confidence) instead of just the result dict.
+
+    Uses the identical step-selection logic as `get_stage_result()` (via
+    `_find_latest_completed_step`) so the two functions can never select a
+    different step for the same (workflow, stage) pair — a caller that
+    needs both a stage's result and its evidence/confidence is guaranteed
+    to see them as they existed together on the same persisted row, not
+    stitched from two different runs.
+
+    `evidence`/`confidence_score`/`confidence_reasoning` are read via
+    `getattr` with conservative defaults (`[]`/`None`/`None`), the same
+    defensive pattern `get_stage_result()` already uses for
+    `human_override` — a structural test fake that only ever implemented
+    `_HasStepResult` (pre-dating this function) still works here without
+    modification, it just reports empty evidence and no confidence rather
+    than raising.
+    """
+    step = _find_latest_completed_step(workflow, stage)
+    if step is None:
+        return None
+    override = getattr(step, "human_override", None)
+    result = {**step.result, **override} if override else dict(step.result)
+    return StageStepData(
+        result=result,
+        evidence=list(getattr(step, "evidence", None) or []),
+        confidence_score=getattr(step, "confidence_score", None),
+        confidence_reasoning=getattr(step, "confidence_reasoning", None),
+    )
