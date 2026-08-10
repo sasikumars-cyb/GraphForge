@@ -77,11 +77,11 @@ def render_impact_analysis(blast_radius: BlastRadius, narrative: dict[str, Any])
         "seed_repository_id": blast_radius.seed.repository_id,
         "direction": blast_radius.direction,
         "max_hops": blast_radius.max_hops,
-        "executive_summary": to_executive_summary(
-            executive_summary, [direct_impact, indirect_impact]
-        )
-        if (direct_impact or indirect_impact)
-        else executive_summary,
+        "executive_summary": (
+            to_executive_summary(executive_summary, [direct_impact, indirect_impact])
+            if (direct_impact or indirect_impact)
+            else executive_summary
+        ),
         "blast_radius_overview": direct_impact,
         "directly_impacted_repositories": list(blast_radius.impacted_repositories),
         "indirectly_impacted_apis": list(blast_radius.impacted_apis),

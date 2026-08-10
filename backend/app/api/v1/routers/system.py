@@ -146,9 +146,7 @@ async def system_status(
     # Repositories with a completed indexing job but no graph Neo4j can
     # currently produce — previously invisible to this endpoint entirely
     # (indistinguishable from "healthy", since both had a completed job).
-    repos_graph_missing = sum(
-        1 for h in repo_health if h.status == GraphHealthStatus.GRAPH_MISSING
-    )
+    repos_graph_missing = sum(1 for h in repo_health if h.status == GraphHealthStatus.GRAPH_MISSING)
 
     knowledge_base = KnowledgeBaseStatus(
         repositories_tracked=repos_tracked,

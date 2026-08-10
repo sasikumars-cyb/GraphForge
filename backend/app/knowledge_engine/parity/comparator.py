@@ -121,9 +121,7 @@ def _compare_nodes(
                 or rule.property_name in materialized_node.properties
             )
             if present and (rule.label_or_type is None or rule.label_or_type == label):
-                ignored.append(
-                    IgnoredDifference("node", node_id, rule.property_name, rule.reason)
-                )
+                ignored.append(IgnoredDifference("node", node_id, rule.property_name, rule.reason))
 
         label_diffs = tuple(
             sorted(

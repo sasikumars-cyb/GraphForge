@@ -28,7 +28,12 @@ def test_discovers_readme_docs_and_adr_files(tmp_path: Path) -> None:
     files = discover_markdown_files(tmp_path)
     by_path = {f.relative_path: f for f in files}
 
-    assert set(by_path) == {"README.md", "docs/architecture.md", "ADR/0001-use-postgres.md", "notes.md"}
+    assert set(by_path) == {
+        "README.md",
+        "docs/architecture.md",
+        "ADR/0001-use-postgres.md",
+        "notes.md",
+    }
     assert by_path["README.md"].category == "readme"
     assert by_path["docs/architecture.md"].category == "docs"
     assert by_path["ADR/0001-use-postgres.md"].category == "adr"
@@ -101,7 +106,9 @@ def test_does_not_flag_a_link_escaping_the_repository(tmp_path: Path) -> None:
 
 def test_finds_exact_duplicate_documents(tmp_path: Path) -> None:
     _write(tmp_path, "docs/a.md", "Shared   content\nacross files.")
-    _write(tmp_path, "docs/b.md", "Shared content across files.")  # same after whitespace normalization
+    _write(
+        tmp_path, "docs/b.md", "Shared content across files."
+    )  # same after whitespace normalization
     _write(tmp_path, "docs/c.md", "Completely different.")
     files = discover_markdown_files(tmp_path)
 

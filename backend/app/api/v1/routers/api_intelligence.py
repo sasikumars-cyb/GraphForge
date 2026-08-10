@@ -77,7 +77,10 @@ async def _load_completed_result(
         )
 
     step_result = await db.execute(
-        select(AgentStep).where(AgentStep.run_id == run.id).order_by(AgentStep.created_at.desc()).limit(1)
+        select(AgentStep)
+        .where(AgentStep.run_id == run.id)
+        .order_by(AgentStep.created_at.desc())
+        .limit(1)
     )
     step = step_result.scalar_one_or_none()
     if step is None or not step.result:

@@ -160,9 +160,11 @@ class InvestigationIntelligenceService:
                     capability=capability,
                     weighted_success_rate=round(success_weight / total_weight, 4),
                     weighted_usefulness=round(usefulness_weight_sum / total_weight, 4),
-                    average_latency_ms=round(latency_weighted_total / latency_weight_sum, 1)
-                    if latency_weight_sum > 0
-                    else 0.0,
+                    average_latency_ms=(
+                        round(latency_weighted_total / latency_weight_sum, 1)
+                        if latency_weight_sum > 0
+                        else 0.0
+                    ),
                     sample_count=len(provider_events),
                     most_recent_at=most_recent_at,
                 )

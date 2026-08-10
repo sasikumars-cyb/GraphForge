@@ -56,9 +56,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="RESTRICT"),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index(
-        op.f("ix_participants_user_id"), "participants", ["user_id"], unique=False
-    )
+    op.create_index(op.f("ix_participants_user_id"), "participants", ["user_id"], unique=False)
 
     op.create_table(
         "engineering_sessions",
@@ -143,9 +141,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["participant_id"], ["participants.id"], ondelete="RESTRICT"),
         sa.ForeignKeyConstraint(["session_id"], ["engineering_sessions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
-        sa.UniqueConstraint(
-            "session_id", "sequence", name="uq_timeline_entries_session_sequence"
-        ),
+        sa.UniqueConstraint("session_id", "sequence", name="uq_timeline_entries_session_sequence"),
     )
     op.create_index(
         op.f("ix_timeline_entries_artifact_id"), "timeline_entries", ["artifact_id"], unique=False
@@ -219,9 +215,7 @@ def upgrade() -> None:
             ["committed_by_participant_id"], ["participants.id"], ondelete="RESTRICT"
         ),
         sa.ForeignKeyConstraint(["id"], ["engineering_artifacts.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["recommendation_id"], ["recommendations.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["recommendation_id"], ["recommendations.id"], ondelete="SET NULL"),
         sa.ForeignKeyConstraint(
             ["superseded_by_decision_id"], ["decisions.id"], ondelete="SET NULL"
         ),
@@ -241,9 +235,7 @@ def upgrade() -> None:
         sa.Column("owner_scope", sa.String(length=16), server_default="session", nullable=False),
         sa.CheckConstraint("owner_scope IN ('session')", name="ck_contradictions_owner_scope"),
         sa.ForeignKeyConstraint(["id"], ["engineering_artifacts.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["resolved_by_decision_id"], ["decisions.id"], ondelete="SET NULL"
-        ),
+        sa.ForeignKeyConstraint(["resolved_by_decision_id"], ["decisions.id"], ondelete="SET NULL"),
         sa.PrimaryKeyConstraint("id"),
     )
 
@@ -253,9 +245,7 @@ def upgrade() -> None:
         sa.Column("contradiction_id", sa.Uuid(), nullable=False),
         sa.Column("artifact_id", sa.Uuid(), nullable=False),
         sa.ForeignKeyConstraint(["artifact_id"], ["engineering_artifacts.id"], ondelete="CASCADE"),
-        sa.ForeignKeyConstraint(
-            ["contradiction_id"], ["contradictions.id"], ondelete="CASCADE"
-        ),
+        sa.ForeignKeyConstraint(["contradiction_id"], ["contradictions.id"], ondelete="CASCADE"),
         sa.PrimaryKeyConstraint("id"),
         sa.UniqueConstraint(
             "contradiction_id", "artifact_id", name="uq_contradiction_parties_pair"

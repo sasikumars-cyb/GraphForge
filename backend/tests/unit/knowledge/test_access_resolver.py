@@ -237,7 +237,9 @@ async def test_resolve_knowledge_access_finds_confluence_via_rest_auto_wire(
     db_session.add(row)
     await db_session.commit()
 
-    access = await resolve_knowledge_access(db_session, "confluence", ProviderCapability.DOCUMENTATION)
+    access = await resolve_knowledge_access(
+        db_session, "confluence", ProviderCapability.DOCUMENTATION
+    )
 
     assert access.available is True
     method = access.preferred()

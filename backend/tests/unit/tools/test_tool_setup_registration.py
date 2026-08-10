@@ -10,8 +10,6 @@ refactor).
 
 from __future__ import annotations
 
-import pytest
-
 from app.tools.setup import _build_tool_config, build_tool_for_connection, register_all_tools
 
 
@@ -95,9 +93,7 @@ def test_build_tool_config_github_returns_none() -> None:
     comment), never synced from a Knowledge Connection — its TransportSpecs
     correctly have no tool_id."""
     assert (
-        _build_tool_config(
-            "github", "rest", {"base_url": "https://api.github.com"}, {"token": "x"}
-        )
+        _build_tool_config("github", "rest", {"base_url": "https://api.github.com"}, {"token": "x"})
         is None
     )
 

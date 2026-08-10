@@ -116,8 +116,7 @@ class GraphHealthService:
             return []
 
         has_graph_by_id: dict[uuid.UUID, bool] = {
-            repo.id: await self._graph_repository.has_graph(str(repo.id))
-            for repo in repositories
+            repo.id: await self._graph_repository.has_graph(str(repo.id)) for repo in repositories
         }
 
         # Job history only changes the verdict for repositories with no

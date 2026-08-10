@@ -60,7 +60,9 @@ def _make_workflow(runs: list[SimpleNamespace]) -> SimpleNamespace:
     return SimpleNamespace(runs=runs)
 
 
-def _make_source_workflow(repository: str = _REPO, file_paths: list[str] | None = None) -> SimpleNamespace:
+def _make_source_workflow(
+    repository: str = _REPO, file_paths: list[str] | None = None
+) -> SimpleNamespace:
     """A source (Planning) workflow whose Development stage's own graph
     traversal already consulted `repository` — the deterministic ground
     truth `verify_repository` checks the LLM's claim against.
@@ -121,7 +123,9 @@ def _make_context(
         "db": db if db is not None else _make_db(),
         "user_id": user_id,
         "workflow": workflow,
-        "source_workflow": source_workflow if source_workflow is not None else _make_source_workflow(),
+        "source_workflow": (
+            source_workflow if source_workflow is not None else _make_source_workflow()
+        ),
     }
     return AgentContext(subject=subject, goal="generate_code", extras=extras)
 
@@ -140,7 +144,9 @@ def _make_llm_response(
             {
                 "path": "src/main/java/com/example/RateLimiterConfig.java",
                 "operation": "modify",
-                "content": "package com.example;\n\npublic class RateLimiterConfig { /* updated */ }",
+                "content": (
+                    "package com.example;\n\npublic class RateLimiterConfig { /* updated */ }"
+                ),
             },
         ]
     return json.dumps(
@@ -338,7 +344,9 @@ async def test_code_generation_agent_rejects_untracked_repository() -> None:
 async def test_code_generation_agent_rejects_repository_outside_workflow_scope() -> None:
     """LLM names a real-looking repository the workflow never actually
     consulted — must fail rather than silently substitute anything."""
-    context = _make_context(source_workflow=_make_source_workflow(repository="other-org/other-repo"))
+    context = _make_context(
+        source_workflow=_make_source_workflow(repository="other-org/other-repo")
+    )
 
     with patch(
         "app.agents.code_generation.agent._call_llm",

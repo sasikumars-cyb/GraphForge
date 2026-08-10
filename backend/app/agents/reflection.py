@@ -36,15 +36,13 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Generic, TypeVar
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
-
 
 @dataclass
-class ReflectionOutcome(Generic[T]):
+class ReflectionOutcome[T]:
     """What a `run_with_reflection` call decided. `applied=False` means
     the original draft won — either no gap was found, the refine call
     failed, or the refine draft still had gaps — so callers always get a
@@ -58,7 +56,7 @@ class ReflectionOutcome(Generic[T]):
     gaps: list[str] = field(default_factory=list)
 
 
-async def run_with_reflection(
+async def run_with_reflection[T](
     *,
     initial_prompt: str,
     initial_raw: str,

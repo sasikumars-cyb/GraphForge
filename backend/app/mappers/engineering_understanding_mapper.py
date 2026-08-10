@@ -137,15 +137,11 @@ def map_to_dto(
             missing_information.append(item)
 
     # recommendations: insights + risks (prefixed)
-    recommendations = list(u.engineering_insights) + [
-        f"Risk: {r}" for r in u.risks
-    ]
+    recommendations = list(u.engineering_insights) + [f"Risk: {r}" for r in u.risks]
 
     # confidence_explanation: partition by satisfied
     completed = [f.label for f in p.capability_factors if f.satisfied]
-    outstanding = [
-        f.label for f in p.capability_factors if not f.satisfied
-    ]
+    outstanding = [f.label for f in p.capability_factors if not f.satisfied]
     parts: list[str] = []
     if completed:
         parts.append(f"Completed: {', '.join(completed)}.")
@@ -295,10 +291,7 @@ def _map_evidence_summary(evidence: EvidencePackage) -> list[str]:
         examples = [item.name for item in items[:3]]
         example_str = ", ".join(examples)
         if len(items) > 3:
-            lines.append(
-                f"{label} ({len(items)}): {example_str}, "
-                f"and {len(items) - 3} more"
-            )
+            lines.append(f"{label} ({len(items)}): {example_str}, " f"and {len(items) - 3} more")
         else:
             lines.append(f"{label} ({len(items)}): {example_str}")
 
@@ -418,9 +411,7 @@ def _map_reasoning(
         contradictions=contradictions,
         open_contradiction_count=len(contradictions) - resolved_count,
         resolved_contradiction_count=resolved_count,
-        strongest_hypothesis_id=(
-            f"hyp_{strongest_index}" if strongest_index is not None else None
-        ),
+        strongest_hypothesis_id=(f"hyp_{strongest_index}" if strongest_index is not None else None),
         dead_ends=list(workspace.dead_ends),
         next_investigation=_map_next_investigation(investigation_priority),
         last_update=last_update,

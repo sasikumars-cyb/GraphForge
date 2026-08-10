@@ -1073,7 +1073,9 @@ async def test_a_failing_on_pre_commit_hook_that_recovers_keeps_the_runs_own_res
     )
     mock_db.rollback = AsyncMock()
 
-    async def on_pre_commit(db, run) -> None:  # noqa: ANN001 - matches Callable[[AsyncSession, Run], Awaitable[None]]
+    async def on_pre_commit(
+        db, run
+    ) -> None:  # noqa: ANN001 - matches Callable[[AsyncSession, Run], Awaitable[None]]
         await db.commit()
 
     run, agent_id, agent = await coordinator.create_pending_run(_make_subject(), "plan_freeform")
@@ -1112,7 +1114,9 @@ async def test_a_failing_on_pre_commit_hook_whose_data_stays_bad_still_marks_the
     )
     mock_db.rollback = AsyncMock()
 
-    async def on_pre_commit(db, run) -> None:  # noqa: ANN001 - matches Callable[[AsyncSession, Run], Awaitable[None]]
+    async def on_pre_commit(
+        db, run
+    ) -> None:  # noqa: ANN001 - matches Callable[[AsyncSession, Run], Awaitable[None]]
         await db.commit()
 
     run, agent_id, agent = await coordinator.create_pending_run(_make_subject(), "plan_freeform")
@@ -1152,9 +1156,7 @@ async def test_when_even_the_retry_commit_fails_a_fresh_session_forces_the_run_f
     fresh_session_cm.__aenter__ = AsyncMock(return_value=fresh_db)
     fresh_session_cm.__aexit__ = AsyncMock(return_value=False)
 
-    with patch(
-        "app.database.session.AsyncSessionLocal", return_value=fresh_session_cm
-    ):
+    with patch("app.database.session.AsyncSessionLocal", return_value=fresh_session_cm):
         run = await coordinator.execute(_make_subject(), "plan_freeform")
 
     # The original (poisoned) session's `run` object never got its status

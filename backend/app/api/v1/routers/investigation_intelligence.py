@@ -187,8 +187,8 @@ async def get_investigation_intelligence_summary(
     )
 
     # -- provider outcome counts + success rate + latency --------------
-    by_provider_capability: dict[tuple[str, str], list[InvestigationProviderEventRecord]] = defaultdict(
-        list
+    by_provider_capability: dict[tuple[str, str], list[InvestigationProviderEventRecord]] = (
+        defaultdict(list)
     )
     for event in provider_events:
         by_provider_capability[(event.provider, event.capability)].append(event)
@@ -260,8 +260,8 @@ async def get_investigation_intelligence_summary(
     )
 
     # -- repeated failure detection ----------------------------------------
-    by_triple: dict[tuple[str, str, str, str], list[InvestigationProviderEventRecord]] = defaultdict(
-        list
+    by_triple: dict[tuple[str, str, str, str], list[InvestigationProviderEventRecord]] = (
+        defaultdict(list)
     )
     for event in provider_events:
         if event.outcome in ("failed", "unavailable"):

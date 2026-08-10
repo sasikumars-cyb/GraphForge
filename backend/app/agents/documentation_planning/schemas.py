@@ -35,7 +35,12 @@ class RequiredDocumentationUpdate(BaseModel):
     dependencies: list[str] = Field(default_factory=list)
 
     @field_validator(
-        "category", "current_status", "action", "reason", "priority", "owner",
+        "category",
+        "current_status",
+        "action",
+        "reason",
+        "priority",
+        "owner",
         "estimated_effort",
         mode="before",
     )
@@ -56,7 +61,11 @@ class NewDocumentationItem(BaseModel):
     estimated_effort: str = ""  # "small" | "medium" | "large"
 
     @field_validator(
-        "category", "purpose", "suggested_location", "owner", "priority",
+        "category",
+        "purpose",
+        "suggested_location",
+        "owner",
+        "priority",
         "estimated_effort",
         mode="before",
     )

@@ -63,12 +63,7 @@ class RepositoryVerification:
 
     @property
     def passed(self) -> bool:
-        return (
-            self.well_formed
-            and self.tracked
-            and self.in_workflow_scope
-            and not self.errors
-        )
+        return self.well_formed and self.tracked and self.in_workflow_scope and not self.errors
 
 
 def _collect_known_repositories(

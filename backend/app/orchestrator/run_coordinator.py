@@ -326,9 +326,11 @@ class RunCoordinator:
             await self._fail_run(run, str(exc))
             await self._commit_with_hook(run, on_pre_commit)
             logger.error(
-                "agent_run_preflight_failed run_id=%s agent_id=%s error=%s"
-                if isinstance(exc, PreFlightCheckFailed)
-                else "agent_run_failed run_id=%s agent_id=%s error=%s",
+                (
+                    "agent_run_preflight_failed run_id=%s agent_id=%s error=%s"
+                    if isinstance(exc, PreFlightCheckFailed)
+                    else "agent_run_failed run_id=%s agent_id=%s error=%s"
+                ),
                 str(run.id),
                 agent_id,
                 str(exc),
@@ -437,9 +439,11 @@ class RunCoordinator:
             await self._fail_run(run, str(exc))
             await self._commit_with_hook(run, on_pre_commit)
             logger.error(
-                "agent_run_resume_preflight_failed run_id=%s agent_id=%s error=%s"
-                if isinstance(exc, PreFlightCheckFailed)
-                else "agent_run_resume_failed run_id=%s agent_id=%s error=%s",
+                (
+                    "agent_run_resume_preflight_failed run_id=%s agent_id=%s error=%s"
+                    if isinstance(exc, PreFlightCheckFailed)
+                    else "agent_run_resume_failed run_id=%s agent_id=%s error=%s"
+                ),
                 str(run.id),
                 agent_id,
                 str(exc),

@@ -707,6 +707,7 @@ def test_step_label_distinguishes_every_request_parser_pass() -> None:
     """P2 regression — the four real, distinct RequestParseInvestigator
     passes used to all render as the identical 'Parsing the request' in
     the live checklist, reading as the UI stuck repeating one step."""
+
     def _action(key: str) -> InvestigationAction:
         return InvestigationAction(
             provider="request_parser", key=key, intent="", targets="work_item"
@@ -1165,18 +1166,18 @@ def test_verifying_one_claim_does_not_verify_a_different_claim_with_the_same_tex
     repository_gap = state.gap_for("repository")
     work_item_gap = state.gap_for("work_item")
     assert repository_gap is not None and repository_gap.status == "verified"
-    assert work_item_gap is not None and work_item_gap.status == "refuted", (
-        "work_item's own claim was never independently corroborated"
-    )
+    assert (
+        work_item_gap is not None and work_item_gap.status == "refuted"
+    ), "work_item's own claim was never independently corroborated"
 
     facts_by_question = {
         f.value.get("question_id"): f
         for f in state.ledger.facts_of("user_statement", verified_only=False)
     }
     assert facts_by_question["q1"].verified is True
-    assert facts_by_question["q2"].verified is False, (
-        "verifying q1's claim must not verify q2's fact just because the text matched"
-    )
+    assert (
+        facts_by_question["q2"].verified is False
+    ), "verifying q1's claim must not verify q2's fact just because the text matched"
 
 
 # ---------------------------------------------------------------------------
@@ -1473,9 +1474,9 @@ async def test_a_work_item_claim_is_never_proposed_as_a_repository_verification(
     )
 
     actions = GraphInvestigator().propose(state)
-    assert not any(a.key.startswith("verify_repository:") for a in actions), (
-        "a work_item claim must never be proposed as a repository verification"
-    )
+    assert not any(
+        a.key.startswith("verify_repository:") for a in actions
+    ), "a work_item claim must never be proposed as a repository verification"
 
     # And the already-established repository candidate must survive being
     # asked to propose again — not merely "no action proposed this time".
@@ -1708,9 +1709,7 @@ class TestCompletionStatus:
         assert state.completion_status == "COMPLETED"
 
     def test_partial_when_only_a_recommended_capability_is_unmet(self) -> None:
-        state = _resynced_state(
-            _ledger_with_repository_and_architecture(with_work_item=True)
-        )
+        state = _resynced_state(_ledger_with_repository_and_architecture(with_work_item=True))
         assert state.readiness == "PARTIAL"
         assert state.completion_status == "PARTIAL"
 
@@ -2072,9 +2071,9 @@ def test_confluence_investigator_does_not_retry_after_a_real_answer() -> None:
             outcome=outcome,
             summary="s",
         )
-        assert ConfluenceInvestigator().propose(state) == [], (
-            f"outcome={outcome!r} should not be retried"
-        )
+        assert (
+            ConfluenceInvestigator().propose(state) == []
+        ), f"outcome={outcome!r} should not be retried"
 
 
 def test_confluence_investigator_retries_after_an_unavailable_connection() -> None:

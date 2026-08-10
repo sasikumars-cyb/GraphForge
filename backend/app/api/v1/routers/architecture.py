@@ -31,7 +31,6 @@ from app.database.session import get_db_session
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
 from app.models.indexing_job import IndexingJob
-from app.models.repository import Repository
 from app.models.user import User
 from app.schemas.architecture import (
     ArchitectureSummaryResponse,

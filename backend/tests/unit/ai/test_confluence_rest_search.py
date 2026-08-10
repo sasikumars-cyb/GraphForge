@@ -206,9 +206,7 @@ async def test_falls_back_to_space_traversal_when_no_text_search_finds_anything(
             ]
         },
     )
-    client = _fake_client(
-        [_empty_search(), _empty_search(), space_response, space_pages_response]
-    )
+    client = _fake_client([_empty_search(), _empty_search(), space_response, space_pages_response])
     with patch("httpx.AsyncClient", return_value=client):
         text, evidence = await search_confluence_rest(
             base_url="https://example.atlassian.net",

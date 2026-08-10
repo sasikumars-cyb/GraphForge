@@ -317,7 +317,9 @@ async def test_confluence_provider_reports_not_found_when_nothing_relevant_but_t
     with (
         patch(
             "app.context_pipeline.providers.resolve_knowledge_access",
-            new=AsyncMock(return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})),
+            new=AsyncMock(
+                return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})
+            ),
         ),
         patch(
             "app.context_pipeline.providers.gather_confluence_context",
@@ -346,7 +348,7 @@ async def test_confluence_provider_reports_not_found_when_nothing_relevant_but_t
 
 
 @pytest.mark.asyncio
-async def test_confluence_provider_falls_back_to_rest_when_mcp_is_unavailable_and_rest_finds_something() -> (
+async def test_confluence_provider_falls_back_to_rest_when_mcp_is_unavailable_and_rest_finds_something() -> (  # noqa: E501
     None
 ):
     """The actual bug this is a regression test for: Atlassian's MCP
@@ -463,7 +465,7 @@ async def test_confluence_provider_stays_unavailable_when_both_mcp_and_rest_fail
 
 
 @pytest.mark.asyncio
-async def test_confluence_provider_reports_not_found_when_rest_fallback_searches_but_finds_nothing() -> (
+async def test_confluence_provider_reports_not_found_when_rest_fallback_searches_but_finds_nothing() -> (  # noqa: E501
     None
 ):
     """REST genuinely ran (no error) but turned up no pages — distinct
@@ -829,7 +831,9 @@ async def test_confluence_provider_reports_unavailable_when_every_tool_call_fail
     with (
         patch(
             "app.context_pipeline.providers.resolve_knowledge_access",
-            new=AsyncMock(return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})),
+            new=AsyncMock(
+                return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})
+            ),
         ),
         patch(
             "app.context_pipeline.providers.gather_confluence_context",
@@ -874,7 +878,9 @@ async def test_confluence_provider_reports_unavailable_when_no_turns_ran_at_all(
     with (
         patch(
             "app.context_pipeline.providers.resolve_knowledge_access",
-            new=AsyncMock(return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})),
+            new=AsyncMock(
+                return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})
+            ),
         ),
         patch(
             "app.context_pipeline.providers.gather_confluence_context",
@@ -897,7 +903,9 @@ async def test_confluence_provider_normalizes_gathered_context_into_an_artifact(
     with (
         patch(
             "app.context_pipeline.providers.resolve_knowledge_access",
-            new=AsyncMock(return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})),
+            new=AsyncMock(
+                return_value=_access(methods=[_mcp_method()], config={"base_url": "cloud-1"})
+            ),
         ),
         patch(
             "app.context_pipeline.providers.gather_confluence_context",
@@ -920,7 +928,7 @@ async def test_confluence_provider_normalizes_gathered_context_into_an_artifact(
 
 
 @pytest.mark.asyncio
-async def test_gather_confluence_context_discards_a_synthesized_answer_after_every_tool_call_fails() -> (
+async def test_gather_confluence_context_discards_a_synthesized_answer_after_every_tool_call_fails() -> (  # noqa: E501
     None
 ):
     """Regression: an Atlassian API token without Teamwork Graph permission
@@ -968,9 +976,7 @@ async def test_gather_confluence_context_discards_a_synthesized_answer_after_eve
             ctx_module,
             "call_mcp_tool",
             new=AsyncMock(
-                side_effect=MCPToolError(
-                    "You don't have permission to connect via API token."
-                )
+                side_effect=MCPToolError("You don't have permission to connect via API token.")
             ),
         ),
     ):

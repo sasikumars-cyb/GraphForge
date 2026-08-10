@@ -55,7 +55,9 @@ def _chain_graph(repository_id: str) -> GraphPayload:
     node z with no path to any of them."""
     node_ids = ["seed", "a", "b", "c", "z"]
     nodes = [
-        GraphNode(id=f"{repository_id}:{n}", labels=["GraphNode", "Component"], properties={"name": n})
+        GraphNode(
+            id=f"{repository_id}:{n}", labels=["GraphNode", "Component"], properties={"name": n}
+        )
         for n in node_ids
     ]
     edges = [
@@ -111,7 +113,9 @@ class TestBlastRadius:
                 ],
                 edges=[
                     GraphEdge(
-                        source_id=f"{repo_id}:repository", target_id=f"{repo_id}:svc", type="CONTAINS"
+                        source_id=f"{repo_id}:repository",
+                        target_id=f"{repo_id}:svc",
+                        type="CONTAINS",
                     )
                 ],
             ),

@@ -69,9 +69,7 @@ def _full_result() -> AIAnalysisResult:
 @pytest.mark.asyncio
 async def test_persist_new_row_includes_all_general_review_fields() -> None:
     db = AsyncMock()
-    db.execute = AsyncMock(
-        return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None))
-    )
+    db.execute = AsyncMock(return_value=MagicMock(scalar_one_or_none=MagicMock(return_value=None)))
     db.add = MagicMock()
     db.commit = AsyncMock()
     db.refresh = AsyncMock()

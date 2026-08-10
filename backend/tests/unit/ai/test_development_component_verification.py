@@ -67,9 +67,7 @@ def _mock_graph_repo_with_component_only_in_repo_a():
         return []
 
     mock_graph_repo.get_nodes_by_label = AsyncMock(side_effect=_get_nodes_by_label)
-    mock_graph_repo.get_full_graph = AsyncMock(
-        return_value=GraphPayload(nodes=[], edges=[])
-    )
+    mock_graph_repo.get_full_graph = AsyncMock(return_value=GraphPayload(nodes=[], edges=[]))
     return mock_graph_repo
 
 

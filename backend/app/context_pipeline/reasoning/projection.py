@@ -315,12 +315,8 @@ def project_repositories(repositories: list[RepositoryCandidate]) -> dict[str, A
     return {
         "ranked_repository_names": [r.name for r in ranked] or [r.name for r in repositories],
         "implementation_candidates": [r.name for r in repositories],
-        "explicit_repositories": [
-            r.model_dump() for r in repositories if r.source == "explicit"
-        ],
-        "suggested_repositories": [
-            r.model_dump() for r in repositories if r.source == "suggested"
-        ],
+        "explicit_repositories": [r.model_dump() for r in repositories if r.source == "explicit"],
+        "suggested_repositories": [r.model_dump() for r in repositories if r.source == "suggested"],
         "selected_repositories": [r.model_dump() for r in repositories if r.selected],
     }
 
@@ -534,9 +530,7 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         scoped_components = [
             c for c in all_components if c.get("repository") in candidate_repo_names
         ]
-        scoped_topics = [
-            t for t in all_topics if t.get("repository") in candidate_repo_names
-        ]
+        scoped_topics = [t for t in all_topics if t.get("repository") in candidate_repo_names]
     else:
         scoped_components = all_components
         scoped_topics = all_topics

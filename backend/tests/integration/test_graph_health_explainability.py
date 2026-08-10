@@ -65,9 +65,7 @@ async def test_graph_missing_repository_gets_a_specific_explanation(
 ) -> None:
     user = await _make_user(db_session)
     repo = await _make_tracked_repository(db_session, user, "streaming-pipeline")
-    db_session.add(
-        IndexingJob(id=uuid.uuid4(), repository_id=repo.id, status="completed")
-    )
+    db_session.add(IndexingJob(id=uuid.uuid4(), repository_id=repo.id, status="completed"))
     await db_session.flush()
     # Deliberately no Neo4j graph written — the exact GRAPH_MISSING state
     # found live in the investigation: a completed job, no matching graph.
@@ -80,9 +78,9 @@ async def test_graph_missing_repository_gets_a_specific_explanation(
 
     evidence_summaries = [e.summary for e in state.ledger.evidence]
     explanation = [s for s in evidence_summaries if "streaming-pipeline" in s]
-    assert explanation, (
-        f"expected an evidence entry naming streaming-pipeline; got {evidence_summaries}"
-    )
+    assert (
+        explanation
+    ), f"expected an evidence entry naming streaming-pipeline; got {evidence_summaries}"
     assert any("re-index" in s.lower() for s in explanation)
     assert any("completed" in s.lower() for s in explanation)
 
@@ -99,9 +97,7 @@ async def test_healthy_repository_is_unaffected_by_the_new_narration(
     that AREN'T usable, not a change to the ones that are."""
     user = await _make_user(db_session)
     repo = await _make_tracked_repository(db_session, user, "payment-service")
-    db_session.add(
-        IndexingJob(id=uuid.uuid4(), repository_id=repo.id, status="completed")
-    )
+    db_session.add(IndexingJob(id=uuid.uuid4(), repository_id=repo.id, status="completed"))
     await db_session.flush()
 
     graph_repository = Neo4jGraphRepository(get_driver())

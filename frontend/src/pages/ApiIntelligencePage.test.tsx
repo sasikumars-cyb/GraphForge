@@ -133,6 +133,9 @@ describe("ApiIntelligencePage", () => {
 
     renderWithAuth();
     const select = await screen.findByLabelText("Repository");
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "acme/widgets" })).toBeInTheDocument();
+    });
     await user.selectOptions(select, "repo-1");
     await user.click(screen.getByRole("button", { name: "Run API intelligence analysis" }));
 
@@ -228,6 +231,9 @@ describe("ApiIntelligencePage", () => {
 
     renderWithAuth();
     const select = await screen.findByLabelText("Repository");
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "acme/widgets" })).toBeInTheDocument();
+    });
     await user.selectOptions(select, "repo-1");
     await user.click(screen.getByRole("button", { name: "Run API intelligence analysis" }));
 
@@ -301,6 +307,9 @@ describe("ApiIntelligencePage", () => {
 
     renderWithAuth();
     const select = await screen.findByLabelText("Repository");
+    await waitFor(() => {
+      expect(screen.getByRole("option", { name: "acme/widgets" })).toBeInTheDocument();
+    });
     await user.selectOptions(select, "repo-1");
     await user.click(screen.getByRole("button", { name: "Run API intelligence analysis" }));
 

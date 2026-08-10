@@ -116,7 +116,11 @@ def _producer_field_methods(class_body: Node | None, source: bytes) -> dict[str,
             continue
         type_text = node_text(child.child_by_field_name("type"), source)
         method = next(
-            (m for prefix, m in _PRODUCER_FIELD_TYPE_METHODS.items() if type_text.startswith(prefix)),
+            (
+                m
+                for prefix, m in _PRODUCER_FIELD_TYPE_METHODS.items()
+                if type_text.startswith(prefix)
+            ),
             None,
         )
         if method is None:

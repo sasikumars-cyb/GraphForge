@@ -286,7 +286,9 @@ class DocumentationHealthAgent:
         clean list of strings rather than trusting the shape."""
         if not isinstance(value, list):
             return []
-        return [str(item) for item in value if isinstance(item, str | int | float) and str(item).strip()]
+        return [
+            str(item) for item in value if isinstance(item, str | int | float) and str(item).strip()
+        ]
 
     def _failed_output(
         self, context: AgentContext, repository: Repository, evidence: list[Evidence], error: str

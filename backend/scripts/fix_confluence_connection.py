@@ -58,11 +58,11 @@ async def main() -> None:
         new_credentials = json.dumps({"api_key": api_key})
         encrypted = encrypt_secret(new_credentials)
 
-        print(f"\n--- Applying fix ---")
+        print("\n--- Applying fix ---")
         print(f"  transport: {row.transport} -> mcp")
         print(f"  auth_method: {row.auth_method} -> api_key")
         print(f"  config: {json.dumps(new_config, indent=2)}")
-        print(f"  credentials: re-encrypted with api_key field")
+        print("  credentials: re-encrypted with api_key field")
 
         await db.execute(
             update(KnowledgeConnection)

@@ -52,9 +52,7 @@ class TestRepositoryWellFormedness:
 
         known = _collect_known_repositories(
             workflow=None,
-            source_workflow=_FakeWorkflow(
-                {"repositories_consulted": ["demo-org/api-gateway"]}
-            ),
+            source_workflow=_FakeWorkflow({"repositories_consulted": ["demo-org/api-gateway"]}),
         )
         assert "demo-org/api-gatewayy" not in known
         assert "demo-org/api-gateway" in known
@@ -200,9 +198,7 @@ class TestCollectKnownFilePathsVerificationFiltering:
         existed must fail closed, never be silently treated as verified."""
         from app.agents.code_generation.verification import _collect_known_file_paths
 
-        development_result = {
-            "components": [{"repository": _REPO, "file_path": "src/Legacy.java"}]
-        }
+        development_result = {"components": [{"repository": _REPO, "file_path": "src/Legacy.java"}]}
         known = _collect_known_file_paths(
             workflow=None, source_workflow=_FakeWorkflow(development_result)
         )

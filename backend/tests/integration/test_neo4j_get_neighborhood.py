@@ -40,9 +40,7 @@ def _chain_graph(repository_id: str) -> GraphPayload:
         for n in node_ids
     ]
     edges = [
-        GraphEdge(
-            source_id=f"{repository_id}:{a}", target_id=f"{repository_id}:{b}", type="CALLS"
-        )
+        GraphEdge(source_id=f"{repository_id}:{a}", target_id=f"{repository_id}:{b}", type="CALLS")
         for a, b in [("A", "B"), ("B", "C"), ("C", "D"), ("D", "E")]
     ]
     return GraphPayload(nodes=nodes, edges=edges)
@@ -196,11 +194,15 @@ async def test_direction_any_is_the_default_and_matches_omitting_it(
         direction="any",
     )
 
-    assert {n.id for n in implicit.nodes} == {n.id for n in explicit.nodes} == {
-        f"{repository_id}:B",
-        f"{repository_id}:C",
-        f"{repository_id}:D",
-    }
+    assert (
+        {n.id for n in implicit.nodes}
+        == {n.id for n in explicit.nodes}
+        == {
+            f"{repository_id}:B",
+            f"{repository_id}:C",
+            f"{repository_id}:D",
+        }
+    )
 
 
 async def test_direction_outgoing_follows_only_forward_edges(
