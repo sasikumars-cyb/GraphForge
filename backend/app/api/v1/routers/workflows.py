@@ -28,7 +28,10 @@ from app.agents.review_adapter import resolve_pr_subject
 from app.api.v1.dependencies import get_current_user
 from app.context.resolvers.freetext import resolve as resolve_freetext
 from app.context_pipeline.reasoning.curation import EvidencePackage
-from app.context_pipeline.reasoning.understanding import EngineeringUnderstanding
+from app.context_pipeline.reasoning.understanding import (
+    EngineeringUnderstanding,
+    InvestigationWorkspace,
+)
 from app.core.exceptions import AppError, NotFoundError
 from app.core.rate_limit import check_rate_limit
 from app.core.request_context import set_workflow_context
@@ -153,6 +156,14 @@ class WorkflowStageResponse(BaseModel):
     label: str
     status: str  # "completed" | "running" | "failed" | "pending"
     run_id: str | None
+    # Best-effort live checklist for a `status == "running"` stage — see
+    # `app.orchestrator.live_progress`. Always `None` for any other status
+    # (nothing left to show once a run has actually finished, and the
+    # persisted transcript is the real record at that point) and for a run
+    # that never wrote one (not every agent opts in, and a run from before
+    # this column existed never will have one) — both read identically as
+    # "no live progress," never as an error.
+    live_progress: dict[str, Any] | None = None
 
 
 class WorkflowDetailResponse(BaseModel):
@@ -251,6 +262,11 @@ def _build_stages(workflow: Workflow) -> list[WorkflowStageResponse]:
                 label=workflow_service.STAGE_LABELS[stage],
                 status=stage_status,
                 run_id=str(matched_run.id) if matched_run is not None else None,
+                live_progress=(
+                    matched_run.live_progress
+                    if matched_run is not None and stage_status == "running"
+                    else None
+                ),
             )
         )
     return stages
@@ -440,10 +456,11 @@ def _workflow_stage_finalizer(workflow_id: uuid.UUID) -> OnComplete:
 
 def _report_finalizer(report_id: uuid.UUID) -> OnComplete:
     """Build the on_complete callback for the report_generation agent's
-    run — persists {"title", "html"} from the completed AgentStep's result
-    into the WorkflowReport row this run was dispatched for. Runs in the
-    background task's own DB session, same pattern as
-    _workflow_stage_finalizer above.
+    run — persists {"title", "html", "view_model"} from the completed
+    AgentStep's result into the WorkflowReport row this run was dispatched
+    for. `view_model` (ADR 0024) is what the frontend actually renders;
+    `html` is kept only as a fallback. Runs in the background task's own
+    DB session, same pattern as _workflow_stage_finalizer above.
     """
 
     async def _finalize(db: AsyncSession, run: Run) -> None:
@@ -478,15 +495,21 @@ def _report_finalizer(report_id: uuid.UUID) -> OnComplete:
         step = step_result.scalar_one_or_none()
         result = step.result if step else {}
         html = result.get("html")
-        if not html:
+        view_model = result.get("view_model")
+        # Report V2 Phase 2 (ADR 0024): `view_model` is the authoritative
+        # field the frontend renders — `html` is kept only as a fallback
+        # (see report_generation/agent.py's `_fallback_html`). A report
+        # missing both means the agent produced nothing usable at all.
+        if not html and not view_model:
             report.status = "failed"
-            report.error_message = "Report generation completed with no HTML content."
+            report.error_message = "Report generation completed with no content."
             report.completed_at = datetime.now(UTC)
             await db.commit()
             return
 
         report.title = result.get("title") or report.title
         report.html_content = html
+        report.view_model = view_model
         report.status = "completed"
         report.completed_at = datetime.now(UTC)
         await db.commit()
@@ -536,10 +559,46 @@ def _build_projection_input(
     evidence_package = EvidencePackage(
         **cd_result.get("evidence_package", {}),
     )
+    # The synthesis LLM's own scratch reasoning (hypotheses, contradictions,
+    # and the code-authored `investigation_history` log the mapper checks
+    # for a degraded synthesis pass). Projected as its own top-level key by
+    # `projection.build_result` unconditionally — see that function's own
+    # comment. Falls back to the older `working_memory.derived.
+    # investigation_workspace` path only for results persisted before that
+    # top-level key existed (a paused run's `working_memory` dump still
+    # carries it); once every such old run has completed or expired, that
+    # fallback stops ever matching. Tolerates a result with neither (`{}`
+    # degrades to an empty workspace, matching every other `.get(..., {})`
+    # in this function).
+    working_memory_derived: dict[str, Any] = (cd_result.get("working_memory") or {}).get(
+        "derived", {}
+    )
+    raw_workspace = cd_result.get("investigation_workspace") or working_memory_derived.get(
+        "investigation_workspace"
+    )
+    try:
+        workspace = InvestigationWorkspace(**(raw_workspace or {}))
+    except Exception:
+        # Malformed/foreign-shaped persisted data must degrade to "no
+        # reasoning to show," never 500 the whole understanding endpoint —
+        # same discipline as every other best-effort read in this file.
+        workspace = InvestigationWorkspace()
+    investigation_priority: dict[str, float] = (
+        cd_result.get("investigation_priority")
+        or working_memory_derived.get("investigation_priority")
+        or {}
+    )
 
     original_request: str = cd_result.get("original_request", "")
     raw_readiness = cd_result.get("readiness", "BLOCKED")
     readiness = raw_readiness if raw_readiness in ("READY", "PARTIAL", "BLOCKED") else "BLOCKED"
+    raw_completion_status = cd_result.get("completion_status", "PARTIAL")
+    completion_status = (
+        raw_completion_status
+        if raw_completion_status
+        in ("COMPLETED", "BUDGET_EXHAUSTED", "PROVIDERS_EXHAUSTED", "BLOCKED", "PARTIAL")
+        else "PARTIAL"
+    )
     blocking_reasons: list[str] = cd_result.get("blocking_reasons") or []
 
     # Typed graph projections from raw dicts
@@ -601,8 +660,11 @@ def _build_projection_input(
     return ProjectionInput(
         understanding=understanding,
         evidence_package=evidence_package,
+        workspace=workspace,
+        investigation_priority=investigation_priority,
         original_request=original_request,
         readiness=readiness,
+        completion_status=completion_status,
         blocking_reasons=blocking_reasons,
         graph_topics=graph_topics,
         graph_components=graph_components,

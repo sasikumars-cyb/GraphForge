@@ -49,15 +49,13 @@ def upgrade() -> None:
         ["id"],
         ondelete="SET NULL",
     )
-    op.execute(
-        """
+    op.execute("""
         UPDATE engineering_sessions
         SET user_id = participants.user_id
         FROM participants
         WHERE engineering_sessions.created_by_participant_id = participants.id
           AND participants.user_id IS NOT NULL
-        """
-    )
+        """)
 
 
 def downgrade() -> None:

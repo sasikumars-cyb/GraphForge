@@ -345,7 +345,18 @@ async def _apply_memory_priority_boost(state: WorkingContext, session: SessionCo
     scope = _repository_scope(state)
     if scope is None:
         return
-    memory_keys: set[str] = set()
+    # A `list`, never a `set` — `state.derived` is persisted verbatim as
+    # part of `WorkingContext.model_dump()` (see `projection.build_result`'s
+    # `working_memory` field), which is written into a JSON/JSONB column.
+    # A `set` here previously reached `json.dumps` and raised `TypeError:
+    # Object of type set is not JSON serializable` — not on every run, only
+    # once this boost had ever fired for a given (scope, capability), which
+    # is exactly what made it look intermittent rather than a straightforward
+    # bug. Every value `state.derived` ever holds must be JSON-serializable
+    # by construction; see `app.database.session`'s `json_serializer` for
+    # the second, independent line of defense against this same class of
+    # mistake reaching persistence again.
+    memory_keys: list[str] = []
     blended: dict[str, float] = {}
     for capability, live_value in live_boost.items():
         memory_value = 0.0
@@ -359,8 +370,8 @@ async def _apply_memory_priority_boost(state: WorkingContext, session: SessionCo
                     "investigation_intelligence_priority_boost_failed capability=%s", capability
                 )
                 memory_value = 0.0
-        if memory_value:
-            memory_keys.add(capability)
+        if memory_value and capability not in memory_keys:
+            memory_keys.append(capability)
         blended[capability] = min(1.0, live_value + memory_value * 0.15)
     state.derived["investigation_priority"] = blended
     state.derived["_intelligence_boost_keys"] = memory_keys
@@ -369,7 +380,7 @@ async def _apply_memory_priority_boost(state: WorkingContext, session: SessionCo
 def _priority_boost_source(state: WorkingContext, capability: str, boost_applied: float) -> str:
     if not boost_applied:
         return "none"
-    memory_keys: set[str] = state.derived.get("_intelligence_boost_keys") or set()
+    memory_keys: list[str] = state.derived.get("_intelligence_boost_keys") or []
     return "both" if capability in memory_keys else "live_llm"
 
 
@@ -491,6 +502,80 @@ async def _record_clean_exit_outcome(state: WorkingContext, session: SessionCont
 
 
 # ---------------------------------------------------------------------------
+# Live progress — best-effort, out-of-band checkpoints (see
+# app.orchestrator.live_progress's own docstring for why this is a separate
+# session/write path rather than a change to how `investigate()` itself
+# commits). Purely additive: every line here is skipped outright when
+# `session.progress_sink` is `None`, which is every call site except a real
+# workflow-stage run with a `run_id` (see `context_discovery/agent.py`).
+# ---------------------------------------------------------------------------
+
+# Short, present-tense labels for the live checklist — deliberately not the
+# full narrated `intent`/`observation` sentence (too long for a compact
+# list) and not a per-action-key label either (a human doesn't need to see
+# "fetch_work_item:PROJ-123" tick by, just "Checking Jira"). Every real
+# `Investigator.name` this codebase registers has an entry; an unlisted one
+# (a future investigator) still gets an honest generic fallback rather than
+# blocking the checklist on this dict being kept in sync.
+_STEP_LABELS: dict[str, str] = {
+    "request_parser": "Parsing the request",
+    "jira": "Checking Jira",
+    "graph": "Investigating the architecture",
+    "github": "Checking GitHub",
+    "confluence": "Checking documentation",
+    "google_drive": "Checking Google Drive",
+    "test_coverage": "Checking test coverage",
+    "user": "Recording your answer",
+}
+
+# P2 fix — `RequestParseInvestigator` genuinely runs up to four distinct
+# passes over the request (see its own module docstring: the raw text,
+# then retrieved ticket/doc content, then indexed repository names, then
+# tracked-but-unindexed ones), but every one of them shares `provider=
+# "request_parser"`, so `_STEP_LABELS` alone rendered all four as the
+# identical "Parsing the request" — a real user watching the live
+# checklist reasonably read that as the UI being stuck re-running the
+# same step, not four different ones. Keyed on `action.key` (each pass's
+# own distinct name — see `RequestParseInvestigator.propose`), checked
+# before the provider-level fallback above.
+_REQUEST_PARSER_STEP_LABELS: dict[str, str] = {
+    "parse_request": "Parsing the request",
+    "parse_retrieved_content": "Checking retrieved content for references",
+    "match_repository_names": "Matching indexed repository names",
+    "match_tracked_repository_names": "Checking tracked repository names",
+}
+
+
+def _step_label(action: InvestigationAction) -> str:
+    if action.provider == "request_parser":
+        return _REQUEST_PARSER_STEP_LABELS.get(action.key, "Parsing the request")
+    return _STEP_LABELS.get(action.provider, f"Checking {action.provider}")
+
+
+async def _report_progress(
+    session: SessionContext,
+    *,
+    iteration: int,
+    max_iterations: int,
+    completed_labels: list[str],
+    active_label: str | None,
+) -> None:
+    if session.progress_sink is None:
+        return
+    from app.orchestrator.live_progress import LiveProgress, LiveProgressStep
+
+    steps = [LiveProgressStep(label=label, status="done") for label in completed_labels]
+    if active_label is not None:
+        steps.append(LiveProgressStep(label=active_label, status="active"))
+    # The sink itself (`write_live_progress`) already never raises — this
+    # call is not wrapped in its own try/except because there is nothing
+    # left here that could fail on top of what it already swallows.
+    await session.progress_sink(
+        LiveProgress(iteration=iteration, max_iterations=max_iterations, steps=steps)
+    )
+
+
+# ---------------------------------------------------------------------------
 # The loop
 # ---------------------------------------------------------------------------
 
@@ -532,6 +617,24 @@ async def investigate(
 
     pool = investigators if investigators is not None else default_investigators()
 
+    # Reset here, not just at construction — a resumed run calls
+    # `investigate()` a second time with a fresh `max_cycles` budget (see
+    # `resume()` below), and a flag left over from the first, budget-cut pass
+    # must not keep reporting BUDGET_EXHAUSTED once the second pass genuinely
+    # finishes inside its own budget.
+    state.metadata.cycle_budget_exhausted = False
+    # True until a real exit condition (nothing unmet, or nothing left to
+    # propose) actually fires — i.e. it stays True exactly when the `while`
+    # condition itself is what ended the loop, which is precisely "the cycle
+    # ceiling was the limiting factor," not a `bool` this loop has to
+    # separately reason about.
+    exhausted_by_cycle_budget = True
+    # Live-progress checklist, carried across cycles (and across a resumed
+    # run's second `investigate()` call — see `resume()`, which does not
+    # reset this) — every completed action's short label, in order. Purely
+    # additive reporting; see `_report_progress` above.
+    completed_step_labels: list[str] = list(state.derived.get("_completed_step_labels") or [])
+
     while state.metadata.iteration < max_cycles:
         state.metadata.iteration += 1
         iteration = state.metadata.iteration
@@ -556,14 +659,23 @@ async def investigate(
         free = [c for c in candidates if c[0].cost == 0]
         if not free:
             if not unmet(state.assessments):
+                exhausted_by_cycle_budget = False
                 break
             if not candidates:
+                exhausted_by_cycle_budget = False
                 break
 
         priority_boost = state.derived.get("investigation_priority") or {}
         candidate_pool = free or candidates
         action, investigator = _select(candidate_pool, state.assessments, priority_boost)
         state.transcript.say("intent", action.intent, iteration=iteration)
+        await _report_progress(
+            session,
+            iteration=iteration,
+            max_iterations=max_cycles,
+            completed_labels=completed_step_labels,
+            active_label=_step_label(action),
+        )
 
         # Captured before the action runs — the decision context `_select()`
         # actually used, for Investigation Intelligence's own record of it
@@ -622,6 +734,14 @@ async def investigate(
         state.transcript.say(
             "observation", outcome.observation, iteration=iteration, evidence_ids=new_evidence
         )
+        completed_step_labels.append(_step_label(action))
+        await _report_progress(
+            session,
+            iteration=iteration,
+            max_iterations=max_cycles,
+            completed_labels=completed_step_labels,
+            active_label=None,
+        )
 
         # Mid-loop re-synthesis: engineering understanding actively driving
         # the *next* action, not just summarizing the last one. Gated three
@@ -648,13 +768,47 @@ async def investigate(
             state.derived["_last_synthesis_evidence_count"] = len(state.ledger.evidence)
             await _apply_memory_priority_boost(state, session)
 
+    # Carried forward so a resumed run's second `investigate()` call
+    # continues the same live checklist rather than restarting it empty —
+    # see this loop's own initialization of `completed_step_labels` above.
+    state.derived["_completed_step_labels"] = completed_step_labels
+
     # Whether we ran out of proposals or out of budget, automated
     # investigation is over — this is the gate `next_question()` waits on.
+    # Deliberately unconditional and unchanged by the flag below: whether a
+    # clarifying question may be offered is a separate question from why the
+    # loop stopped, and narrowing it to "only when genuinely exhausted" would
+    # be a real behavior change to what gets asked, not just to how the
+    # outcome is reported — out of scope for the reporting fix this flag
+    # exists for.
     state.metadata.providers_exhausted = True
+    # Only true when the `while` condition itself ended the loop — i.e.
+    # `iteration` reached `max_cycles` while real work (an unmet requirement,
+    # or a candidate action) was still on the table. The `and` guards the one
+    # edge case where the final in-loop action happens to satisfy everything
+    # on the very last permitted cycle without ever hitting the `not unmet`
+    # break (the loop simply isn't re-entered) — that is a genuine finish,
+    # not a cutoff, and `completion_status` also independently prioritizes
+    # `readiness == "READY"` above this flag for the same reason.
+    state.metadata.cycle_budget_exhausted = (
+        exhausted_by_cycle_budget and state.metadata.iteration >= max_cycles
+    )
     _resync(state)
     state.refresh_assessments()
     _sync_gaps(state)
     state.derived["enriched_text"] = render_enriched_text(state)
+
+    # One last checkpoint covering curation + final synthesis below — both
+    # can take a real, human-noticeable amount of time (the synthesis call
+    # especially, being an LLM round trip), and without this the checklist
+    # would otherwise look finished-but-stuck for that whole stretch.
+    await _report_progress(
+        session,
+        iteration=state.metadata.iteration,
+        max_iterations=max_cycles,
+        completed_labels=completed_step_labels,
+        active_label="Synthesizing findings",
+    )
 
     # Curation (see investigators.curate_evidence's own docstring): runs
     # once, here, over whatever component facts gathering already
@@ -835,6 +989,22 @@ def _conclude(state: WorkingContext) -> None:
 def _verdict_line(state: WorkingContext) -> str:
     readiness = state.readiness
     question = state.next_question()
+    # Checked first, and before the question branch below, to match
+    # `WorkingContext.completion_status`'s own precedence exactly (readiness
+    # READY still wins over either — see that property's docstring). This is
+    # the fix for the audit finding that a cycle-budget cutoff used to read
+    # identically to genuine exhaustion ("I've gathered everything I can on
+    # my own"): that sentence is only ever true when it wasn't the cycle
+    # ceiling that stopped the loop.
+    if state.metadata.cycle_budget_exhausted and readiness != "READY":
+        line = (
+            "I reached my investigation cycle limit before finishing — that's not the same as "
+            "having exhausted every avenue, just what I could cover in the time I had. Here's "
+            "what I found and what's still unknown below."
+        )
+        if question is not None:
+            line += " One thing is also worth asking you about now, since I already have it queued."
+        return line
     if question is not None:
         if state.metadata.clarification_rounds:
             # A re-ask must read as a continuation, not as the engine starting
@@ -900,7 +1070,10 @@ def _seed_explicit_repositories(state: WorkingContext, repo_names: list[str]) ->
         provider="user",
         action="explicit_repository_selection",
         outcome="success",
-        summary=f"User explicitly selected {len(repo_names)} repositor{'y' if len(repo_names) == 1 else 'ies'}: {', '.join(repo_names)}.",
+        summary=(
+            f"User explicitly selected {len(repo_names)} "
+            f"repositor{'y' if len(repo_names) == 1 else 'ies'}: {', '.join(repo_names)}."
+        ),
         iteration=0,
         intent="The user selected these repositories from the Context Explorer UI.",
     )

@@ -75,9 +75,9 @@ async def test_deleting_a_connection_stops_it_being_served(db_session: AsyncSess
     await resync_knowledge_connections_for_source(db_session, "jira")
 
     tool = get_tool_registry().get_tool("jira")
-    assert tool is None or tool._base_url != "https://old.atlassian.net", (  # noqa: SLF001
-        "a deleted connection's credentials must not keep answering lookups"
-    )
+    assert (
+        tool is None or tool._base_url != "https://old.atlassian.net"
+    ), "a deleted connection's credentials must not keep answering lookups"  # noqa: SLF001
 
 
 async def test_deleting_the_newest_connection_falls_back_to_an_older_one(
@@ -101,9 +101,9 @@ async def test_deleting_the_newest_connection_falls_back_to_an_older_one(
     await resync_knowledge_connections_for_source(db_session, "jira")
     tool = get_tool_registry().get_tool("jira")
     assert tool is not None
-    assert tool._base_url == "https://new.atlassian.net", (  # noqa: SLF001
-        "the most recently updated enabled connection must win"
-    )
+    assert (
+        tool._base_url == "https://new.atlassian.net"
+    ), "the most recently updated enabled connection must win"  # noqa: SLF001
 
     await db_session.delete(newer)
     await db_session.commit()
@@ -111,7 +111,9 @@ async def test_deleting_the_newest_connection_falls_back_to_an_older_one(
 
     tool = get_tool_registry().get_tool("jira")
     assert tool is not None
-    assert tool._base_url == "https://old.atlassian.net", (  # noqa: SLF001
+    assert (
+        tool._base_url == "https://old.atlassian.net"
+    ), (  # noqa: SLF001
         "an older, still-enabled connection must take over once the newer one is deleted"
     )
 
@@ -139,6 +141,6 @@ async def test_disabling_a_connection_stops_it_being_served(db_session: AsyncSes
     await resync_knowledge_connections_for_source(db_session, "jira")
 
     tool = get_tool_registry().get_tool("jira")
-    assert tool is None or tool._base_url != "https://toggle-me.atlassian.net", (  # noqa: SLF001
-        "a disabled connection's credentials must not keep answering lookups"
-    )
+    assert (
+        tool is None or tool._base_url != "https://toggle-me.atlassian.net"
+    ), "a disabled connection's credentials must not keep answering lookups"  # noqa: SLF001

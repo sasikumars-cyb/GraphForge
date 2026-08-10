@@ -35,9 +35,7 @@ def _session() -> SessionContext:
     return SessionContext(db=None, user_id=None)  # type: ignore[arg-type]
 
 
-def _graph_result(
-    indexed: list[str], unhealthy: list[dict[str, object]]
-) -> ToolResult:
+def _graph_result(indexed: list[str], unhealthy: list[dict[str, object]]) -> ToolResult:
     return ToolResult(
         tool_id="neo4j_graph",
         tool_name="Neo4j Graph",
@@ -170,9 +168,7 @@ async def test_survey_records_evidence_explaining_each_unhealthy_repository() ->
 
 
 @pytest.mark.asyncio
-async def test_survey_with_zero_healthy_repos_explains_why_instead_of_just_reporting_zero() -> (
-    None
-):
+async def test_survey_with_zero_healthy_repos_explains_why_instead_of_just_reporting_zero() -> None:
     ledger = Ledger()
     action = _survey_action()
     recorder = Recorder(ledger, action, iteration=1)
@@ -232,9 +228,7 @@ async def test_survey_with_no_tracked_repositories_at_all_keeps_the_original_mes
 
 
 @pytest.mark.asyncio
-async def test_verify_of_a_graph_missing_repository_explains_instead_of_generic_not_found() -> (
-    None
-):
+async def test_verify_of_a_graph_missing_repository_explains_instead_of_generic_not_found() -> None:
     ledger = Ledger()
     action = _verify_action("streaming-pipeline")
     recorder = Recorder(ledger, action, iteration=1)

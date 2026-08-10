@@ -421,7 +421,9 @@ async def get_repository_graph_node_neighbors(
             str(repository.id), [node_id], types, hops, direction=direction
         )
     except ValueError as exc:
-        raise AppError(str(exc), status_code=400, error_code="invalid_neighborhood_request") from exc
+        raise AppError(
+            str(exc), status_code=400, error_code="invalid_neighborhood_request"
+        ) from exc
     return _graph_response(graph)
 
 

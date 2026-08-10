@@ -510,6 +510,10 @@ export interface ContextDiscoveryResult {
   // --- Readiness verdict ---
   goal: string;
   readiness: ContextReadiness;
+  /** Why investigation stopped — distinct from `readiness` (which says
+   * whether there's enough). Backend-computed, never re-derive this from
+   * `readiness`/gaps/etc. client-side. See `CompletionStatus`. */
+  completion_status: CompletionStatus;
   /** Necessity-weighted mean of the per-capability scores, excluding
    * capabilities that don't apply to this request. Entirely evidence-derived —
    * no LLM self-report contributes to it. */
@@ -641,8 +645,15 @@ export interface RepositorySummaryDTO {
 }
 
 export interface AreaClusterDTO {
+  /** Now a curated-evidence tier label ("Production Code", "Architecture",
+   * "Reusable Components", "Tests") — not a graph topic. */
   name: string;
+  /** Ranked, capped for display — see `total` for the real count. */
   components: string[];
+  /** The tier's real size before the display cap. Optional — absent for
+   * a DTO from before this field existed; read sites fall back to
+   * `components.length` in that case. */
+  total?: number;
 }
 
 export interface UnknownItemDTO {
@@ -658,6 +669,55 @@ export interface PlanningFactorDTO {
 export interface PlanningAssessmentDTO {
   status: ContextReadiness;
   reasons: PlanningFactorDTO[];
+}
+
+// Why investigation stopped — distinct from `ContextReadiness` (readiness
+// says whether there's enough; this says why looking stopped). Backend is
+// the sole source of truth (`reasoning.memory.WorkingContext.completion_
+// status`) — never re-derive this client-side from readiness/gaps/etc.
+export type CompletionStatus =
+  | "COMPLETED"
+  | "BUDGET_EXHAUSTED"
+  | "PROVIDERS_EXHAUSTED"
+  | "BLOCKED"
+  | "PARTIAL";
+
+export interface HypothesisDTO {
+  id: string;
+  description: string;
+  status: "supported" | "rejected" | "unknown";
+  confidence: number;
+  supporting_evidence: string[];
+  contradicting_evidence: string[];
+  is_strongest: boolean;
+}
+
+export interface ContradictionDTO {
+  id: string;
+  description: string;
+  evidence_for: string[];
+  evidence_against: string[];
+  resolved: boolean;
+  resolution_note: string;
+}
+
+export interface NextInvestigationDTO {
+  capability: string;
+  label: string;
+  priority: number;
+}
+
+export interface ReasoningSummaryDTO {
+  has_reasoning: boolean;
+  degraded: boolean;
+  hypotheses: HypothesisDTO[];
+  contradictions: ContradictionDTO[];
+  open_contradiction_count: number;
+  resolved_contradiction_count: number;
+  strongest_hypothesis_id: string | null;
+  dead_ends: string[];
+  next_investigation: NextInvestigationDTO[];
+  last_update: string;
 }
 
 export interface DebugBundleDTO {
@@ -683,6 +743,11 @@ export interface EngineeringUnderstandingDTO {
   repository_summary: RepositorySummaryDTO;
   architecture_summary: string;
   relevant_areas: AreaClusterDTO[];
+  /** Ranked, deduped production file paths — sourced from the curated
+   * evidence package's must_modify tier. Replaces the old client-side
+   * `extractFilePaths(result.graph_components)`, which read the raw,
+   * unranked component list and could surface only test files. */
+  files_to_review: string[];
   known_constraints: string[];
   missing_information: string[];
   unknowns: UnknownItemDTO[];
@@ -692,6 +757,8 @@ export interface EngineeringUnderstandingDTO {
   confidence_explanation: string;
   documentation_status: string;
   next_step: string;
+  completion_status: CompletionStatus;
+  reasoning_summary: ReasoningSummaryDTO;
   debug_bundle: DebugBundleDTO | null;
 }
 
@@ -725,6 +792,19 @@ export interface PendingClarification {
   investigated: string[];
 }
 
+export type LiveProgressStepStatus = "done" | "active";
+
+export interface LiveProgressStep {
+  label: string;
+  status: LiveProgressStepStatus;
+}
+
+export interface LiveProgress {
+  iteration: number;
+  max_iterations: number;
+  steps: LiveProgressStep[];
+}
+
 export interface WorkflowStageInfo {
   stage: string;
   label: string;
@@ -738,6 +818,13 @@ export interface WorkflowStageInfo {
   // was genuinely in flight.
   status: "completed" | "running" | "queued" | "partial" | "failed" | "pending" | "awaiting_input";
   run_id: string | null;
+  /** Best-effort live checklist while `status === "running"` — absent or
+   * `null` whenever there's nothing real to show yet (not every agent opts
+   * in, and even one that does has nothing to report before its first
+   * reasoning cycle completes) — optional so every existing fixture that
+   * predates this field keeps typechecking. Backend-computed; never
+   * fabricate steps client-side. */
+  live_progress?: LiveProgress | null;
 }
 
 export interface WorkflowRunItem {

@@ -2,9 +2,15 @@ import { useEffect, useRef, useState } from "react";
 import { FileBarChart, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 import { Card } from "../components/Card";
 import { StatusBadge, type StatusTone } from "../components/StatusBadge";
+import { ReportView } from "../components/report/ReportView";
 import { formatRelativeTime } from "../lib/formatDate";
 import { useAuth } from "../app/auth-context";
-import { listReports, getReport, type ReportSummary } from "../lib/api/reports";
+import {
+  listReports,
+  getReport,
+  type ReportSummary,
+  type ReportViewModel,
+} from "../lib/api/reports";
 
 // Reports with this status are still being generated in the background —
 // worth polling for. "failed" and "completed" are both terminal.
@@ -33,9 +39,17 @@ function statusLabel(status: ReportSummary["status"]): string {
   }
 }
 
-function ReportHtmlViewer({ reportId }: { reportId: string }) {
+/**
+ * Report V2 Phase 2 (ADR 0024): a completed report's `view_model` is now
+ * the authoritative content, rendered through real deterministic
+ * components (`ReportView`) — not an LLM-authored HTML string. The
+ * sandboxed iframe below is kept only as a fallback for a report
+ * generated before `view_model` existed (`view_model === null`).
+ */
+function ReportContent({ reportId }: { reportId: string }) {
   const { token } = useAuth();
   const [html, setHtml] = useState<string | null>(null);
+  const [viewModel, setViewModel] = useState<ReportViewModel | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -44,6 +58,7 @@ function ReportHtmlViewer({ reportId }: { reportId: string }) {
     (async () => {
       try {
         const detail = await getReport(token, reportId, controller.signal);
+        setViewModel(detail.view_model);
         setHtml(detail.html_content ?? "");
       } catch (err) {
         if (!controller.signal.aborted) {
@@ -57,7 +72,7 @@ function ReportHtmlViewer({ reportId }: { reportId: string }) {
   if (error) {
     return <p className="p-4 text-sm text-danger-fg">{error}</p>;
   }
-  if (html === null) {
+  if (viewModel === undefined) {
     return (
       <div className="flex items-center gap-2 p-6 text-sm text-fg-muted">
         <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
@@ -65,10 +80,17 @@ function ReportHtmlViewer({ reportId }: { reportId: string }) {
       </div>
     );
   }
+  if (viewModel !== null) {
+    return (
+      <div className="max-h-[80vh] overflow-y-auto bg-canvas p-4">
+        <ReportView model={viewModel} />
+      </div>
+    );
+  }
   return (
     <iframe
-      title="Workflow report"
-      srcDoc={html}
+      title="Workflow report (legacy)"
+      srcDoc={html ?? ""}
       sandbox=""
       className="h-[70vh] w-full rounded-b-lg border-0 bg-white"
     />
@@ -122,7 +144,7 @@ function ReportRow({ report, onStatusSettled }: { report: ReportSummary; onStatu
       </div>
       {expanded && canView && (
         <div className="mt-3 overflow-hidden rounded-lg border border-line">
-          <ReportHtmlViewer reportId={report.id} />
+          <ReportContent reportId={report.id} />
         </div>
       )}
     </Card>

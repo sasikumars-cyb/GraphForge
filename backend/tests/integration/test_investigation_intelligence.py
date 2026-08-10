@@ -37,7 +37,9 @@ def _unique_scope() -> InvestigationScope:
     Investigation Intelligence wiring is live in `context_discovery/
     agent.py`), so a fixed scope_id like "payment-service" can and does
     collide with real data."""
-    return InvestigationScope(scope_type="repository", scope_id=f"test-repo-{uuid.uuid4().hex[:12]}")
+    return InvestigationScope(
+        scope_type="repository", scope_id=f"test-repo-{uuid.uuid4().hex[:12]}"
+    )
 
 
 def _provider_event(
@@ -179,7 +181,9 @@ class TestServiceEffectiveness:
         service = InvestigationIntelligenceService(db_session)
         # A provider that reliably yields evidence and moves confidence...
         await service.record_provider_outcome(
-            _provider_event(scope=scope, provider="rest_cql", outcome="success", yielded_evidence=True)
+            _provider_event(
+                scope=scope, provider="rest_cql", outcome="success", yielded_evidence=True
+            )
         )
         # ...beats one that reliably fails outright.
         await service.record_provider_outcome(
@@ -203,7 +207,9 @@ class TestServiceEffectiveness:
         self, db_session: AsyncSession
     ) -> None:
         service = InvestigationIntelligenceService(db_session)
-        results = await service.provider_effectiveness(scope=_unique_scope(), capability="documentation")
+        results = await service.provider_effectiveness(
+            scope=_unique_scope(), capability="documentation"
+        )
         assert results == []
 
     async def test_repository_provider_preference_centered_at_zero_cold_start(
@@ -221,7 +227,9 @@ class TestServiceEffectiveness:
         scope = _unique_scope()
         service = InvestigationIntelligenceService(db_session)
         await service.record_provider_outcome(
-            _provider_event(scope=scope, provider="rest_cql", outcome="success", yielded_evidence=True)
+            _provider_event(
+                scope=scope, provider="rest_cql", outcome="success", yielded_evidence=True
+            )
         )
         preference = await service.repository_provider_preference(
             scope=scope, capability="documentation"
@@ -251,7 +259,10 @@ class TestServiceEffectiveness:
         service = InvestigationIntelligenceService(db_session)
         await service.record_provider_outcome(
             _provider_event(
-                scope=scope, provider="confluence_mcp", outcome="unavailable", yielded_evidence=False
+                scope=scope,
+                provider="confluence_mcp",
+                outcome="unavailable",
+                yielded_evidence=False,
             )
         )
         result = await service.recent_repeated_failure(
@@ -285,7 +296,9 @@ class TestServiceEffectiveness:
         )
         assert result is None
 
-    async def test_scoped_reads_never_cross_repository_scopes(self, db_session: AsyncSession) -> None:
+    async def test_scoped_reads_never_cross_repository_scopes(
+        self, db_session: AsyncSession
+    ) -> None:
         scope = _unique_scope()
         other_scope = _unique_scope()
         service = InvestigationIntelligenceService(db_session)

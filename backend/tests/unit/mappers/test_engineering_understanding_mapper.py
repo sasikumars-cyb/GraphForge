@@ -11,7 +11,12 @@ from __future__ import annotations
 import pytest
 
 from app.context_pipeline.reasoning.curation import EvidenceItem, EvidencePackage
-from app.context_pipeline.reasoning.understanding import EngineeringUnderstanding
+from app.context_pipeline.reasoning.understanding import (
+    Contradiction,
+    EngineeringUnderstanding,
+    Hypothesis,
+    InvestigationWorkspace,
+)
 from app.mappers.engineering_understanding_mapper import map_to_dto
 from app.schemas.engineering_understanding import (
     CapabilityFactor,
@@ -148,7 +153,8 @@ class TestCompleteInput:
             graph_topics=[TopicProjection(name="Authentication")],
             graph_components=[
                 ComponentProjection(
-                    name="AuthController", topic="Authentication",
+                    name="AuthController",
+                    topic="Authentication",
                 ),
             ],
             capability_factors=[
@@ -165,9 +171,7 @@ class TestCompleteInput:
             ],
             gap_summaries=["Missing IdP config docs"],
             unavailable_gaps=["SAML metadata endpoint"],
-            documentation_status=(
-                "Documentation for IdP integration is missing."
-            ),
+            documentation_status=("Documentation for IdP integration is missing."),
             next_step="Resolve blocking issues: IdP integration pending",
         )
         return map_to_dto(inp)
@@ -191,13 +195,15 @@ class TestCompleteInput:
         assert "gateway → IdP" in complete_dto.architecture_summary
 
     def test_relevant_areas(self, complete_dto):
+        # Tier-based (Production Code / Architecture / Reusable Components /
+        # Tests), sourced from the curated EvidencePackage — not the raw
+        # graph_topics/graph_components grouping this DTO no longer reads.
         assert len(complete_dto.relevant_areas) >= 1
-        auth_area = next(
-            a
-            for a in complete_dto.relevant_areas
-            if a.name == "Authentication"
-        )
-        assert "AuthController" in auth_area.components
+        production = next(a for a in complete_dto.relevant_areas if a.name == "Production Code")
+        assert "AuthController" in production.components
+
+    def test_files_to_review(self, complete_dto):
+        assert complete_dto.files_to_review == []  # _evidence_item has no path by default
 
     def test_known_constraints(self, complete_dto):
         assert "Must support SAML 2.0" in complete_dto.known_constraints
@@ -217,9 +223,7 @@ class TestCompleteInput:
 
     def test_recommendations(self, complete_dto):
         assert "Reuse existing session manager" in complete_dto.recommendations
-        risk_items = [
-            r for r in complete_dto.recommendations if r.startswith("Risk:")
-        ]
+        risk_items = [r for r in complete_dto.recommendations if r.startswith("Risk:")]
         assert len(risk_items) == 1
 
     def test_planning_assessment(self, complete_dto):
@@ -288,65 +292,66 @@ class TestRepositoryMapping:
 
 
 class TestAreaGrouping:
-    """Area grouping → topic-based clusters + 'Other' for unmatched."""
+    """Area grouping → tiered clusters from the curated EvidencePackage,
+    ranked and capped — the P1 fix for the audit's "hundreds of ungrouped
+    test-function names" finding."""
 
-    def test_groups_by_topic(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="Auth")],
-                graph_components=[
-                    ComponentProjection(name="LoginCtrl", topic="Auth"),
-                    ComponentProjection(name="SessionMgr", topic="Auth"),
-                ],
-            )
+    def test_groups_by_tier(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item("LoginCtrl", "must_modify"),
+                _evidence_item("SessionMgr", "must_modify"),
+                _evidence_item("test_login", "relevant_test"),
+            ],
         )
-        assert len(dto.relevant_areas) == 1
-        assert dto.relevant_areas[0].name == "Auth"
-        assert set(dto.relevant_areas[0].components) == {
-            "LoginCtrl",
-            "SessionMgr",
-        }
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        names = {a.name for a in dto.relevant_areas}
+        assert names == {"Production Code", "Tests"}
+        production = next(a for a in dto.relevant_areas if a.name == "Production Code")
+        assert set(production.components) == {"LoginCtrl", "SessionMgr"}
+        tests = next(a for a in dto.relevant_areas if a.name == "Tests")
+        assert tests.components == ["test_login"]
 
-    def test_case_insensitive_matching(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="Authentication")],
-                graph_components=[
-                    ComponentProjection(
-                        name="Ctrl", topic="authentication",
-                    ),
-                ],
-            )
+    def test_every_tier_gets_its_own_honest_label(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item("A", "must_modify"),
+                _evidence_item("B", "architecture_dependency"),
+                _evidence_item("C", "reusable_component"),
+                _evidence_item("D", "relevant_test"),
+            ],
         )
-        assert dto.relevant_areas[0].name == "Authentication"
-        assert "Ctrl" in dto.relevant_areas[0].components
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        labels = [a.name for a in dto.relevant_areas]
+        # Fixed order: must_modify, architecture_dependency,
+        # reusable_component, relevant_test (same order curate() emits).
+        assert labels == [
+            "Production Code",
+            "Architecture",
+            "Reusable Components",
+            "Tests",
+        ]
 
-    def test_unmatched_goes_to_other(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="Auth")],
-                graph_components=[
-                    ComponentProjection(
-                        name="Orphan", topic="nonexistent",
-                    ),
-                ],
-            )
-        )
-        other = next(a for a in dto.relevant_areas if a.name == "Other")
-        assert "Orphan" in other.components
+    def test_a_tier_with_zero_items_is_omitted_not_shown_empty(self):
+        evidence = EvidencePackage(items=[_evidence_item("A", "must_modify")])
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert [a.name for a in dto.relevant_areas] == ["Production Code"]
 
-    def test_topic_with_no_components_still_appears(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="EmptyTopic")],
-                graph_components=[],
-            )
-        )
-        assert any(a.name == "EmptyTopic" for a in dto.relevant_areas)
-
-    def test_empty_topics_and_components(self):
+    def test_empty_evidence_package(self):
         dto = map_to_dto(_minimal_input())
         assert dto.relevant_areas == []
+
+    def test_a_large_tier_is_capped_with_an_honest_total(self):
+        # The exact real-world shape the audit found: hundreds of test
+        # functions in one tier. Must be capped for display, never dumped
+        # as a wall of text, with the true count always stated alongside.
+        evidence = EvidencePackage(
+            items=[_evidence_item(f"test_{i}", "relevant_test") for i in range(340)],
+        )
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        tests = next(a for a in dto.relevant_areas if a.name == "Tests")
+        assert len(tests.components) <= 12
+        assert tests.total == 340
 
 
 class TestUnknownCategorisation:
@@ -355,27 +360,19 @@ class TestUnknownCategorisation:
     def test_remaining_unknowns_categorised(self):
         u = EngineeringUnderstanding(remaining_unknowns=["What is X?"])
         dto = map_to_dto(_minimal_input(understanding=u))
-        assert any(
-            x.category == "unknown" and x.description == "What is X?"
-            for x in dto.unknowns
-        )
+        assert any(x.category == "unknown" and x.description == "What is X?" for x in dto.unknowns)
 
     def test_rejected_assumptions_categorised(self):
         u = EngineeringUnderstanding(rejected_assumptions=["OAuth works"])
         dto = map_to_dto(_minimal_input(understanding=u))
-        assert any(
-            x.category == "known" and x.description == "OAuth works"
-            for x in dto.unknowns
-        )
+        assert any(x.category == "known" and x.description == "OAuth works" for x in dto.unknowns)
 
     def test_unavailable_gaps_categorised(self):
         dto = map_to_dto(
             _minimal_input(unavailable_gaps=["SAML endpoint"]),
         )
         assert any(
-            x.category == "unavailable"
-            and x.description == "SAML endpoint"
-            for x in dto.unknowns
+            x.category == "unavailable" and x.description == "SAML endpoint" for x in dto.unknowns
         )
 
 
@@ -403,14 +400,10 @@ class TestEvidenceSummary:
 
     def test_more_than_three_shows_count(self):
         evidence = EvidencePackage(
-            items=[
-                _evidence_item(f"Item{i}", "must_modify") for i in range(5)
-            ],
+            items=[_evidence_item(f"Item{i}", "must_modify") for i in range(5)],
         )
         dto = map_to_dto(_minimal_input(evidence_package=evidence))
-        line = next(
-            s for s in dto.evidence_summary if "Must-modify" in s
-        )
+        line = next(s for s in dto.evidence_summary if "Must-modify" in s)
         assert "and 2 more" in line
 
     def test_excluded_count_message(self):
@@ -451,12 +444,8 @@ class TestPlanningAssessment:
             ),
         ]
         dto = map_to_dto(_minimal_input(capability_factors=factors))
-        satisfied_reasons = [
-            r for r in dto.planning_assessment.reasons if r.satisfied
-        ]
-        unsatisfied_reasons = [
-            r for r in dto.planning_assessment.reasons if not r.satisfied
-        ]
+        satisfied_reasons = [r for r in dto.planning_assessment.reasons if r.satisfied]
+        unsatisfied_reasons = [r for r in dto.planning_assessment.reasons if not r.satisfied]
         assert len(satisfied_reasons) >= 1
         assert len(unsatisfied_reasons) >= 1
 
@@ -556,10 +545,7 @@ class TestDTOSerialization:
         dumped = dto.model_dump()
         restored = EngineeringUnderstandingDTO(**dumped)
         assert restored.business_goal == dto.business_goal
-        assert (
-            restored.repository_summary.primary
-            == dto.repository_summary.primary
-        )
+        assert restored.repository_summary.primary == dto.repository_summary.primary
 
     def test_round_trip_with_debug(self):
         bundle = DebugBundleDTO(
@@ -641,71 +627,21 @@ class TestNextStep:
 # ---------------------------------------------------------------------------
 
 
-class TestDuplicateTopics:
-    """Duplicate topics (case-insensitive) → last wins for canonical name."""
-
-    def test_duplicate_topic_same_case(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[
-                    TopicProjection(name="Auth"),
-                    TopicProjection(name="Auth"),
-                ],
-                graph_components=[
-                    ComponentProjection(name="Ctrl", topic="Auth"),
-                ],
-            )
-        )
-        auth_areas = [a for a in dto.relevant_areas if a.name == "Auth"]
-        assert len(auth_areas) == 1
-        assert "Ctrl" in auth_areas[0].components
-
-    def test_duplicate_topic_different_case(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[
-                    TopicProjection(name="Auth"),
-                    TopicProjection(name="auth"),
-                ],
-                graph_components=[
-                    ComponentProjection(name="Ctrl", topic="AUTH"),
-                ],
-            )
-        )
-        # Components should be grouped under one cluster
-        total_components = sum(
-            len(a.components) for a in dto.relevant_areas
-        )
-        ctrl_found = any(
-            "Ctrl" in a.components for a in dto.relevant_areas
-        )
-        assert total_components == 1
-        assert ctrl_found
-
-
 class TestUnicode:
-    """Unicode characters in topics, components, and unknowns."""
+    """Unicode characters in components, and unknowns."""
 
-    def test_unicode_topic_and_component(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="認証")],
-                graph_components=[
-                    ComponentProjection(name="ログインCtrl", topic="認証"),
-                ],
-            )
-        )
-        assert dto.relevant_areas[0].name == "認証"
-        assert "ログインCtrl" in dto.relevant_areas[0].components
+    def test_unicode_component_name(self):
+        evidence = EvidencePackage(items=[_evidence_item("ログインCtrl", "must_modify")])
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        production = next(a for a in dto.relevant_areas if a.name == "Production Code")
+        assert "ログインCtrl" in production.components
 
     def test_unicode_unknowns(self):
         u = EngineeringUnderstanding(
             remaining_unknowns=["¿Qué es X?"],
         )
         dto = map_to_dto(_minimal_input(understanding=u))
-        assert any(
-            x.description == "¿Qué es X?" for x in dto.unknowns
-        )
+        assert any(x.description == "¿Qué es X?" for x in dto.unknowns)
 
     def test_unicode_business_goal(self):
         u = EngineeringUnderstanding(business_objective="Über-Feature")
@@ -744,75 +680,83 @@ class TestDeterministicOrdering:
         assert all(r == results[0] for r in results)
 
 
-class TestEmptyComponentNames:
-    """Components with empty names are silently skipped."""
-
-    def test_empty_name_skipped(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="Auth")],
-                graph_components=[
-                    ComponentProjection(name="", topic="Auth"),
-                    ComponentProjection(name="Valid", topic="Auth"),
-                ],
-            )
-        )
-        auth_area = next(
-            a for a in dto.relevant_areas if a.name == "Auth"
-        )
-        assert auth_area.components == ["Valid"]
-
-    def test_all_empty_names(self):
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=[TopicProjection(name="Auth")],
-                graph_components=[
-                    ComponentProjection(name="", topic="Auth"),
-                ],
-            )
-        )
-        auth_area = next(
-            a for a in dto.relevant_areas if a.name == "Auth"
-        )
-        assert auth_area.components == []
-
-
 class TestLargeGraphs:
     """Large input sets process correctly without issues."""
 
-    def test_many_topics_and_components(self):
-        topics = [
-            TopicProjection(name=f"Topic{i}") for i in range(100)
-        ]
-        components = [
-            ComponentProjection(
-                name=f"Comp{i}_{j}", topic=f"Topic{i}",
-            )
-            for i in range(100)
-            for j in range(10)
-        ]
-        dto = map_to_dto(
-            _minimal_input(
-                graph_topics=topics,
-                graph_components=components,
-            )
+    def test_many_components_across_every_tier(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item(f"Comp{i}", "must_modify" if i % 2 == 0 else "relevant_test")
+                for i in range(1000)
+            ],
         )
-        assert len(dto.relevant_areas) == 100
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert len(dto.relevant_areas) == 2
         for area in dto.relevant_areas:
-            assert len(area.components) == 10
+            assert area.total == 500
+            assert len(area.components) <= 12
+
+
+class TestFilesToReview:
+    """files_to_review → ranked production file paths, never test paths."""
+
+    def test_reads_must_modify_paths(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item("rate_association", "must_modify", path="soco/rate_association.py"),
+            ],
+        )
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert dto.files_to_review == ["soco/rate_association.py"]
+
+    def test_never_includes_test_or_reusable_paths(self):
+        # The exact real-world bug: "Files to Review" used to list only
+        # test files because it read the raw, unranked component list.
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item("test_rate_association", "relevant_test", path="tests/test_ra.py"),
+                _evidence_item("string_utils", "reusable_component", path="soco/utils.py"),
+                _evidence_item("rate_association", "must_modify", path="soco/rate_association.py"),
+            ],
+        )
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert dto.files_to_review == ["soco/rate_association.py"]
+
+    def test_falls_back_to_architecture_dependency_to_fill_the_cap(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item("a", "must_modify", path="a.py"),
+                _evidence_item("b", "architecture_dependency", path="b.py"),
+            ],
+        )
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert dto.files_to_review == ["a.py", "b.py"]
+
+    def test_deduplicates_and_caps_at_eight(self):
+        evidence = EvidencePackage(
+            items=[
+                _evidence_item(f"item{i}", "must_modify", path=f"path{i % 5}.py") for i in range(20)
+            ],
+        )
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert dto.files_to_review == [f"path{i}.py" for i in range(5)]
+
+    def test_items_without_a_path_are_skipped(self):
+        evidence = EvidencePackage(items=[_evidence_item("no_path", "must_modify")])
+        dto = map_to_dto(_minimal_input(evidence_package=evidence))
+        assert dto.files_to_review == []
+
+    def test_empty_evidence_package(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.files_to_review == []
 
     def test_many_evidence_items(self):
         evidence = EvidencePackage(
-            items=[
-                _evidence_item(f"Item{i}", "must_modify")
-                for i in range(200)
-            ],
+            items=[_evidence_item(f"Item{i}", "must_modify") for i in range(200)],
             excluded_count=500,
         )
         dto = map_to_dto(_minimal_input(evidence_package=evidence))
-        line = next(
-            s for s in dto.evidence_summary if "Must-modify" in s
-        )
+        line = next(s for s in dto.evidence_summary if "Must-modify" in s)
         assert "(200)" in line
         assert "and 197 more" in line
 
@@ -823,3 +767,245 @@ class TestLargeGraphs:
         dto = map_to_dto(_minimal_input(understanding=u))
         assert len(dto.unknowns) == 500
         assert all(x.category == "unknown" for x in dto.unknowns)
+
+
+# ---------------------------------------------------------------------------
+# reasoning_summary — hypotheses/contradictions projection
+# ---------------------------------------------------------------------------
+
+
+class TestReasoningSummaryEmpty:
+    """No workspace at all → an honest empty state, never a crash."""
+
+    def test_has_reasoning_false(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.reasoning_summary.has_reasoning is False
+
+    def test_no_hypotheses_or_contradictions(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.reasoning_summary.hypotheses == []
+        assert dto.reasoning_summary.contradictions == []
+
+    def test_degraded_false_by_default(self):
+        """Genuinely nothing to reason about is NOT the same as a failed
+        synthesis call — both must be distinguishable, and the default
+        (empty workspace, no notes) must read as the former."""
+        dto = map_to_dto(_minimal_input())
+        assert dto.reasoning_summary.degraded is False
+
+    def test_strongest_hypothesis_id_none(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.reasoning_summary.strongest_hypothesis_id is None
+
+
+class TestReasoningSummaryHypotheses:
+    def test_no_hypotheses(self):
+        workspace = InvestigationWorkspace(hypotheses=[])
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.hypotheses == []
+        assert dto.reasoning_summary.strongest_hypothesis_id is None
+
+    def test_one_hypothesis_is_strongest(self):
+        workspace = InvestigationWorkspace(
+            hypotheses=[
+                Hypothesis(description="X causes Y", status="supported", confidence=0.8),
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert len(dto.reasoning_summary.hypotheses) == 1
+        assert dto.reasoning_summary.hypotheses[0].id == "hyp_0"
+        assert dto.reasoning_summary.hypotheses[0].is_strongest is True
+        assert dto.reasoning_summary.strongest_hypothesis_id == "hyp_0"
+
+    def test_strongest_is_highest_confidence_among_non_rejected(self):
+        workspace = InvestigationWorkspace(
+            hypotheses=[
+                Hypothesis(description="weak", status="unknown", confidence=0.3),
+                Hypothesis(description="strong", status="supported", confidence=0.9),
+                Hypothesis(description="medium", status="unknown", confidence=0.6),
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        strongest = next(h for h in dto.reasoning_summary.hypotheses if h.is_strongest)
+        assert strongest.description == "strong"
+        assert dto.reasoning_summary.strongest_hypothesis_id == "hyp_1"
+        # Exactly one hypothesis is ever flagged strongest.
+        assert sum(1 for h in dto.reasoning_summary.hypotheses if h.is_strongest) == 1
+
+    def test_a_high_confidence_rejected_hypothesis_is_never_strongest(self):
+        """A hypothesis the model itself eliminated must never be crowned
+        "strongest" just because it once scored high before rejection."""
+        workspace = InvestigationWorkspace(
+            hypotheses=[
+                Hypothesis(description="eliminated", status="rejected", confidence=0.95),
+                Hypothesis(description="survives", status="unknown", confidence=0.4),
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        strongest = next(h for h in dto.reasoning_summary.hypotheses if h.is_strongest)
+        assert strongest.description == "survives"
+
+    def test_all_rejected_means_no_strongest(self):
+        workspace = InvestigationWorkspace(
+            hypotheses=[
+                Hypothesis(description="a", status="rejected", confidence=0.9),
+                Hypothesis(description="b", status="rejected", confidence=0.7),
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.strongest_hypothesis_id is None
+        assert all(not h.is_strongest for h in dto.reasoning_summary.hypotheses)
+
+    def test_supporting_and_contradicting_evidence_pass_through(self):
+        workspace = InvestigationWorkspace(
+            hypotheses=[
+                Hypothesis(
+                    description="X",
+                    status="unknown",
+                    confidence=0.5,
+                    supporting_evidence=["ticket says X", "PR #12 implements X"],
+                    contradicting_evidence=["doc says not-X"],
+                )
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        h = dto.reasoning_summary.hypotheses[0]
+        assert h.supporting_evidence == ["ticket says X", "PR #12 implements X"]
+        assert h.contradicting_evidence == ["doc says not-X"]
+        assert dto.reasoning_summary.has_reasoning is True
+
+
+class TestReasoningSummaryContradictions:
+    def test_no_contradictions(self):
+        workspace = InvestigationWorkspace(contradictions=[])
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.contradictions == []
+        assert dto.reasoning_summary.open_contradiction_count == 0
+        assert dto.reasoning_summary.resolved_contradiction_count == 0
+
+    def test_one_unresolved_contradiction(self):
+        workspace = InvestigationWorkspace(
+            contradictions=[
+                Contradiction(
+                    description="Ticket says X, code does Y",
+                    evidence_for=["ticket text"],
+                    evidence_against=["current implementation"],
+                    resolved=False,
+                )
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert len(dto.reasoning_summary.contradictions) == 1
+        c = dto.reasoning_summary.contradictions[0]
+        assert c.id == "contra_0"
+        assert c.resolved is False
+        assert dto.reasoning_summary.open_contradiction_count == 1
+        assert dto.reasoning_summary.resolved_contradiction_count == 0
+
+    def test_one_resolved_contradiction(self):
+        workspace = InvestigationWorkspace(
+            contradictions=[
+                Contradiction(
+                    description="Two docs disagreed",
+                    resolved=True,
+                    resolution_note="Newer doc confirmed as authoritative.",
+                )
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.resolved_contradiction_count == 1
+        assert dto.reasoning_summary.open_contradiction_count == 0
+        assert dto.reasoning_summary.contradictions[0].resolution_note == (
+            "Newer doc confirmed as authoritative."
+        )
+
+    def test_multiple_contradictions_mixed_resolution(self):
+        workspace = InvestigationWorkspace(
+            contradictions=[
+                Contradiction(description="a", resolved=True),
+                Contradiction(description="b", resolved=False),
+                Contradiction(description="c", resolved=False),
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert len(dto.reasoning_summary.contradictions) == 3
+        assert dto.reasoning_summary.resolved_contradiction_count == 1
+        assert dto.reasoning_summary.open_contradiction_count == 2
+        assert [c.id for c in dto.reasoning_summary.contradictions] == [
+            "contra_0",
+            "contra_1",
+            "contra_2",
+        ]
+
+
+class TestReasoningSummaryDegraded:
+    def test_degraded_detected_from_history_entry(self):
+        workspace = InvestigationWorkspace(
+            reasoning_notes=[
+                "Synthesis call failed or returned an invalid response; falling back to a "
+                "deterministic, evidence-only summary."
+            ],
+            investigation_history=[
+                "Cycle 1: synthesis degraded to a deterministic summary over 3 evidence record(s)."
+            ],
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.degraded is True
+
+    def test_last_update_reflects_final_history_entry(self):
+        workspace = InvestigationWorkspace(
+            investigation_history=[
+                "Cycle 1: re-synthesized over 2 evidence record(s) — 1 hypothesis/es.",
+                "Cycle 2: re-synthesized over 5 evidence record(s) — 2 hypothesis/es.",
+            ]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.last_update == (
+            "Cycle 2: re-synthesized over 5 evidence record(s) — 2 hypothesis/es."
+        )
+
+
+class TestReasoningSummaryDeadEndsAndNextInvestigation:
+    def test_dead_ends_pass_through(self):
+        workspace = InvestigationWorkspace(
+            dead_ends=["Ruled out: caching layer — no cache in path."]
+        )
+        dto = map_to_dto(_minimal_input(workspace=workspace))
+        assert dto.reasoning_summary.dead_ends == ["Ruled out: caching layer — no cache in path."]
+
+    def test_next_investigation_ranked_highest_first(self):
+        dto = map_to_dto(
+            _minimal_input(
+                investigation_priority={"architecture": 0.4, "documentation": 0.9, "work_item": 0.1}
+            )
+        )
+        labels = [i.capability for i in dto.reasoning_summary.next_investigation]
+        assert labels == ["documentation", "architecture", "work_item"]
+        assert dto.reasoning_summary.next_investigation[0].label == "Documentation"
+
+    def test_unknown_capability_key_is_dropped_not_crashed(self):
+        dto = map_to_dto(_minimal_input(investigation_priority={"not_a_real_capability": 0.9}))
+        assert dto.reasoning_summary.next_investigation == []
+
+    def test_next_investigation_empty_by_default(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.reasoning_summary.next_investigation == []
+
+
+# ---------------------------------------------------------------------------
+# completion_status — pass-through, source of truth stays the backend
+# ---------------------------------------------------------------------------
+
+
+class TestCompletionStatus:
+    @pytest.mark.parametrize(
+        "status",
+        ["COMPLETED", "BUDGET_EXHAUSTED", "PROVIDERS_EXHAUSTED", "BLOCKED", "PARTIAL"],
+    )
+    def test_passes_through_unchanged(self, status):
+        dto = map_to_dto(_minimal_input(completion_status=status))
+        assert dto.completion_status == status
+
+    def test_defaults_to_partial(self):
+        dto = map_to_dto(_minimal_input())
+        assert dto.completion_status == "PARTIAL"

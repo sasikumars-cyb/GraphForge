@@ -15,6 +15,7 @@ Nothing here decides ordering; `engine.py` does that.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -32,6 +33,7 @@ from app.context_pipeline.reasoning.ledger import (
 if TYPE_CHECKING:
     from app.context_pipeline.reasoning.memory import WorkingContext
     from app.investigation_intelligence.service import InvestigationIntelligenceService
+    from app.orchestrator.live_progress import LiveProgress
 
 
 @dataclass
@@ -64,6 +66,14 @@ class SessionContext:
     # migrated); every read/write site in `engine.py` must treat that as
     # "no signal available" and degrade silently, never require it.
     intelligence: InvestigationIntelligenceService | None = None
+    # Best-effort live-progress checkpoint hook (see `app.orchestrator.
+    # live_progress`) — `None` for every caller that never constructs one
+    # (ad-hoc test fixtures, standalone/non-workflow runs with no `run_id`
+    # to key a checkpoint on). `engine.py` must treat that as "nothing to
+    # report to" and skip the call entirely, exactly like `intelligence`
+    # above; when present, the callable itself already swallows its own
+    # failures, so `engine.py` never needs a try/except around calling it.
+    progress_sink: Callable[[LiveProgress], Awaitable[None]] | None = None
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,6 @@ Run inside the backend container:
 import asyncio
 import json
 import sys
-import uuid
 
 from sqlalchemy import select
 
@@ -50,7 +49,10 @@ async def main() -> None:
         print(f"    - [{f['category']}] {f['path']} ({f['size_bytes']} bytes)")
     print(f"[FINDINGS] {len(result.get('findings', []))}")
     for finding in result.get("findings", []):
-        print(f"    - [{finding['finding_type']}/{finding['severity']}] {finding['file_path']}: {finding['description']}")
+        print(
+            f"    - [{finding['finding_type']}/{finding['severity']}] "
+            f"{finding['file_path']}: {finding['description']}"
+        )
     print(f"[PROPOSED UPDATES] {len(result.get('proposed_updates', []))}")
     for u in result.get("proposed_updates", []):
         print(f"    - {u['file_path']}: {u['rationale']}")

@@ -322,6 +322,68 @@ describe("WorkflowPage", () => {
     expect(await screen.findByText("Found 3 repositories.")).toBeInTheDocument();
   });
 
+  it("shows the live progress checklist for a running stage that has one", async () => {
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
+      makeWorkflow({
+        current_stage: "development",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          {
+            stage: "development",
+            label: "Development",
+            status: "running",
+            run_id: "run-2",
+            live_progress: {
+              iteration: 2,
+              max_iterations: 8,
+              steps: [
+                { label: "Parsing the request", status: "done" },
+                { label: "Investigating the architecture", status: "active" },
+              ],
+            },
+          },
+          { stage: "testing", label: "Testing", status: "pending", run_id: null },
+          { stage: "review", label: "Review", status: "pending", run_id: null },
+        ],
+      }),
+    );
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
+
+    renderWorkflowPage();
+
+    expect(await screen.findByText("Implement JWT auth")).toBeInTheDocument();
+    expect(await screen.findByText("Investigating")).toBeInTheDocument();
+    expect(screen.getByText("Parsing the request")).toBeInTheDocument();
+    expect(screen.getByText("Investigating the architecture")).toBeInTheDocument();
+    expect(screen.getByText("step 2 of 8")).toBeInTheDocument();
+  });
+
+  it("shows no live progress checklist when the running stage has none yet", async () => {
+    vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
+      makeWorkflow({
+        current_stage: "development",
+        stages: [
+          { stage: "planning", label: "Planning", status: "completed", run_id: "run-1" },
+          {
+            stage: "development",
+            label: "Development",
+            status: "running",
+            run_id: "run-2",
+            live_progress: null,
+          },
+          { stage: "testing", label: "Testing", status: "pending", run_id: null },
+          { stage: "review", label: "Review", status: "pending", run_id: null },
+        ],
+      }),
+    );
+    vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());
+
+    renderWorkflowPage();
+
+    expect(await screen.findByText("Implement JWT auth")).toBeInTheDocument();
+    expect(screen.queryByText("Investigating")).not.toBeInTheDocument();
+  });
+
   it("has no detectable accessibility violations once loaded (KAN-38)", async () => {
     vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(makeWorkflow());
     vi.mocked(agentRunsApi.getAgentRun).mockResolvedValue(makeRun());

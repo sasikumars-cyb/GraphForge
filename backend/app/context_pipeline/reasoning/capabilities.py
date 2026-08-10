@@ -878,7 +878,7 @@ def _documentation_necessity(ledger: Ledger) -> Necessity:
 
 
 def _documentation_unreachable_detail(ledger: Ledger) -> str:
-    """"Confluence is not connected" is only one of several reasons the
+    """ "Confluence is not connected" is only one of several reasons the
     "Documentation source reachable" signal below can fail — the others
     (every MCP call attempted but rejected, e.g. an Atlassian API token
     missing Teamwork Graph permission) mean Confluence *is* connected, and

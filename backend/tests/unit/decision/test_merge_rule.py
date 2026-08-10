@@ -24,9 +24,9 @@ def _confidence(state: ConfidenceState) -> ConfidenceModel:
         distinct_confirming_source_types=len(sources),
         confirming_source_types=sources,
         max_confirming_reliability_tier=2 if sources else 0,
-        contradiction_count=1
-        if state in (ConfidenceState.CONFLICTING, ConfidenceState.REJECTED)
-        else 0,
+        contradiction_count=(
+            1 if state in (ConfidenceState.CONFLICTING, ConfidenceState.REJECTED) else 0
+        ),
         computed_at=datetime(2026, 8, 6, tzinfo=UTC),
         formula_version="1.0.0",
     )

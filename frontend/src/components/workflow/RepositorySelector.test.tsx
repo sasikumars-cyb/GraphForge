@@ -84,6 +84,7 @@ function makeResult(overrides: Partial<ContextDiscoveryResult> = {}): ContextDis
     prompt_version: "1.0",
     goal: "req",
     readiness: "READY",
+    completion_status: "COMPLETED",
     confidence: 0.9,
     capability_confidence: {},
     clarification_rounds: 0,

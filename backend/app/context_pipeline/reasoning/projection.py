@@ -27,6 +27,7 @@ from app.context_pipeline.providers import wrap_artifact_text
 from app.context_pipeline.reasoning.capabilities import GRAPH_TRAVERSAL_ACTION
 from app.context_pipeline.reasoning.ledger import EvidenceRecord, Ledger
 from app.context_pipeline.reasoning.memory import WorkingContext
+from app.context_pipeline.reasoning.understanding import InvestigationWorkspace
 
 # Fact kinds whose retrieved prose belongs in the planning prompt, in the
 # order they should appear.
@@ -135,6 +136,7 @@ def build_discovery_report(state: WorkingContext) -> dict[str, Any]:
     """
     return {
         "readiness": state.readiness,
+        "completion_status": state.completion_status,
         "confidence": state.confidence,
         "headline": _headline(state),
         "transcript": [e.model_dump() for e in state.transcript.entries],
@@ -313,12 +315,8 @@ def project_repositories(repositories: list[RepositoryCandidate]) -> dict[str, A
     return {
         "ranked_repository_names": [r.name for r in ranked] or [r.name for r in repositories],
         "implementation_candidates": [r.name for r in repositories],
-        "explicit_repositories": [
-            r.model_dump() for r in repositories if r.source == "explicit"
-        ],
-        "suggested_repositories": [
-            r.model_dump() for r in repositories if r.source == "suggested"
-        ],
+        "explicit_repositories": [r.model_dump() for r in repositories if r.source == "explicit"],
+        "suggested_repositories": [r.model_dump() for r in repositories if r.source == "suggested"],
         "selected_repositories": [r.model_dump() for r in repositories if r.selected],
     }
 
@@ -368,6 +366,112 @@ def _build_repositories(state: WorkingContext) -> list[RepositoryCandidate]:
         selected_names = set()
 
     return [c.model_copy(update={"selected": c.name in selected_names}) for c in candidates]
+
+
+def build_reasoning_summary(state: WorkingContext) -> dict[str, Any]:
+    """The minimal, report-safe projection of one investigation's
+    `InvestigationWorkspace` — hypotheses and contradictions only, the two
+    things a downstream report needs to honestly show "what does
+    GraphForge believe, and why" (Report V2's reasoning-visualization
+    requirement).
+
+    Deliberately NOT the full workspace: `open_questions`, `dead_ends`,
+    `candidate_repositories`/`candidate_architecture`, `reasoning_notes`,
+    `next_investigation_candidates`, `information_gain_estimates`,
+    `investigation_history`, and `investigation_graph` all stay exactly
+    as private as `engineering_understanding`'s own docstring already
+    requires the whole workspace to be for Planning — this function is
+    the one place that decides what of the workspace a report consumer
+    is allowed to see, and it draws that line at hypotheses/
+    contradictions only.
+
+    Reads `state.derived.get("investigation_workspace")` — already a
+    plain dict (`InvestigationWorkspace.model_dump()`) produced by the
+    *existing* synthesis call (see `synthesize_engineering_
+    understanding`). This function performs no LLM call and adds no new
+    one; it is a pure projection over data the synthesis pass already
+    computed this run, at every call site `build_result` already runs
+    from (not gated on whether the run paused for a clarification
+    question, unlike `working_memory` below — hypotheses/contradictions
+    are two small lists, not the full ledger, so the storage-size
+    argument that gates `working_memory` doesn't apply here).
+
+    Re-validates through the real `Hypothesis`/`Contradiction` models
+    (never hand-reshapes the dict) so a caller downstream can trust every
+    entry has exactly the shape those models guarantee, and so a future
+    field added to either model is projected automatically without this
+    function needing to change.
+
+    Also carries `synthesis_state` — one of `"not_run"`/`"failed"`/
+    `"completed_empty"`/`"completed"` (see `_resolve_synthesis_run_state`
+    below and ADR 0024 §11). This is the one deliberately small addition
+    over the original version of this function: a report consumer must be
+    able to tell "the reasoning engine investigated and found nothing" (a
+    real, positive result) apart from "reasoning synthesis never ran or
+    failed" (an availability problem) — collapsing both to an empty
+    projection, as this function used to, made that distinction
+    impossible downstream. No new LLM call: `synthesize_engineering_
+    understanding` already knows which of the three raw cases it hit
+    (zero-evidence short-circuit, caught synthesis exception, or a clean
+    completion) at the exact point it stashes `investigation_workspace` —
+    this function only has to read the one extra string it now also
+    stashes (`state.derived["investigation_workspace_run_state"]`) rather
+    than re-deriving anything.
+
+    `{}` only in the one case that truly precedes this addition: a
+    persisted result from before this field existed (`derived` has no
+    `investigation_workspace` key at all). Report V2's data plumbing
+    treats that bare `{}` identically to `synthesis_state == "not_run"`
+    — never a confident-looking empty list either way.
+    """
+    workspace_dump = state.derived.get("investigation_workspace")
+    if not workspace_dump:
+        return {}
+    try:
+        workspace = InvestigationWorkspace.model_validate(workspace_dump)
+    except Exception:
+        return {}
+    raw_run_state = state.derived.get("investigation_workspace_run_state")
+    synthesis_state = _resolve_synthesis_run_state(raw_run_state, workspace)
+    return {
+        "synthesis_state": synthesis_state,
+        "hypotheses": [h.model_dump() for h in workspace.hypotheses],
+        "contradictions": [c.model_dump() for c in workspace.contradictions],
+        "iteration": state.metadata.iteration,
+    }
+
+
+_SynthesisRunState = Literal["not_run", "failed", "completed_empty", "completed"]
+
+
+def _resolve_synthesis_run_state(
+    raw: str | None, workspace: InvestigationWorkspace
+) -> _SynthesisRunState:
+    """Turns the raw signal `synthesize_engineering_understanding` stashes
+    (`"not_run"`/`"failed"`/`"completed"`, or `None` for a call site that
+    predates this addition) plus the workspace's own list lengths into the
+    exhaustive four-value state ADR 0024 §11 defines.
+
+    A plain string, not `app.agents.report_generation.contracts.
+    SynthesisRunState` — this module is upstream of report_generation and
+    must not import it; the two share the same four literal values by
+    convention, bridged explicitly at read time (`data_plumbing.
+    map_synthesis_run_state`), the same pattern this codebase already
+    uses for `Hypothesis.status` (a bare `Literal` here) versus
+    `contracts.SynthesisStatus` (the report-facing enum) — see
+    `data_plumbing.map_synthesis_status`.
+
+    `raw is None`/`"not_run"` both resolve to `"not_run"`: the honest
+    default when the signal isn't there is "we don't know reasoning ran,"
+    never a guess at `"completed"`.
+    """
+    if raw == "failed":
+        return "failed"
+    if raw is None or raw == "not_run":
+        return "not_run"
+    if not workspace.hypotheses and not workspace.contradictions:
+        return "completed_empty"
+    return "completed"
 
 
 def build_result(state: WorkingContext) -> dict[str, Any]:
@@ -426,9 +530,7 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         scoped_components = [
             c for c in all_components if c.get("repository") in candidate_repo_names
         ]
-        scoped_topics = [
-            t for t in all_topics if t.get("repository") in candidate_repo_names
-        ]
+        scoped_topics = [t for t in all_topics if t.get("repository") in candidate_repo_names]
     else:
         scoped_components = all_components
         scoped_topics = all_topics
@@ -473,6 +575,11 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         # `{}` for a run that predates this field or produced no evidence
         # to synthesize over.
         "engineering_understanding": state.derived.get("engineering_understanding") or {},
+        # The report-safe hypotheses/contradictions projection — see
+        # build_reasoning_summary's own docstring for exactly what this
+        # does and does not carry, and why it's unconditional (unlike
+        # working_memory below, which only survives a paused run).
+        "reasoning_summary": build_reasoning_summary(state),
         "graph_topics": scoped_topics,
         "repositories": [r.model_dump() for r in repositories],
         **projected_repositories,
@@ -500,6 +607,7 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         # --- readiness / confidence --------------------------------------
         "goal": state.metadata.goal,
         "readiness": state.readiness,
+        "completion_status": state.completion_status,
         "confidence": state.confidence,
         "capability_confidence": {a.capability: a.score for a in state.assessments},
         "clarification_rounds": state.metadata.clarification_rounds,
@@ -518,6 +626,23 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         ),
         # --- the human-facing report -------------------------------------
         "discovery_report": build_discovery_report(state),
+        # The synthesis LLM's own scratch reasoning (hypotheses,
+        # contradictions, and — critically — `investigation_history`, the
+        # code-authored log `_map_reasoning` greps for the literal string
+        # "synthesis degraded" to detect a failed synthesis pass). Projected
+        # as its own top-level key, unconditionally, same as
+        # `engineering_understanding` above — *not* gated on `question is
+        # not None` the way `working_memory` below is. It used to be
+        # readable only via `working_memory.derived.investigation_workspace`,
+        # which is deliberately omitted once discovery finishes (see that
+        # field's own comment) — meaning a completed run's degraded-
+        # synthesis signal was silently discarded before the mapper ever
+        # saw it, and every completed investigation reported `degraded=
+        # False` regardless of what synthesis actually did. See the P1
+        # regression this fixes: a real LLM timeout was shown to the user
+        # as "no competing hypotheses were needed."
+        "investigation_workspace": state.derived.get("investigation_workspace") or {},
+        "investigation_priority": state.derived.get("investigation_priority") or {},
         # --- the full working memory, for resume -------------------------
         # Only carried while the run is actually paused. It exists so a resumed
         # run continues from real state rather than a lossy reconstruction of
@@ -528,7 +653,9 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         # Omitted once discovery has finished, because nothing reads it then and
         # it is a second full copy of the ledger already projected into
         # `graph_components`/`discovery_report`. On a large monorepo that is
-        # thousands of duplicated rows in every persisted AgentStep.
+        # thousands of duplicated rows in every persisted AgentStep. (Reasoning
+        # state specifically no longer depends on this — see
+        # `investigation_workspace` above.)
         "working_memory": state.model_dump() if question is not None else {},
     }
 

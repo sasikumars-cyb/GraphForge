@@ -1,5 +1,6 @@
-import { FileQuestion, Layers } from "lucide-react";
+import { Clock, FileQuestion, Layers, Search } from "lucide-react";
 import type React from "react";
+import type { CompletionStatus } from "../../types/agent";
 
 // ---------------------------------------------------------------------------
 // Shared building blocks for every disclosure level of Context Explorer
@@ -53,24 +54,96 @@ export function BulletList({ items }: { items: string[] }) {
   );
 }
 
+/** A confidence/priority value rendered as a short filled track, never a
+ * bare number — used everywhere Context Explorer shows a 0-1 score
+ * (hypothesis confidence, next-investigation priority) so a score is never
+ * presented without its shape. Originally local to `ReasoningSection`;
+ * moved here once `InvestigationTimeline`/`UnknownsAndNext` needed the same
+ * treatment for `NextInvestigationDTO.priority`. */
+export function Meter({
+  value,
+  barClassName = "bg-accent-solid",
+}: {
+  value: number;
+  barClassName?: string;
+}) {
+  const pct = Math.round(Math.max(0, Math.min(1, value)) * 100);
+  return (
+    <div className="flex shrink-0 items-center gap-1.5">
+      <div className="h-1.5 w-14 overflow-hidden rounded-full bg-canvas ring-1 ring-inset ring-line-muted">
+        <div className={`h-full rounded-full ${barClassName}`} style={{ width: `${pct}%` }} />
+      </div>
+      <span className="w-8 shrink-0 text-right font-mono text-[10px] tabular-nums text-fg-subtle">{pct}%</span>
+    </div>
+  );
+}
+
+// Tiers ranked below "important enough to show open by default" — the
+// same collapse-secondary-items rule a real triage would apply: knowing
+// there are 340 relevant test cases is useful, reading all of them isn't
+// the first thing anyone reaches for. `Layers` order in `relevant_areas`
+// is already Production Code → Architecture → Reusable Components →
+// Tests (see the backend mapper), so this only affects open/closed state,
+// never re-sorts anything.
+const _COLLAPSED_BY_DEFAULT = new Set(["Reusable Components", "Tests"]);
+
 /** The full per-area component breakdown — `InvestigationSummary` shows
- * only each area's name as a chip; this is the detail behind that chip. */
-export function RelevantAreas({ areas }: { areas: { name: string; components: string[] }[] }) {
+ * only each area's name as a chip; this is the detail behind that chip.
+ * Each area is a curated-evidence *tier* (Production Code / Architecture /
+ * Reusable Components / Tests), already ranked and capped by the backend
+ * — this renders exactly what it's given, with the real total alongside
+ * so a capped list never silently implies it's the whole thing. */
+export function RelevantAreas({
+  areas,
+}: {
+  areas: { name: string; components: string[]; total?: number }[];
+}) {
   if (areas.length === 0) return null;
   return (
     <section className="flex flex-col gap-1.5">
       <SectionHeading icon={Layers}>Relevant Areas</SectionHeading>
       <p className="text-[11px] text-fg-subtle">
-        What's involved, grouped by area — see Architecture Relationships for how they connect.
+        What's involved, ranked and grouped by role — see Architecture Relationships for how they
+        connect.
       </p>
-      {areas.map((area) => (
-        <div key={area.name} className="rounded-lg bg-surface-raised px-3 py-2">
-          <p className="text-xs font-medium text-fg-secondary">{area.name}</p>
-          {area.components.length > 0 && (
-            <p className="mt-0.5 text-xs text-fg-muted">{area.components.join(", ")}</p>
-          )}
-        </div>
-      ))}
+      {areas.map((area) => {
+        const total = area.total ?? area.components.length;
+        const hiddenCount = Math.max(0, total - area.components.length);
+        const body = (
+          <>
+            {area.components.length > 0 && (
+              <p className="mt-0.5 text-xs text-fg-muted">
+                {area.components.join(", ")}
+                {hiddenCount > 0 && (
+                  <span className="text-fg-subtle"> — and {hiddenCount} more</span>
+                )}
+              </p>
+            )}
+          </>
+        );
+        const heading = (
+          <span className="flex items-center gap-1.5 text-xs font-medium text-fg-secondary">
+            {area.name}
+            <span className="rounded bg-canvas px-1.5 py-0.5 font-mono text-[10px] text-fg-subtle">
+              {total}
+            </span>
+          </span>
+        );
+        if (_COLLAPSED_BY_DEFAULT.has(area.name)) {
+          return (
+            <details key={area.name} className="rounded-lg bg-surface-raised px-3 py-2">
+              <summary className="cursor-pointer">{heading}</summary>
+              {body}
+            </details>
+          );
+        }
+        return (
+          <div key={area.name} className="rounded-lg bg-surface-raised px-3 py-2">
+            <p>{heading}</p>
+            {body}
+          </div>
+        );
+      })}
     </section>
   );
 }
@@ -85,4 +158,30 @@ export function MissingInformation({ items }: { items: string[] }) {
       <BulletList items={items} />
     </section>
   );
+}
+
+/** Only rendered for the two `completion_status` values that say something
+ * `readiness` alone doesn't: BUDGET_EXHAUSTED and PROVIDERS_EXHAUSTED. For
+ * COMPLETED/PARTIAL/BLOCKED, the existing readiness badge already reads as
+ * exactly that word, so a second identical-looking chip beside it would be
+ * decoration, not information — the audit's own "don't add visuals that
+ * don't answer a real question faster than text" rule applied to itself. */
+export function CompletionStatusBadge({ status }: { status: CompletionStatus }) {
+  if (status === "BUDGET_EXHAUSTED") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-warning-bg px-2 py-0.5 text-[10px] font-semibold text-warning-fg">
+        <Clock className="h-3 w-3 shrink-0" aria-hidden="true" />
+        Stopped at cycle limit
+      </span>
+    );
+  }
+  if (status === "PROVIDERS_EXHAUSTED") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-accent-bg px-2 py-0.5 text-[10px] font-semibold text-accent-fg">
+        <Search className="h-3 w-3 shrink-0" aria-hidden="true" />
+        Every automated avenue tried
+      </span>
+    );
+  }
+  return null;
 }

@@ -9,6 +9,7 @@ what the report_generation agent already produced.
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
@@ -39,6 +40,12 @@ class ReportSummary(BaseModel):
 
 class ReportDetail(ReportSummary):
     html_content: str | None
+    # Report V2 Phase 2 (ADR 0024) — the authoritative, deterministic
+    # representation the frontend renders through real components (see
+    # frontend/src/components/report/). `html_content` above is kept only
+    # as a fallback for older reports / any consumer still reading it
+    # directly. `None` for a report generated before this field existed.
+    view_model: dict[str, Any] | None
 
 
 def _iso(dt: object) -> str | None:
@@ -108,4 +115,5 @@ async def get_report(
     return ReportDetail(
         **_to_summary(report).model_dump(),
         html_content=report.html_content,
+        view_model=report.view_model,
     )

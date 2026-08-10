@@ -39,9 +39,7 @@ class TestTestClassConfusion:
         components = [
             _comp("TestSCDType2Merger", "etl-core", "tests/unit/test_scd2.py", is_test=True),
             _comp("SCDType2Merger", "etl-core", "src/etl_core/scd/scd_type2.py", is_test=False),
-            _comp(
-                "TestExactDeduplicator", "etl-core", "tests/unit/test_dedup.py", is_test=True
-            ),
+            _comp("TestExactDeduplicator", "etl-core", "tests/unit/test_dedup.py", is_test=True),
             _comp(
                 "ExactDeduplicator", "etl-core", "src/etl_core/dedup/exact_dedup.py", is_test=False
             ),

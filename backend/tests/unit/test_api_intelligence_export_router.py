@@ -28,7 +28,10 @@ from app.models.user import User
 
 async def _make_user(db: AsyncSession) -> User:
     user = User(
-        id=uuid.uuid4(), email=f"{uuid.uuid4().hex}@example.com", hashed_password="x", full_name="Test User"
+        id=uuid.uuid4(),
+        email=f"{uuid.uuid4().hex}@example.com",
+        hashed_password="x",
+        full_name="Test User",
     )
     db.add(user)
     await db.flush()
@@ -68,7 +71,9 @@ async def test_load_completed_result_rejects_unknown_run(db_session: AsyncSessio
 
 
 @pytest.mark.asyncio
-async def test_load_completed_result_rejects_a_run_owned_by_another_user(db_session: AsyncSession) -> None:
+async def test_load_completed_result_rejects_a_run_owned_by_another_user(
+    db_session: AsyncSession,
+) -> None:
     user = await _make_user(db_session)
     run = await _make_run(db_session, user, status="completed", with_result=True)
 
@@ -77,7 +82,9 @@ async def test_load_completed_result_rejects_a_run_owned_by_another_user(db_sess
 
 
 @pytest.mark.asyncio
-async def test_load_completed_result_rejects_a_not_yet_completed_run(db_session: AsyncSession) -> None:
+async def test_load_completed_result_rejects_a_not_yet_completed_run(
+    db_session: AsyncSession,
+) -> None:
     user = await _make_user(db_session)
     run = await _make_run(db_session, user, status="running", with_result=False)
 

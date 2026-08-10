@@ -916,3 +916,253 @@ async def test_resume_step_stays_paused_when_output_awaiting_input_again() -> No
     assert resumed.status == "awaiting_input"
     assert step.status == "awaiting_input"
     assert step.completed_at is None
+
+
+# ---------------------------------------------------------------------------
+# P0-1 regression — a persistence failure must never leave a Run silently
+# stuck at "running"/"awaiting_input" (real production incident: a `set`
+# inside `AgentOutput.result` reached `json.dumps` and raised `TypeError`,
+# which cascaded into a `PendingRollbackError` that escaped every handler —
+# see `RunCoordinator._commit_or_fail`'s own docstring for the full
+# mechanism this now guards against).
+# ---------------------------------------------------------------------------
+
+
+def _flaky_commit_raising_on_call(n: int, error: Exception) -> AsyncMock:
+    """An `AsyncMock` standing in for `db.commit` that raises `error` on
+    exactly the `n`-th call (1-indexed) and succeeds on every other call —
+    the shape every test below needs to land the failure on a specific
+    commit in the sequence (the running-transition commit must always
+    succeed; only the result-persisting commit should fail)."""
+    calls = {"count": 0}
+
+    async def _commit() -> None:
+        calls["count"] += 1
+        if calls["count"] == n:
+            raise error
+
+    return AsyncMock(side_effect=_commit)
+
+
+def _flaky_commit_failing_calls(failing: set[int], error: Exception) -> AsyncMock:
+    """Like `_flaky_commit_raising_on_call`, but raises on every call number
+    in `failing` (1-indexed) rather than just one — for modeling a commit
+    that keeps failing across a rollback-and-retry until the poisoned data
+    is actually discarded (real SQLAlchemy semantics a plain call-counting
+    mock can't reproduce on its own; the test asserts the *contract*, not
+    a faithful dirty-state simulation)."""
+    calls = {"count": 0}
+
+    async def _commit() -> None:
+        calls["count"] += 1
+        if calls["count"] in failing:
+            raise error
+
+    return AsyncMock(side_effect=_commit)
+
+
+@pytest.mark.asyncio
+async def test_a_serialization_failure_on_completion_marks_the_run_failed_not_stuck() -> None:
+    """The exact reported incident, reproduced directly: the commit that
+    would persist a completed run's result raises `TypeError` (a `set`
+    reached `json.dumps`). The run must end up explicitly `failed`, with a
+    real `error_message` and `completed_at` — never left at "running"."""
+    coordinator, mock_db, mock_agent = _build_coordinator()
+    mock_db.commit = _flaky_commit_raising_on_call(
+        2, TypeError("Object of type set is not JSON serializable")
+    )
+    mock_db.rollback = AsyncMock()
+
+    run = await coordinator.execute(_make_subject(), "plan_freeform")
+
+    assert run.status == "failed"
+    assert run.error_message is not None
+    assert "Object of type set is not JSON serializable" in run.error_message
+    assert run.completed_at is not None
+    mock_db.rollback.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_a_serialization_failure_while_pausing_for_clarification_marks_the_run_failed() -> (
+    None
+):
+    """Same guarantee, on the pause path specifically — this is the exact
+    branch the real incident happened on: Context Discovery correctly
+    reaching `awaiting_input`, then failing to persist that paused state.
+    The honest outcome is `failed`, not a run silently left claiming to
+    be "awaiting_input" (or "running") while actually abandoned."""
+    coordinator, mock_db, mock_agent = _build_coordinator(
+        agent_id="context_discovery", goal="discover_context"
+    )
+    mock_agent.run = AsyncMock(return_value=_make_awaiting_input_output())
+    mock_db.commit = _flaky_commit_raising_on_call(
+        2, TypeError("Object of type set is not JSON serializable")
+    )
+    mock_db.rollback = AsyncMock()
+
+    run = await coordinator.execute(_make_subject(), "discover_context")
+
+    assert run.status == "failed"
+    assert run.error_message is not None
+    assert run.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_a_serialization_failure_on_resume_marks_the_run_failed_not_stuck() -> None:
+    """Same guarantee again, on `resume_step` — a human just answered a
+    clarification question; the re-investigation completes, and *that*
+    persistence attempt fails. Must not silently strand the run at
+    "running" with the human's answer lost and no way to tell."""
+    mock_db = AsyncMock()
+    mock_db.flush = AsyncMock()
+    mock_db.add = MagicMock()
+    mock_db.commit = _flaky_commit_raising_on_call(
+        2, TypeError("Object of type set is not JSON serializable")
+    )
+    mock_db.rollback = AsyncMock()
+
+    registry = AgentRegistry()
+    registry.register(_make_manifest("context_discovery", "discover_context"), AsyncMock())
+    mock_agent = AsyncMock()
+    mock_agent.run = AsyncMock(return_value=_make_output("context_discovery"))
+
+    coordinator = RunCoordinator(db=mock_db, registry=registry, selector=None)
+    run = Run(
+        id=uuid.uuid4(),
+        subject_id="freetext:abc123",
+        subject_type="freetext",
+        display_name="Test task",
+        goal="discover_context",
+        status="awaiting_input",
+    )
+    step = AgentStep(
+        id=uuid.uuid4(), run_id=run.id, agent_id="context_discovery", status="awaiting_input"
+    )
+
+    resumed = await coordinator.resume_step(
+        run,
+        step,
+        "context_discovery",
+        mock_agent,
+        _make_subject(),
+        "discover_context",
+        extras={"resume": {"working_context": {}, "answer": {"question_id": "q1", "answer": "x"}}},
+    )
+
+    assert resumed.status == "failed"
+    assert resumed.error_message is not None
+    assert resumed.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_a_failing_on_pre_commit_hook_that_recovers_keeps_the_runs_own_result() -> None:
+    """`on_pre_commit`'s own commit fails, but the fallback plain commit of
+    `run`'s already-set fields (still "completed", from `_apply_agent_
+    output`) succeeds — meaning the run's own result genuinely was fine;
+    only the hook's side effects (e.g. workflow advancement) were lost.
+    This is `_commit_with_hook`'s own documented, pre-existing contract
+    ("a bookkeeping bug can never cost the run its own recorded outcome")
+    and must keep holding: the run stays `completed`, not incorrectly
+    downgraded to `failed` for a problem that wasn't its own."""
+    coordinator, mock_db, mock_agent = _build_coordinator()
+    # Call 1: running-transition commit (succeeds). Call 2: the hook's own
+    # commit (fails). Call 3: `_commit_or_fail`'s fallback plain commit of
+    # `run` alone (succeeds — nothing about `run` itself was ever bad).
+    mock_db.commit = _flaky_commit_raising_on_call(
+        2, TypeError("Object of type set is not JSON serializable")
+    )
+    mock_db.rollback = AsyncMock()
+
+    async def on_pre_commit(
+        db, run
+    ) -> None:  # noqa: ANN001 - matches Callable[[AsyncSession, Run], Awaitable[None]]
+        await db.commit()
+
+    run, agent_id, agent = await coordinator.create_pending_run(_make_subject(), "plan_freeform")
+    run = await coordinator.execute_run(
+        run,
+        agent_id,
+        agent,
+        _make_subject(),
+        "plan_freeform",
+        on_pre_commit=on_pre_commit,
+    )
+
+    assert run.status == "completed"
+    assert run.error_message is None
+
+
+@pytest.mark.asyncio
+async def test_a_failing_on_pre_commit_hook_whose_data_stays_bad_still_marks_the_run_failed() -> (
+    None
+):
+    """The real production shape: `on_pre_commit` (the workflow-stage
+    finalizer) shares this coordinator's session, so its failed commit and
+    `_commit_or_fail`'s own first retry both attempt to flush the *same*
+    poisoned `step.result` — both fail, until the rollback that precedes
+    the second retry actually discards it. The run must still end up
+    `failed`, never left at `completed`/`running` with the bad result
+    quietly re-attempted forever."""
+    coordinator, mock_db, mock_agent = _build_coordinator()
+    # Call 1: running-transition (succeeds). Calls 2-3: the hook's commit,
+    # then `_commit_or_fail`'s first plain-retry — both still see the bad
+    # data and fail. Call 4: the retry *after* `rollback()` — the poisoned
+    # state is gone, this one succeeds, and `_commit_or_fail` has already
+    # set status="failed" before making it.
+    mock_db.commit = _flaky_commit_failing_calls(
+        {2, 3}, TypeError("Object of type set is not JSON serializable")
+    )
+    mock_db.rollback = AsyncMock()
+
+    async def on_pre_commit(
+        db, run
+    ) -> None:  # noqa: ANN001 - matches Callable[[AsyncSession, Run], Awaitable[None]]
+        await db.commit()
+
+    run, agent_id, agent = await coordinator.create_pending_run(_make_subject(), "plan_freeform")
+    run = await coordinator.execute_run(
+        run,
+        agent_id,
+        agent,
+        _make_subject(),
+        "plan_freeform",
+        on_pre_commit=on_pre_commit,
+    )
+
+    assert run.status == "failed"
+    assert run.error_message is not None
+    assert run.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_when_even_the_retry_commit_fails_a_fresh_session_forces_the_run_failed() -> None:
+    """Both the original commit *and* the rollback-and-retry commit fail —
+    the session is unrecoverable. `_force_fail_run` must still land the
+    run at `failed` through a brand new, independent session rather than
+    leaving it stuck."""
+    coordinator, mock_db, mock_agent = _build_coordinator()
+    # Call 1 (running-transition) succeeds; every commit from call 2
+    # onward (the result-persisting commit, and its rollback-and-retry)
+    # keeps failing — the session is unrecoverable.
+    mock_db.commit = _flaky_commit_failing_calls(
+        {2, 3, 4, 5}, TypeError("Object of type set is not JSON serializable")
+    )
+    mock_db.rollback = AsyncMock()
+
+    fresh_db = AsyncMock()
+    fresh_db.execute = AsyncMock()
+    fresh_db.commit = AsyncMock()
+    fresh_session_cm = AsyncMock()
+    fresh_session_cm.__aenter__ = AsyncMock(return_value=fresh_db)
+    fresh_session_cm.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.database.session.AsyncSessionLocal", return_value=fresh_session_cm):
+        run = await coordinator.execute(_make_subject(), "plan_freeform")
+
+    # The original (poisoned) session's `run` object never got its status
+    # written successfully — this test's real assertion is that the fresh
+    # session's UPDATE was actually issued and committed, not that the
+    # in-memory `run` object reflects it (it can't, in this scenario).
+    fresh_db.execute.assert_awaited_once()
+    fresh_db.commit.assert_awaited_once()
+    assert run.status != "completed"

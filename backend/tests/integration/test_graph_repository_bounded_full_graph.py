@@ -40,7 +40,11 @@ def _node(repository_id: str, n: int, label: str = "Component") -> GraphNode:
 
 
 async def _seed_chain(
-    graph_repository: Neo4jGraphRepository, repository_id: str, *, count: int, label: str = "Component"
+    graph_repository: Neo4jGraphRepository,
+    repository_id: str,
+    *,
+    count: int,
+    label: str = "Component",
 ) -> list[GraphNode]:
     """`count` nodes, each linked to the next by CALLS — enough to exercise
     both "some edges land inside the returned page" and "some edges would
@@ -291,7 +295,10 @@ class TestTypeCounts:
         await graph_repository.replace_repository_graph(
             other_repository_id,
             GraphPayload(
-                nodes=[_node(other_repository_id, 0, "Service"), _node(other_repository_id, 1, "Service")]
+                nodes=[
+                    _node(other_repository_id, 0, "Service"),
+                    _node(other_repository_id, 1, "Service"),
+                ]
             ),
         )
         try:

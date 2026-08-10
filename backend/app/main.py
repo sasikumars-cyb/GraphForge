@@ -91,8 +91,7 @@ def create_app() -> FastAPI:
                 )
             )
             # Ensure knowledge_connections table exists.
-            await conn.execute(
-                text("""
+            await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS knowledge_connections (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     source_type VARCHAR(64) NOT NULL,
@@ -111,14 +110,11 @@ def create_app() -> FastAPI:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
-            """)
-            )
-            await conn.execute(
-                text("""
+            """))
+            await conn.execute(text("""
                 CREATE INDEX IF NOT EXISTS ix_knowledge_connections_source_type
                 ON knowledge_connections (source_type)
-            """)
-            )
+            """))
             # No admin-promotion SQL here on purpose — the bootstrap admin
             # account is seeded once, by the b5c6d7e8f9a0 migration, not on
             # every process start. An unconditional
@@ -185,6 +181,19 @@ def create_app() -> FastAPI:
         worker_stop_event = asyncio.Event()
         worker_task = asyncio.create_task(Worker().run_forever(worker_stop_event))
 
+        # P2 — the periodic counterpart to `recover_orphaned_runs` above:
+        # that one only catches what a *restart* can see (a Run whose job
+        # is no longer queued/leased). A Run whose in-process task died
+        # silently without a restart — the real incident `RunCoordinator.
+        # _commit_or_fail` was added for, and the class of bug it's a
+        # backstop against more generally — needs a wall-clock sweep
+        # instead. Same stop-event/graceful-shutdown shape as the worker
+        # task right above it.
+        stale_run_sweep_stop_event = asyncio.Event()
+        stale_run_sweep_task = asyncio.create_task(
+            background_execution.run_stale_run_sweep_forever(stale_run_sweep_stop_event)
+        )
+
         yield
 
         # Graceful shutdown: stop claiming new jobs and let any in-flight
@@ -193,6 +202,8 @@ def create_app() -> FastAPI:
         # those jobs depend on.
         worker_stop_event.set()
         await worker_task
+        stale_run_sweep_stop_event.set()
+        await stale_run_sweep_task
 
         # Graceful shutdown: release the Neo4j connection pool and dispose
         # the SQLAlchemy engine's own pool, rather than leaving both open

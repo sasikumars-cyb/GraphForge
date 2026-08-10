@@ -326,9 +326,11 @@ class RunCoordinator:
             await self._fail_run(run, str(exc))
             await self._commit_with_hook(run, on_pre_commit)
             logger.error(
-                "agent_run_preflight_failed run_id=%s agent_id=%s error=%s"
-                if isinstance(exc, PreFlightCheckFailed)
-                else "agent_run_failed run_id=%s agent_id=%s error=%s",
+                (
+                    "agent_run_preflight_failed run_id=%s agent_id=%s error=%s"
+                    if isinstance(exc, PreFlightCheckFailed)
+                    else "agent_run_failed run_id=%s agent_id=%s error=%s"
+                ),
                 str(run.id),
                 agent_id,
                 str(exc),
@@ -437,9 +439,11 @@ class RunCoordinator:
             await self._fail_run(run, str(exc))
             await self._commit_with_hook(run, on_pre_commit)
             logger.error(
-                "agent_run_resume_preflight_failed run_id=%s agent_id=%s error=%s"
-                if isinstance(exc, PreFlightCheckFailed)
-                else "agent_run_resume_failed run_id=%s agent_id=%s error=%s",
+                (
+                    "agent_run_resume_preflight_failed run_id=%s agent_id=%s error=%s"
+                    if isinstance(exc, PreFlightCheckFailed)
+                    else "agent_run_resume_failed run_id=%s agent_id=%s error=%s"
+                ),
                 str(run.id),
                 agent_id,
                 str(exc),
@@ -506,15 +510,108 @@ class RunCoordinator:
         `on_pre_commit` also mutates (see execute_run's docstring). Falls
         back to a plain commit — of the run's own status alone — if the
         hook is absent or raises, so a caller's bookkeeping bug can never
-        cost the run its own recorded outcome."""
+        cost the run its own recorded outcome.
+
+        `run_id` is captured *before* anything that could fail, never read
+        off `run` again inside a failure branch: once a commit has failed,
+        `run`'s attributes may be expired, and reading one (even just for a
+        log message) issues a query against a session SQLAlchemy has
+        already flagged as needing an explicit `rollback()` first — which
+        raised `PendingRollbackError` right out of the exception handler
+        that was trying to report the *original* failure, so the run was
+        never marked failed at all and sat at status="running" forever.
+        See `_commit_or_fail` for the guarantee this method now makes:
+        `run` always ends this call in an explicit terminal state if
+        persisting its real outcome didn't succeed.
+        """
+        run_id = run.id
         if on_pre_commit is None:
-            await self._db.commit()
+            await self._commit_or_fail(run, run_id)
             return
         try:
             await on_pre_commit(self._db, run)
         except Exception:
-            logger.exception("run_coordinator_pre_commit_hook_failed run_id=%s", str(run.id))
+            logger.exception("run_coordinator_pre_commit_hook_failed run_id=%s", run_id)
+            await self._commit_or_fail(run, run_id)
+
+    async def _commit_or_fail(self, run: Run, run_id: uuid.UUID) -> None:
+        """Commit `run`'s pending changes. If the commit itself fails (a
+        non-JSON-serializable value slipping into a JSON column being the
+        one confirmed real-world case — see `context_pipeline.reasoning.
+        engine._apply_memory_priority_boost`'s own docstring — but this
+        must hold for *any* commit failure, not just that one), the
+        transaction is rolled back and a second, minimal attempt persists
+        an explicit failure onto `run` alone. If even that fails, a brand
+        new session — entirely independent of whatever state poisoned this
+        one — is used as the last resort. One of these three always
+        succeeds short of the database itself being unreachable, which
+        `recover_orphaned_runs`/the periodic stale-run sweep (see
+        `app.orchestrator.background_execution`) exists to catch instead.
+
+        The one guarantee this whole method exists for: `run` never exits
+        `_commit_with_hook` sitting at status="running"/"awaiting_input"
+        with its *real* outcome silently lost.
+        """
+        try:
             await self._db.commit()
+            return
+        except Exception as exc:
+            logger.exception("run_coordinator_commit_failed run_id=%s", run_id)
+            first_error = exc
+
+        try:
+            await self._db.rollback()
+            run.status = "failed"
+            run.error_message = f"Internal error while saving results: {first_error}"
+            run.completed_at = datetime.now(UTC)
+            await self._db.commit()
+            return
+        except Exception:
+            logger.exception("run_coordinator_failure_persist_failed run_id=%s", run_id)
+            try:
+                await self._db.rollback()
+            except Exception:
+                logger.exception("run_coordinator_rollback_failed run_id=%s", run_id)
+
+        await self._force_fail_run(run_id, str(first_error))
+
+    async def _force_fail_run(self, run_id: uuid.UUID, error: str) -> None:
+        """Last resort: mark `run_id` failed through a brand new session,
+        bypassing this coordinator's own — which, by the time this is
+        called, has failed to commit twice in a row and cannot be trusted
+        not to fail a third time on whatever state it's still carrying. A
+        plain Core `UPDATE` against only `agent_runs`, not the ORM object
+        graph that got this coordinator into trouble, and not touching
+        `agent_steps` at all — the step's own bad data stays exactly as
+        broken as it already was; this only guarantees the *run* stops
+        lying about being "running" forever."""
+        from sqlalchemy import update
+
+        from app.database.session import AsyncSessionLocal
+
+        try:
+            async with AsyncSessionLocal() as db:
+                stuck_statuses = ("running", "awaiting_input", "queued")
+                await db.execute(
+                    update(Run)
+                    .where(Run.id == run_id, Run.status.in_(stuck_statuses))
+                    .values(
+                        status="failed",
+                        error_message=f"Internal error while saving results: {error}",
+                        completed_at=datetime.now(UTC),
+                    )
+                )
+                await db.commit()
+        except Exception:
+            # Truly last resort — the database itself may be unreachable.
+            # `recover_orphaned_runs` (startup) and the periodic stale-run
+            # sweep are the remaining backstops; nothing further to do from
+            # inside this request/task.
+            logger.critical(
+                "run_coordinator_force_fail_failed run_id=%s — run may remain stuck at a "
+                "non-terminal status until the next orphan sweep",
+                run_id,
+            )
 
     async def _fail_step(self, step: AgentStep, error: str, latency_ms: int) -> None:
         step.status = "failed"

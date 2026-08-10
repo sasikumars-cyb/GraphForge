@@ -63,12 +63,7 @@ class RepositoryVerification:
 
     @property
     def passed(self) -> bool:
-        return (
-            self.well_formed
-            and self.tracked
-            and self.in_workflow_scope
-            and not self.errors
-        )
+        return self.well_formed and self.tracked and self.in_workflow_scope and not self.errors
 
 
 def _collect_known_repositories(
@@ -101,8 +96,25 @@ def _collect_known_repositories(
 def _collect_known_file_paths(
     workflow: Workflow | None, source_workflow: Workflow | None
 ) -> dict[str, set[str]]:
-    """repository full_name -> file_paths the Development stage's own
-    graph traversal reported for it (`AffectedComponent.file_path`)."""
+    """repository full_name -> file_paths this run's Development stage
+    deterministically verified against that exact repository
+    (`AffectedComponent.file_path_verification == "verified"`, ADR 0027).
+
+    Only `"verified"` entries are included — `"not_checked"` and
+    `"unverified"` (including a component flagged
+    `component_repository_mismatch`) are excluded identically, and a
+    Development result predating this field (no `file_path_verification`
+    key at all) defaults to absent/excluded, never included (ADR 0027
+    §11 — fails closed for legacy data, never silently trusted).
+
+    The returned mapping stays repository-partitioned
+    (`dict[repository, set[file_path]]`) deliberately — never flatten
+    this to a single `set[file_path]` for convenience; `repository` is
+    looked up by the caller's own already-verified target repository
+    (see `validate_file_operations` below), and collapsing this shape
+    would reintroduce, on this side, the exact repository-attribution gap
+    ADR 0027 closes on the Development side (Invariant G).
+    """
     by_repo: dict[str, set[str]] = {}
     for wf in (source_workflow, workflow):
         if wf is None:
@@ -113,7 +125,8 @@ def _collect_known_file_paths(
         for component in result.get("components", []) or []:
             repo = component.get("repository", "")
             path = component.get("file_path", "")
-            if repo and path:
+            verification_status = component.get("file_path_verification")
+            if repo and path and verification_status == "verified":
                 by_repo.setdefault(repo, set()).add(path)
     return by_repo
 
@@ -246,15 +259,28 @@ def validate_file_operations(
 ) -> list[FileOperationViolation]:
     """Reject invalid file operations before they ever reach git.
 
-    - create: destination must be a safe relative path.
-    - modify / delete: destination must be safe AND, whenever this
-      workflow's Development stage reported known file paths for
-      `repository`, must actually be one of them. When no such ground
-      truth exists (Development stage absent, or reported no components
-      for this repository), existence cannot be asserted either way, so
-      only the path-safety check applies — a documented limitation, not a
-      silent pass: see `RepositoryVerification` for why generation is
-      already gated on a verified, in-scope repository regardless.
+    - create: destination must be a safe relative path. Never gated by
+      `known_file_paths` at all (ADR 0027 Invariant 2) — a genuinely new
+      file has no existing evidence to match, by definition.
+    - modify / delete: destination must be safe AND appear in
+      `known_file_paths[repository]` — i.e. deterministically VERIFIED
+      by Development's repository-scoped check (ADR 0027 Invariant 1).
+
+    ADR 0027 correction: an earlier version of this function skipped the
+    known-path check entirely whenever `known_file_paths.get(repository)`
+    was empty — intended for the narrow case where Development reported
+    *no components at all* for `repository`. Once `known_file_paths` was
+    changed (ADR 0027) to include only `"verified"` entries, that same
+    empty-set condition also — and far more commonly — describes "components
+    were proposed for this repository, but none of them verified": e.g.
+    every one was `UNVERIFIED` due to a repository/file mismatch. Silently
+    falling through to path-safety-only in that case would let
+    `modify`/`delete` bypass verification entirely, which directly
+    contradicts Invariant 1 ("NOT_CHECKED/UNVERIFIED → reject"). The
+    check below is therefore now unconditional on `known` being non-empty:
+    an empty verified set for `repository` means every `modify`/`delete`
+    against it is rejected, exactly as it should be per Invariant 1 —
+    there is no longer a "no ground truth, allow anyway" fallback.
     """
     violations: list[FileOperationViolation] = []
     known = known_file_paths.get(repository, set())
@@ -280,11 +306,7 @@ def validate_file_operations(
             )
             continue
 
-        if (
-            operation in ("modify", "delete")
-            and known
-            and normalize_path(path) not in known_normalized
-        ):
+        if operation in ("modify", "delete") and normalize_path(path) not in known_normalized:
             violations.append(
                 FileOperationViolation(
                     path=path,

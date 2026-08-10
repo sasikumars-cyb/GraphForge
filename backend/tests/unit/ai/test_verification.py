@@ -91,10 +91,7 @@ class TestCheckEntityMismatch:
     def test_ignores_other_common_emphasis_words(self):
         for word in ("MUST", "NOT", "ALL", "ANY", "EACH", "NEVER", "ALWAYS"):
             assert (
-                check_entity_mismatch(
-                    f"You {word} keep this change minimal.", "some-repo"
-                )
-                is None
+                check_entity_mismatch(f"You {word} keep this change minimal.", "some-repo") is None
             ), word
 
     def test_accepts_list_of_selected_repositories(self):

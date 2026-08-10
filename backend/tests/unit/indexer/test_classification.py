@@ -48,9 +48,7 @@ class TestClassifyIsTest:
         # (e.g. "TestConnectionPool" — a connection pool *for* tests) is
         # still flagged (name is real evidence), but at lower confidence
         # than a path-confirmed test, since this is the ambiguous case.
-        is_test, confidence = classify_is_test(
-            "src/etl_core/util/pool.py", "TestConnectionPool"
-        )
+        is_test, confidence = classify_is_test("src/etl_core/util/pool.py", "TestConnectionPool")
         assert is_test is True
         assert confidence == 0.55
 

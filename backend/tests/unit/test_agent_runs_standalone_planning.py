@@ -92,9 +92,7 @@ async def test_load_standalone_planning_context_rejects_unsupported_goals(goal: 
     ignored (or, for plan_documentation/review_readiness, partially and
     confusingly applied — see the field's own docstring)."""
     with pytest.raises(AppError) as exc_info:
-        await _load_standalone_planning_context(
-            AsyncMock(), uuid.uuid4(), goal, str(uuid.uuid4())
-        )
+        await _load_standalone_planning_context(AsyncMock(), uuid.uuid4(), goal, str(uuid.uuid4()))
     assert exc_info.value.error_code == "planning_run_id_unsupported_goal"
 
 

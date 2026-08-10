@@ -55,7 +55,9 @@ class InvestigationProviderEventRecord(Base):
     # Monotonic insertion ordinal — see module docstring. Not the primary
     # key (that stays a plain UUID, matching every other table in this
     # codebase); purely an ordering/pagination column.
-    sequence: Mapped[int] = mapped_column(Integer, Identity(always=True), nullable=False, unique=True)
+    sequence: Mapped[int] = mapped_column(
+        Integer, Identity(always=True), nullable=False, unique=True
+    )
 
     investigation_id: Mapped[str] = mapped_column(String(128), nullable=False)
     cycle_number: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -106,7 +108,9 @@ class InvestigationOutcomeRecord(Base):
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
-    sequence: Mapped[int] = mapped_column(Integer, Identity(always=True), nullable=False, unique=True)
+    sequence: Mapped[int] = mapped_column(
+        Integer, Identity(always=True), nullable=False, unique=True
+    )
 
     investigation_id: Mapped[str] = mapped_column(String(128), nullable=False)
 

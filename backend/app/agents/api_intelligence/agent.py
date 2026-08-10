@@ -76,7 +76,9 @@ def resolve_repository_subject(repository: Repository) -> Subject:
 
 def _extract_repository_uuid(subject_id: str) -> uuid.UUID:
     if not subject_id.startswith("repo:"):
-        raise NotFoundError(f"API Intelligence Agent expects subject_id 'repo:<uuid>', got '{subject_id}'.")
+        raise NotFoundError(
+            f"API Intelligence Agent expects subject_id 'repo:<uuid>', got '{subject_id}'."
+        )
     raw = subject_id[len("repo:") :]
     try:
         return uuid.UUID(raw)
@@ -187,7 +189,9 @@ class ApiIntelligenceAgent:
                 relationships = discover_relationships(repo_path, files)
                 file_contents = self._read_bounded_content(files)
         except RepositoryCloneError as exc:
-            logger.warning("api_intelligence_clone_failed repository=%s error=%s", repository.full_name, exc)
+            logger.warning(
+                "api_intelligence_clone_failed repository=%s error=%s", repository.full_name, exc
+            )
             evidence.append(
                 Evidence(
                     kind="tool_call",
@@ -217,7 +221,9 @@ class ApiIntelligenceAgent:
 
         if not file_contents:
             return self._empty_result(
-                context, repository, evidence,
+                context,
+                repository,
+                evidence,
                 "No Markdown documentation was found in this repository.",
             )
 
@@ -264,7 +270,9 @@ class ApiIntelligenceAgent:
                 text = f.absolute_path.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
-            contents.append({"path": f.relative_path, "content": text[:_MAX_CONTENT_CHARS_PER_FILE]})
+            contents.append(
+                {"path": f.relative_path, "content": text[:_MAX_CONTENT_CHARS_PER_FILE]}
+            )
         return contents
 
     async def _synthesize(
@@ -273,7 +281,9 @@ class ApiIntelligenceAgent:
         repository: Repository,
         file_contents: list[dict[str, str]],
     ) -> tuple[dict[str, Any], Evidence]:
-        user_prompt = json.dumps({"repository": repository.full_name, "markdown_files": file_contents})
+        user_prompt = json.dumps(
+            {"repository": repository.full_name, "markdown_files": file_contents}
+        )
         try:
             provider = StageAwareLLMProvider(
                 stage=stage_for(context.extras, STAGE_API_INTELLIGENCE), model=context.model
@@ -294,7 +304,11 @@ class ApiIntelligenceAgent:
                 status="success",
             )
         except (AppError, json.JSONDecodeError) as exc:
-            logger.warning("api_intelligence_synthesis_failed repository=%s error=%s", repository.full_name, exc)
+            logger.warning(
+                "api_intelligence_synthesis_failed repository=%s error=%s",
+                repository.full_name,
+                exc,
+            )
             return {}, Evidence(
                 kind="llm_reasoning",
                 reference="llm_synthesis",
@@ -349,7 +363,11 @@ class ApiIntelligenceAgent:
                 document_relationships=document_relationships,
             )
         except Exception as exc:
-            logger.warning("api_intelligence_result_validation_failed repository=%s error=%s", repository.full_name, exc)
+            logger.warning(
+                "api_intelligence_result_validation_failed repository=%s error=%s",
+                repository.full_name,
+                exc,
+            )
             return ApiIntelligenceResult(
                 repository_full_name=repository.full_name,
                 executive_summary=(

@@ -1,12 +1,10 @@
 import {
-  AlertCircle,
   CheckCircle2,
   ChevronRight,
   FileCode,
   FileQuestion,
   Lightbulb,
   ShieldCheck,
-  Target,
 } from "lucide-react";
 import type { ContextDiscoveryResult, EngineeringUnderstandingDTO } from "../../types/agent";
 import { SectionHeading } from "./EngineeringUnderstandingPanel";
@@ -20,45 +18,45 @@ import { SectionHeading } from "./EngineeringUnderstandingPanel";
 // orders it, it introduces nothing new.
 //
 // Layout (in order):
-//   1. Engineering Summary  — business goal / what we're trying to do
-//   2. Root Cause           — what's broken and why (current_situation)
-//   3. Files to Review      — concrete file paths from graph_components
-//   4. Proposed Change      — recommendations (what should change)
-//   5. Acceptance Criteria  — expected_outcome (what "done" means)
-//   6. Why GraphForge believes this — confidence + evidence grounding
+//   1. Files to Review      — ranked production file paths (understanding.files_to_review)
+//   2. Proposed Change      — recommendations (what should change)
+//   3. Acceptance Criteria  — expected_outcome (what "done" means)
+//   4. Why GraphForge believes this — confidence + evidence grounding
+//
+// The business goal ("Question") and root cause ("Currently believes") that
+// used to open this list now live in `ReasoningOverview` — node 1 of the
+// investigation-story Context Explorer composes above this component (see
+// `ContextExplorerPanel`). Showing `understanding.business_goal`/
+// `current_situation` a second time here would be the exact "text-heavy
+// dashboard" the Reasoning Visualization redesign was meant to avoid — same
+// two sentences, twice, in two different boxes.
 //
 // Supporting information (repository, areas, constraints, missing info)
 // lives in Advanced Details. Implementation internals stay in Debug.
 // ---------------------------------------------------------------------------
-
-const MAX_FILES = 8;
-
-/** `graph_components` is `Record<string, unknown>[]` on the wire (the raw
- * Component facts Context Discovery recorded) — `file_path` is already on
- * every one of them (see app.indexer.graph.builder), just never read on
- * this screen before. Deduped and capped so a large architecture doesn't
- * turn "which files should I review" into another wall of text. */
-function extractFilePaths(components: Record<string, unknown>[]): string[] {
-  const seen: string[] = [];
-  for (const component of components) {
-    const path = component.file_path;
-    if (typeof path === "string" && path.length > 0 && !seen.includes(path)) {
-      seen.push(path);
-    }
-    if (seen.length >= MAX_FILES) break;
-  }
-  return seen;
-}
 
 interface InvestigationSummaryProps {
   result: ContextDiscoveryResult;
   understanding: EngineeringUnderstandingDTO;
 }
 
-/** Level 1, screen 1: the engineering investigation brief. Six sections,
- * each answering one question an engineer asks before touching code. */
+/** Level 1, screen 1 (continued): the engineering investigation brief —
+ * everything an engineer needs beyond the story already told above. */
 export function InvestigationSummary({ result, understanding }: InvestigationSummaryProps) {
-  const files = extractFilePaths(result.graph_components);
+  // `understanding.files_to_review` is the curated, ranked must-modify /
+  // architecture-dependency selection from the Evidence Package (see
+  // engineering_understanding_mapper._map_files_to_review) — production
+  // files preferred, capped, never a raw dump. Deliberately no fallback to
+  // `result.graph_components` here: that's the complete, unranked component
+  // list (hundreds of entries on a real repo, dominated by test names
+  // simply because there are more of them), and reading it directly when
+  // curation came back empty is exactly the regression this component once
+  // shipped — "Files to Review" silently became a wall of test files while
+  // the one production file the investigation had just named as the root
+  // cause wasn't even in it. An empty `files_to_review` is a real signal
+  // (no file cleared curation's bar) and must render as the honest empty
+  // state below, not be silently replaced with something less trustworthy.
+  const files = understanding.files_to_review;
   const evidenceCount = result.discovery_report?.findings?.reduce(
     (total, group) => total + group.total,
     0,
@@ -66,31 +64,9 @@ export function InvestigationSummary({ result, understanding }: InvestigationSum
 
   return (
     <div className="flex flex-col gap-3">
-      {/* 1 — Engineering Summary: orient the engineer to what this ticket
-          is about — the business objective and high-level context. */}
-      {understanding.business_goal && (
-        <div className="rounded-lg border border-line-muted bg-surface-raised px-3 py-2.5">
-          <SectionHeading icon={Target}>Engineering Summary</SectionHeading>
-          <p className="mt-1 text-xs leading-relaxed text-fg-secondary">
-            {understanding.business_goal}
-          </p>
-        </div>
-      )}
-
-      {/* 2 — Root Cause: the evidence-grounded explanation of what's
-          broken and why — the core analysis from Context Discovery. */}
-      {understanding.current_situation && (
-        <div className="rounded-lg border border-line-muted bg-surface-raised px-3 py-2.5">
-          <SectionHeading icon={AlertCircle}>Root Cause</SectionHeading>
-          <p className="mt-1 text-xs leading-relaxed text-fg-secondary">
-            {understanding.current_situation}
-          </p>
-        </div>
-      )}
-
-      {/* 3 — Files to Review: the concrete file paths an engineer should
-          open first — extracted from the graph components Context Discovery
-          recorded during its investigation. */}
+      {/* 1 — Files to Review: the concrete file paths an engineer should
+          open first — the curated evidence package's own must_modify
+          tier (ranked, deduped), not the raw component list. */}
       <div className="rounded-lg border border-line-muted bg-surface-raised px-3 py-2.5">
         <SectionHeading icon={FileCode}>Files to Review</SectionHeading>
         {files.length > 0 ? (
@@ -102,13 +78,17 @@ export function InvestigationSummary({ result, understanding }: InvestigationSum
             ))}
           </ul>
         ) : (
-          <p className="mt-1 text-xs text-fg-subtle">
-            No specific files identified — see Advanced Details for the full component list.
-          </p>
+          <div className="mt-1 flex flex-col gap-0.5">
+            <p className="text-xs text-fg-subtle">No clearly relevant files identified.</p>
+            <p className="text-[11px] text-fg-subtle">
+              The investigation did not identify a production file with sufficient evidence to
+              recommend — see Advanced Details for the full component list.
+            </p>
+          </div>
         )}
       </div>
 
-      {/* 4 — Proposed Change: what should change — the actionable
+      {/* 2 — Proposed Change: what should change — the actionable
           recommendations from Context Discovery's analysis. */}
       <div className="rounded-lg border border-line-muted bg-surface-raised px-3 py-2.5">
         <SectionHeading icon={Lightbulb}>Proposed Change</SectionHeading>
@@ -125,7 +105,7 @@ export function InvestigationSummary({ result, understanding }: InvestigationSum
         )}
       </div>
 
-      {/* 5 — Acceptance Criteria: what "done" means — sourced from the
+      {/* 3 — Acceptance Criteria: what "done" means — sourced from the
           same field the ticket's own AC section fills when one exists. */}
       {understanding.expected_outcome && (
         <div className="rounded-lg border border-line-muted bg-surface-raised px-3 py-2.5">
@@ -136,7 +116,7 @@ export function InvestigationSummary({ result, understanding }: InvestigationSum
         </div>
       )}
 
-      {/* 6 — Why GraphForge believes this: the trust footer — confidence
+      {/* 4 — Why GraphForge believes this: the trust footer — confidence
           explanation plus how much evidence it's grounded in. Promoted here
           because "why should I trust this" is a first-20-seconds question. */}
       {(understanding.confidence_explanation || evidenceCount) && (

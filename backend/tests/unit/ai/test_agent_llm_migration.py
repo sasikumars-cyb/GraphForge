@@ -60,9 +60,7 @@ _CASES = [
 ]
 
 
-@pytest.mark.parametrize(
-    "module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES]
-)
+@pytest.mark.parametrize("module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES])
 @pytest.mark.asyncio
 async def test_call_llm_delegates_to_provider_and_returns_text(
     module_path, call_llm, error_cls, stage
@@ -85,9 +83,7 @@ async def test_call_llm_delegates_to_provider_and_returns_text(
     assert kwargs["options"].response_format.value == "json"
 
 
-@pytest.mark.parametrize(
-    "module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES]
-)
+@pytest.mark.parametrize("module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES])
 @pytest.mark.asyncio
 async def test_call_llm_remaps_provider_error_to_agent_error(
     module_path, call_llm, error_cls, stage
@@ -110,9 +106,7 @@ async def test_call_llm_remaps_provider_error_to_agent_error(
     assert exc_info.value.provider_error == {"provider": "openai", "status_code": 429}
 
 
-@pytest.mark.parametrize(
-    "module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES]
-)
+@pytest.mark.parametrize("module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES])
 @pytest.mark.asyncio
 async def test_call_llm_error_without_provider_metadata_defaults_to_none(
     module_path, call_llm, error_cls, stage
@@ -141,9 +135,7 @@ async def test_call_llm_error_without_provider_metadata_defaults_to_none(
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES]
-)
+@pytest.mark.parametrize("module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES])
 @pytest.mark.asyncio
 async def test_every_agent_gets_the_full_invocation_metadata_set(
     module_path, call_llm, error_cls, stage
@@ -190,9 +182,7 @@ async def test_every_agent_gets_the_full_invocation_metadata_set(
     assert metadata["estimated_cost_usd"] == 12.50
 
 
-@pytest.mark.parametrize(
-    "module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES]
-)
+@pytest.mark.parametrize("module_path,call_llm,error_cls,stage", _CASES, ids=[c[0] for c in _CASES])
 @pytest.mark.asyncio
 async def test_invocation_metadata_is_recorded_on_the_failure_path(
     module_path, call_llm, error_cls, stage
