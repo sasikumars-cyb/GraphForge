@@ -140,13 +140,19 @@ class TestFileOperationValidation:
         files = [{"path": "src/main/Existing.java", "operation": "delete"}]
         assert validate_file_operations(files, _REPO, known) == []
 
-    def test_no_known_files_for_repository_skips_existence_check(self):
-        """No ground truth at all for this repository (Development stage
-        absent, or reported no components) — existence cannot be asserted
-        either way, so only path-safety applies (documented limitation,
-        not a silent pass — see validate_file_operations' docstring)."""
+    def test_no_known_files_for_repository_rejects_modify(self):
+        """ADR 0027 correction: an empty verified set for `repository` —
+        whether because Development reported no components at all, or
+        because every proposed component failed verification (e.g. all
+        UNVERIFIED due to a repository/file mismatch) — must now reject
+        modify/delete, not silently allow it. The pre-ADR-0027 behavior
+        (skip the existence check when `known` is empty) was a real gap:
+        once `known_file_paths` only contains VERIFIED entries, an empty
+        set is exactly the case Invariant 1 requires to fail closed."""
         files = [{"path": "src/main/Anything.java", "operation": "modify"}]
-        assert validate_file_operations(files, _REPO, {}) == []
+        violations = validate_file_operations(files, _REPO, {})
+        assert len(violations) == 1
+        assert violations[0].operation == "modify"
 
     def test_case_sensitivity_is_preserved_for_file_paths(self):
         """Unlike claim-text matching, file path case is a real
@@ -156,6 +162,155 @@ class TestFileOperationValidation:
         files = [{"path": "src/main/service.java", "operation": "modify"}]
         violations = validate_file_operations(files, _REPO, known)
         assert len(violations) == 1
+
+
+class TestCollectKnownFilePathsVerificationFiltering:
+    """ADR 0027 — `_collect_known_file_paths` must only include components
+    whose `file_path_verification` is exactly "verified"."""
+
+    def test_only_verified_components_are_included(self):
+        from app.agents.code_generation.verification import _collect_known_file_paths
+
+        development_result = {
+            "components": [
+                {
+                    "repository": _REPO,
+                    "file_path": "src/Verified.java",
+                    "file_path_verification": "verified",
+                },
+                {
+                    "repository": _REPO,
+                    "file_path": "src/Unverified.java",
+                    "file_path_verification": "unverified",
+                },
+                {
+                    "repository": _REPO,
+                    "file_path": "src/NotChecked.java",
+                    "file_path_verification": "not_checked",
+                },
+            ]
+        }
+        known = _collect_known_file_paths(
+            workflow=None, source_workflow=_FakeWorkflow(development_result)
+        )
+        assert known[_REPO] == {"src/Verified.java"}
+
+    def test_legacy_result_missing_the_field_is_excluded(self):
+        """Case 10 — a Development result persisted before this field
+        existed must fail closed, never be silently treated as verified."""
+        from app.agents.code_generation.verification import _collect_known_file_paths
+
+        development_result = {
+            "components": [{"repository": _REPO, "file_path": "src/Legacy.java"}]
+        }
+        known = _collect_known_file_paths(
+            workflow=None, source_workflow=_FakeWorkflow(development_result)
+        )
+        assert known.get(_REPO, set()) == set()
+
+    def test_wrong_repository_component_excluded_even_though_file_exists_under_another_repo(self):
+        """Case 2, full outcome at the Code Generation boundary — a
+        component the Development stage itself marked UNVERIFIED for a
+        cross-repository mismatch must never appear as known for either
+        repository."""
+        from app.agents.code_generation.verification import _collect_known_file_paths
+
+        other_repo = "demo-org/other-repo"
+        development_result = {
+            "components": [
+                {
+                    "repository": other_repo,
+                    "file_path": "src/Shared.java",
+                    "file_path_verification": "verified",
+                },
+                {
+                    "repository": _REPO,
+                    "file_path": "src/Shared.java",
+                    "file_path_verification": "unverified",
+                },
+            ]
+        }
+        known = _collect_known_file_paths(
+            workflow=None, source_workflow=_FakeWorkflow(development_result)
+        )
+        assert known[other_repo] == {"src/Shared.java"}
+        assert known.get(_REPO, set()) == set()
+
+
+class TestModifyDeleteCannotBypassVerificationViaEmptyKnownSet:
+    """The ADR 0027 correction to validate_file_operations: an empty
+    verified set for `repository` must reject modify/delete, never fall
+    through to path-safety-only, regardless of *why* it's empty."""
+
+    def test_modify_rejected_when_repository_had_zero_reported_components(self):
+        files = [{"path": "src/Anything.java", "operation": "modify"}]
+        violations = validate_file_operations(files, _REPO, {})
+        assert len(violations) == 1
+
+    def test_modify_rejected_when_repository_had_components_but_none_verified(self):
+        """The specific scenario the correction targets: `known` is empty
+        not because nothing was reported, but because everything reported
+        for this repository failed verification."""
+        files = [{"path": "src/Anything.java", "operation": "modify"}]
+        # An empty set specifically for _REPO, as _collect_known_file_paths
+        # would now produce when every component for it was UNVERIFIED.
+        violations = validate_file_operations(files, _REPO, {_REPO: set()})
+        assert len(violations) == 1
+
+    def test_create_is_never_affected_by_an_empty_known_set(self):
+        """Invariant 2 — create must remain unaffected regardless of
+        why/whether the verified set is empty."""
+        files = [{"path": "src/BrandNewFile.java", "operation": "create"}]
+        assert validate_file_operations(files, _REPO, {}) == []
+        assert validate_file_operations(files, _REPO, {_REPO: set()}) == []
+
+
+class TestAntiLaunderingAtCodeGenerationBoundary:
+    """Case 19 — Code Generation cannot regain trust for an UNVERIFIED
+    Development component merely by proposing the same
+    (repository, file_path) pair itself."""
+
+    def test_code_generation_cannot_launder_an_unverified_path_by_repeating_it(self):
+        from app.agents.code_generation.verification import _collect_known_file_paths
+
+        development_result = {
+            "components": [
+                {
+                    "repository": _REPO,
+                    "file_path": "src/Hallucinated.java",
+                    "file_path_verification": "unverified",
+                }
+            ]
+        }
+        known = _collect_known_file_paths(
+            workflow=None, source_workflow=_FakeWorkflow(development_result)
+        )
+        # Code Generation's own LLM output proposes a modify at the exact
+        # same path Development already marked UNVERIFIED — this must
+        # still be rejected; nothing in Code Generation can promote it.
+        files = [{"path": "src/Hallucinated.java", "operation": "modify"}]
+        violations = validate_file_operations(files, _REPO, known)
+        assert len(violations) == 1
+
+    def test_verified_component_stays_verified_and_usable(self):
+        """Positive control (case 20) — a genuinely VERIFIED component's
+        status survives unchanged through to the write gate."""
+        from app.agents.code_generation.verification import _collect_known_file_paths
+
+        development_result = {
+            "components": [
+                {
+                    "repository": _REPO,
+                    "file_path": "src/Real.java",
+                    "file_path_verification": "verified",
+                }
+            ]
+        }
+        known = _collect_known_file_paths(
+            workflow=None, source_workflow=_FakeWorkflow(development_result)
+        )
+        files = [{"path": "src/Real.java", "operation": "modify"}]
+        assert validate_file_operations(files, _REPO, known) == []
 
 
 class TestSafeDestination:

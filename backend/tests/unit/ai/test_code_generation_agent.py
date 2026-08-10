@@ -63,9 +63,18 @@ def _make_workflow(runs: list[SimpleNamespace]) -> SimpleNamespace:
 def _make_source_workflow(repository: str = _REPO, file_paths: list[str] | None = None) -> SimpleNamespace:
     """A source (Planning) workflow whose Development stage's own graph
     traversal already consulted `repository` — the deterministic ground
-    truth `verify_repository` checks the LLM's claim against."""
+    truth `verify_repository` checks the LLM's claim against.
+
+    `file_path_verification: "verified"` (ADR 0027) is set on every
+    component here because this fixture represents a genuinely real,
+    correctly-attributed Development result — the exact case
+    `_collect_known_file_paths` is supposed to trust. A test that instead
+    needs an UNVERIFIED/absent-verification component (to prove a
+    modify/delete is correctly rejected) builds its own `components` list
+    directly, as `test_code_generation_agent_reads_full_untruncated_blueprint_context`
+    already does."""
     components = [
-        {"repository": repository, "file_path": path}
+        {"repository": repository, "file_path": path, "file_path_verification": "verified"}
         for path in (file_paths or ["src/main/java/com/example/RateLimiterConfig.java"])
     ]
     development_result = {
