@@ -88,11 +88,16 @@ export function ActiveMissionsPanel() {
               </div>
               {/* Read-only preview: clicking a stage still takes you to the
                   real workflow page (where its run detail actually lives)
-                  rather than trying to reproduce run selection here. */}
+                  rather than trying to reproduce run selection here.
+                  `compact`: this card is half the page's width, not the
+                  full width PipelineGraph's default layout assumes — see
+                  PipelineGraph's own docstring for why the default layout
+                  overflows here without it. */}
               <PipelineGraph
                 stages={workflow.stages}
                 selectedRunId={null}
                 onSelectStage={() => navigate(`/workflows/${workflow.workflow_id}`)}
+                compact
               />
             </div>
           ))}

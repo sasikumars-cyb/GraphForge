@@ -5,6 +5,27 @@ interface PipelineGraphProps {
   stages: WorkflowStageInfo[];
   selectedRunId: string | null;
   onSelectStage: (runId: string) => void;
+  /**
+   * Embedded rendering for space-constrained containers — e.g. Mission
+   * Control's Active Missions card, which is roughly half the width this
+   * component was originally built for on the full workflow detail page.
+   *
+   * The default layout's stage nodes are `flex-1` but have no `min-w-0`,
+   * so flexbox refuses to shrink them below their label text's intrinsic
+   * width ("Documentation Planning" etc.) — with 6 stages that intrinsic
+   * total regularly exceeds a half-width card by 250-450px, spilling
+   * stages outside the card at every breakpoint (only reachable via the
+   * page's own invisible `overflow-x: auto`, not a discoverable
+   * interaction). Compact mode fixes this at the source: every node gets
+   * `min-w-0` so the row's total width is always exactly the container's
+   * width, and a shorter icon-first node with a truncated label absorbs
+   * the shrinkage instead of silently overflowing. Ordering, status
+   * semantics (completed/current/pending/blocked), and accessible names
+   * are unchanged from the default mode — only the visual footprint
+   * shrinks. Default (`compact` unset) renders byte-for-byte the same
+   * markup/classes as before this prop existed.
+   */
+  compact?: boolean;
 }
 
 const NODE_CONFIG: Record<
@@ -78,19 +99,39 @@ const NODE_CONFIG: Record<
  * complete) and doubles as the workflow's structural graph (completed
  * stages stay clickable to inspect their run). Deliberately a single
  * component rather than two near-identical visualizations. */
-export function PipelineGraph({ stages, selectedRunId, onSelectStage }: PipelineGraphProps) {
+export function PipelineGraph({
+  stages,
+  selectedRunId,
+  onSelectStage,
+  compact = false,
+}: PipelineGraphProps) {
   return (
-    <div className="flex items-stretch" role="list" aria-label="Workflow pipeline">
+    <div
+      className={compact ? "flex min-w-0 items-center" : "flex items-stretch"}
+      role="list"
+      aria-label="Workflow pipeline"
+    >
       {stages.map((stage, idx) => {
         const config = NODE_CONFIG[stage.status] ?? NODE_CONFIG.pending;
         const Icon = config.icon;
         const isSelected = stage.run_id !== null && stage.run_id === selectedRunId;
         const prevDone = idx > 0 && stages[idx - 1].status === "completed";
+        const isActiveStep = stage.status === "running" || stage.status === "queued";
 
         return (
-          <div key={stage.stage} className="flex flex-1 items-stretch" role="listitem">
+          <div
+            key={stage.stage}
+            className={compact ? "flex min-w-0 flex-1 items-center" : "flex flex-1 items-stretch"}
+            role="listitem"
+          >
             {idx > 0 && (
-              <div className="flex w-6 shrink-0 items-center sm:w-10">
+              <div
+                className={
+                  compact
+                    ? "flex w-2 shrink-0 items-center"
+                    : "flex w-6 shrink-0 items-center sm:w-10"
+                }
+              >
                 <div
                   className={`h-0.5 w-full transition-colors duration-500 ${
                     prevDone ? "bg-success-bg" : "bg-surface-raised"
@@ -103,25 +144,35 @@ export function PipelineGraph({ stages, selectedRunId, onSelectStage }: Pipeline
               type="button"
               disabled={!stage.run_id}
               onClick={() => stage.run_id && onSelectStage(stage.run_id)}
-              className={`flex flex-1 flex-col items-center gap-2 rounded-xl border bg-surface px-3 py-4 text-center transition-all duration-300 ${config.ring} ${
-                isSelected ? "bg-surface-raised ring-2 ring-accent-line" : ""
-              } ${stage.run_id ? "cursor-pointer hover:bg-surface-raised" : "cursor-default opacity-70"}`}
-              aria-current={
-                stage.status === "running" || stage.status === "queued" ? "step" : undefined
+              className={
+                compact
+                  ? `flex min-w-0 flex-1 flex-col items-center gap-1 rounded-lg border bg-surface px-1 py-2 text-center transition-all duration-300 ${config.ring} ${
+                      isSelected ? "bg-surface-raised ring-2 ring-accent-line" : ""
+                    } ${stage.run_id ? "cursor-pointer hover:bg-surface-raised" : "cursor-default opacity-70"}`
+                  : `flex flex-1 flex-col items-center gap-2 rounded-xl border bg-surface px-3 py-4 text-center transition-all duration-300 ${config.ring} ${
+                      isSelected ? "bg-surface-raised ring-2 ring-accent-line" : ""
+                    } ${stage.run_id ? "cursor-pointer hover:bg-surface-raised" : "cursor-default opacity-70"}`
               }
+              aria-current={isActiveStep ? "step" : undefined}
               aria-label={`${stage.label}: ${config.subLabel}`}
             >
               <Icon
-                className={`h-5 w-5 ${config.iconColor} ${
-                  stage.status === "running" || stage.status === "queued" ? "animate-spin" : ""
+                className={`${compact ? "h-4 w-4" : "h-5 w-5"} ${config.iconColor} ${
+                  isActiveStep ? "animate-spin" : ""
                 }`}
                 aria-hidden="true"
               />
-              <div>
-                <p className="text-sm font-semibold text-fg">{stage.label}</p>
-                <p className={`text-[11px] font-medium ${config.subColor}`}>{config.subLabel}</p>
-              </div>
-              {stage.status === "running" && (
+              {compact ? (
+                <p className={`w-full truncate text-[9px] font-medium ${config.subColor}`}>
+                  {stage.label}
+                </p>
+              ) : (
+                <div>
+                  <p className="text-sm font-semibold text-fg">{stage.label}</p>
+                  <p className={`text-[11px] font-medium ${config.subColor}`}>{config.subLabel}</p>
+                </div>
+              )}
+              {!compact && stage.status === "running" && (
                 <div className="h-1 w-full overflow-hidden rounded-full bg-surface-raised">
                   <div className="h-full w-1/3 animate-[pipeline-shimmer_1.4s_ease-in-out_infinite] rounded-full bg-info-solid" />
                 </div>

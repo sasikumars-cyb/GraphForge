@@ -65,7 +65,12 @@ export function MissionControlPage() {
       </div>
 
       {/* ── Needs attention + Active missions — above the fold ──── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      {/* items-start: CSS Grid's default `stretch` was forcing Needs
+          Attention's <section> to match Active Missions' taller natural
+          height, leaving ~679px of empty space below its own (internally
+          capped-and-scrollable) content. Each card should size to its own
+          content instead of its sibling's. */}
+      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
         <NeedsAttentionPanel />
         <ActiveMissionsPanel />
       </div>
