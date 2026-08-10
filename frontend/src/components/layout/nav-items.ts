@@ -1,5 +1,5 @@
 import {
-  Server,
+  Radar,
   GitMerge,
   FolderGit2,
   Network,
@@ -30,6 +30,8 @@ export interface NavSection {
  *
  * Navigation is organised around user journeys — not implementation concepts.
  *
+ * • Mission Control — prioritization + intelligence + current state (not
+ *   configuration; see MissionControlPage's own docstring)
  * • Build — create and execute AI-powered engineering work
  * • Monitor — observe execution history and status
  * • Knowledge — understand the codebase
@@ -40,7 +42,7 @@ export interface NavSection {
  * sidebar changes.
  */
 export const NAV_SECTIONS: NavSection[] = [
-  { section: null, items: [{ label: "Control Center", path: "/", icon: Server }] },
+  { section: null, items: [{ label: "Mission Control", path: "/", icon: Radar }] },
   {
     section: "Build",
     items: [

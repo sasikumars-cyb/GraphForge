@@ -3,7 +3,7 @@ import { AppLayout } from "../components/layout/AppLayout";
 import { RequireAuth } from "../components/layout/RequireAuth";
 import { LoginPage } from "../pages/LoginPage";
 import { OAuthCallbackPage } from "../pages/OAuthCallbackPage";
-import { ControlCenterPage } from "../pages/ControlCenterPage";
+import { MissionControlPage } from "../pages/MissionControlPage";
 import { WorkspacePage } from "../pages/WorkspacePage";
 import { PlanningPage } from "../pages/PlanningPage";
 import { DevelopmentPage } from "../pages/DevelopmentPage";
@@ -47,7 +47,7 @@ export const routes: RouteObject[] = [
       {
         element: <AppLayout />,
         children: [
-          { path: "/", element: <ControlCenterPage /> },
+          { path: "/", element: <MissionControlPage /> },
 
           // ── Build: AI Workspace ──────────────────────────────────
           { path: "/workspace", element: <WorkspacePage /> },
