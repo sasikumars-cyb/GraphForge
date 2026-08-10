@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.agents._contract import ComponentWarning
+from app.agents.verification import FilePathVerificationStatus
 
 
 class AffectedRepository(BaseModel):
@@ -29,6 +30,15 @@ class AffectedComponent(BaseModel):
     repository: str = ""
     file_path: str = ""
     change_description: str = ""
+    # ADR 0027 — never set from the LLM's own JSON (see agent.py's
+    # explicit-keyword construction, which never reads this key from the
+    # raw dict). Computed only by `verify_file_path_pair` against this
+    # run's own repository-scoped tool evidence, after all other mutation
+    # of `repository`/`file_path` is complete. Defaults to "not_checked"
+    # so any component from before this field existed (or any malformed
+    # entry missing repository/file_path) fails closed rather than being
+    # silently treated as verified.
+    file_path_verification: FilePathVerificationStatus = "not_checked"
 
 
 class Dependency(BaseModel):

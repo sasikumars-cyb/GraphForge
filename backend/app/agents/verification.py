@@ -44,13 +44,29 @@ only reads the observation data tools already return this run.
    to True for any category not explicitly listed in
    `NON_BLOCKING_CATEGORIES` — a new check that forgets to classify itself,
    or a category typo, fails closed (blocks) rather than silently passing.
+
+4. Repository-scoped file-pair verification (`FilePathVerificationStatus`,
+   `build_repository_scoped_evidence`, `verify_file_path_pair` — ADR 0027).
+   A **separate** mechanism from (2) above, added for one specific reason
+   `verify_claims` cannot serve: `verify_claims` is intentionally
+   repository-agnostic (checks whether a string appears *anywhere* in this
+   run's evidence), so it cannot tell a real file in the correct
+   repository from the same-named real file in the *wrong* repository.
+   This mechanism answers a narrower, relational question —
+   "does this exact `(repository, file_path)` pair appear together in
+   this run's own evidence" — via a single joint, repository-partitioned
+   lookup, never two independently-true conditions ANDed together (ADR
+   0027 §4.3, Invariant E). `verify_claims` is not modified, not reused,
+   and not superseded by this addition; both run independently and
+   neither check's result may substitute for or suppress the other's (ADR
+   0027 §3, §7 case 23).
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from app.agents.normalization import normalize_path, normalize_text, squash, tokenize
 
@@ -87,6 +103,15 @@ BLOCKING_CATEGORIES = frozenset(
         "component_not_found",
         "component_misattribution",
         "scope_ambiguity",
+        # ADR 0027 §4.5 — a claimed file_path exists in this run's
+        # evidence, but not paired with the claimed repository. Distinct
+        # from, and mutually exclusive with, `component_not_found` (which
+        # fires only when the path matches nothing anywhere) — see
+        # `verify_file_path_pair` below for the check that assigns this.
+        # Blocking by default already (not listed in
+        # `NON_BLOCKING_CATEGORIES`); listed here for documentation
+        # completeness only, per this set's own stated purpose.
+        "component_repository_mismatch",
         # Assigned by the collector (see engineering_review/agent.py and
         # documentation_planning/agent.py) to any warning read back from a
         # stage result persisted before this classification existed, or
@@ -535,3 +560,91 @@ def verify_claims(claims: list[str], evidence_pool: set[str]) -> VerificationRes
             continue
         (verified if _claim_supported(claim, evidence_pool) else unverified).append(claim)
     return VerificationResult(verified=verified, unverified=unverified)
+
+
+# ---------------------------------------------------------------------------
+# 4. Repository-scoped file-pair verification (ADR 0027)
+# ---------------------------------------------------------------------------
+
+#: NOT_CHECKED = verification could not be performed because the required
+#: evidence was unavailable (no repository-scoped evidence pool existed to
+#: check against at all).
+#: UNVERIFIED = verification was performed against available evidence, but
+#: the exact (repository, file_path) pair was not found in it — this does
+#: NOT mean the proposed change is invalid; it describes evidence state
+#: only (ADR 0027 §4.4). A genuinely new file has no existing evidence to
+#: match and is expected to be UNVERIFIED.
+#: VERIFIED = the exact (repository, file_path) pair was deterministically
+#: found in this run's own repository-scoped evidence.
+FilePathVerificationStatus = Literal["not_checked", "verified", "unverified"]
+
+NOT_CHECKED: FilePathVerificationStatus = "not_checked"
+VERIFIED: FilePathVerificationStatus = "verified"
+UNVERIFIED: FilePathVerificationStatus = "unverified"
+
+
+def build_repository_scoped_evidence(
+    components: list[dict[str, Any]],
+) -> dict[str, set[str]]:
+    """repository -> the set of (normalized) file_paths this run's own
+    tool-derived evidence (e.g. `ComponentDiscoveryTool`) actually
+    returned for that specific repository.
+
+    Callers must pass the *raw* per-component evidence dicts as returned
+    by the discovery tool (each with its own `"repository"`/`"file_path"`
+    keys intact) — never a pre-flattened pool. This is the one place in
+    this module repository attribution is preserved rather than discarded
+    (contrast with `build_evidence_pool`, which is deliberately flat and
+    repository-agnostic for its own, different purpose).
+    """
+    by_repository: dict[str, set[str]] = {}
+    for component in components:
+        repository = component.get("repository")
+        file_path = component.get("file_path")
+        if not repository or not file_path:
+            continue
+        by_repository.setdefault(repository, set()).add(normalize_path(str(file_path)))
+    return by_repository
+
+
+def verify_file_path_pair(
+    repository: str,
+    file_path: str,
+    evidence_by_repository: dict[str, set[str]],
+) -> FilePathVerificationStatus:
+    """The sole function permitted to produce `VERIFIED` for a Development
+    component's file_path (ADR 0027 §4.2, Invariant F).
+
+    A single joint containment test — `file_path in
+    evidence_by_repository.get(repository, set())` — never two
+    independently-true conditions ANDed together (Invariant E). Exact,
+    normalized-path equality only: no fuzzy matching, no token overlap, no
+    trailing-segment/bare-filename tolerance (unlike `_claim_supported`'s
+    deliberately more permissive matching for its own, different purpose)
+    — ADR 0027 explicitly excludes "filename alone" as a sufficient basis
+    for VERIFIED.
+    """
+    if not evidence_by_repository:
+        return NOT_CHECKED
+    if not repository or not file_path:
+        return UNVERIFIED
+    normalized_path = normalize_path(file_path)
+    if normalized_path in evidence_by_repository.get(repository, set()):
+        return VERIFIED
+    return UNVERIFIED
+
+
+def file_path_exists_in_any_repository(
+    file_path: str,
+    evidence_by_repository: dict[str, set[str]],
+) -> bool:
+    """Whether `file_path` appears under *some* repository in the
+    evidence, regardless of which one — used only to choose between the
+    `component_not_found` and `component_repository_mismatch` diagnostic
+    categories (ADR 0027 §4.5). Never consulted by `verify_file_path_pair`
+    itself and never used to produce `VERIFIED` — existence in the wrong
+    repository is exactly the case that must remain `UNVERIFIED`."""
+    if not file_path:
+        return False
+    normalized_path = normalize_path(file_path)
+    return any(normalized_path in paths for paths in evidence_by_repository.values())

@@ -684,6 +684,14 @@ async def test_development_agent_graph_unavailable() -> None:
     failed_evidence = [e for e in output.evidence if "FAILED" in e.summary]
     assert len(failed_evidence) >= 1
 
+    # ADR 0027 — no repository-scoped evidence pool exists when the graph
+    # is unavailable, so every component must fail closed to "not_checked"
+    # (never "verified", never silently trusted).
+    assert output.result["components"]
+    assert all(
+        c["file_path_verification"] == "not_checked" for c in output.result["components"]
+    )
+
 
 @pytest.mark.asyncio
 async def test_development_agent_graph_context_used_overridden_when_graph_fails() -> None:

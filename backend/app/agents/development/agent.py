@@ -540,6 +540,44 @@ class DevelopmentAgent:
                     "this run's indexed graph data — unverified.",
                     "component_not_found",
                 )
+
+        # ------------------------------------------------------------------
+        # ADR 0027 — repository-scoped file-pair verification. A separate,
+        # independently-run mechanism from the verify_claims loop directly
+        # above: it does not read, depend on, or get short-circuited by
+        # that check's result, and that check is not modified by this
+        # block (ADR 0027 §3, §7 case 23). Runs after every mutation of a
+        # component's repository/file_path for this run is complete
+        # (Invariant C) — the only such mutation above,
+        # `_apply_test_grounding`, only ever touches `.name`.
+        #
+        # `file_path_verification` is the sole gate input Code Generation's
+        # write gate may consult (ADR 0027 Invariant G) — never the
+        # `component_not_found`/`component_repository_mismatch` findings
+        # below, which exist for human-facing diagnostics only.
+        # ------------------------------------------------------------------
+        evidence_by_repository = verification.build_repository_scoped_evidence(
+            components_obs.data.get("components", [])
+        )
+        for comp in plan.components:
+            comp.file_path_verification = verification.verify_file_path_pair(
+                comp.repository, comp.file_path, evidence_by_repository
+            )
+            if comp.file_path_verification == verification.UNVERIFIED and (
+                verification.file_path_exists_in_any_repository(
+                    comp.file_path, evidence_by_repository
+                )
+            ):
+                # The path is real somewhere in this run's evidence, just
+                # not under the claimed repository — distinct from, and
+                # mutually exclusive with, `component_not_found` above
+                # (which already covers "matches nothing anywhere").
+                _warn(
+                    f"Component file_path '{comp.file_path}' (for '{comp.name}') exists "
+                    "in this run's indexed graph data, but not under the claimed "
+                    f"repository '{comp.repository}' — repository/file mismatch.",
+                    "component_repository_mismatch",
+                )
         plan.verification_warnings = verification_warnings
         plan.verification_findings = [f.to_dict() for f in verification_findings]
         plan.component_warnings = to_contract_warnings(component_warnings)
