@@ -688,9 +688,7 @@ async def test_development_agent_graph_unavailable() -> None:
     # is unavailable, so every component must fail closed to "not_checked"
     # (never "verified", never silently trusted).
     assert output.result["components"]
-    assert all(
-        c["file_path_verification"] == "not_checked" for c in output.result["components"]
-    )
+    assert all(c["file_path_verification"] == "not_checked" for c in output.result["components"])
 
 
 @pytest.mark.asyncio

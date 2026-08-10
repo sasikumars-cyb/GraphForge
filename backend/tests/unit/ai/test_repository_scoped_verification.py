@@ -163,9 +163,7 @@ class TestBlockingCategoryClassification:
         that rule, not just that it's listed for documentation."""
         from app.agents.verification import VerificationFinding
 
-        finding = VerificationFinding(
-            message="mismatch", category="component_repository_mismatch"
-        )
+        finding = VerificationFinding(message="mismatch", category="component_repository_mismatch")
         assert finding.blocking is True
 
     def test_mutual_exclusivity_is_a_property_of_the_caller_not_this_module(self):
