@@ -30,6 +30,7 @@ from app.agents.blueprint.models import (
 if TYPE_CHECKING:
     from app.agents.development.schemas import DevelopmentPlan
     from app.agents.planning.schemas import PlanningResult
+    from app.agents.testing.schemas import TestPlan
 
 
 # ---------------------------------------------------------------------------
@@ -1409,6 +1410,172 @@ def _build_dev_risk_matrix(risks: list[dict[str, Any]]) -> Diagram | None:
     )
 
 
+def _build_test_execution_timeline(phases: list[dict[str, Any]]) -> Diagram | None:
+    """Test execution phases as a clickable timeline — mirrors
+    _build_dev_implementation_flow for the Testing Agent's ExecutionPhase
+    objects (order, title, description, test_types)."""
+    if not phases:
+        return None
+    sorted_phases = sorted(phases, key=lambda p: int(p.get("order", 0)))
+    nodes = [
+        DiagramNode(
+            id=f"testphase_{p.get('order', i + 1)}",
+            label=p.get("title", f"Phase {i + 1}")[:40],
+            type="phase",
+            properties={
+                "test_types": p.get("test_types", [])[:5],
+                "description": _truncate_at_word(p.get("description", "") or "", 60),
+            },
+        )
+        for i, p in enumerate(sorted_phases)
+        if p.get("title")
+    ]
+    if not nodes:
+        return None
+    edges = [
+        DiagramEdge(
+            id=(
+                f"testphase_{sorted_phases[i].get('order', i + 1)}"
+                f"_to_{sorted_phases[i + 1].get('order', i + 2)}"
+            ),
+            source=f"testphase_{sorted_phases[i].get('order', i + 1)}",
+            target=f"testphase_{sorted_phases[i + 1].get('order', i + 2)}",
+        )
+        for i in range(len(sorted_phases) - 1)
+    ]
+    return Diagram(
+        id="test_execution_timeline",
+        title="Test Execution Order",
+        description="Test phases in execution order — click each to see its test types",
+        type=DiagramType.TIMELINE,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Test Execution Order",
+            "why": "The order test phases should run in, and what each phase covers",
+        },
+    )
+
+
+def _build_test_coverage_map(
+    integration_tests: list[dict[str, Any]], regression_tests: list[dict[str, Any]]
+) -> Diagram | None:
+    """Component test coverage: integration test relationships as edges
+    (mirrors _build_component_dependency_graph), regression test counts
+    annotated onto the components they cover."""
+    if not integration_tests and not regression_tests:
+        return None
+
+    comp_names: set[str] = set()
+    for t in integration_tests:
+        if t.get("source_component"):
+            comp_names.add(t["source_component"])
+        if t.get("target_component"):
+            comp_names.add(t["target_component"])
+    for t in regression_tests:
+        if t.get("component"):
+            comp_names.add(t["component"])
+    if not comp_names:
+        return None
+
+    regression_by_component: dict[str, list[str]] = {}
+    for t in regression_tests:
+        if t.get("component"):
+            regression_by_component.setdefault(t["component"], []).append(t.get("description", ""))
+
+    nodes = [
+        DiagramNode(
+            id=f"testcov_{_slug(name)}",
+            label=name[:40],
+            type="component",
+            properties={"regression_tests": regression_by_component.get(name, [])[:5]},
+            metadata={"regression_test_count": len(regression_by_component.get(name, []))},
+        )
+        for name in comp_names
+    ]
+    edges = [
+        DiagramEdge(
+            id=f"testcov_{_slug(t.get('source_component', ''))}_to_{_slug(t.get('target_component', ''))}",
+            source=f"testcov_{_slug(t['source_component'])}",
+            target=f"testcov_{_slug(t['target_component'])}",
+            label=t.get("relationship", "")[:20],
+            type="dependency",
+        )
+        for t in integration_tests
+        if t.get("source_component") and t.get("target_component")
+    ]
+
+    return Diagram(
+        id="test_coverage_map",
+        title="Test Coverage Map",
+        description=(
+            "Components under test, with integration test relationships and "
+            "regression coverage"
+        ),
+        type=DiagramType.DEPENDENCY,
+        nodes=nodes,
+        edges=edges,
+        layout=DiagramLayout(direction="LR"),
+        metadata={
+            "section": "Test Coverage Map",
+            "why": "Shows which components are covered by integration and regression tests",
+        },
+    )
+
+
+def _build_test_risk_matrix(risks: list[dict[str, Any]]) -> Diagram | None:
+    """Risk matrix from the Testing Agent's TestRisk objects — identical
+    shape to Development's Risk, so this mirrors _build_dev_risk_matrix
+    exactly (kept as a separate function for testing-appropriate
+    id/title/section labels, not a shared helper)."""
+    if not risks:
+        return None
+    valid = [r for r in risks if r.get("description")]
+    if not valid:
+        return None
+
+    nodes: list[DiagramNode] = []
+    for i, r in enumerate(valid):
+        severity = r.get("severity", "medium").lower()
+        if severity not in ("critical", "high", "medium", "low"):
+            severity = _risk_level(r["description"])
+        mitigation = r.get("mitigation", "")
+        label_parts = [r["description"]]
+        if r.get("affected_component"):
+            label_parts.append(f"Affects: {r['affected_component']}")
+        if mitigation:
+            label_parts.append(f"Mitigation: {mitigation}")
+        nodes.append(
+            DiagramNode(
+                id=f"testrisk_{i}",
+                label=" — ".join(label_parts),
+                type="risk",
+                metadata={"severity": severity, "mitigation": mitigation},
+            )
+        )
+
+    nodes_sorted = sorted(
+        nodes,
+        key=lambda n: {"critical": 0, "high": 1, "medium": 2, "low": 3}.get(
+            str(n.metadata.get("severity", "low")), 3
+        ),
+    )
+    return Diagram(
+        id="test_risk_matrix",
+        title="Test Risks",
+        description="Risks identified during test planning",
+        type=DiagramType.RISK_HEATMAP,
+        nodes=nodes_sorted,
+        edges=[],
+        layout=DiagramLayout(direction="TB", algorithm="grid"),
+        metadata={
+            "section": "Test Risks",
+            "why": "Coverage gaps, flaky-test risk, and environment risks surfaced before execution",
+        },
+    )
+
+
 def _require_grounded_flag(diagrams: list[Diagram]) -> list[Diagram]:
     """Every diagram must carry an explicit `grounded` bool in its
     metadata, so the frontend can chip a diagram as "illustrative" without
@@ -1592,5 +1759,35 @@ class BlueprintFactory:
         return BlueprintArtifact(
             agent_id="development",
             stage="development",
+            diagrams=_require_grounded_flag(diagrams),
+        )
+
+    @staticmethod
+    def from_testing_result(result: TestPlan) -> BlueprintArtifact:
+        diagrams: list[Diagram] = []
+
+        phases_raw = [p.model_dump() for p in result.execution_order]
+        integration_raw = [t.model_dump() for t in result.integration_tests]
+        regression_raw = [t.model_dump() for t in result.regression_tests]
+        risks_raw = [r.model_dump() for r in result.risks]
+
+        if phases_raw:
+            d = _build_test_execution_timeline(phases_raw)
+            if d:
+                diagrams.append(d)
+
+        if integration_raw or regression_raw:
+            d = _build_test_coverage_map(integration_raw, regression_raw)
+            if d:
+                diagrams.append(d)
+
+        if risks_raw:
+            d = _build_test_risk_matrix(risks_raw)
+            if d:
+                diagrams.append(d)
+
+        return BlueprintArtifact(
+            agent_id="testing",
+            stage="testing",
             diagrams=_require_grounded_flag(diagrams),
         )

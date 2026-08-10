@@ -6,6 +6,8 @@ Machine-readable, card-friendly for the frontend. No large text blobs.
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 from app.agents._contract import ComponentWarning
@@ -118,6 +120,7 @@ class TestPlan(BaseModel):
 
     graph_context_used: bool = False
     repositories_consulted: list[str] = Field(default_factory=list)
+    blueprint: dict[str, Any] | None = Field(default=None)
     prompt_version: str = "1.0"
 
     # Deterministic, non-LLM warnings: components/repositories cited above

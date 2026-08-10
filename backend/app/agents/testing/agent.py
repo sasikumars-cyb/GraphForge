@@ -56,6 +56,7 @@ from app.agents._contract import (
     Confidence,
     Evidence,
 )
+from app.agents.blueprint.factory import BlueprintFactory
 from app.agents.component_grounding import check_test_used_as_production, to_contract_warnings
 from app.agents.git_ops._artifact_reader import get_stage_result
 from app.agents.llm import STAGE_TESTING, invoke_llm_json, stage_for
@@ -666,6 +667,19 @@ class TestPlanningAgent:
                 ),
             )
         )
+
+        # Generate visual blueprint from structured plan fields — same
+        # deterministic, no-second-LLM-call approach as Planning/Development
+        # (see BlueprintFactory's own docstring). diagrams ends up empty
+        # whenever execution_order/integration_tests/regression_tests/risks
+        # are all empty; the frontend's Visual Blueprint tab already only
+        # appears when diagrams is non-empty, so nothing extra to gate here.
+        try:
+            blueprint = BlueprintFactory.from_testing_result(test_plan)
+            test_plan.blueprint = blueprint.model_dump()
+        except Exception:
+            logger.warning("testing_agent_blueprint_generation_failed", exc_info=True)
+            test_plan.blueprint = None
 
         # LLM synthesis evidence
         evidence.append(
