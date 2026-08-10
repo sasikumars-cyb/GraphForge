@@ -99,7 +99,9 @@ class TestAccessControl:
         response = await db_client.get("/api/v1/investigation-intelligence/summary")
         assert response.status_code == 401
 
-    async def test_requires_admin_role(self, db_client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_requires_admin_role(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         token = await _register_and_get_token(db_client, _unique("user") + "@example.com")
         response = await db_client.get(
             "/api/v1/investigation-intelligence/summary",
@@ -203,12 +205,15 @@ class TestDistributions:
         after_buckets = {
             b["bucket"]: b["count"] for b in after.json()["confidence_improvement_distribution"]
         }
-        assert after_buckets.get("<= 0 (no improvement)", 0) == before_buckets.get(
-            "<= 0 (no improvement)", 0
-        ) + 1
+        assert (
+            after_buckets.get("<= 0 (no improvement)", 0)
+            == before_buckets.get("<= 0 (no improvement)", 0) + 1
+        )
         assert after_buckets.get("0.15+", 0) == before_buckets.get("0.15+", 0) + 1
 
-    async def test_latency_distribution(self, db_client: AsyncClient, db_session: AsyncSession) -> None:
+    async def test_latency_distribution(
+        self, db_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
         scope_id = _unique("repo")
         db_session.add_all(
             [
@@ -273,7 +278,9 @@ class TestCyclesAndBoostUsage:
             headers={"Authorization": f"Bearer {token}"},
         )
         ready = next(
-            c for c in response.json()["cycles_by_terminal_outcome"] if c["terminal_outcome"] == "READY"
+            c
+            for c in response.json()["cycles_by_terminal_outcome"]
+            if c["terminal_outcome"] == "READY"
         )
         assert ready["count"] >= 2
         # avg of at least the two rows just inserted (2 and 4) is >= 3 only
@@ -346,7 +353,9 @@ class TestRepeatedFailureDetection:
         self, db_client: AsyncClient, db_session: AsyncSession
     ) -> None:
         scope_id = _unique("repo")
-        db_session.add(_provider_row(scope_id=scope_id, provider="confluence_mcp", outcome="failed"))
+        db_session.add(
+            _provider_row(scope_id=scope_id, provider="confluence_mcp", outcome="failed")
+        )
         await db_session.flush()
 
         token = await _register_admin(db_client, db_session, _unique("admin") + "@example.com")

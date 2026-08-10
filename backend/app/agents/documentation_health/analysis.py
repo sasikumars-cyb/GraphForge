@@ -110,7 +110,9 @@ _SKIP_DIRS = frozenset(
 _HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+?)\s*$", re.MULTILINE)
 _H1_PATTERN = re.compile(r"^#\s+(.+?)\s*$", re.MULTILINE)
 _TOC_PATTERN = re.compile(r"table of contents|^\s*\*\s*\[.+\]\(#", re.IGNORECASE | re.MULTILINE)
-_OWNERSHIP_PATTERN = re.compile(r"\b(owner|owners|maintainer|maintainers|codeowners)\b", re.IGNORECASE)
+_OWNERSHIP_PATTERN = re.compile(
+    r"\b(owner|owners|maintainer|maintainers|codeowners)\b", re.IGNORECASE
+)
 _LAST_UPDATED_PATTERN = re.compile(r"last[\s_-]*updated", re.IGNORECASE)
 _ARCHITECTURE_PATTERN = re.compile(r"architect|design|adr|system[\s_-]*overview", re.IGNORECASE)
 
@@ -171,9 +173,7 @@ def check_empty_and_placeholder_documents(files: list[MarkdownFile]) -> list[Hea
     for file in files:
         content = _read(file).strip()
         if not content:
-            findings.append(
-                _finding("empty_document", file.relative_path, "Document is empty.")
-            )
+            findings.append(_finding("empty_document", file.relative_path, "Document is empty."))
         elif len(content) < _PLACEHOLDER_MAX_CHARS:
             findings.append(
                 _finding(
@@ -289,14 +289,14 @@ def check_ownership_and_freshness(
     return findings
 
 
-def check_undocumented_folders(
-    repo_root: Path, files: list[MarkdownFile]
-) -> list[HealthFinding]:
+def check_undocumented_folders(repo_root: Path, files: list[MarkdownFile]) -> list[HealthFinding]:
     """Source directories carrying real code but no Markdown anywhere
     beneath them. Reported per top-level source directory rather than per
     leaf, so a large package produces one actionable finding instead of
     dozens."""
-    documented_prefixes = {f.relative_path.rsplit("/", 1)[0] for f in files if "/" in f.relative_path}
+    documented_prefixes = {
+        f.relative_path.rsplit("/", 1)[0] for f in files if "/" in f.relative_path
+    }
     findings: list[HealthFinding] = []
 
     for entry in sorted(repo_root.iterdir()):

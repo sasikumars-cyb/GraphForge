@@ -108,9 +108,7 @@ async def test_hypothesis_to_belief_to_decision_flow(db_client: AsyncClient) -> 
     assert decision_response.status_code == 201
     assert decision_response.json()["decision_kind"] == "planning_strategy"
 
-    timeline = await db_client.get(
-        f"/api/v1/sessions/{session['id']}/timeline", headers=headers
-    )
+    timeline = await db_client.get(f"/api/v1/sessions/{session['id']}/timeline", headers=headers)
     assert timeline.status_code == 200
     kinds = [e["kind"] for e in timeline.json()["items"]]
     assert kinds == [

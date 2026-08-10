@@ -77,9 +77,7 @@ def format_repository_relationships_block(result: dict[str, Any] | None) -> str:
         return ""
     lines = ["### Repository Relationships (Context Discovery)"]
     if explicit:
-        lines.append(
-            "Explicitly referenced: " + ", ".join(r.get("name", "?") for r in explicit)
-        )
+        lines.append("Explicitly referenced: " + ", ".join(r.get("name", "?") for r in explicit))
     if suggested:
 
         def _describe_suggested(r: dict[str, Any]) -> str:

@@ -25,10 +25,22 @@ LOCAL_PASSWORD = os.environ.get("LOCAL_SEED_PASSWORD", "correct-horse-battery-st
 LOCAL_REPOSITORIES_CONTAINER_ROOT = "/local-repos"
 
 REPOSITORIES = [
-    {"provider_repo_id": "local-ds-databricks-avangrid-em-ct-dataingest", "name": "ds-databricks-avangrid-em-ct-dataingest"},
-    {"provider_repo_id": "local-ds-databricks-pseg-nj-dataingest", "name": "ds-databricks-pseg-nj-dataingest"},
-    {"provider_repo_id": "local-ds-databricks-soco-apc-c2m-rcs-dataingest", "name": "ds-databricks-soco-apc-c2m-rcs-dataingest"},
-    {"provider_repo_id": "local-ds-databricks-soco-gpc-c2m-rcs-dataingest", "name": "ds-databricks-soco-gpc-c2m-rcs-dataingest"},
+    {
+        "provider_repo_id": "local-ds-databricks-avangrid-em-ct-dataingest",
+        "name": "ds-databricks-avangrid-em-ct-dataingest",
+    },
+    {
+        "provider_repo_id": "local-ds-databricks-pseg-nj-dataingest",
+        "name": "ds-databricks-pseg-nj-dataingest",
+    },
+    {
+        "provider_repo_id": "local-ds-databricks-soco-apc-c2m-rcs-dataingest",
+        "name": "ds-databricks-soco-apc-c2m-rcs-dataingest",
+    },
+    {
+        "provider_repo_id": "local-ds-databricks-soco-gpc-c2m-rcs-dataingest",
+        "name": "ds-databricks-soco-gpc-c2m-rcs-dataingest",
+    },
     {"provider_repo_id": "local-up-databricks-shared-jobs", "name": "up-databricks-shared-jobs"},
 ]
 

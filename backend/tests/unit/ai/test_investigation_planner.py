@@ -29,9 +29,7 @@ def _assessment(capability: str, *, satisfied: bool) -> CapabilityAssessment:
     # signal rather than trying to set the derived fields directly.
     from app.context_pipeline.reasoning.capabilities import LOAD_BEARING_WEIGHT, ConfidenceSignal
 
-    signal = ConfidenceSignal(
-        label="x", satisfied=satisfied, weight=LOAD_BEARING_WEIGHT, detail=""
-    )
+    signal = ConfidenceSignal(label="x", satisfied=satisfied, weight=LOAD_BEARING_WEIGHT, detail="")
     return CapabilityAssessment.from_signals(
         capability=capability, label=capability, necessity="required", signals=[signal]
     )
@@ -201,11 +199,16 @@ def test_refresh_is_idempotent_for_the_same_unresolved_contradiction():
 def test_priority_boost_from_tasks_only_counts_ready_pending_tasks():
     tasks = [
         InvestigationTask(
-            task_id="blocked", purpose="p", required_capability="architecture",
-            expected_information_gain=0.9, dependencies=["not-done"],
+            task_id="blocked",
+            purpose="p",
+            required_capability="architecture",
+            expected_information_gain=0.9,
+            dependencies=["not-done"],
         ),
         InvestigationTask(
-            task_id="ready", purpose="p", required_capability="documentation",
+            task_id="ready",
+            purpose="p",
+            required_capability="documentation",
             expected_information_gain=0.4,
         ),
         InvestigationTask(
@@ -219,7 +222,9 @@ def test_priority_boost_from_tasks_only_counts_ready_pending_tasks():
 def test_priority_boost_from_tasks_clamps_to_unit_interval():
     tasks = [
         InvestigationTask(
-            task_id="a", purpose="p", required_capability="architecture",
+            task_id="a",
+            purpose="p",
+            required_capability="architecture",
             expected_information_gain=5.0,
         )
     ]
@@ -229,7 +234,9 @@ def test_priority_boost_from_tasks_clamps_to_unit_interval():
 def test_plan_priority_boost_combines_workspace_and_graph_signals_via_max():
     tasks = [
         InvestigationTask(
-            task_id="a", purpose="p", required_capability="architecture",
+            task_id="a",
+            purpose="p",
+            required_capability="architecture",
             expected_information_gain=0.3,
         )
     ]
@@ -241,7 +248,9 @@ def test_plan_priority_boost_combines_workspace_and_graph_signals_via_max():
 def test_plan_priority_boost_lets_the_graph_contribute_a_capability_absent_from_workspace():
     tasks = [
         InvestigationTask(
-            task_id="a", purpose="p", required_capability="repository",
+            task_id="a",
+            purpose="p",
+            required_capability="repository",
             expected_information_gain=0.6,
         )
     ]

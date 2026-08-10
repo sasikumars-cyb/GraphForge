@@ -465,9 +465,7 @@ class TestCommitChangesAgent:
                 "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch(
-                "app.agents.git_ops.commit_changes_agent.create_git_write_provider"
-            ) as MockVCS,
+            patch("app.agents.git_ops.commit_changes_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -505,9 +503,7 @@ class TestCommitChangesAgent:
                 "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch(
-                "app.agents.git_ops.commit_changes_agent.create_git_write_provider"
-            ) as MockVCS,
+            patch("app.agents.git_ops.commit_changes_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -641,9 +637,7 @@ class TestCommitChangesAgent:
                 "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch(
-                "app.agents.git_ops.commit_changes_agent.create_git_write_provider"
-            ) as MockVCS,
+            patch("app.agents.git_ops.commit_changes_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -679,9 +673,7 @@ class TestCommitChangesAgent:
                 "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch(
-                "app.agents.git_ops.commit_changes_agent.create_git_write_provider"
-            ) as MockVCS,
+            patch("app.agents.git_ops.commit_changes_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -717,9 +709,7 @@ class TestCommitChangesAgent:
                 "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch(
-                "app.agents.git_ops.commit_changes_agent.create_git_write_provider"
-            ) as MockVCS,
+            patch("app.agents.git_ops.commit_changes_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value
@@ -755,9 +745,7 @@ class TestCommitChangesAgent:
                 "app.agents.git_ops.commit_changes_agent.get_decrypted_access_token",
                 new_callable=AsyncMock,
             ) as mock_token,
-            patch(
-                "app.agents.git_ops.commit_changes_agent.create_git_write_provider"
-            ) as MockVCS,
+            patch("app.agents.git_ops.commit_changes_agent.create_git_write_provider") as MockVCS,
         ):
             mock_token.return_value = "ghp_test_token"
             vcs = MockVCS.return_value

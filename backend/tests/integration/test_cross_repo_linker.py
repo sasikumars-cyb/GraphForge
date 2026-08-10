@@ -268,9 +268,9 @@ async def test_cross_repository_edge_source_id_is_the_real_source_node(
 
         edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
         assert edges, "expected the CALLS_SERVICE edge to have been computed"
-        assert edges[0].source_id == f"{a_id}:repository", (
-            f"source_id must be the real source Repository node id, got {edges[0].source_id!r}"
-        )
+        assert (
+            edges[0].source_id == f"{a_id}:repository"
+        ), f"source_id must be the real source Repository node id, got {edges[0].source_id!r}"
     finally:
         await graph_repository.replace_repository_graph(a_id, GraphPayload())
         await graph_repository.replace_repository_graph(b_id, GraphPayload())
@@ -475,9 +475,7 @@ async def test_relink_account_blocks_until_a_concurrent_relink_releases_the_lock
                 "expected relink_account to still be blocked while another relink for "
                 "the same account holds the lock"
             )
-            await holder_conn.execute(
-                select(func.pg_advisory_unlock(func.hashtext(str(user.id))))
-            )
+            await holder_conn.execute(select(func.pg_advisory_unlock(func.hashtext(str(user.id)))))
             await asyncio.wait_for(task, timeout=5)
 
         edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
@@ -700,12 +698,12 @@ async def test_three_concurrent_relinks_all_converge_on_the_full_edge_set(
 
         a_edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
         b_edges = await graph_repository.get_outgoing_cross_repository_edges(b_id)
-        assert any(e.type == "CALLS_SERVICE" for e in a_edges), (
-            f"A->B Feign edge missing after concurrent relinks: {a_edges}"
-        )
-        assert any(e.type == "SHARES_TOPIC" for e in b_edges), (
-            f"B->C Kafka edge missing after concurrent relinks: {b_edges}"
-        )
+        assert any(
+            e.type == "CALLS_SERVICE" for e in a_edges
+        ), f"A->B Feign edge missing after concurrent relinks: {a_edges}"
+        assert any(
+            e.type == "SHARES_TOPIC" for e in b_edges
+        ), f"B->C Kafka edge missing after concurrent relinks: {b_edges}"
     finally:
         for repo_id in (a_id, b_id, c_id):
             await graph_repository.replace_repository_graph(repo_id, GraphPayload())

@@ -571,9 +571,7 @@ async def fail_stale_running_runs(
     observability, exactly like `recover_orphaned_runs`.
     """
     cutoff = datetime.now(UTC) - older_than
-    result = await db.execute(
-        select(Run).where(Run.status == "running", Run.started_at < cutoff)
-    )
+    result = await db.execute(select(Run).where(Run.status == "running", Run.started_at < cutoff))
     stale = list(result.scalars().all())
     if not stale:
         return 0

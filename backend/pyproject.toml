@@ -56,6 +56,20 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
 
+[tool.ruff.lint.per-file-ignores]
+# Inline HTML/CSS template literals (report rendering markup) — each
+# "line" is a literal fragment of rendered output, not prose or code
+# structure; wrapping it to satisfy line-length would either alter the
+# rendered HTML's whitespace or require breaking a single template
+# expression across an f-string boundary, both worse than the line being
+# long. E501 doesn't meaningfully apply to this file's content.
+"app/agents/api_intelligence/renderers.py" = ["E501"]
+# Literal LLM prompt-instruction text, built from adjacent string
+# constants — re-splitting each long line risks silently inserting or
+# dropping a space at the join point in text sent verbatim to the model.
+# Mechanical line-length is not a meaningful signal for prompt content.
+"app/agents/api_intelligence/agent.py" = ["E501"]
+
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI's dependency injection requires calling Depends()/Query()/Body()
 # in argument defaults - that's the framework's own pattern, not the bug

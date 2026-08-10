@@ -196,7 +196,11 @@ class ConfluenceProvider:
         prefetched_rest_attempted = False
         prefetched_rest_text: str | None = None
         prefetched_rest_evidence: list[Evidence] = []
-        if self._intelligence is not None and access.connection_id is not None and rest_method is not None:
+        if (
+            self._intelligence is not None
+            and access.connection_id is not None
+            and rest_method is not None
+        ):
             recent_failure = await self._intelligence.recent_repeated_failure(
                 scope=InvestigationScope(
                     scope_type="knowledge_connection", scope_id=access.connection_id

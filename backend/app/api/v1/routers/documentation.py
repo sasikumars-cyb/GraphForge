@@ -64,12 +64,13 @@ async def _load_completed_result(
     if run is None:
         raise NotFoundError(f"Documentation review run '{run_id}' not found for this account.")
     if run.status != "completed":
-        raise CreatePRExecutionError(
-            f"Run '{run_id}' is not completed (status: {run.status})."
-        )
+        raise CreatePRExecutionError(f"Run '{run_id}' is not completed (status: {run.status}).")
 
     step_result = await db.execute(
-        select(AgentStep).where(AgentStep.run_id == run.id).order_by(AgentStep.created_at.desc()).limit(1)
+        select(AgentStep)
+        .where(AgentStep.run_id == run.id)
+        .order_by(AgentStep.created_at.desc())
+        .limit(1)
     )
     step = step_result.scalar_one_or_none()
     if step is None or not step.result:
@@ -116,7 +117,9 @@ async def create_documentation_pr(
 
     try:
         base_sha = await vcs.get_branch_sha(owner, repo, repository.default_branch, access_token)
-        existing_branch_sha = await vcs.get_branch_sha_or_none(owner, repo, branch_name, access_token)
+        existing_branch_sha = await vcs.get_branch_sha_or_none(
+            owner, repo, branch_name, access_token
+        )
         if existing_branch_sha is None:
             await vcs.create_branch(owner, repo, branch_name, base_sha, access_token)
 

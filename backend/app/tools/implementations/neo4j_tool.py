@@ -113,9 +113,7 @@ class Neo4jGraphTool:
             # reason (see `GraphHealthStatus`) — forwarded so callers (e.g.
             # `GraphInvestigator`) can explain *why* a repository can't be
             # used instead of it just silently not appearing above.
-            unhealthy_repos: list[dict[str, Any]] = repos_obs.data.get(
-                "unhealthy_repositories", []
-            )
+            unhealthy_repos: list[dict[str, Any]] = repos_obs.data.get("unhealthy_repositories", [])
 
             traverse_tool = TraverseArchitectureGraphTool(graph_repository=graph_repo)
             traverse_obs = await traverse_tool.execute(

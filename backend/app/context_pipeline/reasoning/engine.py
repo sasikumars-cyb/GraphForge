@@ -1070,7 +1070,10 @@ def _seed_explicit_repositories(state: WorkingContext, repo_names: list[str]) ->
         provider="user",
         action="explicit_repository_selection",
         outcome="success",
-        summary=f"User explicitly selected {len(repo_names)} repositor{'y' if len(repo_names) == 1 else 'ies'}: {', '.join(repo_names)}.",
+        summary=(
+            f"User explicitly selected {len(repo_names)} "
+            f"repositor{'y' if len(repo_names) == 1 else 'ies'}: {', '.join(repo_names)}."
+        ),
         iteration=0,
         intent="The user selected these repositories from the Context Explorer UI.",
     )

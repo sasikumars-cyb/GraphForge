@@ -231,9 +231,7 @@ def _full_workflow() -> SimpleNamespace:
             _make_run("planning", "completed", _planning_result()),
             _make_run("development", "completed", _development_result()),
             _make_run("testing", "completed", _testing_result()),
-            _make_run(
-                "documentation_planning", "completed", _documentation_planning_result()
-            ),
+            _make_run("documentation_planning", "completed", _documentation_planning_result()),
         ]
     )
 
@@ -377,8 +375,7 @@ async def test_engineering_review_agent_ready_when_only_informational_findings()
     testing_with_note = _testing_result()
     testing_with_note["verification_findings"] = [
         _finding(
-            "This is a test PLAN produced by an LLM — no test in it has "
-            "actually been executed.",
+            "This is a test PLAN produced by an LLM — no test in it has " "actually been executed.",
             "informational",
         )
     ]
@@ -439,9 +436,7 @@ async def test_engineering_review_agent_downgrades_on_genuine_repository_warning
 
     assert output.result["readiness_status"] == "needs_revision"
     assert any("billing-service" in w for w in output.result["blocking_verification_warnings"])
-    assert not any(
-        "test PLAN" in w for w in output.result["blocking_verification_warnings"]
-    )
+    assert not any("test PLAN" in w for w in output.result["blocking_verification_warnings"])
 
 
 @pytest.mark.asyncio
@@ -474,9 +469,7 @@ async def test_engineering_review_agent_downgrades_on_genuine_component_warning(
         output = await EngineeringReviewAgent().run(context)
 
     assert output.result["readiness_status"] == "needs_revision"
-    assert any(
-        "misattributed" in w for w in output.result["blocking_verification_warnings"]
-    )
+    assert any("misattributed" in w for w in output.result["blocking_verification_warnings"])
 
 
 @pytest.mark.asyncio
@@ -582,9 +575,7 @@ class TestConfidenceMatchesSharedEngine:
                 _make_run("planning", "completed", planning_result),
                 _make_run("development", "completed", _development_result()),
                 _make_run("testing", "completed", _testing_result()),
-                _make_run(
-                    "documentation_planning", "completed", _documentation_planning_result()
-                ),
+                _make_run("documentation_planning", "completed", _documentation_planning_result()),
             ]
         )
         context = _make_context(workflow=workflow)
@@ -612,9 +603,7 @@ class TestConfidenceMatchesSharedEngine:
                 _make_run("planning", "completed", planning_with_warning),
                 _make_run("development", "completed", _development_result()),
                 _make_run("testing", "completed", _testing_result()),
-                _make_run(
-                    "documentation_planning", "completed", _documentation_planning_result()
-                ),
+                _make_run("documentation_planning", "completed", _documentation_planning_result()),
             ]
         )
         context = _make_context(workflow=workflow)
@@ -746,8 +735,7 @@ async def test_engineering_review_agent_missing_workflow_falls_back_gracefully()
     assert output.result["readiness_status"] == "ready"
     tool_evidence = next(e for e in output.evidence if e.kind == "tool_call")
     assert (
-        "Missing: Planning, Development, Testing, Documentation Planning."
-        in tool_evidence.summary
+        "Missing: Planning, Development, Testing, Documentation Planning." in tool_evidence.summary
     )
 
 

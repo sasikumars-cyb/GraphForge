@@ -37,9 +37,7 @@ from app.models.investigation_intelligence import (
 def _serialize_snapshot(snapshot: StateSnapshot) -> dict:
     return {
         "version": snapshot.version,
-        "candidates_considered": [
-            dataclasses.asdict(c) for c in snapshot.candidates_considered
-        ],
+        "candidates_considered": [dataclasses.asdict(c) for c in snapshot.candidates_considered],
         "all_capability_scores": snapshot.all_capability_scores,
         "open_contradictions": snapshot.open_contradictions,
     }

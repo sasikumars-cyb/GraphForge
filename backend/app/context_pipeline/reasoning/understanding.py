@@ -640,8 +640,10 @@ async def synthesize_engineering_understanding(
         logger.exception("context_discovery_synthesis_failed")
         degraded = True
         workspace = InvestigationWorkspace(
-            reasoning_notes=["Synthesis call failed or returned an invalid response; falling "
-                             "back to a deterministic, evidence-only summary."]
+            reasoning_notes=[
+                "Synthesis call failed or returned an invalid response; falling "
+                "back to a deterministic, evidence-only summary."
+            ]
         )
         understanding = _deterministic_understanding(state, package, ticket_sections)
         understanding.remaining_unknowns = [

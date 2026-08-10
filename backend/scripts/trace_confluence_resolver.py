@@ -10,7 +10,7 @@ Run inside the backend container:
 import asyncio
 import uuid
 
-from app.agents._contract import AgentContext, Subject
+from app.agents._contract import AgentContext
 from app.agents.context_discovery.agent import ContextDiscoveryAgent
 from app.context.resolvers.freetext import resolve as resolve_freetext
 from app.database.session import AsyncSessionLocal
@@ -59,9 +59,7 @@ async def main() -> None:
 
     providers_module.resolve_knowledge_access = instrumented_resolve
 
-    subject = resolve_freetext(
-        "https://cybage-team-n8wdf7c7.atlassian.net/browse/NPT-30"
-    )
+    subject = resolve_freetext("https://cybage-team-n8wdf7c7.atlassian.net/browse/NPT-30")
     print(f"\n[SUBJECT] subject_id={subject.subject_id!r} display_name={subject.display_name!r}\n")
 
     async with AsyncSessionLocal() as db:
@@ -82,7 +80,9 @@ async def main() -> None:
     print("  capability_confidence:", result.get("capability_confidence"))
     print("\n[ALL EVIDENCE]")
     for e in output.evidence:
-        print(f"  - kind={e.kind} reference={e.reference} status={e.status} summary={e.summary[:120]}")
+        print(
+            f"  - kind={e.kind} reference={e.reference} status={e.status} summary={e.summary[:120]}"
+        )
     eu = result.get("engineering_understanding")
     print("\n[ENGINEERING UNDERSTANDING]")
     print("  populated:", bool(eu))
@@ -93,7 +93,10 @@ async def main() -> None:
         "FAIL: resolve_knowledge_access was never called for confluence — "
         "ConfluenceProvider did not go through the resolver"
     )
-    print("\n[VERIFIED] ConfluenceProvider called resolve_knowledge_access for source_type='confluence'.")
+    print(
+        "\n[VERIFIED] ConfluenceProvider called resolve_knowledge_access "
+        "for source_type='confluence'."
+    )
 
 
 if __name__ == "__main__":

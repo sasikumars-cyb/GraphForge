@@ -521,9 +521,7 @@ def map_synthesis_run_state(
 
 
 _RUN_STATE_UNAVAILABLE_REASON: dict[SynthesisRunState, str] = {
-    SynthesisRunState.NOT_RUN: (
-        "Reasoning synthesis was not recorded for this investigation."
-    ),
+    SynthesisRunState.NOT_RUN: ("Reasoning synthesis was not recorded for this investigation."),
     SynthesisRunState.FAILED: (
         "Reasoning synthesis failed for this investigation — falling back to "
         "evidence-only findings. This is not the same as 'no hypotheses found.'"
@@ -557,9 +555,11 @@ def map_hypotheses(
         return (
             [],
             SectionAvailability(
-                Availability.UNAVAILABLE
-                if run_state == SynthesisRunState.NOT_RUN
-                else Availability.DEGRADED,
+                (
+                    Availability.UNAVAILABLE
+                    if run_state == SynthesisRunState.NOT_RUN
+                    else Availability.DEGRADED
+                ),
                 reason=_RUN_STATE_UNAVAILABLE_REASON[run_state],
             ),
             run_state,
@@ -596,17 +596,19 @@ def map_contradictions(
         return (
             [],
             SectionAvailability(
-                Availability.UNAVAILABLE
-                if run_state == SynthesisRunState.NOT_RUN
-                else Availability.DEGRADED,
+                (
+                    Availability.UNAVAILABLE
+                    if run_state == SynthesisRunState.NOT_RUN
+                    else Availability.DEGRADED
+                ),
                 reason=_RUN_STATE_UNAVAILABLE_REASON[run_state],
             ),
             run_state,
         )
     assert context_discovery_bundle is not None
-    raw = (
-        context_discovery_bundle.result.get("reasoning_summary") or {}
-    ).get("contradictions") or []
+    raw = (context_discovery_bundle.result.get("reasoning_summary") or {}).get(
+        "contradictions"
+    ) or []
     entries = [
         ContradictionEntry(
             statement=str(c.get("description") or ""),
@@ -625,9 +627,7 @@ def map_contradictions(
 # ---------------------------------------------------------------------------
 
 
-def map_file_role(
-    component: dict[str, Any], repository_usage: list[dict[str, Any]]
-) -> FileRole:
+def map_file_role(component: dict[str, Any], repository_usage: list[dict[str, Any]]) -> FileRole:
     """Source: Development's `components[]` entries
     (app.agents.development.schemas.AffectedComponent) default to
     MODIFIED — that schema's own docstring defines the type as "A
@@ -688,11 +688,7 @@ def map_scope(
 
     entries = []
     for usage in planning_usage:
-        role = (
-            FileRole.PROPOSED_UNVERIFIED
-            if not usage.get("verified")
-            else FileRole.MODIFIED
-        )
+        role = FileRole.PROPOSED_UNVERIFIED if not usage.get("verified") else FileRole.MODIFIED
         for path in usage.get("files_affected") or []:
             entries.append(
                 ScopeFileEntry(
@@ -790,9 +786,9 @@ def map_risks(
                 RiskEntry(
                     description=str(r.get("description") or ""),
                     severity=RiskSeverity.UNSPECIFIED,
-                    mitigated=bool(r.get("adequately_mitigated"))
-                    if "adequately_mitigated" in r
-                    else None,
+                    mitigated=(
+                        bool(r.get("adequately_mitigated")) if "adequately_mitigated" in r else None
+                    ),
                     mitigation_text=r.get("concern") or None,
                     source_stage="engineering_review",
                 )

@@ -112,7 +112,13 @@ async def test_run_produces_extracted_api_surface_and_scores(
                     "base_url": "https://api.acme.com",
                     "description": "Fetch a widget",
                     "parameters": [
-                        {"name": "id", "location": "path", "type": "string", "required": True, "description": "Widget id"}
+                        {
+                            "name": "id",
+                            "location": "path",
+                            "type": "string",
+                            "required": True,
+                            "description": "Widget id",
+                        }
                     ],
                     "request_example": "",
                     "response_example": '{"id": "1"}',
@@ -187,9 +193,11 @@ async def test_run_produces_extracted_api_surface_and_scores(
     assert result["missing_information"] == ["No documented error response schema."]
 
     # Deterministic relationship discovery: README.md really links to api.md.
-    assert {"from_file": "README.md", "to_file": "api.md", "relationship_type": "links_to"} in result[
-        "document_relationships"
-    ]
+    assert {
+        "from_file": "README.md",
+        "to_file": "api.md",
+        "relationship_type": "links_to",
+    } in result["document_relationships"]
 
     assert any(e.kind == "llm_reasoning" for e in output.evidence)
     assert any(e.reference == "discovery:discover_relationships" for e in output.evidence)

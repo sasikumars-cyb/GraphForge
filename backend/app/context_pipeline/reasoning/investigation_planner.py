@@ -107,8 +107,16 @@ _STRATEGY_KEYWORDS: tuple[tuple[EngineeringStrategy, tuple[str, ...]], ...] = (
     (
         "security",
         (
-            "vulnerability", "cve", "exploit", "auth bypass", "injection", "xss",
-            "secret leak", "security", "unauthorized access", "privilege escalation",
+            "vulnerability",
+            "cve",
+            "exploit",
+            "auth bypass",
+            "injection",
+            "xss",
+            "secret leak",
+            "security",
+            "unauthorized access",
+            "privilege escalation",
         ),
     ),
     (
@@ -118,15 +126,29 @@ _STRATEGY_KEYWORDS: tuple[tuple[EngineeringStrategy, tuple[str, ...]], ...] = (
     (
         "performance",
         (
-            "slow", "latency", "timeout", "performance", "throughput", "memory leak",
-            "n+1", "scale", "scalability", "bottleneck",
+            "slow",
+            "latency",
+            "timeout",
+            "performance",
+            "throughput",
+            "memory leak",
+            "n+1",
+            "scale",
+            "scalability",
+            "bottleneck",
         ),
     ),
     (
         "data",
         (
-            "duplicate record", "data corruption", "data integrity", "incorrect data",
-            "data loss", "schema change", "backfill data", "inconsistent data",
+            "duplicate record",
+            "data corruption",
+            "data integrity",
+            "incorrect data",
+            "data loss",
+            "schema change",
+            "backfill data",
+            "inconsistent data",
         ),
     ),
     (
@@ -582,9 +604,7 @@ def select_next_task(tasks: list[InvestigationTask]) -> InvestigationTask | None
     dependency that hasn't completed yet)."""
     done_ids = {t.task_id for t in tasks if t.status == "done"}
     ready = [
-        t
-        for t in tasks
-        if t.status == "pending" and all(dep in done_ids for dep in t.dependencies)
+        t for t in tasks if t.status == "pending" and all(dep in done_ids for dep in t.dependencies)
     ]
     if not ready:
         return None

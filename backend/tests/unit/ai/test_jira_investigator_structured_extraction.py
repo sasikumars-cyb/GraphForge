@@ -80,9 +80,7 @@ async def test_work_item_fact_keeps_structured_fields_and_extracted_sections():
     recorder = Recorder(ledger, action, iteration=1)
     session = SessionContext(db=None, user_id=None)  # type: ignore[arg-type]
 
-    with patch(
-        "app.context_pipeline.reasoning.investigators.JiraProvider"
-    ) as provider_cls:
+    with patch("app.context_pipeline.reasoning.investigators.JiraProvider") as provider_cls:
         provider_cls.return_value.resolve = AsyncMock(return_value=_artifact(description))
         outcome = await JiraInvestigator().run(action, session, recorder)
 

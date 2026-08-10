@@ -137,7 +137,8 @@ async def app_client() -> AsyncGenerator[AsyncClient, None]:
 
     transport = ASGITransport(app=app)
     async with AsyncClient(
-        transport=transport, base_url="http://test",
+        transport=transport,
+        base_url="http://test",
     ) as ac:
         yield ac
     app.dependency_overrides.clear()
@@ -160,7 +161,8 @@ class TestHappyPath:
     """200 with correct DTO when context discovery is completed."""
 
     async def test_returns_200_with_dto(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -182,7 +184,8 @@ class TestHappyPath:
         assert body["expected_outcome"] == "Consume order events"
 
     async def test_repository_summary(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -202,7 +205,8 @@ class TestHappyPath:
         assert body["repository_summary"]["supporting"] == ["org/kafka-lib"]
 
     async def test_relevant_areas_grouped(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -227,7 +231,8 @@ class TestHappyPath:
         assert "OrderConsumer" in production["components"]
 
     async def test_evidence_summary_populated(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -246,7 +251,8 @@ class TestHappyPath:
         assert len(body["evidence_summary"]) >= 1
 
     async def test_planning_assessment_ready(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -285,7 +291,8 @@ class TestHappyPath:
 
 class TestReasoningDegradedPropagation:
     async def test_a_degraded_synthesis_is_exposed_as_degraded_true(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         cd_result = _cd_result(
             investigation_workspace={
@@ -312,7 +319,8 @@ class TestReasoningDegradedPropagation:
         assert body["reasoning_summary"]["degraded"] is True
 
     async def test_a_successful_synthesis_history_entry_is_not_degraded(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         cd_result = _cd_result(
             investigation_workspace={
@@ -339,7 +347,8 @@ class TestReasoningDegradedPropagation:
         assert body["reasoning_summary"]["degraded"] is False
 
     async def test_no_reasoning_at_all_is_the_honest_empty_state_not_degraded(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         """A request too thin to have hypotheses (`has_reasoning=False`) is a
         different, equally real outcome from a failed synthesis pass
@@ -363,7 +372,8 @@ class TestReasoningDegradedPropagation:
         assert body["reasoning_summary"]["has_reasoning"] is False
 
     async def test_legacy_results_still_read_degraded_from_working_memory(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         """Backward compatibility: a result persisted before the top-level
         `investigation_workspace` key existed only carries it inside
@@ -398,7 +408,8 @@ class TestReasoningDegradedPropagation:
         assert body["reasoning_summary"]["degraded"] is True
 
     async def test_top_level_key_takes_precedence_over_stale_working_memory(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         """When both are present, the unconditional top-level projection is
         the current write path and must win over the working_memory copy."""
@@ -446,7 +457,8 @@ class TestNotFound:
     """404 when workflow or context discovery not found."""
 
     async def test_invalid_workflow_id(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         resp = await app_client.get(
             "/api/v1/workflows/not-a-uuid/understanding",
@@ -454,7 +466,8 @@ class TestNotFound:
         assert resp.status_code == 404
 
     async def test_workflow_not_found(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with patch(
             "app.services.workflow_service.get_workflow",
@@ -466,7 +479,8 @@ class TestNotFound:
         assert resp.status_code == 404
 
     async def test_no_context_discovery(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -493,7 +507,8 @@ class TestDebugToggle:
     """debug=false → None; debug=true → populated bundle."""
 
     async def test_debug_false_returns_no_bundle(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -511,7 +526,8 @@ class TestDebugToggle:
         assert resp.json()["debug_bundle"] is None
 
     async def test_debug_true_returns_bundle(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -564,12 +580,11 @@ class TestDocumentationStatusDerivation:
         assert "satisfied" in resp.json()["documentation_status"].lower()
 
     async def test_unsatisfied_with_doc_gap(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         result = _cd_result()
-        result["discovery_report"]["confidence_breakdown"][1][
-            "satisfied"
-        ] = False
+        result["discovery_report"]["confidence_breakdown"][1]["satisfied"] = False
         result["discovery_report"]["gaps"] = [
             {
                 "capability": "documentation",
@@ -590,12 +605,11 @@ class TestDocumentationStatusDerivation:
         ):
             resp = await app_client.get(_URL)
 
-        assert (
-            resp.json()["documentation_status"] == "API docs are outdated"
-        )
+        assert resp.json()["documentation_status"] == "API docs are outdated"
 
     async def test_no_doc_capability(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         result = _cd_result()
         result["discovery_report"]["confidence_breakdown"] = [
@@ -644,7 +658,8 @@ class TestNextStepDerivation:
         assert "ready" in resp.json()["next_step"].lower()
 
     async def test_blocked_with_reasons(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -665,7 +680,8 @@ class TestNextStepDerivation:
         assert "Missing graph" in resp.json()["next_step"]
 
     async def test_blocked_without_reasons(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -692,7 +708,8 @@ class TestParsingBoundary:
     """Endpoint correctly parses raw dicts into typed models."""
 
     async def test_invalid_readiness_defaults_to_blocked(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         with (
             patch(
@@ -710,7 +727,8 @@ class TestParsingBoundary:
         assert resp.json()["planning_assessment"]["status"] == "BLOCKED"
 
     async def test_not_applicable_capabilities_filtered(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         result = _cd_result()
         result["discovery_report"]["confidence_breakdown"].append(
@@ -741,7 +759,8 @@ class TestParsingBoundary:
         assert not any("Deployment topology" in d for d in descriptions)
 
     async def test_empty_result_fields_handled(
-        self, app_client: AsyncClient,
+        self,
+        app_client: AsyncClient,
     ) -> None:
         """Minimal result with missing optional fields → no crash."""
         result: dict[str, Any] = {

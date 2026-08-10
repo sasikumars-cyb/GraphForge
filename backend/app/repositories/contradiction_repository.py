@@ -49,8 +49,10 @@ class ContradictionRepository:
         offset: int = 0,
     ) -> tuple[list[Contradiction], int]:
         base = select(Contradiction).where(Contradiction.session_id == session_id)
-        count_base = select(func.count()).select_from(Contradiction).where(
-            Contradiction.session_id == session_id
+        count_base = (
+            select(func.count())
+            .select_from(Contradiction)
+            .where(Contradiction.session_id == session_id)
         )
         if unresolved_only:
             base = base.where(Contradiction.status.in_(("detected", "investigating")))

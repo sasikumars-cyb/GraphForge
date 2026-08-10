@@ -151,9 +151,7 @@ def _repository_name(context_discovery_bundle: StageStepData | None) -> str | No
     return str(ranked[0]) if ranked else None
 
 
-def _build_header(
-    workflow: Workflow, bundles: dict[str, StageStepData | None]
-) -> HeaderVM:
+def _build_header(workflow: Workflow, bundles: dict[str, StageStepData | None]) -> HeaderVM:
     cd_bundle = bundles.get("context_discovery")
     question = (cd_bundle.result.get("original_request") if cd_bundle else None) or str(
         workflow.original_prompt

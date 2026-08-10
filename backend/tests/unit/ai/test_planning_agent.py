@@ -1586,9 +1586,7 @@ async def test_planning_agent_repository_usage_in_canonical_form_passes_verifica
     usage = output.result["repository_usage"][0]
     assert usage["verified"] is True, "a correctly-cited, correctly-owned claim must verify"
     warnings = output.result["verification_warnings"]
-    assert not any(
-        "cited in repository_usage was not found" in w for w in warnings
-    ), (
+    assert not any("cited in repository_usage was not found" in w for w in warnings), (
         "a canonically-cited, genuinely-indexed repository must not be "
         f"flagged unindexed: {warnings}"
     )
@@ -1841,9 +1839,7 @@ async def test_planning_agent_entity_mismatch_still_fires_when_selected_repo_lac
     warnings = output.result["verification_warnings"]
     assert any("entity/tenant-shaped token" in w and "APC" in w for w in warnings), warnings
     findings = output.result["verification_findings"]
-    assert any(
-        f["category"] == "repository_identity_mismatch" for f in findings
-    ), findings
+    assert any(f["category"] == "repository_identity_mismatch" for f in findings), findings
 
 
 @pytest.mark.asyncio
@@ -1902,8 +1898,7 @@ async def test_planning_agent_end_to_end_prompt_library_only_objective_no_false_
         # prompt-library is actually selected as the target.
         "ranked_repository_names": consulted_repo_names,
         "repositories": [
-            {"name": name, "selected": name == "prompt-library"}
-            for name in consulted_repo_names
+            {"name": name, "selected": name == "prompt-library"} for name in consulted_repo_names
         ],
         "graph_available": True,
         "graph_has_data": False,

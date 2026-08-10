@@ -87,9 +87,7 @@ class ContradictionParty(Base):
 
     __tablename__ = "contradiction_parties"
     __table_args__ = (
-        UniqueConstraint(
-            "contradiction_id", "artifact_id", name="uq_contradiction_parties_pair"
-        ),
+        UniqueConstraint("contradiction_id", "artifact_id", name="uq_contradiction_parties_pair"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)

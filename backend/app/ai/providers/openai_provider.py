@@ -346,9 +346,7 @@ def _to_openai_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
             continue
 
         if role == "assistant":
-            text_parts = [
-                block["text"] for block in content if isinstance(block.get("text"), str)
-            ]
+            text_parts = [block["text"] for block in content if isinstance(block.get("text"), str)]
             tool_calls = [
                 {
                     "id": block["toolUse"]["toolUseId"],

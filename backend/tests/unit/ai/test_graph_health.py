@@ -44,15 +44,9 @@ def test_status_for_has_graph_is_healthy_regardless_of_job_status() -> None:
     """A queryable graph wins over everything else — even a "failed" or
     absent job history, since the graph is usable right now regardless of
     how it got there."""
-    assert (
-        _status_for(has_graph=True, latest_job_status=None) == GraphHealthStatus.HEALTHY
-    )
-    assert (
-        _status_for(has_graph=True, latest_job_status="failed") == GraphHealthStatus.HEALTHY
-    )
-    assert (
-        _status_for(has_graph=True, latest_job_status="running") == GraphHealthStatus.HEALTHY
-    )
+    assert _status_for(has_graph=True, latest_job_status=None) == GraphHealthStatus.HEALTHY
+    assert _status_for(has_graph=True, latest_job_status="failed") == GraphHealthStatus.HEALTHY
+    assert _status_for(has_graph=True, latest_job_status="running") == GraphHealthStatus.HEALTHY
 
 
 @pytest.mark.parametrize("in_progress_status", ["pending", "running"])
@@ -79,10 +73,7 @@ def test_status_for_no_job_and_no_graph_is_not_indexed() -> None:
 def test_status_for_only_failed_job_is_not_indexed() -> None:
     """A failed-only history is "never successfully indexed", the same
     bucket as never having attempted at all — not a distinct state."""
-    assert (
-        _status_for(has_graph=False, latest_job_status="failed")
-        == GraphHealthStatus.NOT_INDEXED
-    )
+    assert _status_for(has_graph=False, latest_job_status="failed") == GraphHealthStatus.NOT_INDEXED
 
 
 # ---------------------------------------------------------------------------
@@ -139,9 +130,9 @@ async def test_for_repositories_mixed_batch_queries_job_status_only_for_unhealth
     )
 
     service = GraphHealthService(mock_db, mock_graph_repo)
-    results = {h.repository_id: h for h in await service.for_repositories(
-        [healthy_repo, missing_repo]
-    )}
+    results = {
+        h.repository_id: h for h in await service.for_repositories([healthy_repo, missing_repo])
+    }
 
     assert results[healthy_repo.id].status == GraphHealthStatus.HEALTHY
     assert results[healthy_repo.id].latest_job_status is None

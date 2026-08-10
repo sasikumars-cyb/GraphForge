@@ -80,9 +80,7 @@ class EngineeringMemoryRepository:
         )
         return list((await self._db.execute(stmt)).scalars().all())
 
-    async def prune_evidence_packs(
-        self, repository_id: uuid.UUID, *, keep_last_n: int
-    ) -> int:
+    async def prune_evidence_packs(self, repository_id: uuid.UUID, *, keep_last_n: int) -> int:
         """Delete evidence-pack rows for `repository_id` beyond the newest
         `keep_last_n` (by `sequence`, not `created_at` — see this table's
         own `sequence` column comment: `now()` is transaction-scoped, so

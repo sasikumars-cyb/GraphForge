@@ -153,7 +153,8 @@ class TestCompleteInput:
             graph_topics=[TopicProjection(name="Authentication")],
             graph_components=[
                 ComponentProjection(
-                    name="AuthController", topic="Authentication",
+                    name="AuthController",
+                    topic="Authentication",
                 ),
             ],
             capability_factors=[
@@ -170,9 +171,7 @@ class TestCompleteInput:
             ],
             gap_summaries=["Missing IdP config docs"],
             unavailable_gaps=["SAML metadata endpoint"],
-            documentation_status=(
-                "Documentation for IdP integration is missing."
-            ),
+            documentation_status=("Documentation for IdP integration is missing."),
             next_step="Resolve blocking issues: IdP integration pending",
         )
         return map_to_dto(inp)
@@ -200,9 +199,7 @@ class TestCompleteInput:
         # Tests), sourced from the curated EvidencePackage — not the raw
         # graph_topics/graph_components grouping this DTO no longer reads.
         assert len(complete_dto.relevant_areas) >= 1
-        production = next(
-            a for a in complete_dto.relevant_areas if a.name == "Production Code"
-        )
+        production = next(a for a in complete_dto.relevant_areas if a.name == "Production Code")
         assert "AuthController" in production.components
 
     def test_files_to_review(self, complete_dto):
@@ -226,9 +223,7 @@ class TestCompleteInput:
 
     def test_recommendations(self, complete_dto):
         assert "Reuse existing session manager" in complete_dto.recommendations
-        risk_items = [
-            r for r in complete_dto.recommendations if r.startswith("Risk:")
-        ]
+        risk_items = [r for r in complete_dto.recommendations if r.startswith("Risk:")]
         assert len(risk_items) == 1
 
     def test_planning_assessment(self, complete_dto):
@@ -365,27 +360,19 @@ class TestUnknownCategorisation:
     def test_remaining_unknowns_categorised(self):
         u = EngineeringUnderstanding(remaining_unknowns=["What is X?"])
         dto = map_to_dto(_minimal_input(understanding=u))
-        assert any(
-            x.category == "unknown" and x.description == "What is X?"
-            for x in dto.unknowns
-        )
+        assert any(x.category == "unknown" and x.description == "What is X?" for x in dto.unknowns)
 
     def test_rejected_assumptions_categorised(self):
         u = EngineeringUnderstanding(rejected_assumptions=["OAuth works"])
         dto = map_to_dto(_minimal_input(understanding=u))
-        assert any(
-            x.category == "known" and x.description == "OAuth works"
-            for x in dto.unknowns
-        )
+        assert any(x.category == "known" and x.description == "OAuth works" for x in dto.unknowns)
 
     def test_unavailable_gaps_categorised(self):
         dto = map_to_dto(
             _minimal_input(unavailable_gaps=["SAML endpoint"]),
         )
         assert any(
-            x.category == "unavailable"
-            and x.description == "SAML endpoint"
-            for x in dto.unknowns
+            x.category == "unavailable" and x.description == "SAML endpoint" for x in dto.unknowns
         )
 
 
@@ -413,14 +400,10 @@ class TestEvidenceSummary:
 
     def test_more_than_three_shows_count(self):
         evidence = EvidencePackage(
-            items=[
-                _evidence_item(f"Item{i}", "must_modify") for i in range(5)
-            ],
+            items=[_evidence_item(f"Item{i}", "must_modify") for i in range(5)],
         )
         dto = map_to_dto(_minimal_input(evidence_package=evidence))
-        line = next(
-            s for s in dto.evidence_summary if "Must-modify" in s
-        )
+        line = next(s for s in dto.evidence_summary if "Must-modify" in s)
         assert "and 2 more" in line
 
     def test_excluded_count_message(self):
@@ -461,12 +444,8 @@ class TestPlanningAssessment:
             ),
         ]
         dto = map_to_dto(_minimal_input(capability_factors=factors))
-        satisfied_reasons = [
-            r for r in dto.planning_assessment.reasons if r.satisfied
-        ]
-        unsatisfied_reasons = [
-            r for r in dto.planning_assessment.reasons if not r.satisfied
-        ]
+        satisfied_reasons = [r for r in dto.planning_assessment.reasons if r.satisfied]
+        unsatisfied_reasons = [r for r in dto.planning_assessment.reasons if not r.satisfied]
         assert len(satisfied_reasons) >= 1
         assert len(unsatisfied_reasons) >= 1
 
@@ -566,10 +545,7 @@ class TestDTOSerialization:
         dumped = dto.model_dump()
         restored = EngineeringUnderstandingDTO(**dumped)
         assert restored.business_goal == dto.business_goal
-        assert (
-            restored.repository_summary.primary
-            == dto.repository_summary.primary
-        )
+        assert restored.repository_summary.primary == dto.repository_summary.primary
 
     def test_round_trip_with_debug(self):
         bundle = DebugBundleDTO(
@@ -665,9 +641,7 @@ class TestUnicode:
             remaining_unknowns=["¿Qué es X?"],
         )
         dto = map_to_dto(_minimal_input(understanding=u))
-        assert any(
-            x.description == "¿Qué es X?" for x in dto.unknowns
-        )
+        assert any(x.description == "¿Qué es X?" for x in dto.unknowns)
 
     def test_unicode_business_goal(self):
         u = EngineeringUnderstanding(business_objective="Über-Feature")
@@ -761,8 +735,7 @@ class TestFilesToReview:
     def test_deduplicates_and_caps_at_eight(self):
         evidence = EvidencePackage(
             items=[
-                _evidence_item(f"item{i}", "must_modify", path=f"path{i % 5}.py")
-                for i in range(20)
+                _evidence_item(f"item{i}", "must_modify", path=f"path{i % 5}.py") for i in range(20)
             ],
         )
         dto = map_to_dto(_minimal_input(evidence_package=evidence))
@@ -779,16 +752,11 @@ class TestFilesToReview:
 
     def test_many_evidence_items(self):
         evidence = EvidencePackage(
-            items=[
-                _evidence_item(f"Item{i}", "must_modify")
-                for i in range(200)
-            ],
+            items=[_evidence_item(f"Item{i}", "must_modify") for i in range(200)],
             excluded_count=500,
         )
         dto = map_to_dto(_minimal_input(evidence_package=evidence))
-        line = next(
-            s for s in dto.evidence_summary if "Must-modify" in s
-        )
+        line = next(s for s in dto.evidence_summary if "Must-modify" in s)
         assert "(200)" in line
         assert "and 197 more" in line
 
@@ -1003,9 +971,7 @@ class TestReasoningSummaryDeadEndsAndNextInvestigation:
             dead_ends=["Ruled out: caching layer — no cache in path."]
         )
         dto = map_to_dto(_minimal_input(workspace=workspace))
-        assert dto.reasoning_summary.dead_ends == [
-            "Ruled out: caching layer — no cache in path."
-        ]
+        assert dto.reasoning_summary.dead_ends == ["Ruled out: caching layer — no cache in path."]
 
     def test_next_investigation_ranked_highest_first(self):
         dto = map_to_dto(
@@ -1018,9 +984,7 @@ class TestReasoningSummaryDeadEndsAndNextInvestigation:
         assert dto.reasoning_summary.next_investigation[0].label == "Documentation"
 
     def test_unknown_capability_key_is_dropped_not_crashed(self):
-        dto = map_to_dto(
-            _minimal_input(investigation_priority={"not_a_real_capability": 0.9})
-        )
+        dto = map_to_dto(_minimal_input(investigation_priority={"not_a_real_capability": 0.9}))
         assert dto.reasoning_summary.next_investigation == []
 
     def test_next_investigation_empty_by_default(self):
