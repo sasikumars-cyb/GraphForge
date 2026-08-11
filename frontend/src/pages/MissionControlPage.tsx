@@ -1,4 +1,4 @@
-import { Plus } from "lucide-react";
+import { GitBranch, Plus, Radar, Waypoints } from "lucide-react";
 import { Link } from "react-router-dom";
 import { NeedsAttentionPanel } from "../components/missionControl/NeedsAttentionPanel";
 import { ActiveMissionsPanel } from "../components/missionControl/ActiveMissionsPanel";
@@ -33,6 +33,32 @@ import { RecentActivityFeed } from "../components/missionControl/RecentActivityF
  * look populated; see each panel's own docstring for its exact source
  * and, where relevant, what the backend genuinely doesn't provide yet.
  */
+
+// The primary action (start a new investigation) already gets the header's
+// own prominent CTA — repeating it here as an equal-weight tile would just
+// be the same action rendered twice. This row is for the other places a
+// command center should let you jump straight in.
+const QUICK_ACTIONS = [
+  {
+    to: "/architecture",
+    icon: Waypoints,
+    label: "Explore architecture",
+    hint: "Walk the dependency graph",
+  },
+  {
+    to: "/workspace/impact-analysis",
+    icon: Radar,
+    label: "Check impact",
+    hint: "Blast radius before you change something",
+  },
+  {
+    to: "/repositories",
+    icon: GitBranch,
+    label: "Repositories",
+    hint: "Indexing status across the org",
+  },
+] as const;
+
 export function MissionControlPage() {
   return (
     <div className="flex flex-col gap-8">
@@ -62,6 +88,25 @@ export function MissionControlPage() {
           <Plus className="h-4 w-4" aria-hidden="true" />
           New workflow
         </Link>
+      </div>
+
+      {/* ── Quick actions ──────────────────────────────────────── */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        {QUICK_ACTIONS.map((action) => (
+          <Link
+            key={action.to}
+            to={action.to}
+            className="focus-ring group flex items-center gap-3 rounded-xl border border-line-muted bg-surface px-4 py-3.5 transition-colors hover:border-line-strong hover:bg-surface-hover"
+          >
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-bg text-accent-fg transition-colors group-hover:bg-accent-solid group-hover:text-accent-on-solid">
+              <action.icon className="h-4.5 w-4.5" aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold whitespace-nowrap text-fg">{action.label}</p>
+              <p className="truncate text-xs text-fg-muted">{action.hint}</p>
+            </div>
+          </Link>
+        ))}
       </div>
 
       {/* ── Needs attention + Active missions — above the fold ──── */}
