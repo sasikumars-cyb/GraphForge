@@ -10,7 +10,7 @@ function renderBanner(props: Partial<Parameters<typeof ApprovalGateBanner>[0]> =
       <ApprovalGateBanner
         completedStage="planning"
         nextStage="development"
-        workflowTitle="Implement JWT auth"
+        refineObjective="Implement JWT auth"
         workflowId="wf-1"
         isSubmitting={false}
         onApprove={vi.fn()}

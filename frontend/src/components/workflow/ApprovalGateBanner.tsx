@@ -21,7 +21,14 @@ interface FailureInfo {
 interface ApprovalGateBannerProps {
   completedStage: string;
   nextStage: string;
-  workflowTitle: string;
+  /** The workflow's FULL original request (`original_prompt`), not its
+   * short AI-generated `title` — this seeds the objective box of the
+   * refinement NewWorkflowPage creates, and whatever lands there becomes
+   * the new workflow's own `original_prompt`. Passing the summarized title
+   * silently strips the detail Context Discovery matches repository names
+   * against, so a refined workflow re-scoped itself onto the wrong
+   * repository. */
+  refineObjective: string;
   /** This workflow's own id — threaded into "Refine"'s parentId (see
    * WorkflowApprovalBanner and NewWorkflowPage's parentId handling). */
   workflowId: string;
@@ -52,7 +59,7 @@ interface ApprovalGateBannerProps {
 export function ApprovalGateBanner({
   completedStage,
   nextStage,
-  workflowTitle,
+  refineObjective,
   workflowId,
   isSubmitting,
   onApprove,
@@ -60,7 +67,7 @@ export function ApprovalGateBanner({
   failure,
 }: ApprovalGateBannerProps) {
   const navigate = useNavigate();
-  const refineHref = `/workflows/new?title=${encodeURIComponent(workflowTitle)}&parentId=${encodeURIComponent(workflowId)}`;
+  const refineHref = `/workflows/new?title=${encodeURIComponent(refineObjective)}&parentId=${encodeURIComponent(workflowId)}`;
 
   if (failure) {
     return (

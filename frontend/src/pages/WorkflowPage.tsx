@@ -446,7 +446,7 @@ export function WorkflowPage() {
           <ApprovalGateBanner
             completedStage={lastCompletedStage.stage}
             nextStage={workflow.current_stage}
-            workflowTitle={workflow.title}
+            refineObjective={workflow.original_prompt || workflow.title}
             workflowId={workflow.workflow_id}
             isSubmitting={isSubmitting}
             onApprove={() => handleApprove()}
@@ -458,7 +458,7 @@ export function WorkflowPage() {
           <ApprovalGateBanner
             completedStage={lastCompletedStage?.stage ?? currentStageInfo.stage}
             nextStage={currentStageInfo.stage}
-            workflowTitle={workflow.title}
+            refineObjective={workflow.original_prompt || workflow.title}
             workflowId={workflow.workflow_id}
             isSubmitting={isSubmitting}
             onApprove={() => handleApprove()}
@@ -472,7 +472,7 @@ export function WorkflowPage() {
 
         {phase === "blueprint_approval" && (
           <WorkflowApprovalBanner
-            workflowTitle={workflow.title}
+            refineObjective={workflow.original_prompt || workflow.title}
             workflowId={workflow.workflow_id}
             status={workflow.status}
             isSubmitting={isSubmitting}
