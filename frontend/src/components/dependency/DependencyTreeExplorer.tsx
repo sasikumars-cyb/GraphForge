@@ -186,7 +186,12 @@ export function DependencyTreeExplorer({
           {selectedNode && (
             <NodeDetailPanel
               node={selectedNode}
+              graph={graph}
               onClose={() => setSelectedNode(null)}
+              onSelectNode={(id) => {
+                const next = graph.nodes.find((n) => n.id === id);
+                if (next) setSelectedNode(next);
+              }}
               onExploreNeighbors={() => void handleExpand()}
               isExploringNeighbors={isExpanding}
               exploreLabel="Expand dependencies"
