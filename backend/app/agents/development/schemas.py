@@ -97,6 +97,9 @@ class DevelopmentPlan(BaseModel):
     recommendations: list[str] = Field(default_factory=list)
 
     graph_context_used: bool = False
+    # See PlanningResult.grounding_status / app.agents.verification.
+    # grounding_status for why this exists alongside graph_context_used.
+    grounding_status: str = "not_indexed"
     repositories_consulted: list[str] = Field(default_factory=list)
     blueprint: dict[str, Any] | None = Field(default=None)
     prompt_version: str = "1.0"

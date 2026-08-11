@@ -433,9 +433,7 @@ def _selected_repo_names(result: dict[str, Any], ranked_repo_names: list[str]) -
     """
     if "repositories" in result:
         names = [
-            str(r.get("name", ""))
-            for r in (result.get("repositories") or [])
-            if r.get("selected")
+            str(r.get("name", "")) for r in (result.get("repositories") or []) if r.get("selected")
         ]
         return names or ranked_repo_names[:1]
     selected = result.get("selected_repositories")
@@ -486,8 +484,7 @@ def _graph_context_text_from(result: dict[str, Any]) -> str:
                 return (
                     understanding_text
                     + "\n\n---\n\n**Supporting evidence** (for traceability — not the "
-                    "primary basis for this plan):\n\n"
-                    + evidence_text
+                    "primary basis for this plan):\n\n" + evidence_text
                 )
             return understanding_text
 
@@ -924,6 +921,9 @@ class PlanningAgent:
         # from what the tools actually returned. If traversal failed or the
         # graph was empty, this must be False regardless of what the model claims.
         planning_result.graph_context_used = has_graph_data
+        planning_result.grounding_status = verification.grounding_status(
+            graph_unavailable, has_graph_data
+        )
 
         # ------------------------------------------------------------------
         # Verify the LLM's repository_usage claims against ground truth

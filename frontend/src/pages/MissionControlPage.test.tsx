@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
@@ -473,5 +473,85 @@ describe("MissionControlPage", () => {
     await screen.findByText("Nothing in progress");
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+
+  // The case above deliberately has no active missions, so it never renders
+  // a compact PipelineGraph — the representation Active Missions actually
+  // ships. This covers that gap.
+  describe("with active missions on screen", () => {
+    const missionA = makeWorkflowItem({
+      workflow_id: "wf-a",
+      title: "Investigate ingestion failures",
+      status: "in_progress",
+      stages: [
+        { stage: "context", label: "Context Discovery", status: "completed", run_id: "run-a1" },
+        { stage: "planning", label: "Planning", status: "running", run_id: "run-a2" },
+        { stage: "development", label: "Development", status: "queued", run_id: "run-a3" },
+        { stage: "docs", label: "Documentation Planning", status: "pending", run_id: null },
+        { stage: "review", label: "Engineering Review", status: "pending", run_id: null },
+      ],
+    });
+    const missionB = makeWorkflowItem({
+      workflow_id: "wf-b",
+      title: "Bump connection pool size",
+      status: "in_progress",
+      stages: [
+        { stage: "context", label: "Context Discovery", status: "completed", run_id: "run-b1" },
+        { stage: "planning", label: "Planning", status: "partial", run_id: "run-b2" },
+        { stage: "development", label: "Development", status: "failed", run_id: "run-b3" },
+      ],
+    });
+
+    function mockActiveMissions() {
+      vi.mocked(systemApi.getSystemStatus).mockResolvedValue(healthyStatus);
+      vi.mocked(githubApi.getConnectionStatus).mockResolvedValue(githubConnected);
+      mockWorkflowsByStatus({ in_progress: [missionA, missionB] });
+      vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(emptyArchitectureSummary);
+      vi.mocked(investigationIntelligenceApi.getInvestigationIntelligenceSummary).mockResolvedValue(
+        emptyInvestigationSummary,
+      );
+      vi.mocked(reportsApi.listReports).mockResolvedValue([]);
+    }
+
+    it("has no detectable accessibility violations while compact pipelines are rendered", async () => {
+      mockActiveMissions();
+      const { container } = renderPage();
+      await screen.findByText("Investigate ingestion failures");
+      expect(screen.getAllByRole("list", { name: /^Workflow pipeline for / })).toHaveLength(2);
+
+      expect(await axe(container)).toHaveNoViolations();
+    });
+
+    it("gives each mission's pipeline an accessible name identifying that mission", async () => {
+      mockActiveMissions();
+      renderPage();
+      expect(
+        await screen.findByRole("list", {
+          name: "Workflow pipeline for Investigate ingestion failures",
+        }),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByRole("list", { name: "Workflow pipeline for Bump connection pool size" }),
+      ).toBeInTheDocument();
+    });
+
+    it("keeps stage accessible names complete even though the visible labels truncate", async () => {
+      mockActiveMissions();
+      renderPage();
+      const pipeline = await screen.findByRole("list", {
+        name: "Workflow pipeline for Investigate ingestion failures",
+      });
+      // "Documentation Planning" renders visually as roughly "Docu…" at
+      // Mission Control's card width; the accessible name must not truncate.
+      expect(
+        within(pipeline).getByRole("button", { name: "Documentation Planning: Queued" }),
+      ).toBeInTheDocument();
+      expect(
+        within(pipeline).getByRole("button", { name: "Context Discovery: Complete" }),
+      ).toBeInTheDocument();
+      expect(
+        within(pipeline).getByRole("button", { name: "Planning: Running…" }),
+      ).toBeInTheDocument();
+    });
   });
 });

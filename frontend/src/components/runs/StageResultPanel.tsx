@@ -3,17 +3,25 @@ import { LayoutDashboard, AlignLeft, FlaskConical, Code } from "lucide-react";
 import { EvidencePanel } from "../EvidencePanel";
 import { ExecutionLogPanel } from "../workflow/ExecutionLogPanel";
 import {
+  ApiIntelligenceResultDetails,
   DevelopmentResultDetails,
+  DocumentationHealthResultDetails,
   DocumentationPlanningResultDetails,
   PlanningResultDetails,
+  RepositoryUnderstandingResultDetails,
+  ReviewResultDetails,
   TestingResultDetails,
 } from "../agents/StageResultDetails";
 import { BlueprintExplorer } from "../blueprint/BlueprintExplorer";
 import type {
   AgentStep,
+  ApiIntelligenceResult,
   DevelopmentPlanResult,
+  DocumentationHealthResult,
   DocumentationPlanResult,
   PlanningResult,
+  PRReviewResult,
+  RepositoryUnderstandingResult,
   TestPlanResult,
 } from "../../types/agent";
 import type { BlueprintArtifact } from "../../types/blueprint";
@@ -62,6 +70,15 @@ export function StageResultPanel({
 }) {
   const planningResult = stage === "planning" ? (step.result as unknown as PlanningResult) : null;
   const developmentResult = stage === "development" ? (step.result as unknown as DevelopmentPlanResult) : null;
+  const reviewResult = stage === "review" ? (step.result as unknown as PRReviewResult) : null;
+  const documentationHealthResult =
+    stage === "documentation_health" ? (step.result as unknown as DocumentationHealthResult) : null;
+  const apiIntelligenceResult =
+    stage === "api_intelligence" ? (step.result as unknown as ApiIntelligenceResult) : null;
+  const repositoryUnderstandingResult =
+    stage === "repository_understanding"
+      ? (step.result as unknown as RepositoryUnderstandingResult)
+      : null;
 
   const blueprint =
     (planningResult?.blueprint ?? developmentResult?.blueprint) as BlueprintArtifact | null | undefined;
@@ -75,11 +92,19 @@ export function StageResultPanel({
   const risksCount = planningResult?.risk_considerations?.length ?? developmentResult?.risks?.length;
 
   const hasBlueprint = Boolean(blueprint && blueprint.diagrams.length > 0);
+  // UX audit P0.2/P0.3: review/documentation_health/api_intelligence/
+  // repository_understanding used to be absent here, which meant those
+  // four agents' runs fell through to Evidence/Log/JSON only in Run
+  // History — see ReviewResultDetails and friends in StageResultDetails.tsx.
   const hasSummary =
     stage === "planning" ||
     stage === "development" ||
     stage === "testing" ||
-    stage === "documentation_planning";
+    stage === "documentation_planning" ||
+    stage === "review" ||
+    stage === "documentation_health" ||
+    stage === "api_intelligence" ||
+    stage === "repository_understanding";
 
   const defaultTab: ResultTab = hasBlueprint ? "blueprint" : hasSummary ? "summary" : "evidence";
   const [activeTab, setActiveTab] = useState<ResultTab>(defaultTab);
@@ -200,6 +225,19 @@ export function StageResultPanel({
               <DocumentationPlanningResultDetails
                 result={step.result as unknown as DocumentationPlanResult}
               />
+            )}
+            {/* ViewVisualReportButton lives in RunDetailPage's header (next
+                to status/confidence), not duplicated here — same reason
+                WorkflowPage's own header already owns run-level actions. */}
+            {reviewResult && <ReviewResultDetails result={reviewResult} />}
+            {documentationHealthResult && (
+              <DocumentationHealthResultDetails result={documentationHealthResult} />
+            )}
+            {apiIntelligenceResult && (
+              <ApiIntelligenceResultDetails result={apiIntelligenceResult} />
+            )}
+            {repositoryUnderstandingResult && (
+              <RepositoryUnderstandingResultDetails result={repositoryUnderstandingResult} />
             )}
           </div>
         )}

@@ -125,7 +125,9 @@ async def test_repository_discovery_with_indexed_repos() -> None:
     mock_graph_repo = AsyncMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=True)
 
-    tool = TestRepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo)
+    tool = TestRepositoryDiscoveryTool(
+        db=mock_db, graph_repository=mock_graph_repo, user_id="user-1"
+    )
     obs = await tool.execute()
 
     assert obs.succeeded is True
@@ -152,7 +154,9 @@ async def test_repository_discovery_full_name_is_canonical_owner_slash_name() ->
     mock_graph_repo = AsyncMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=True)
 
-    tool = TestRepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo)
+    tool = TestRepositoryDiscoveryTool(
+        db=mock_db, graph_repository=mock_graph_repo, user_id="user-1"
+    )
     obs = await tool.execute()
 
     repo = obs.data["indexed_repositories"][0]
@@ -179,7 +183,9 @@ async def test_repository_discovery_none_indexed() -> None:
     mock_graph_repo = AsyncMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=False)
 
-    tool = TestRepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo)
+    tool = TestRepositoryDiscoveryTool(
+        db=mock_db, graph_repository=mock_graph_repo, user_id="user-1"
+    )
     obs = await tool.execute()
 
     assert obs.succeeded is True
@@ -191,7 +197,7 @@ async def test_repository_discovery_db_failure() -> None:
     mock_db = AsyncMock()
     mock_db.execute.side_effect = Exception("DB unavailable")
 
-    tool = TestRepositoryDiscoveryTool(db=mock_db, graph_repository=AsyncMock())
+    tool = TestRepositoryDiscoveryTool(db=mock_db, graph_repository=AsyncMock(), user_id="user-1")
     obs = await tool.execute()
 
     assert obs.succeeded is False
@@ -441,7 +447,7 @@ def _make_testing_context(
     return AgentContext(
         subject=subject,
         goal="plan_tests",
-        extras={"db": mock_db},
+        extras={"db": mock_db, "user_id": "user-1"},
     )
 
 

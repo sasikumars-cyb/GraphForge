@@ -25,6 +25,14 @@ class RegressionTest(BaseModel):
     description: str
     priority: str = ""  # critical, high, medium, low
     automated: bool = False
+    # Never set from the LLM's own JSON — computed only by agent.py after
+    # `component` has been cleaned of any self-annotation (see
+    # app.agents.verification.strip_not_indexed_annotation) and checked
+    # against this run's real evidence pool. Defaults to True (assume
+    # fine) purely because agent.py always overwrites it explicitly before
+    # this schema is returned; nothing downstream should rely on the
+    # default itself.
+    verified: bool = True
 
 
 class IntegrationTest(BaseModel):
@@ -35,6 +43,9 @@ class IntegrationTest(BaseModel):
     relationship: str = ""  # CALLS, PRODUCES_TO, CONSUMES_FROM
     description: str
     priority: str = ""
+    # See RegressionTest.verified — same contract, true when both
+    # source_component and target_component are confirmed in evidence.
+    verified: bool = True
 
 
 class EdgeCase(BaseModel):
@@ -44,6 +55,9 @@ class EdgeCase(BaseModel):
     component: str = ""
     severity: str = ""  # critical, high, medium, low
     category: str = ""  # boundary, null_handling, concurrency, timeout, etc.
+    # See RegressionTest.verified. True when `component` is empty (nothing
+    # to verify) or confirmed in evidence.
+    verified: bool = True
 
 
 class EnvironmentRequirement(BaseModel):
@@ -117,6 +131,9 @@ class TestPlan(BaseModel):
     recommendations: list[str] = Field(default_factory=list)
 
     graph_context_used: bool = False
+    # See PlanningResult.grounding_status / app.agents.verification.
+    # grounding_status for why this exists alongside graph_context_used.
+    grounding_status: str = "not_indexed"
     repositories_consulted: list[str] = Field(default_factory=list)
     prompt_version: str = "1.0"
 

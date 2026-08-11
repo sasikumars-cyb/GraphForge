@@ -182,6 +182,12 @@ export interface LLMTrace {
   estimated_cost_usd: number | null;
 }
 
+/** See backend app.agents.verification.grounding_status — the one
+ * canonical answer to "why is/isn't this grounded", replacing each
+ * agent's own re-derivation of the same three states from
+ * graph_context_used/repositories_consulted alone (UX audit P1.3/P1.4). */
+export type GroundingStatus = "grounded" | "unavailable" | "not_indexed";
+
 export interface PlanningResult {
   executive_summary: string;
   implementation_steps: PlanningStep[];
@@ -189,6 +195,7 @@ export interface PlanningResult {
   kafka_topics_involved: string[];
   risk_considerations: string[];
   graph_context_used: boolean;
+  grounding_status?: GroundingStatus;
   repositories_consulted?: string[];
   // Deterministic, backend-computed list of claims in this result that
   // could not be matched against the run's own tool evidence (see
@@ -217,12 +224,20 @@ export interface AffectedRepository {
   reason: string;
 }
 
+/** "not_checked" means no repository-scoped evidence existed to check
+ * against at all (not itself a red flag); "unverified" means the
+ * (repository, file_path) pair was checked and not found — the canonical
+ * signal for whether `file_path` is safe to display as a real location.
+ * See backend app.agents.verification's FilePathVerificationStatus. */
+export type FilePathVerificationStatus = "not_checked" | "verified" | "unverified";
+
 export interface AffectedComponent {
   name: string;
   component_type: string;
   repository: string;
   file_path: string;
   change_description: string;
+  file_path_verification: FilePathVerificationStatus;
 }
 
 export interface PlanDependency {
@@ -265,6 +280,7 @@ export interface DevelopmentPlanResult {
   risks: PlanRisk[];
   recommendations: string[];
   graph_context_used: boolean;
+  grounding_status?: GroundingStatus;
   repositories_consulted?: string[];
   // Deterministic, backend-computed list of claims in this result that
   // could not be matched against the run's own tool evidence (see
@@ -288,6 +304,10 @@ export interface RegressionTestResult {
   description: string;
   priority: string;
   automated: boolean;
+  /** Canonical verification state, computed server-side against this
+   * run's real evidence — never derive this from parsing `component`'s
+   * own text (see backend app.agents.verification's module docstring). */
+  verified: boolean;
 }
 
 export interface IntegrationTestResult {
@@ -296,6 +316,7 @@ export interface IntegrationTestResult {
   relationship: string;
   description: string;
   priority: string;
+  verified: boolean;
 }
 
 export interface EdgeCaseResult {
@@ -303,6 +324,7 @@ export interface EdgeCaseResult {
   component: string;
   severity: string;
   category: string;
+  verified: boolean;
 }
 
 export interface EnvironmentRequirementResult {
@@ -355,6 +377,7 @@ export interface TestPlanResult {
   risks: TestRiskResult[];
   recommendations: string[];
   graph_context_used: boolean;
+  grounding_status?: GroundingStatus;
   repositories_consulted?: string[];
   // Deterministic, backend-computed list of claims in this result that
   // could not be matched against the run's own tool evidence (see
@@ -921,4 +944,135 @@ export interface OverrideStageResultRequest {
   // selected repositories as explicit input — recomputing all investigation
   // results instead of just patching the repository list.
   rerun?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Result shapes for the four agents that previously had no shared type at
+// all — every call site cast `step.result as Record<string, unknown>` and
+// re-derived field names locally. Extracted here so ReviewPage/
+// DocumentationHealthPage/ApiIntelligencePage/RepositoryUnderstandingPage
+// and StageResultPanel's Run History view can share one rendering
+// component per agent instead of ReviewPage-only rendering that Run
+// History had no way to reach (see StageResultDetails.tsx's
+// ReviewResultDetails and friends).
+// ---------------------------------------------------------------------------
+
+export interface PRReviewFinding {
+  category: string;
+  severity: string;
+  title: string;
+  description: string;
+}
+
+export interface PRReviewBreakingChange {
+  component: string;
+  description: string;
+  severity: string;
+}
+
+export interface PRReviewMigrationAdvice {
+  component: string;
+  advice: string;
+  priority: string;
+}
+
+export interface PRReviewSuggestedReviewer {
+  reviewer: string;
+  reason: string;
+}
+
+export interface PRReviewRegressionTest {
+  component: string;
+  test_description: string;
+}
+
+export interface PRReviewResult {
+  executive_summary: string;
+  quality_score?: number | null;
+  risk_score?: number | null;
+  merge_recommendation?: "approve" | "approve_with_comments" | "request_changes" | "block" | null;
+  findings: PRReviewFinding[];
+  architecture_observations: string[];
+  maintainability_observations: string[];
+  reliability_observations: string[];
+  testing_review: string;
+  documentation_review: string;
+  positive_findings: string[];
+  suggested_improvements: string[];
+  breaking_changes: PRReviewBreakingChange[];
+  migration_advice: PRReviewMigrationAdvice[];
+  suggested_reviewers: PRReviewSuggestedReviewer[];
+  regression_tests: PRReviewRegressionTest[];
+}
+
+export interface DocumentationHealthFinding {
+  category: string;
+  severity: string;
+  file_path: string;
+  message: string;
+}
+
+export interface DocumentationHealthScoreBreakdownEntry {
+  category: string;
+  finding_count: number;
+  penalty: number;
+  capped: boolean;
+}
+
+export interface DocumentationHealthFileReviewed {
+  path: string;
+  category: string;
+  heading_count: number;
+}
+
+export interface DocumentationHealthResult {
+  health_score: number;
+  grade: string;
+  summary: string;
+  stats: Record<string, number>;
+  files_reviewed: DocumentationHealthFileReviewed[];
+  findings: DocumentationHealthFinding[];
+  score_breakdown: DocumentationHealthScoreBreakdownEntry[];
+  strengths: string[];
+  areas_for_improvement: string[];
+  suggested_next_actions: string[];
+}
+
+export interface ApiIntelligenceEndpoint {
+  method: string;
+  path: string;
+  description?: string;
+  authentication_required?: boolean;
+}
+
+export interface ApiIntelligenceSecurityFinding {
+  severity: string;
+  title: string;
+  description: string;
+  recommendation: string;
+}
+
+export interface ApiIntelligenceResult {
+  executive_summary: string;
+  endpoints: ApiIntelligenceEndpoint[];
+  security_findings: ApiIntelligenceSecurityFinding[];
+  missing_information: string[];
+  scores: Record<string, number>;
+}
+
+export interface RepositoryUnderstandingResult {
+  executive_summary: string;
+  repository_overview: string;
+  architecture_overview: string;
+  api_summary: string;
+  apis: string[];
+  database_summary: string;
+  databases: string[];
+  messaging_summary: string;
+  queues: string[];
+  external_systems_summary: string;
+  integrations: string[];
+  dependency_summary: string;
+  dependencies: string[];
+  interesting_findings: string[];
 }

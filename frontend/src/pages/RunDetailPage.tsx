@@ -5,6 +5,10 @@ import { Card } from "../components/Card";
 import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
+import {
+  pullRequestIdFromSubject,
+  ViewVisualReportButton,
+} from "../components/agents/ViewVisualReportButton";
 import { StageResultPanel } from "../components/runs/StageResultPanel";
 import { useAuth } from "../app/auth-context";
 import { getAgentRun } from "../lib/api/agentRuns";
@@ -97,6 +101,16 @@ export function RunDetailPage() {
   // goal so StageResultPanel still knows whether to render a blueprint.
   const stage = run.workflow_stage ?? stageFromGoal(run.goal);
 
+  // PR Review's "View Visual Report" has no equivalent in StageResultPanel,
+  // because it isn't a blueprint diagram at all: it's a separate, pre-
+  // rendered HTML dashboard keyed off the pull request id, not off
+  // step.result. It used to render only inline in ReviewPage.tsx (the page
+  // shown right after submitting a review); reaching the exact same
+  // completed run through Run History (this page) landed on
+  // StageResultPanel instead, which has no stage mapped for "review_pr"
+  // (see GOAL_TO_STAGE) and therefore had no way to open it.
+  const pullRequestId = pullRequestIdFromSubject(run.goal, run.subject.subject_id);
+
   return (
     <div className="flex flex-col gap-6">
       <Link
@@ -139,14 +153,17 @@ export function RunDetailPage() {
       )}
 
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-semibold text-fg">
-          {run.title ?? run.subject.display_name ?? run.subject.subject_id}
-        </h1>
-        <div className="mt-2 flex items-center gap-3">
-          <RunStatusBadge status={run.status} />
-          {step?.confidence && <ConfidenceBadge confidence={step.confidence} />}
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-xl font-semibold text-fg">
+            {run.title ?? run.subject.display_name ?? run.subject.subject_id}
+          </h1>
+          <div className="mt-2 flex items-center gap-3">
+            <RunStatusBadge status={run.status} />
+            {step?.confidence && <ConfidenceBadge confidence={step.confidence} />}
+          </div>
         </div>
+        <ViewVisualReportButton pullRequestId={pullRequestId} />
       </div>
 
       {/* Run metadata */}
@@ -226,9 +243,23 @@ export function RunDetailPage() {
           )}
           {run.repository && (
             <div>
-              <dt className="text-xs text-fg-muted">Repository</dt>
+              {/* UX audit P1.1: `run.repository` is `repositories_consulted`
+                  (grounding scope — everything the graph traversal read for
+                  context), not the repositories this change actually
+                  affects — those are two different numbers (e.g. 17
+                  consulted vs. 3 affected) and showing the consulted list
+                  under an unqualified "Repository" label read as "this run
+                  touches 17 repos". The full names still live in one place
+                  — the Summary tab's GroundingBanner — this is a count and
+                  a pointer to it, not a second copy of the list. */}
+              <dt className="text-xs text-fg-muted">Grounding Scope</dt>
               <dd className="truncate text-fg-secondary" title={run.repository}>
-                {run.repository}
+                {(() => {
+                  const repoNames = run.repository.split(", ").filter(Boolean);
+                  return repoNames.length === 1
+                    ? repoNames[0]
+                    : `${repoNames.length} repositories consulted — see Summary`;
+                })()}
               </dd>
             </div>
           )}

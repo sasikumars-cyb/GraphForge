@@ -98,6 +98,7 @@ export function ActiveMissionsPanel() {
                 selectedRunId={null}
                 onSelectStage={() => navigate(`/workflows/${workflow.workflow_id}`)}
                 compact
+                accessibleLabel={`Workflow pipeline for ${workflow.title}`}
               />
             </div>
           ))}

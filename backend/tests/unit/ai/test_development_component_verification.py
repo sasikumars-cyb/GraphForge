@@ -30,7 +30,7 @@ def _context() -> AgentContext:
     return AgentContext(
         subject=subject,
         goal="develop_change_plan",
-        extras={"db": AsyncMock()},
+        extras={"db": AsyncMock(), "user_id": "user-1"},
     )
 
 

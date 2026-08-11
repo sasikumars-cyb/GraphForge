@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 import { Network, Send, RotateCcw, History, Download, ExternalLink } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
+import { ApiIntelligenceResultDetails } from "../components/agents/StageResultDetails";
 import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
@@ -14,22 +15,8 @@ import {
   fetchApiIntelligenceExport,
   type ApiIntelligenceExportFormat,
 } from "../lib/api/apiIntelligence";
+import type { ApiIntelligenceResult } from "../types/agent";
 import type { TrackedRepository } from "../types/github";
-
-const SEVERITY_STYLES: Record<string, string> = {
-  critical: "border-danger-line/40 bg-danger-bg text-danger-fg",
-  high: "border-danger-line/20 bg-danger-bg/60 text-danger-fg",
-  medium: "border-warning-line/30 bg-warning-bg text-warning-fg",
-  low: "border-line-muted bg-surface text-fg-muted",
-};
-
-const METHOD_STYLES: Record<string, string> = {
-  GET: "bg-success-bg text-success-fg",
-  POST: "bg-cat-1-bg text-cat-1-fg",
-  PUT: "bg-warning-bg text-warning-fg",
-  PATCH: "bg-cat-2-bg text-cat-2-fg",
-  DELETE: "bg-danger-bg text-danger-fg",
-};
 
 export function ApiIntelligencePage() {
   const { token } = useAuth();
@@ -185,14 +172,8 @@ function ApiIntelligenceResultView({
 }) {
   const { token } = useAuth();
   const step = run.steps[0];
-  const result = step?.result as Record<string, unknown> | undefined;
+  const result = step?.result as unknown as ApiIntelligenceResult | undefined;
   const evidence = step?.evidence ?? [];
-
-  const summary = (result?.executive_summary as string) ?? "";
-  const endpoints = (result?.endpoints as Array<Record<string, unknown>>) ?? [];
-  const securityFindings = (result?.security_findings as Array<Record<string, unknown>>) ?? [];
-  const missingInformation = (result?.missing_information as string[]) ?? [];
-  const scores = (result?.scores as Record<string, number>) ?? {};
 
   const [exportError, setExportError] = useState<string | null>(null);
   const [downloadingFormat, setDownloadingFormat] = useState<ApiIntelligenceExportFormat | null>(null);
@@ -250,28 +231,6 @@ function ApiIntelligenceResultView({
         </div>
       )}
 
-      {summary && (
-        <Card title="Executive Summary">
-          <p className="text-sm text-fg-secondary">{summary}</p>
-        </Card>
-      )}
-
-      {Object.keys(scores).length > 0 && (
-        <Card title="Scores">
-          <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
-            {Object.entries(scores).map(([key, value]) => (
-              <div key={key}>
-                <dt className="text-xs capitalize text-fg-muted">{key.replaceAll("_", " ")}</dt>
-                <dd className="text-xl font-semibold text-fg">
-                  {value}
-                  <span className="text-xs text-fg-muted">/100</span>
-                </dd>
-              </div>
-            ))}
-          </dl>
-        </Card>
-      )}
-
       {run.status === "completed" && (
         <Card title="Export & Dashboard" description="Every format is re-rendered from this run's result — no re-analysis.">
           <div className="flex flex-wrap items-center gap-3">
@@ -309,58 +268,7 @@ function ApiIntelligenceResultView({
         </Card>
       )}
 
-      {endpoints.length > 0 && (
-        <Card title="Endpoints" description={`${endpoints.length} documented`}>
-          <ul className="space-y-2" role="list">
-            {endpoints.map((e, i) => (
-              <li key={i} className="rounded-lg border border-line-muted bg-surface px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <span className={`rounded px-2 py-0.5 text-xs font-semibold ${METHOD_STYLES[e.method as string] ?? "bg-surface-raised text-fg-muted"}`}>
-                    {e.method as string}
-                  </span>
-                  <span className="font-mono text-sm text-fg-secondary">{e.path as string}</span>
-                  {Boolean(e.authentication_required) && (
-                    <span className="text-xs text-warning-fg">🔒 Auth</span>
-                  )}
-                </div>
-                {Boolean(e.description) && <p className="mt-1 text-sm text-fg-muted">{e.description as string}</p>}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      {securityFindings.length > 0 && (
-        <Card title="Security Findings" description={`${securityFindings.length} found`}>
-          <ul className="space-y-2" role="list">
-            {securityFindings.map((f, i) => (
-              <li
-                key={i}
-                className={`rounded-lg border px-4 py-3 ${SEVERITY_STYLES[f.severity as string] ?? SEVERITY_STYLES.low}`}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-semibold uppercase tracking-wide">{f.severity as string}</span>
-                  <span className="text-sm font-medium">{f.title as string}</span>
-                </div>
-                <p className="mt-1 text-sm">{f.description as string}</p>
-                <p className="mt-1 text-xs opacity-80">Recommendation: {f.recommendation as string}</p>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      {missingInformation.length > 0 && (
-        <Card title="Missing Information" description="What should be added — never hallucinated.">
-          <ul className="space-y-1.5" role="list">
-            {missingInformation.map((item, i) => (
-              <li key={i} className="text-sm text-fg-muted">
-                • {item}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+      {result && <ApiIntelligenceResultDetails result={result} />}
 
       <EvidencePanel evidence={evidence} />
     </div>

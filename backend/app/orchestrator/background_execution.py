@@ -571,9 +571,7 @@ async def fail_stale_running_runs(
     observability, exactly like `recover_orphaned_runs`.
     """
     cutoff = datetime.now(UTC) - older_than
-    result = await db.execute(
-        select(Run).where(Run.status == "running", Run.started_at < cutoff)
-    )
+    result = await db.execute(select(Run).where(Run.status == "running", Run.started_at < cutoff))
     stale = list(result.scalars().all())
     if not stale:
         return 0
@@ -649,12 +647,16 @@ _title_tasks: set[Any] = set()
 
 
 async def _generate_title_task(
-    model_cls: type[Any], row_id: uuid.UUID, objective: str, model: str | None
+    model_cls: type[Any],
+    row_id: uuid.UUID,
+    objective: str,
+    model: str | None,
+    goal: str | None = None,
 ) -> None:
     from app.agents.title_generation import generate_title
 
     try:
-        title = await generate_title(objective, model=model)
+        title = await generate_title(objective, model=model, goal=goal)
     except Exception:
         # generate_title() itself only raises on a bug in its own fallback
         # path (it catches AppError internally) — this is defense in depth,
@@ -686,14 +688,21 @@ def schedule_title_generation(
     model: str | None = None,
     *,
     model_cls: type[Any] | None = None,
+    goal: str | None = None,
 ) -> Any:
     """Fire-and-forget the real AI title generation for a just-created
     Workflow (default) or Run (`model_cls=Run`). Returns the created
-    asyncio.Task (mainly useful for tests)."""
+    asyncio.Task (mainly useful for tests).
+
+    `goal` (UX audit P1.5) is only ever meaningful for a standalone Run —
+    a Workflow's title covers its whole multi-stage objective, not one
+    agent's goal, so every Workflow call site leaves this at its default
+    and gets the prior, un-prefixed behavior unchanged.
+    """
     import asyncio
 
     task = asyncio.create_task(
-        _generate_title_task(model_cls or Workflow, row_id, objective, model)
+        _generate_title_task(model_cls or Workflow, row_id, objective, model, goal)
     )
     _title_tasks.add(task)
     task.add_done_callback(_title_tasks.discard)

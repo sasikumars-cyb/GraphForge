@@ -8,6 +8,8 @@ from app.agents.verification import (
     build_evidence_pool,
     check_entity_mismatch,
     find_unindexed_sibling_references,
+    grounding_status,
+    strip_not_indexed_annotation,
     verify_claims,
 )
 
@@ -91,10 +93,7 @@ class TestCheckEntityMismatch:
     def test_ignores_other_common_emphasis_words(self):
         for word in ("MUST", "NOT", "ALL", "ANY", "EACH", "NEVER", "ALWAYS"):
             assert (
-                check_entity_mismatch(
-                    f"You {word} keep this change minimal.", "some-repo"
-                )
-                is None
+                check_entity_mismatch(f"You {word} keep this change minimal.", "some-repo") is None
             ), word
 
     def test_accepts_list_of_selected_repositories(self):
@@ -360,3 +359,85 @@ class TestVerifyClaimsNormalization:
         pool = build_evidence_pool(["PaymentService"])
         results = [verify_claims(["payment-service"], pool).all_verified for _ in range(10)]
         assert all(results)
+
+
+class TestStripNotIndexedAnnotation:
+    """Regression coverage for the UX audit's P0.1 finding: Development and
+    Testing rendered `(not yet indexed)`/`- not yet indexed` verbatim as
+    part of a component's name/file_path, even on runs the tool's own
+    verification had already grounded — because the model's own self-doubt
+    text became part of the "name" instead of a separate signal."""
+
+    def test_clean_name_is_unchanged(self):
+        # The common case: nothing to strip, no false positive on a name
+        # that just happens to contain similar words in an unrelated
+        # context should ever be mis-parsed.
+        text, had = strip_not_indexed_annotation("order-service-python")
+        assert text == "order-service-python"
+        assert had is False
+
+    def test_strips_parenthetical_suffix(self):
+        text, had = strip_not_indexed_annotation("order-service-python (not yet indexed)")
+        assert text == "order-service-python"
+        assert had is True
+
+    def test_strips_dash_suffix(self):
+        text, had = strip_not_indexed_annotation("payment-service-java - not yet indexed")
+        assert text == "payment-service-java"
+        assert had is True
+
+    def test_whole_field_is_the_sentinel(self):
+        # Development's file_path field: the model writes the sentinel as
+        # the entire value when it has no real path to offer.
+        text, had = strip_not_indexed_annotation("not yet indexed")
+        assert text == ""
+        assert had is True
+
+    def test_case_insensitive(self):
+        text, had = strip_not_indexed_annotation("shared-python-sdk (Not Yet Indexed)")
+        assert text == "shared-python-sdk"
+        assert had is True
+
+    def test_empty_string_is_a_no_op(self):
+        assert strip_not_indexed_annotation("") == ("", False)
+
+    def test_verified_entity_never_shows_the_annotation_after_cleaning(self):
+        """The end-to-end contract: a component the LLM doubted but that
+        genuinely IS in this run's evidence must verify cleanly once its
+        name is stripped of the self-annotation — the doubt-text itself
+        must never be what verify_claims checks."""
+        pool = build_evidence_pool(["order-service-python"])
+        clean_name, _ = strip_not_indexed_annotation("order-service-python (not yet indexed)")
+        assert verify_claims([clean_name], pool).all_verified
+
+    def test_genuinely_unindexed_entity_stays_unverified_after_cleaning(self):
+        """Stripping the annotation must never manufacture a false
+        verification — a component that really isn't in this run's
+        evidence stays unverified regardless of how its name was
+        written."""
+        pool = build_evidence_pool(["order-service-python"])
+        clean_name, _ = strip_not_indexed_annotation("some-other-service (not yet indexed)")
+        assert verify_claims([clean_name], pool).unverified == ["some-other-service"]
+
+
+class TestGroundingStatus:
+    """Regression coverage for the UX audit's P1.3/P1.4 finding: Planning
+    presented the same underlying condition three different, sometimes
+    contradictory ways (infrastructure error / expected new project /
+    greenfield project) because each surface re-derived its own guess.
+    `grounding_status` is the one function that maps the two booleans
+    Planning/Development/Testing already compute to a single, agreed-on
+    answer every caller must use."""
+
+    def test_infrastructure_failure_is_unavailable_even_with_data_claims(self):
+        # graph_unavailable takes priority — a genuine infra failure is
+        # never reported as "not indexed", regardless of what has_graph_data
+        # would otherwise suggest.
+        assert grounding_status(graph_unavailable=True, has_graph_data=True) == "unavailable"
+        assert grounding_status(graph_unavailable=True, has_graph_data=False) == "unavailable"
+
+    def test_reachable_graph_with_data_is_grounded(self):
+        assert grounding_status(graph_unavailable=False, has_graph_data=True) == "grounded"
+
+    def test_reachable_empty_graph_is_not_indexed(self):
+        assert grounding_status(graph_unavailable=False, has_graph_data=False) == "not_indexed"

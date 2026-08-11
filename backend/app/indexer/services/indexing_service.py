@@ -83,11 +83,19 @@ async def index_repository(
     db: AsyncSession | None = None,
     on_language_detected: Callable[[DetectedLanguage], None] | None = None,
     on_commit_resolved: Callable[[str], None] | None = None,
+    repository_name: str | None = None,
 ) -> IndexingSummary:
     """The DB-independent core of the pipeline — clone, detect, parse,
     build, persist. Takes plain values rather than ORM objects specifically
     so it's testable without a database at all (see
     tests/integration/test_indexing_pipeline.py).
+
+    `repository_name` (optional, defaults to None — every existing call
+    site predating this parameter still works unchanged) becomes the
+    Repository graph node's "name" property, the same way `build_graph`
+    already sets one for every other node type. Omitting it just means
+    that one Repository node renders as its raw id instead of a name
+    wherever the frontend falls back to `properties.name ?? id`.
 
     `db` (added in ADR 0018 RFC-04) is optional and touches nothing except
     the shadow reasoning pipeline's Engineering Memory persistence step —
@@ -132,7 +140,7 @@ async def index_repository(
         # agnostic (see repository_evidence.py's own docstring).
         repository_evidence_facts = extract_repository_evidence(repo_path)
 
-    graph = build_graph(repository_id, model)
+    graph = build_graph(repository_id, model, repository_name=repository_name)
     graph_repository = Neo4jGraphRepository(get_driver())
     await graph_repository.replace_repository_graph(repository_id, graph)
 
@@ -170,6 +178,7 @@ async def _index_changed_files(
     changed_files: list[ChangedFile],
     head_sha: str,
     access_token: str | None,
+    repository_name: str | None = None,
 ) -> IndexingSummary:
     """KAN-32: re-parse only `changed_files` (fetched via GitHub's API —
     see `materialize_changed_files`, no `git clone`) and merge the result
@@ -196,7 +205,7 @@ async def _index_changed_files(
     ) as work_dir:
         model = parser.parse(work_dir)
 
-    graph = build_graph(repository_id, model)
+    graph = build_graph(repository_id, model, repository_name=repository_name)
     graph_repository = Neo4jGraphRepository(get_driver())
     # A rename touches two paths: the old one (nothing lives there
     # anymore — must be deleted) and the new one (already covered by
@@ -264,6 +273,7 @@ async def _attempt_incremental_index(
             changed_files=changed_files,
             head_sha=head_sha,
             access_token=access_token,
+            repository_name=repository.full_name,
         )
     except Exception:
         logger.exception(
@@ -335,6 +345,7 @@ async def run_indexing(db: AsyncSession, repository: Repository) -> IndexingSumm
             db=db,
             on_language_detected=_capture_language,
             on_commit_resolved=_capture_commit,
+            repository_name=repository.full_name,
         )
         # `resolve_head_commit_sha` reads the clone `index_repository` just
         # made (plain `git rev-parse HEAD`) — works identically for

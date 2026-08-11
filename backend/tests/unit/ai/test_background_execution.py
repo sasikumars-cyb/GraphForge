@@ -193,7 +193,7 @@ async def test_generate_title_task_persists_generated_title(monkeypatch):
 
     monkeypatch.setattr(background_execution, "AsyncSessionLocal", lambda: _FakeSession())
 
-    async def fake_generate_title(objective, *, model=None):
+    async def fake_generate_title(objective, *, model=None, goal=None):
         assert objective == "Some objective"
         return "A Real Generated Title"
 
@@ -228,7 +228,7 @@ async def test_generate_title_task_noop_when_workflow_vanished(monkeypatch):
 
     monkeypatch.setattr(background_execution, "AsyncSessionLocal", lambda: _FakeSession())
 
-    async def fake_generate_title(objective, *, model=None):
+    async def fake_generate_title(objective, *, model=None, goal=None):
         return "Some Title"
 
     monkeypatch.setattr("app.agents.title_generation.generate_title", fake_generate_title)
@@ -245,7 +245,7 @@ async def test_generate_title_task_swallows_generate_title_exception(monkeypatch
     path — this is defense in depth, and must never escape the detached
     background task."""
 
-    async def fake_generate_title(objective, *, model=None):
+    async def fake_generate_title(objective, *, model=None, goal=None):
         raise RuntimeError("unexpected bug")
 
     monkeypatch.setattr("app.agents.title_generation.generate_title", fake_generate_title)

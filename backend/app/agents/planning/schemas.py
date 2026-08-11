@@ -172,6 +172,14 @@ class PlanningResult(BaseModel):
     kafka_topics_involved: list[str] = Field(default_factory=list)
     risk_considerations: list[str] = Field(default_factory=list)
     graph_context_used: bool = False
+    # UX audit P1.3/P1.4: the one canonical answer to "why is/isn't this
+    # grounded" — see app.agents.verification.grounding_status. Computed
+    # from the exact same booleans `confidence_reasoning`'s prose already
+    # used, so the frontend's GroundingBanner never has to re-derive (and
+    # risk disagreeing with) the same classification from `graph_context_
+    # used` alone, which collapses "infra failure" and "genuinely nothing
+    # indexed" into one indistinguishable false state.
+    grounding_status: str = "not_indexed"
     repositories_consulted: list[str] = Field(default_factory=list)
     # The confirmed subset of `repositories_consulted` this work is actually
     # about — Context Discovery's explicit/selected repositories (see

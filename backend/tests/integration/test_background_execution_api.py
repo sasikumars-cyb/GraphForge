@@ -296,7 +296,9 @@ async def test_workflow_title_starts_as_placeholder_then_becomes_ai_generated(
 
     generation_started = asyncio.Event()
 
-    async def fake_generate_title(objective: str, *, model: str | None = None) -> str:
+    async def fake_generate_title(
+        objective: str, *, model: str | None = None, goal: str | None = None
+    ) -> str:
         generation_started.set()
         return "A Real AI-Generated Title"
 

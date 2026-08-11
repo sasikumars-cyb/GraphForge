@@ -46,15 +46,26 @@ def _service_call_evidence(execution: ExecutionResult) -> list[Evidence]:
 
 
 def _confidence_from_execution(execution: ExecutionResult) -> Confidence:
+    # UX audit P2.1: this reasoning is what a user reads to decide whether
+    # to trust the result — "1/1 Engineering Intelligence service call(s)
+    # succeeded" is an internal implementation detail (this mapper's own
+    # request-batching mechanism), not an answer to "why should I trust
+    # this?". The raw per-call counts/status still exist, in full, as
+    # Evidence (`_service_call_evidence` above) for anyone who wants the
+    # technical detail — this text stays in plain, domain language.
     total = len(execution.calls)
     if total == 0:
-        return Confidence(score=0.0, reasoning="No service calls were made.")
+        return Confidence(score=0.0, reasoning="No data could be retrieved for this analysis.")
     failed = len(execution.errors)
     succeeded = total - failed
     score = succeeded / total
-    reasoning = f"{succeeded}/{total} Engineering Intelligence service call(s) succeeded."
-    if failed:
-        reasoning += f" {failed} failed — see evidence for detail."
+    if failed == 0:
+        reasoning = "All data needed for this analysis was retrieved successfully."
+    else:
+        reasoning = (
+            f"{succeeded} of {total} data source(s) needed for this analysis were retrieved "
+            f"successfully; {failed} could not be reached — see Evidence for detail."
+        )
     return Confidence(score=score, reasoning=reasoning)
 
 
