@@ -143,7 +143,15 @@ export function ImpactAnalysisPage() {
                   />
                 </div>
                 {selectedNode && (
-                  <NodeDetailPanel node={selectedNode} onClose={() => setSelectedNode(null)} />
+                  <NodeDetailPanel
+                    node={selectedNode}
+                    graph={blastRadiusQuery.data.graph}
+                    onClose={() => setSelectedNode(null)}
+                    onSelectNode={(id) => {
+                      const next = blastRadiusQuery.data.graph.nodes.find((n) => n.id === id);
+                      if (next) setSelectedNode(next);
+                    }}
+                  />
                 )}
               </div>
               <ImpactedNodesTable

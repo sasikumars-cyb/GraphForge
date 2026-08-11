@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Layers, Search, X } from "lucide-react";
+import { Layers, MousePointerClick, Search, X } from "lucide-react";
 import { Card } from "../Card";
 import { EmptyState, SampleGraph } from "../EmptyState";
 import { DependencyGraph } from "../graph/DependencyGraph";
@@ -352,17 +352,52 @@ export function RepositoryGraphExplorer({
                 viewMode={mode.kind === "full" && groupByLayer ? "layer" : "repository"}
               />
             </div>
-            {selectedNode && (
+            {/* Always present, not just-when-selected: a panel that only
+                exists after a click reads as a popover, not a persistent
+                "here's what GraphForge knows about your selection" pane.
+                Its own empty state tells a first-time visitor what
+                clicking a node will surface, which the old "nothing here
+                until you click" silence didn't. */}
+            {selectedNode ? (
               <NodeDetailPanel
                 node={selectedNode}
+                graph={graph}
                 onClose={() => setSelectedNode(null)}
+                onSelectNode={(id) => {
+                  const next = graph.nodes.find((n) => n.id === id);
+                  if (next) setSelectedNode(next);
+                }}
                 onExploreNeighbors={() => void handleExploreNeighbors()}
                 isExploringNeighbors={isExploringNeighbors}
               />
+            ) : (
+              <NodeDetailEmptyState />
             )}
           </div>
         </div>
       )}
     </Card>
+  );
+}
+
+/** What the "selected entity" pane shows before anything is selected —
+ * hidden below `lg` rather than stacking full-width beneath the graph on
+ * narrower screens, where the graph itself needs the room more. */
+function NodeDetailEmptyState() {
+  return (
+    <aside
+      aria-hidden="true"
+      className="hidden w-[22rem] shrink-0 flex-col items-center justify-center gap-3 border-l border-line-muted bg-surface px-6 py-12 text-center lg:flex"
+    >
+      <div className="flex h-10 w-10 items-center justify-center rounded-full bg-accent-bg text-accent-fg">
+        <MousePointerClick className="h-5 w-5" aria-hidden="true" />
+      </div>
+      <div>
+        <p className="text-sm font-semibold text-fg-secondary">Select a component</p>
+        <p className="mt-1 max-w-[16rem] text-xs leading-relaxed text-fg-muted">
+          Click any node to see its dependencies, blast radius, and what depends on it.
+        </p>
+      </div>
+    </aside>
   );
 }

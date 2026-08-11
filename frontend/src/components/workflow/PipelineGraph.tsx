@@ -188,13 +188,13 @@ export function PipelineGraph({
             // a min-width would push the row back past its container and
             // recreate the original overflow bug. No legitimate content is
             // clipped at any real width (verified 320px-1536px).
-            "min-w-0 flex-1 gap-1 overflow-hidden rounded-lg px-1 py-2"
-          : "flex-1 gap-2 rounded-xl px-3 py-4";
+            "min-w-0 flex-1 gap-1.5 overflow-hidden rounded-lg px-1.5 py-2.5"
+          : "min-w-[76px] flex-1 gap-2 rounded-xl px-2 py-4 sm:px-3";
 
         return (
           <div
             key={stage.stage}
-            className={compact ? "flex min-w-0 flex-1 items-center" : "flex flex-1 items-stretch"}
+            className={compact ? "flex min-w-0 flex-1 items-center" : "flex min-w-0 flex-1 items-stretch"}
             role="listitem"
           >
             {idx > 0 && (
@@ -202,7 +202,7 @@ export function PipelineGraph({
                 className={
                   compact
                     ? "flex w-2 shrink-0 items-center"
-                    : "flex w-6 shrink-0 items-center sm:w-10"
+                    : "flex w-3 shrink-0 items-center sm:w-6 lg:w-10"
                 }
               >
                 <div
@@ -232,13 +232,17 @@ export function PipelineGraph({
                 aria-hidden="true"
               />
               {compact ? (
-                <p className={`w-full truncate text-[10px] font-medium ${config.subColor}`}>
+                <p className={`w-full truncate text-[11px] font-medium ${config.subColor}`}>
                   {stage.label}
                 </p>
               ) : (
-                <div>
-                  <p className="text-sm font-semibold text-fg">{stage.label}</p>
-                  <p className={`text-[11px] font-medium ${config.subColor}`}>{config.subLabel}</p>
+                <div className="w-full min-w-0">
+                  <p className="text-sm leading-tight font-semibold text-wrap text-fg">
+                    {stage.label}
+                  </p>
+                  <p className={`mt-0.5 text-[11px] font-medium ${config.subColor}`}>
+                    {config.subLabel}
+                  </p>
                 </div>
               )}
               {!compact && stage.status === "running" && (

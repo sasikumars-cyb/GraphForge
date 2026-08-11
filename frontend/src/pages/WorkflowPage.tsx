@@ -321,6 +321,21 @@ export function WorkflowPage() {
         />
       )}
 
+      {/* The investigation narrative — what GraphForge found, how sure it
+          is, what it recommends — leads the page. It used to render far
+          below the Pipeline mechanics (stage tiles, replay controls),
+          which put "here are six technical boxes" ahead of "here's what
+          was actually discovered." The stages still exist below; they
+          support the story now instead of opening it. */}
+      {(canContinue || phase === "awaiting_clarification") && discoveryResult && (
+        <ContextExplorerPanel
+          workflowId={workflow.workflow_id}
+          result={discoveryResult}
+          humanOverride={discoveryStep?.human_override ?? null}
+          onOverridden={() => loadWorkflow(false)}
+        />
+      )}
+
       <Card
         title="Pipeline"
         action={
@@ -341,11 +356,18 @@ export function WorkflowPage() {
           )
         }
       >
-        <PipelineGraph
-          stages={workflow.stages}
-          selectedRunId={selectedRunId}
-          onSelectStage={setSelectedRunId}
-        />
+        {/* Contained horizontal scroll as the floor, not the plan: min-w-0
+            + wrapping labels (see PipelineGraph) mean 6 stages fit without
+            it down to ~640px. Below that, this scrolls just the pipeline
+            row instead of the whole page picking up a horizontal
+            scrollbar that hides the sidebar nav off-screen. */}
+        <div className="-mx-1 overflow-x-auto px-1">
+          <PipelineGraph
+            stages={workflow.stages}
+            selectedRunId={selectedRunId}
+            onSelectStage={setSelectedRunId}
+          />
+        </div>
         {currentStageInfo?.status === "running" && currentStageInfo.live_progress && (
           <div className="mt-3">
             <LiveProgressChecklist progress={currentStageInfo.live_progress} />
@@ -481,18 +503,6 @@ export function WorkflowPage() {
           />
         )}
       </div>
-
-      {/* Supplementary evidence, not an action prompt — coexists with
-          whichever banner above is showing rather than competing with it,
-          so it stays outside the action zone. */}
-      {(canContinue || phase === "awaiting_clarification") && discoveryResult && (
-        <ContextExplorerPanel
-          workflowId={workflow.workflow_id}
-          result={discoveryResult}
-          humanOverride={discoveryStep?.human_override ?? null}
-          onOverridden={() => loadWorkflow(false)}
-        />
-      )}
 
       {stageTabs.length > 1 && (
         <div className="flex flex-wrap gap-2">

@@ -1,5 +1,5 @@
-import { Search } from "lucide-react";
-import { usePalette } from "../app/palette-context";
+import { GitBranch, Plus, Radar, Waypoints } from "lucide-react";
+import { Link } from "react-router-dom";
 import { NeedsAttentionPanel } from "../components/missionControl/NeedsAttentionPanel";
 import { ActiveMissionsPanel } from "../components/missionControl/ActiveMissionsPanel";
 import { AgentInsightsPanel } from "../components/missionControl/AgentInsightsPanel";
@@ -33,35 +33,86 @@ import { RecentActivityFeed } from "../components/missionControl/RecentActivityF
  * look populated; see each panel's own docstring for its exact source
  * and, where relevant, what the backend genuinely doesn't provide yet.
  */
-export function MissionControlPage() {
-  const { openPalette } = usePalette();
 
+// The primary action (start a new investigation) already gets the header's
+// own prominent CTA — repeating it here as an equal-weight tile would just
+// be the same action rendered twice. This row is for the other places a
+// command center should let you jump straight in.
+const QUICK_ACTIONS = [
+  {
+    to: "/architecture",
+    icon: Waypoints,
+    label: "Explore architecture",
+    hint: "Walk the dependency graph",
+  },
+  {
+    to: "/workspace/impact-analysis",
+    icon: Radar,
+    label: "Check impact",
+    hint: "Blast radius before you change something",
+  },
+  {
+    to: "/repositories",
+    icon: GitBranch,
+    label: "Repositories",
+    hint: "Indexing status across the org",
+  },
+] as const;
+
+export function MissionControlPage() {
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-8">
       {/* ── Header ──────────────────────────────────────────────── */}
+      {/* The page-level search box this used to render was a second,
+          visually distinct entry point to the exact same CommandPalette
+          the Topbar's "Jump to…" already opens — two search affordances on
+          one screen reads as indecision, not capability. This slot is more
+          useful spent on the one action a command center should always
+          surface: starting new work. */}
       <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
         <div>
-          <h1 className="font-display text-2xl font-bold tracking-tight text-fg">
+          <p className="text-xs font-semibold tracking-[0.14em] text-accent-fg uppercase">
+            Engineering intelligence
+          </p>
+          <h1 className="mt-1 font-display text-3xl font-bold tracking-tight text-fg">
             Mission Control
           </h1>
-          <p className="mt-1 text-sm text-fg-muted">
-            Your engineering intelligence command center
+          <p className="mt-1.5 text-sm text-fg-muted">
+            What GraphForge found, what it&apos;s doing, and what needs you.
           </p>
         </div>
-        {/* Not a second search implementation — this opens the same global
-            CommandPalette Topbar's "⌘K" button does (see PaletteContext).
-            AI interaction lives in AI Workspace, not here. */}
-        <button
-          type="button"
-          onClick={openPalette}
-          className="focus-ring flex items-center gap-2.5 rounded-lg border border-line bg-surface px-3.5 py-2.5 text-sm text-fg-muted shadow-xs transition-colors hover:bg-surface-hover hover:text-fg-secondary sm:w-72"
+        <Link
+          to="/workflows/new"
+          className="focus-ring flex items-center justify-center gap-2 rounded-lg bg-accent-solid px-4 py-2.5 text-sm font-semibold text-accent-on-solid shadow-sm transition-colors hover:brightness-110 sm:w-auto"
         >
-          <Search className="h-4 w-4 shrink-0" aria-hidden="true" />
-          <span className="flex-1 text-left">Search GraphForge…</span>
-          <kbd className="shrink-0 rounded border border-line px-1.5 py-0.5 text-[10px] text-fg-subtle">
-            ⌘K
-          </kbd>
-        </button>
+          <Plus className="h-4 w-4" aria-hidden="true" />
+          New workflow
+        </Link>
+      </div>
+
+      {/* ── Quick actions ──────────────────────────────────────────
+          Borderless by default — these are navigational shortcuts, not
+          content-bearing panels, so they sit at the "interactive
+          surface" tier (calm until touched) rather than competing with
+          the real data cards below for the same bordered-rectangle
+          visual weight. The border only appears on hover/focus, as the
+          affordance that it's clickable. */}
+      <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
+        {QUICK_ACTIONS.map((action) => (
+          <Link
+            key={action.to}
+            to={action.to}
+            className="focus-ring group flex items-center gap-3 rounded-xl border border-transparent px-4 py-3.5 transition-colors hover:border-line-muted hover:bg-surface-raised"
+          >
+            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-bg text-accent-fg transition-colors group-hover:bg-accent-solid group-hover:text-accent-on-solid">
+              <action.icon className="h-4.5 w-4.5" aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold whitespace-nowrap text-fg">{action.label}</p>
+              <p className="truncate text-xs text-fg-muted">{action.hint}</p>
+            </div>
+          </Link>
+        ))}
       </div>
 
       {/* ── Needs attention + Active missions — above the fold ──── */}
@@ -70,7 +121,13 @@ export function MissionControlPage() {
           height, leaving ~679px of empty space below its own (internally
           capped-and-scrollable) content. Each card should size to its own
           content instead of its sibling's. */}
-      <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
+      {/* Asymmetric, not a 50/50 split: Needs Attention is a compact list
+          that reads fine narrow, while Active Missions renders a 6-stage
+          pipeline tracker per mission that was getting crushed into
+          10px-label icons in an even half. Giving it the wider column is
+          what actually fixed the "cramped, truncated stage labels" problem
+          — a 50/50 split just relocated it. */}
+      <div className="grid grid-cols-1 items-start gap-6 xl:grid-cols-[minmax(320px,420px)_1fr]">
         <NeedsAttentionPanel />
         <ActiveMissionsPanel />
       </div>
@@ -79,7 +136,7 @@ export function MissionControlPage() {
       <AgentInsightsPanel />
 
       {/* ── Knowledge coverage + system health ──────────────────── */}
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
         <KnowledgeCoveragePanel />
         <SystemHealthSummary />
       </div>

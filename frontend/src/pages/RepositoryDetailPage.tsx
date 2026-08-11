@@ -242,7 +242,7 @@ export function RepositoryDetailPage() {
             disabled={
               isIndexing || indexingJob?.status === "pending" || indexingJob?.status === "running"
             }
-            className="rounded-md bg-info-solid px-3 py-1.5 text-sm font-medium text-info-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md bg-accent-solid px-3 py-1.5 text-sm font-medium text-accent-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isIndexing ? "Indexing…" : "Run indexing"}
           </button>

@@ -132,13 +132,24 @@
   --gf-info-solid: #0d97d6;
   --gf-info-on-solid: #0b0b0f;
 
-  --gf-accent-fg: #7e1bff;
-  --gf-accent-bg: #e4dcfa;
-  --gf-accent-line: #8425ff;
-  --gf-accent-solid: #8425ff;
+  /* GraphForge brand — "Iris": a blue-leaning indigo (~H241), deliberately
+     rotated away from the flat magenta-violet (~H265) this used to be.
+     That original hue sat exactly on the generic "AI product = purple"
+     cliché the redesign was asked to move away from; Iris reads as
+     engineering/trust-blue with just enough violet to still feel like
+     intelligence, not a SaaS-template sky blue. One hue, reused for every
+     "this is GraphForge" surface — buttons, active nav, selected graph
+     nodes, focus rings, and the AI Insight provenance tag — so the brand
+     is recognizable without a second look. Values re-solved against the
+     same WCAG targets as everything else here (see tokens.test.ts), not
+     hand-waved. */
+  --gf-accent-fg: #4338ca;
+  --gf-accent-bg: #e6e5fb;
+  --gf-accent-line: #4f46e5;
+  --gf-accent-solid: #4f46e5;
   --gf-accent-on-solid: #ffffff;
 
-  --gf-focus: #8425ff;
+  --gf-focus: #4338ca;
 
   /* Graph — light canvas steps. */
   --gf-graph-canvas: var(--gf-slate-900);
@@ -146,8 +157,8 @@
   --gf-graph-edge-label: #475569;
   --gf-graph-cluster: color-mix(in srgb, #64748b 6%, transparent);
   --gf-graph-cluster-line: #94a3b8;
-  --gf-graph-selected: #7e1bff;
-  --gf-graph-incoming: #0a7350;
+  --gf-graph-selected: #6366f1;
+  --gf-graph-incoming: #c07c08;
   --gf-graph-outgoing: #096e9c;
   /* Node border stroke width — 1px everywhere except High Contrast (see
      that theme block), which doubles it. That theme's own node fills are
@@ -234,21 +245,21 @@
   --gf-info-solid: #0ea5e9;
   --gf-info-on-solid: #0b0b0f;
 
-  --gf-accent-fg: #af72ff;
-  --gf-accent-bg: #1d1944;
-  --gf-accent-line: #8425ff;
-  --gf-accent-solid: #8425ff;
+  --gf-accent-fg: #a5aeff;
+  --gf-accent-bg: #201f52;
+  --gf-accent-line: #504bea;
+  --gf-accent-solid: #504bea;
   --gf-accent-on-solid: #ffffff;
 
-  --gf-focus: #af72ff;
+  --gf-focus: #a5aeff;
 
   --gf-graph-canvas: var(--gf-slate-900);
   --gf-graph-edge: #64748b;
   --gf-graph-edge-label: #94a3b8;
   --gf-graph-cluster: color-mix(in srgb, #94a3b8 5%, transparent);
   --gf-graph-cluster-line: #475569;
-  --gf-graph-selected: #af72ff;
-  --gf-graph-incoming: #10b981;
+  --gf-graph-selected: #a5aeff;
+  --gf-graph-incoming: #f59e0b;
   --gf-graph-outgoing: #0ea5e9;
 
   --gf-node-1-bg: #172b4c;
@@ -328,21 +339,21 @@
   --gf-info-solid: #0ea5e9;
   --gf-info-on-solid: #0b0b0f;
 
-  --gf-accent-fg: #a45dff;
-  --gf-accent-bg: #19113e;
-  --gf-accent-line: #9147ff;
-  --gf-accent-solid: #9147ff;
+  --gf-accent-fg: #aeb4ff;
+  --gf-accent-bg: #1c1a4d;
+  --gf-accent-line: #5a54e8;
+  --gf-accent-solid: #5a54e8;
   --gf-accent-on-solid: #ffffff;
 
-  --gf-focus: #a45dff;
+  --gf-focus: #aeb4ff;
 
   --gf-graph-canvas: var(--gf-slate-900);
   --gf-graph-edge: #5a658b;
   --gf-graph-edge-label: #7c85ab;
   --gf-graph-cluster: color-mix(in srgb, #7c85ab 5%, transparent);
   --gf-graph-cluster-line: #333b5c;
-  --gf-graph-selected: #a45dff;
-  --gf-graph-incoming: #10b981;
+  --gf-graph-selected: #aeb4ff;
+  --gf-graph-incoming: #f59e0b;
   --gf-graph-outgoing: #0ea5e9;
 
   --gf-node-1-bg: #122447;
@@ -422,21 +433,21 @@
   --gf-info-solid: #0ea5e9;
   --gf-info-on-solid: #0b0b0f;
 
-  --gf-accent-fg: #a967ff;
-  --gf-accent-bg: #1b1840;
-  --gf-accent-line: #1c86ff;
-  --gf-accent-solid: #1c86ff;
-  --gf-accent-on-solid: #06162c;
+  --gf-accent-fg: #93a8ff;
+  --gf-accent-bg: #182350;
+  --gf-accent-line: #3f5eef;
+  --gf-accent-solid: #3f5eef;
+  --gf-accent-on-solid: #ffffff;
 
-  --gf-focus: #4da8ff;
+  --gf-focus: #93a8ff;
 
   --gf-graph-canvas: var(--gf-slate-900);
   --gf-graph-edge: #526a90;
   --gf-graph-edge-label: #6f88ab;
   --gf-graph-cluster: color-mix(in srgb, #6f88ab 5%, transparent);
   --gf-graph-cluster-line: #374b68;
-  --gf-graph-selected: #4da8ff;
-  --gf-graph-incoming: #10b981;
+  --gf-graph-selected: #93a8ff;
+  --gf-graph-incoming: #f59e0b;
   --gf-graph-outgoing: #0ea5e9;
 
   --gf-node-1-bg: #152a48;
@@ -516,21 +527,21 @@
   --gf-info-solid: #0d9edf;
   --gf-info-on-solid: #0b0b0f;
 
-  --gf-accent-fg: #5700c8;
-  --gf-accent-bg: #e7dcf6;
-  --gf-accent-line: #8425ff;
-  --gf-accent-solid: #7a00e6;
+  --gf-accent-fg: #2e22c0;
+  --gf-accent-bg: #e4e2fb;
+  --gf-accent-line: #4f46e5;
+  --gf-accent-solid: #372ec2;
   --gf-accent-on-solid: #ffffff;
 
-  --gf-focus: #5700c8;
+  --gf-focus: #2e22c0;
 
   --gf-graph-canvas: var(--gf-slate-900);
   --gf-graph-edge: #454545;
   --gf-graph-edge-label: #1a1a1a;
   --gf-graph-cluster: color-mix(in srgb, #000000 4%, transparent);
   --gf-graph-cluster-line: #717171;
-  --gf-graph-selected: #5700c8;
-  --gf-graph-incoming: #075239;
+  --gf-graph-selected: #6a63ff;
+  --gf-graph-incoming: #996206;
   --gf-graph-outgoing: #075071;
   --gf-node-border-width: 2px;
 

@@ -1,10 +1,10 @@
 import { Link } from "react-router-dom";
-import { RefreshCw } from "lucide-react";
+import { AlertTriangle, ChevronDown, RefreshCw, TrendingDown, TrendingUp } from "lucide-react";
 import { Card } from "../components/Card";
 import { EmptyState, SampleChart } from "../components/EmptyState";
-import { StatCard } from "../components/StatCard";
 import { StatusBadge, type StatusTone } from "../components/StatusBadge";
 import { Table, type TableColumn } from "../components/Table";
+import { ProvenanceTag } from "../components/intelligence/ProvenanceTag";
 import {
   BarChart,
   HorizontalBarChart,
@@ -13,6 +13,7 @@ import {
 } from "../components/charts/SimpleCharts";
 import { useReportsData } from "../hooks/useReportsData";
 import { formatCount, formatLabel, formatUsd, shortenIsoDate } from "../lib/formatMetrics";
+import { computeMetricsSignals, type MetricsSignal } from "../lib/metricsSignals";
 import type {
   MetricsReportResponse,
   MetricsScope,
@@ -30,9 +31,19 @@ const WORKFLOW_STATUS_TONE: Record<string, StatusTone> = {
   failed: "danger",
 };
 
-/** Live activity dashboard — workflows, AI cost/tokens, and indexed
- * architecture. Separate from ReportsPage, which is the PR-review evidence
- * packet feature. */
+/** Operational intelligence for GraphForge itself — what's happening,
+ * where effort is going, where problems occur, and what actually deserves
+ * attention, in that order. Redesigned from a flat "eight stat tiles plus
+ * six independent chart cards" layout (no hierarchy — a completion rate
+ * and a token count read as equally important) into the same executive
+ * summary → trends → efficiency → health → detail structure a Delivery
+ * Manager actually scans a report in.
+ *
+ * Every number is still read straight from `MetricsReportResponse` —
+ * nothing is fabricated. The one new thing is `computeMetricsSignals`:
+ * plain arithmetic over that same data (failure rate by stage, cost
+ * share by stage, a two-half cost trend), tagged `derived` via
+ * `ProvenanceTag` rather than presented as an AI judgment it isn't. */
 export function MetricsPage() {
   const { report, scope, setScope, isLoading, error, refresh } = useReportsData();
 
@@ -40,9 +51,12 @@ export function MetricsPage() {
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold text-fg">Metrics</h1>
+          <p className="text-xs font-semibold tracking-[0.14em] text-accent-fg uppercase">
+            Operational intelligence
+          </p>
+          <h1 className="mt-1 font-display text-2xl font-bold tracking-tight text-fg">Metrics</h1>
           <p className="mt-1 text-sm text-fg-muted">
-            Live activity metrics — workflows, AI cost/tokens, and indexed architecture.
+            What GraphForge is doing, where effort is going, and what deserves attention.
           </p>
         </div>
         <div className="flex items-center gap-3">
@@ -51,7 +65,7 @@ export function MetricsPage() {
             type="button"
             onClick={refresh}
             disabled={isLoading}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-line-muted bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
+            className="focus-ring inline-flex items-center gap-1.5 rounded-lg border border-line-muted bg-surface px-3 py-1.5 text-xs font-medium text-fg-secondary transition-colors hover:bg-surface-hover disabled:opacity-50"
           >
             <RefreshCw
               className={`h-3.5 w-3.5 ${isLoading ? "animate-spin" : ""}`}
@@ -70,8 +84,9 @@ export function MetricsPage() {
 
       {!report && isLoading && (
         <div className="flex flex-col gap-4" aria-busy="true" aria-label="Loading metrics">
-          <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-            {[0, 1, 2, 3, 4, 5, 6, 7].map((i) => (
+          <div className="h-20 animate-pulse rounded-xl bg-surface" />
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
               <div key={i} className="h-24 animate-pulse rounded-xl bg-surface" />
             ))}
           </div>
@@ -98,18 +113,31 @@ export function MetricsPage() {
 
       {report && !(report.overview.total_workflows === 0 && report.overview.total_llm_calls === 0) && (
         <>
-          <p className="text-xs text-fg-muted">
+          <p className="text-xs text-fg-subtle">
             Generated {new Date(report.generated_at).toLocaleString()} · last {report.window_days}{" "}
             days · scope: {report.scope}
           </p>
 
-          <OverviewSection report={report} />
+          {/* ── Executive summary — the handful of numbers that matter,
+              not every number collected. Indexed-repository/node/edge
+              counts (this page used to lead with all three) live on
+              Architecture now, which already tells that story better. ── */}
+          <ExecutiveSummary report={report} />
 
-          <Card title="AI Cost & Token Analysis">
-            <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
+          {/* ── What deserves attention — computed, not collected.
+              Same "count chip + ranked list" vocabulary as Mission
+              Control's and Architecture's own Needs Attention sections,
+              so this reads as the same product concept in a third
+              place. ─────────────────────────────────────────────────── */}
+          <SignalsSection report={report} />
+
+          {/* ── Trends — what's changing over the window. ──────────── */}
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold text-fg">Trends</h2>
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <div>
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-fg-muted">
-                  Cost over time
+                <h3 className="mb-3 text-xs font-semibold tracking-wide text-fg-muted uppercase">
+                  AI cost per day
                 </h3>
                 <BarChart
                   data={report.cost_by_day.map((d) => ({ label: d.day, value: d.cost_usd }))}
@@ -119,8 +147,8 @@ export function MetricsPage() {
                 />
               </div>
               <div>
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-fg-muted">
-                  Tokens over time
+                <h3 className="mb-3 text-xs font-semibold tracking-wide text-fg-muted uppercase">
+                  Tokens per day
                 </h3>
                 <LineChart
                   data={report.cost_by_day.map((d) => ({ label: d.day, value: d.tokens }))}
@@ -129,21 +157,15 @@ export function MetricsPage() {
                   label="Tokens per day"
                 />
               </div>
+            </div>
+          </section>
+
+          {/* ── Investigation efficiency — where cost/effort goes. ──── */}
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold text-fg">Where effort is going</h2>
+            <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
               <div>
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-fg-muted">
-                  Cost by provider
-                </h3>
-                <HorizontalBarChart
-                  data={report.cost_by_provider.map((p) => ({
-                    label: p.provider,
-                    value: p.cost_usd,
-                  }))}
-                  valueFormatter={formatUsd}
-                  label="Cost by provider"
-                />
-              </div>
-              <div>
-                <h3 className="mb-3 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+                <h3 className="mb-3 text-xs font-semibold tracking-wide text-fg-muted uppercase">
                   Cost by stage
                 </h3>
                 <HorizontalBarChart
@@ -155,45 +177,69 @@ export function MetricsPage() {
                   label="Cost by stage"
                 />
               </div>
+              <div>
+                <h3 className="mb-3 text-xs font-semibold tracking-wide text-fg-muted uppercase">
+                  Cost by provider
+                </h3>
+                <HorizontalBarChart
+                  data={report.cost_by_provider.map((p) => ({
+                    label: p.provider,
+                    value: p.cost_usd,
+                  }))}
+                  valueFormatter={formatUsd}
+                  label="Cost by provider"
+                />
+              </div>
             </div>
-          </Card>
+            <Card title="Model usage">
+              <ModelUsageTable rows={report.model_usage} />
+            </Card>
+          </section>
 
-          <Card title="Model Usage">
-            <ModelUsageTable rows={report.model_usage} />
-          </Card>
+          {/* ── Workflow health — where failures happen. ────────────── */}
+          <section className="flex flex-col gap-3">
+            <h2 className="text-sm font-semibold text-fg">Workflow health</h2>
+            <Card description="Each bar is scaled to its own stage's total, so rates are comparable; the run count is shown alongside.">
+              <StackedBarChart
+                data={report.run_success_by_stage.map((r) => ({
+                  label: formatLabel(r.stage),
+                  succeeded: r.succeeded,
+                  failed: r.failed,
+                }))}
+                label="Run success rate by stage"
+              />
+            </Card>
+          </section>
 
-          <Card title="Repository Graph" description="Components per indexed repository">
-            {/* No `labelFormatter` — these labels are repository names, not
-                dates. The axis used to trim five characters off every label
-                unconditionally, which silently mangled them here. */}
-            <BarChart
-              data={report.repository_components.map((r) => ({
-                label: r.name,
-                value: r.components,
-              }))}
-              valueFormatter={formatCount}
-              color="var(--gf-info-fg, #3b82f6)"
-              label="Components per indexed repository"
-            />
-          </Card>
-
-          <Card
-            title="Run Success Rate by Stage"
-            description="Each bar is scaled to its own stage's total, so rates are comparable; the run count is shown alongside."
-          >
-            <StackedBarChart
-              data={report.run_success_by_stage.map((r) => ({
-                label: formatLabel(r.stage),
-                succeeded: r.succeeded,
-                failed: r.failed,
-              }))}
-              label="Run success rate by stage"
-            />
-          </Card>
-
-          <Card title="Recent Workflows">
-            <RecentWorkflowsTable rows={report.recent_workflows} />
-          </Card>
+          {/* ── Detailed analytics — progressive disclosure, not deleted.
+              Recent Workflows and the repository component chart are
+              real, useful data; they're just not the story most visits
+              to this page are here for. ─────────────────────────────── */}
+          <details className="group rounded-xl border border-line-muted">
+            <summary className="focus-ring flex cursor-pointer list-none items-center justify-between gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-fg-secondary hover:bg-surface-raised">
+              <span>Detailed analytics</span>
+              <ChevronDown
+                className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180"
+                aria-hidden="true"
+              />
+            </summary>
+            <div className="flex flex-col gap-6 px-4 pb-4">
+              <Card title="Recent workflows">
+                <RecentWorkflowsTable rows={report.recent_workflows} />
+              </Card>
+              <Card title="Repository graph" description="Components per indexed repository">
+                <BarChart
+                  data={report.repository_components.map((r) => ({
+                    label: r.name,
+                    value: r.components,
+                  }))}
+                  valueFormatter={formatCount}
+                  color="var(--gf-info-fg, #096e9c)"
+                  label="Components per indexed repository"
+                />
+              </Card>
+            </div>
+          </details>
         </>
       )}
     </div>
@@ -225,7 +271,11 @@ function ScopeToggle({
   );
 }
 
-function OverviewSection({ report }: { report: MetricsReportResponse }) {
+/** Four numbers, not eight — the ones a Delivery Manager actually opens
+ * this page to check. No card border per tile (see the redesign's own
+ * "don't over-card" rule): one shared surface, dividers between values
+ * rather than four separate rounded rectangles. */
+function ExecutiveSummary({ report }: { report: MetricsReportResponse }) {
   const { overview } = report;
   const completionRate = overview.total_workflows
     ? Math.round((overview.completed_workflows / overview.total_workflows) * 100)
@@ -233,50 +283,114 @@ function OverviewSection({ report }: { report: MetricsReportResponse }) {
   const avgCostPerWorkflow = overview.total_workflows
     ? overview.total_cost_usd / overview.total_workflows
     : 0;
-  const avgTokensPerCall = overview.total_llm_calls
-    ? Math.round(overview.total_tokens / overview.total_llm_calls)
-    : 0;
 
   return (
-    <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
-      <StatCard
+    <div className="grid grid-cols-2 gap-x-6 gap-y-5 rounded-xl border border-line-muted bg-surface p-5 sm:grid-cols-4">
+      <SummaryStat
         label="Workflows"
         value={formatCount(overview.total_workflows)}
-        hint={`${overview.completed_workflows} completed · ${completionRate}% rate`}
+        hint={`${completionRate}% completed`}
       />
-      <Link to="/runs" className="block transition-opacity hover:opacity-80">
-        <StatCard
-          label="Agent Runs"
-          value={formatCount(overview.completed_runs)}
-          hint="Completed runs"
-        />
-      </Link>
-      <StatCard
-        label="Indexed Repositories"
-        value={formatCount(overview.indexed_repositories)}
-        hint={`${formatCount(overview.total_graph_nodes)} nodes · ${formatCount(overview.total_graph_edges)} edges`}
+      <SummaryStat
+        label="AI cost"
+        value={formatUsd(overview.total_cost_usd)}
+        hint={`${formatUsd(avgCostPerWorkflow)} / workflow`}
       />
-      <StatCard
-        label="LLM Calls"
+      <SummaryStat
+        label="LLM calls"
         value={formatCount(overview.total_llm_calls)}
         hint={`avg ${formatCount(overview.avg_latency_ms)}ms latency`}
       />
-      <StatCard label="Total AI Cost" value={formatUsd(overview.total_cost_usd)} hint="USD" />
-      <StatCard
-        label="Total Tokens"
-        value={formatCount(overview.total_tokens)}
-        hint="prompt + completion"
+      <Link to="/runs" className="transition-opacity hover:opacity-80">
+        <SummaryStat label="Agent runs" value={formatCount(overview.completed_runs)} hint="completed" />
+      </Link>
+    </div>
+  );
+}
+
+function SummaryStat({ label, value, hint }: { label: string; value: string; hint: string }) {
+  return (
+    <div>
+      <p className="font-display text-2xl font-semibold tabular-nums text-fg">{value}</p>
+      <p className="mt-0.5 text-xs font-medium text-fg-secondary">{label}</p>
+      <p className="text-[11px] text-fg-muted">{hint}</p>
+    </div>
+  );
+}
+
+function SignalsSection({ report }: { report: MetricsReportResponse }) {
+  const signals = computeMetricsSignals(report);
+  if (signals.length === 0) return null;
+
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="flex items-center gap-2 text-sm font-semibold text-fg">
+        <span
+          aria-hidden="true"
+          className="flex h-5 w-5 items-center justify-center rounded-full bg-warning-solid text-[11px] font-bold text-warning-on-solid"
+        >
+          {signals.length}
+        </span>
+        What deserves attention
+      </h2>
+      <div className="divide-y divide-line-muted rounded-xl border border-warning-line/30 bg-warning-bg/40">
+        {signals.map((signal) => (
+          <SignalRow key={signal.kind} signal={signal} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function SignalRow({ signal }: { signal: MetricsSignal }) {
+  if (signal.kind === "stage_failure") {
+    return (
+      <div className="flex items-center gap-3 px-4 py-3">
+        <AlertTriangle className="h-4 w-4 shrink-0 text-danger-fg" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-fg">
+            {formatLabel(signal.stage)} is failing {Math.round(signal.failureRate * 100)}% of runs
+          </p>
+          <p className="text-xs text-fg-muted">
+            {signal.failed} of {signal.total} runs failed in this window
+          </p>
+        </div>
+        <ProvenanceTag kind="derived" />
+      </div>
+    );
+  }
+  if (signal.kind === "stage_cost") {
+    return (
+      <div className="flex items-center gap-3 px-4 py-3">
+        <AlertTriangle className="h-4 w-4 shrink-0 text-warning-fg" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-fg">
+            {formatLabel(signal.stage)} accounts for {Math.round(signal.shareOfTotal * 100)}% of AI
+            spend
+          </p>
+          <p className="text-xs text-fg-muted">{formatUsd(signal.costUsd)} in this window</p>
+        </div>
+        <ProvenanceTag kind="derived" />
+      </div>
+    );
+  }
+  const Icon = signal.direction === "up" ? TrendingUp : TrendingDown;
+  return (
+    <div className="flex items-center gap-3 px-4 py-3">
+      <Icon
+        className={`h-4 w-4 shrink-0 ${signal.direction === "up" ? "text-warning-fg" : "text-success-fg"}`}
+        aria-hidden="true"
       />
-      <StatCard
-        label="Avg Cost / Workflow"
-        value={formatUsd(avgCostPerWorkflow)}
-        hint="USD per workflow"
-      />
-      <StatCard
-        label="Avg Tokens / Call"
-        value={formatCount(avgTokensPerCall)}
-        hint="tokens per LLM call"
-      />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-fg">
+          AI cost is {signal.direction === "up" ? "up" : "down"} {Math.round(signal.changeFraction * 100)}%
+          vs. the earlier half of this window
+        </p>
+        <p className="text-xs text-fg-muted">
+          {formatUsd(signal.priorCostUsd)} → {formatUsd(signal.recentCostUsd)}
+        </p>
+      </div>
+      <ProvenanceTag kind="derived" />
     </div>
   );
 }

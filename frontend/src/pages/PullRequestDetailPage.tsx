@@ -516,7 +516,7 @@ export function PullRequestDetailPage() {
             type="button"
             onClick={() => void handleRunDeterministic()}
             disabled={isRunningDeterministic}
-            className="rounded-md bg-info-solid px-3 py-1.5 text-sm font-medium text-info-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            className="rounded-md bg-accent-solid px-3 py-1.5 text-sm font-medium text-accent-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {isRunningDeterministic
               ? "Running…"
@@ -542,7 +542,7 @@ export function PullRequestDetailPage() {
               type="button"
               onClick={() => void handleRunAi()}
               disabled={isRunningAi || isInvestigating}
-              className="rounded-md bg-info-solid px-3 py-1.5 text-sm font-medium text-info-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+              className="rounded-md bg-accent-solid px-3 py-1.5 text-sm font-medium text-accent-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {isRunningAi ? "Running…" : aiAnalysis ? "Re-run AI analysis" : "Run AI analysis"}
             </button>

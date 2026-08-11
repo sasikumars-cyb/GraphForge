@@ -41,7 +41,7 @@ export function ConfidenceJourneyCard({ confidence }: { confidence: ConfidenceSe
         <div className="mt-4">
           <LineChart
             data={chartData}
-            color={droppedStage ? "var(--gf-danger-fg, #f43f5e)" : "var(--gf-info-fg, #6366f1)"}
+            color={droppedStage ? "var(--gf-danger-fg, #f43f5e)" : "var(--gf-info-fg, #096e9c)"}
             valueFormatter={(v) => `${Math.round(v)}%`}
             height={140}
             label="Confidence by stage"

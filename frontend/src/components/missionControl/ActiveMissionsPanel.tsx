@@ -75,10 +75,10 @@ export function ActiveMissionsPanel() {
               key={workflow.workflow_id}
               className="rounded-xl border border-line-muted bg-surface p-4"
             >
-              <div className="mb-3 flex items-center justify-between gap-3">
+              <div className="mb-3.5 flex items-start justify-between gap-3">
                 <Link
                   to={`/workflows/${workflow.workflow_id}`}
-                  className="truncate text-sm font-medium text-fg hover:text-accent-fg hover:underline"
+                  className="text-sm font-medium text-fg hover:text-accent-fg hover:underline"
                 >
                   {workflow.title}
                 </Link>

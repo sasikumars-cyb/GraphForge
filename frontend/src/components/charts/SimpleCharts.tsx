@@ -84,10 +84,16 @@ interface BarChartProps {
   label?: string;
 }
 
-/** Vertical bar chart — cost/tokens per day, components per repository. */
+/** Vertical bar chart — cost/tokens per day, components per repository.
+ * Defaults to the Iris brand accent: the single most common caller of
+ * this default is Metrics' own headline "AI cost per day" series — the
+ * one chart on the page that most deserves to read as "this is
+ * GraphForge's own signal," not a generic info-blue bar. Callers with a
+ * more specific semantic (a danger-toned failure count, an explicit
+ * per-repository categorical color) still pass their own `color`. */
 export function BarChart({
   data,
-  color = "var(--gf-info-fg, #6366f1)",
+  color = "var(--gf-accent-fg, #4338ca)",
   valueFormatter,
   height = 220,
   labelFormatter = identityLabel,
@@ -145,10 +151,15 @@ interface LineChartProps {
   label?: string;
 }
 
-/** Simple line/area chart — tokens over time. */
+/** Simple line/area chart — tokens over time. Defaults to the analytical
+ * "derived" tone (the same cool cyan-blue `ProvenanceTag kind="derived"`
+ * uses) rather than success-green — a raw token count isn't a pass/fail
+ * signal, and borrowing the green success color implied one that isn't
+ * there. Explicit `color` overrides still win (e.g. ConfidenceJourneyCard
+ * switches to danger-toned when confidence actually drops). */
 export function LineChart({
   data,
-  color = "var(--gf-success-fg, #22c55e)",
+  color = "var(--gf-info-fg, #096e9c)",
   valueFormatter,
   height = 220,
   labelFormatter = identityLabel,
@@ -227,7 +238,7 @@ interface HorizontalBarChartProps {
 export function HorizontalBarChart({
   data,
   valueFormatter,
-  defaultColor = "var(--gf-info-fg, #6366f1)",
+  defaultColor = "var(--gf-info-fg, #096e9c)",
   label = "Horizontal bar chart",
 }: HorizontalBarChartProps) {
   if (data.length === 0) {

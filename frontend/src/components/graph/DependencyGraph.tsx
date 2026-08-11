@@ -22,12 +22,22 @@ const NODE_HEIGHT = 56;
 // Node-focused highlighting palette (DependencyGraph only). These are the
 // *relationship* colours — deliberately drawn from the semantic roles rather
 // than the categorical node slots, so a highlight can never be confused with
-// a node type. The selection colour used to be a hardcoded `#facc15` gold,
-// which sat at ~1.9:1 on the light canvas and clashed with the amber warning
-// tone; it is now the theme's accent.
+// a node type.
+//
+// SELECTED is the Iris brand accent — "this is what you picked", the same
+// hue as every other GraphForge selected/active/primary state in the app.
+//
+// INCOMING and OUTGOING are deliberately *not* a neutral "two directions,
+// two colours" pair. `incoming` (an edge whose target is the selected node)
+// means the *other* node depends on the one you selected — exactly
+// NodeDetailPanel's "Depended on by: what breaks if this changes" — so it
+// gets the warning tone: this is the blast-radius direction, the one worth
+// a second look. `outgoing` (the selected node's own dependencies — "what
+// this needs to work") stays the calmer analytical/info tone: necessary
+// context, not a risk signal.
 const SELECTED_COLOR = "var(--gf-graph-selected)";
-const INCOMING_COLOR = "var(--gf-graph-incoming)";
-const OUTGOING_COLOR = "var(--gf-graph-outgoing)";
+const INCOMING_COLOR = "var(--gf-graph-incoming)"; // dependents — risk/attention (warning)
+const OUTGOING_COLOR = "var(--gf-graph-outgoing)"; // dependencies — informational (info)
 // Dimming for nodes outside the selection. 0.15 pushed unrelated nodes below
 // the point where their labels could be read at all; the highlight ring and
 // z-order already carry the emphasis, so the dim only needs to recede.

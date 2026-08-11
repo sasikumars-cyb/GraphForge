@@ -11,7 +11,15 @@ import { getLatestIndexingJob, triggerIndexing } from "../lib/api/repositories";
 import { repositoryHealthPresentation } from "../lib/statusPresentation";
 import { formatRelativeTime } from "../lib/formatDate";
 import type { IndexingJob } from "../types/graph";
-import { FolderGit2, GitPullRequest, LayoutDashboard, Clock } from "lucide-react";
+import {
+  AlertTriangle,
+  CheckCircle2,
+  ChevronDown,
+  Clock,
+  FolderGit2,
+  GitPullRequest,
+  LayoutDashboard,
+} from "lucide-react";
 
 type IndexingFilter = "all" | "indexed" | "not_indexed" | "failed";
 
@@ -292,6 +300,26 @@ export function RepositoriesPage() {
         </div>
       )}
 
+      {/* ── Repository intelligence — "why should I care", not "here's
+          a database row". Cards lead; the sortable/filterable/bulk-index
+          table (unchanged below, in its own disclosure) is the
+          operational tool for managing indexing across many repos at
+          once — a different job than "which repositories need my
+          attention right now", so it stays a click away rather than
+          competing for the same space. ──────────────────────────────── */}
+      {!isLoading && repositories.length > 0 && (
+        <RepositoryIntelligenceGrid repositories={repositories} jobsByRepoId={jobsByRepoId} />
+      )}
+
+      <details className="group rounded-xl border border-line-muted open:bg-surface/40">
+        <summary className="focus-ring flex cursor-pointer list-none items-center justify-between gap-2 rounded-xl px-4 py-3 text-sm font-semibold text-fg-secondary hover:bg-surface-raised">
+          <span>Manage &amp; bulk index</span>
+          <ChevronDown
+            className="h-4 w-4 shrink-0 text-fg-muted transition-transform group-open:rotate-180"
+            aria-hidden="true"
+          />
+        </summary>
+        <div className="px-4 pb-4">
       <Card>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-2">
@@ -365,6 +393,88 @@ export function RepositoriesPage() {
           }
         />
       </Card>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+/** Health/indexing/activity, in one glance per repository — the "why
+ * should I care" read the plain table couldn't give without opening every
+ * row. Every field is real: `health` is computed upstream from actual PR
+ * risk data (see useDashboardData), `openPullRequests` and `source` are
+ * as-tracked, and indexing status/last-indexed come from the same
+ * `jobsByRepoId` query the operational table below already fetches — no
+ * second request, no invented signal. */
+function RepositoryIntelligenceGrid({
+  repositories,
+  jobsByRepoId,
+}: {
+  repositories: DashboardRepositoryRow[];
+  jobsByRepoId: Record<string, IndexingJob | null | undefined>;
+}) {
+  // Attention-worthy first (health critical/attention), then everything
+  // else in the order the API returned it — not re-sorted beyond that, so
+  // this doesn't silently reorder relative to what "Manage & bulk index"
+  // shows below.
+  const ordered = [...repositories].sort((a, b) => {
+    const rank = { critical: 0, attention: 1, healthy: 2 } as const;
+    return rank[a.health] - rank[b.health];
+  });
+
+  return (
+    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      {ordered.map((repo) => {
+        const { label: healthLabel, tone: healthTone } = repositoryHealthPresentation(repo.health);
+        const job = jobsByRepoId[repo.id];
+        const indexed = job?.status === "completed";
+        const indexFailed = job?.status === "failed";
+        return (
+          <Link
+            key={repo.id}
+            to={`/repositories/${repo.id}`}
+            className="focus-ring flex flex-col gap-3 rounded-xl border border-line-muted bg-surface p-4 transition-colors hover:border-line-strong hover:bg-surface-hover"
+          >
+            <div className="flex items-start justify-between gap-2">
+              {/* `name` not `fullName`: every card in a single-org
+                  dataset repeated an identical "org/" prefix, truncating
+                  the one part of the name that actually varies — the
+                  full name is still one hover/click away on the detail
+                  page. */}
+              <p className="min-w-0 truncate text-sm font-semibold text-fg" title={repo.fullName}>
+                {repo.name}
+              </p>
+              <StatusBadge label={healthLabel} tone={healthTone} />
+            </div>
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-fg-muted">
+              <span className="flex items-center gap-1.5">
+                <GitPullRequest className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                {repo.openPullRequests} open PR{repo.openPullRequests === 1 ? "" : "s"}
+              </span>
+              <span className="flex items-center gap-1.5">
+                <FolderGit2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                {repo.source === "local" ? "Local" : "GitHub"}
+              </span>
+            </div>
+            <div className="mt-auto flex items-center gap-1.5 border-t border-line-muted pt-2.5 text-xs">
+              {indexFailed ? (
+                <span className="flex items-center gap-1 font-medium text-danger-fg">
+                  <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  Index failed
+                </span>
+              ) : indexed ? (
+                <span className="flex items-center gap-1 text-fg-muted">
+                  <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success-fg" aria-hidden="true" />
+                  Indexed
+                  {job?.finished_at && ` · ${formatRelativeTime(job.finished_at)}`}
+                </span>
+              ) : (
+                <span className="text-fg-subtle">Not indexed yet</span>
+              )}
+            </div>
+          </Link>
+        );
+      })}
     </div>
   );
 }
