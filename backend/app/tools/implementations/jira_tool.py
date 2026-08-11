@@ -154,20 +154,31 @@ class JiraTool:
                 error="No Jira issue key found in the query.",
             )
 
-        if self._uses_mcp:
-            result = await self._execute_via_mcp(issue_key)
-            # A known MCP endpoint may be auto-wired from the same
-            # credential as REST (see app.tools.setup) rather than actually
-            # verified compatible - e.g. Atlassian's hosted server needs
-            # OAuth, which _execute_via_mcp's bearer-token auth cannot
-            # satisfy. Rather than surface that failure, fall back to REST
-            # when it's available so an auto-wired MCP attempt can never
-            # regress an otherwise-working connection.
-            if result.success or not self._uses_rest:
+        # REST first when this connection is actually configured for REST —
+        # it's the transport the Knowledge Connection genuinely owns and
+        # was health-checked against (see JiraTool.health_check), not a
+        # guess. An MCP endpoint reachable from this same config is often
+        # auto-wired from the REST credential itself (see app.tools.setup's
+        # REST->MCP auto-wire) rather than a connection anyone actually
+        # verified against that server: it may need OAuth _execute_via_mcp's
+        # bearer-token auth cannot satisfy, or expose its "get one issue"
+        # tool under a different name than this class's own default
+        # (`jira_mcp_tool_name`) guesses — confirmed live: Atlassian's own
+        # hosted MCP server accepted the auto-wired token and negotiated a
+        # session fine, then rejected the call with "Tool getJiraIssue not
+        # found", a deterministic failure on every single call, not a
+        # transient one. Trying REST first avoids paying for that guaranteed
+        # round-trip on every fetch when REST alone already satisfies this
+        # tool's one capability (fetch one issue by key); MCP remains the
+        # fallback for a REST-less or currently-down REST connection, and
+        # the primary path for a connection genuinely configured MCP-only.
+        if self._uses_rest:
+            result = await self._execute_via_rest(issue_key)
+            if result.success or not self._uses_mcp:
                 return result
-            logger.info("jira_tool_mcp_fallback_to_rest key=%s", issue_key)
-            return await self._execute_via_rest(issue_key)
-        return await self._execute_via_rest(issue_key)
+            logger.info("jira_tool_rest_fallback_to_mcp key=%s", issue_key)
+            return await self._execute_via_mcp(issue_key)
+        return await self._execute_via_mcp(issue_key)
 
     async def _execute_via_mcp(self, issue_key: str) -> ToolResult:
         try:

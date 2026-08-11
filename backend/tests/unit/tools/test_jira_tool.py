@@ -206,6 +206,107 @@ async def test_execute_via_rest_and_mcp_return_same_shape():
     assert set(rest_result.data.keys()) == set(mcp_result.data.keys())
 
 
+@pytest.mark.asyncio
+async def test_execute_prefers_rest_over_mcp_when_both_configured():
+    """REST is the transport this connection actually owns (health-checked,
+    not guessed) — see execute()'s own docstring for why an MCP endpoint
+    reachable from the same config may still be a REST->MCP auto-wire
+    whose tool name/auth were never verified. When both are configured,
+    REST must run first and MCP must not be called at all if REST
+    succeeds."""
+    tool = JiraTool(
+        {
+            "jira_base_url": "https://example.atlassian.net",
+            "jira_email": "a@b.com",
+            "jira_api_token": "token",
+            "jira_mcp_server_url": "https://example.com/mcp",
+            "jira_mcp_api_key": "secret",
+        }
+    )
+
+    class FakeResponse:
+        status_code = 200
+        headers = {"content-type": "application/json"}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "fields": {
+                    "summary": "S",
+                    "description": None,
+                    "status": {"name": "To Do"},
+                    "issuetype": {"name": "Story"},
+                    "priority": {"name": "Medium"},
+                    "labels": [],
+                }
+            }
+
+    with (
+        patch("httpx.AsyncClient.get", new=AsyncMock(return_value=FakeResponse())),
+        patch(
+            "app.tools.implementations.jira_tool.call_mcp_tool",
+            new=AsyncMock(side_effect=AssertionError("MCP must not be called when REST succeeds")),
+        ) as mock_mcp,
+    ):
+        result = await tool.execute(ToolInput(query="NPT-6"))
+
+    assert result.success is True
+    mock_mcp.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_execute_falls_back_to_mcp_when_rest_fails_and_both_configured():
+    """A guaranteed-to-fail auto-wired MCP tool name (see execute()'s
+    docstring — reproduced live against Atlassian's own hosted MCP server:
+    a real, valid REST connection auto-wires an MCP method whose default
+    tool name that server doesn't recognize) must never make an otherwise-
+    reachable connection look unreachable when REST alone can't serve the
+    request (e.g. REST credentials just rotated) — MCP remains the
+    fallback, not removed as an option."""
+    tool = JiraTool(
+        {
+            "jira_base_url": "https://example.atlassian.net",
+            "jira_email": "a@b.com",
+            "jira_api_token": "token",
+            "jira_mcp_server_url": "https://example.com/mcp",
+            "jira_mcp_api_key": "secret",
+        }
+    )
+
+    class FakeUnauthorizedResponse:
+        status_code = 401
+        headers = {"content-type": "application/json"}
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {}
+
+    fake_mcp_payload = {
+        "fields": {
+            "summary": "S",
+            "status": {"name": "To Do"},
+            "issuetype": {"name": "Story"},
+            "priority": {"name": "Medium"},
+        },
+    }
+
+    with (
+        patch("httpx.AsyncClient.get", new=AsyncMock(return_value=FakeUnauthorizedResponse())),
+        patch(
+            "app.tools.implementations.jira_tool.call_mcp_tool",
+            new=AsyncMock(return_value=fake_mcp_payload),
+        ) as mock_mcp,
+    ):
+        result = await tool.execute(ToolInput(query="NPT-6"))
+
+    assert result.success is True
+    mock_mcp.assert_awaited_once()
+
+
 # ---------------------------------------------------------------------------
 # JiraIssueTrackerAdapter — IIssueTrackerProvider extension point (Part 5/12)
 # ---------------------------------------------------------------------------
