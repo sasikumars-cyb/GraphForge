@@ -8,6 +8,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { Table, type TableColumn } from "../components/Table";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
+import { ProvenanceTag } from "../components/intelligence/ProvenanceTag";
 import { formatRelativeTime } from "../lib/formatDate";
 import { deriveWorkflowState, stageLabel, workflowStatusDisplay } from "../lib/workflowDerived";
 import { useRunHistory } from "../hooks/useRunHistory";
@@ -294,6 +295,20 @@ function WorkflowGroupRow({
   const completedCount = workflow?.stages.filter((s) => s.status === "completed").length ?? 0;
   const totalStages = workflow?.stages.length ?? group.runs.length;
   const isApproved = workflow?.status === "approved";
+  // "Approved"/"Rejected" are the one status pair in this list that a
+  // human actually chose — every other status (completed, failed, in
+  // progress) is the system arriving somewhere on its own. Tagging only
+  // those two keeps the Fact/Derived/AI Insight/Human Decision vocabulary
+  // honest instead of implying every terminal state was a person's call.
+  const isHumanDecision = workflow?.status === "approved" || workflow?.status === "rejected";
+  // Real, already-fetched data — no extra request: `group.runs` are this
+  // same page's own RunListItem rows, which already carry each stage's
+  // confidence score (see ConfidenceCell above).
+  const scoredRuns = group.runs.filter((r) => r.confidence_score != null);
+  const avgConfidence =
+    scoredRuns.length > 0
+      ? scoredRuns.reduce((sum, r) => sum + (r.confidence_score as number), 0) / scoredRuns.length
+      : null;
 
   async function handleDeleteWorkflow() {
     if (!token) return;
@@ -323,7 +338,11 @@ function WorkflowGroupRow({
             {completedCount}/{totalStages} stage{totalStages === 1 ? "" : "s"} complete
           </p>
         </div>
+        {avgConfidence !== null && (
+          <ConfidenceBadge confidence={{ score: avgConfidence, reasoning: "" }} />
+        )}
         {status && <StatusBadge label={status.label} tone={status.tone} />}
+        {isHumanDecision && <ProvenanceTag kind="human_decision" />}
         <span className="text-xs text-fg-muted">
           {group.runs[0]?.started_at ? formatRelativeTime(group.runs[0].started_at) : "—"}
         </span>
@@ -407,9 +426,15 @@ export function RunHistoryPage() {
             <History className="h-5 w-5 text-cat-7-fg" aria-hidden="true" />
           </div>
           <div>
-            <h1 className="text-xl font-semibold text-fg">Run History</h1>
+            <p className="text-xs font-semibold tracking-[0.14em] text-accent-fg uppercase">
+              Institutional memory
+            </p>
+            <h1 className="mt-0.5 font-display text-xl font-bold tracking-tight text-fg">
+              Workflow History
+            </h1>
             <p className="text-sm text-fg-muted">
-              {total} total run{total === 1 ? "" : "s"}
+              Every investigation GraphForge has run — {total} underlying run{total === 1 ? "" : "s"}{" "}
+              behind them
             </p>
           </div>
         </div>
@@ -435,7 +460,10 @@ export function RunHistoryPage() {
       )}
 
       {groups.length > 0 && (
-        <Card title="Workflows" description="Multi-stage runs, grouped — expand to see each stage">
+        <Card
+          title="Investigations"
+          description="Confidence and decision, at a glance — expand any one for its stage-by-stage execution detail"
+        >
           <div className="divide-y divide-line-muted">
             {groups.map((group) => (
               <WorkflowGroupRow

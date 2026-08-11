@@ -54,7 +54,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     section: "Monitor",
     items: [
-      { label: "Runs", path: "/runs", icon: History },
+      { label: "Workflow History", path: "/runs", icon: History },
       { label: "Metrics", path: "/metrics", icon: BarChart3 },
     ],
   },
