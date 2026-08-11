@@ -205,9 +205,9 @@ class TestNoUndeclaredFacts:
         # identifier - a locator, an id, an evidence kind. None may be novel.
         for token in re.findall(r"`([^`]+)`", rendered):
             bare = token.split(":")[0] if token.count(":") > 2 else token
-            assert any(bare in candidate or candidate in token for candidate in declared), (
-                f"PR comment printed `{token}`, which is not derivable from the decision"
-            )
+            assert any(
+                bare in candidate or candidate in token for candidate in declared
+            ), f"PR comment printed `{token}`, which is not derivable from the decision"
 
     def test_pr_comment_names_only_entities_on_the_decision(self) -> None:
         decision = _the_original_bug_decision()

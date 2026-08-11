@@ -24,9 +24,7 @@ async def get_or_create_human_participant(db: AsyncSession, user: User) -> Parti
     """A Human Participant is a thin wrapper around a real `User` row —
     created lazily on first use rather than at signup, since not every
     User ever participates in an Engineering Session."""
-    stmt = select(Participant).where(
-        Participant.kind == "human", Participant.user_id == user.id
-    )
+    stmt = select(Participant).where(Participant.kind == "human", Participant.user_id == user.id)
     existing = (await db.execute(stmt)).scalar_one_or_none()
     if existing is not None:
         return existing

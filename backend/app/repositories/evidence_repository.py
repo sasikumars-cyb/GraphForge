@@ -27,8 +27,8 @@ class EvidenceRepository:
     async def list_page(
         self, session_id: uuid.UUID, *, limit: int = 50, offset: int = 0
     ) -> tuple[list[Evidence], int]:
-        count_stmt = select(func.count()).select_from(Evidence).where(
-            Evidence.session_id == session_id
+        count_stmt = (
+            select(func.count()).select_from(Evidence).where(Evidence.session_id == session_id)
         )
         total = (await self._db.execute(count_stmt)).scalar_one()
 

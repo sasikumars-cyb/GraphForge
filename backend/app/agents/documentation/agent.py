@@ -29,7 +29,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -88,7 +87,9 @@ def resolve_repository_subject(repository: Repository) -> Subject:
 
 def _extract_repository_uuid(subject_id: str) -> uuid.UUID:
     if not subject_id.startswith("repo:"):
-        raise NotFoundError(f"Documentation Agent expects subject_id 'repo:<uuid>', got '{subject_id}'.")
+        raise NotFoundError(
+            f"Documentation Agent expects subject_id 'repo:<uuid>', got '{subject_id}'."
+        )
     raw = subject_id[len("repo:") :]
     try:
         return uuid.UUID(raw)
@@ -177,7 +178,9 @@ class DocumentationReviewAgent:
                 duplicate_pairs = find_duplicate_documents(files)
                 file_contents = self._read_bounded_content(files)
         except RepositoryCloneError as exc:
-            logger.warning("documentation_agent_clone_failed repository=%s error=%s", repository.full_name, exc)
+            logger.warning(
+                "documentation_agent_clone_failed repository=%s error=%s", repository.full_name, exc
+            )
             evidence.append(
                 Evidence(
                     kind="tool_call",
@@ -217,7 +220,9 @@ class DocumentationReviewAgent:
             repository_full_name=repository.full_name,
             summary=llm_result.get("summary", ""),
             files_reviewed=[
-                MarkdownFileSummary(path=f.relative_path, category=f.category, size_bytes=f.size_bytes)
+                MarkdownFileSummary(
+                    path=f.relative_path, category=f.category, size_bytes=f.size_bytes
+                )
                 for f in files
             ],
             findings=deterministic_findings + self._parse_llm_findings(llm_result),
@@ -261,7 +266,11 @@ class DocumentationReviewAgent:
         try:
             nodes = await graph_repository.get_nodes_by_label(repository_id, "Component")
         except Exception:
-            logger.warning("documentation_agent_graph_read_failed repository_id=%s", repository_id, exc_info=True)
+            logger.warning(
+                "documentation_agent_graph_read_failed repository_id=%s",
+                repository_id,
+                exc_info=True,
+            )
             return []
         return [
             {
@@ -279,7 +288,9 @@ class DocumentationReviewAgent:
                 text = f.absolute_path.read_text(encoding="utf-8", errors="ignore")
             except OSError:
                 continue
-            contents.append({"path": f.relative_path, "content": text[:_MAX_CONTENT_CHARS_PER_FILE]})
+            contents.append(
+                {"path": f.relative_path, "content": text[:_MAX_CONTENT_CHARS_PER_FILE]}
+            )
         return contents
 
     def _deterministic_findings(self, broken_links, duplicate_pairs) -> list[DocumentationFinding]:
@@ -290,7 +301,10 @@ class DocumentationReviewAgent:
                     finding_type="broken_link",
                     severity="medium",
                     file_path=link.source_file,
-                    description=f"Link target '{link.target}' does not resolve to a file in this repository.",
+                    description=(
+                        f"Link target '{link.target}' does not resolve to a file "
+                        "in this repository."
+                    ),
                     broken_link_target=link.target,
                 )
             )
@@ -335,11 +349,18 @@ class DocumentationReviewAgent:
             return parsed, Evidence(
                 kind="llm_reasoning",
                 reference="llm_synthesis",
-                summary=f"LLM synthesis produced {len(parsed.get('findings', []))} additional finding(s).",
+                summary=(
+                    f"LLM synthesis produced {len(parsed.get('findings', []))} "
+                    "additional finding(s)."
+                ),
                 status="success",
             )
         except (AppError, json.JSONDecodeError) as exc:
-            logger.warning("documentation_agent_synthesis_failed repository=%s error=%s", repository.full_name, exc)
+            logger.warning(
+                "documentation_agent_synthesis_failed repository=%s error=%s",
+                repository.full_name,
+                exc,
+            )
             return {}, Evidence(
                 kind="llm_reasoning",
                 reference="llm_synthesis",

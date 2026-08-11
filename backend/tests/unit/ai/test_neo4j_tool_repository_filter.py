@@ -29,11 +29,12 @@ async def test_no_filter_fetches_cross_repo_edges_for_every_repository() -> None
     graph_repo = AsyncMock()
     graph_repo.get_outgoing_cross_repository_edges = AsyncMock(return_value=[])
 
-    with patch(
-        "app.tools.implementations.neo4j_tool.GetIndexedRepositoriesTool"
-    ) as repos_tool_cls, patch(
-        "app.tools.implementations.neo4j_tool.TraverseArchitectureGraphTool"
-    ) as traverse_tool_cls:
+    with (
+        patch("app.tools.implementations.neo4j_tool.GetIndexedRepositoriesTool") as repos_tool_cls,
+        patch(
+            "app.tools.implementations.neo4j_tool.TraverseArchitectureGraphTool"
+        ) as traverse_tool_cls,
+    ):
         repos_tool_cls.return_value.execute = AsyncMock(
             return_value=type(
                 "Obs", (), {"data": {"indexed_repositories": _indexed_repos()}, "succeeded": True}
@@ -63,11 +64,12 @@ async def test_repository_filter_restricts_cross_repo_edges_to_named_repository(
     graph_repo = AsyncMock()
     graph_repo.get_outgoing_cross_repository_edges = AsyncMock(return_value=[])
 
-    with patch(
-        "app.tools.implementations.neo4j_tool.GetIndexedRepositoriesTool"
-    ) as repos_tool_cls, patch(
-        "app.tools.implementations.neo4j_tool.TraverseArchitectureGraphTool"
-    ) as traverse_tool_cls:
+    with (
+        patch("app.tools.implementations.neo4j_tool.GetIndexedRepositoriesTool") as repos_tool_cls,
+        patch(
+            "app.tools.implementations.neo4j_tool.TraverseArchitectureGraphTool"
+        ) as traverse_tool_cls,
+    ):
         repos_tool_cls.return_value.execute = AsyncMock(
             return_value=type(
                 "Obs", (), {"data": {"indexed_repositories": _indexed_repos()}, "succeeded": True}

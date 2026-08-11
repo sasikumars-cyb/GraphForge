@@ -214,11 +214,15 @@ async def test_cross_repository_edges_endpoint_returns_structural_edges(
     # written by `replace_repository_graph` during indexing.
     await graph_repository.replace_repository_graph(
         engine_id,
-        GraphPayload(nodes=[GraphNode(id=f"{engine_id}:repository", labels=["Repository"])], edges=[]),
+        GraphPayload(
+            nodes=[GraphNode(id=f"{engine_id}:repository", labels=["Repository"])], edges=[]
+        ),
     )
     await graph_repository.replace_repository_graph(
         notes_id,
-        GraphPayload(nodes=[GraphNode(id=f"{notes_id}:repository", labels=["Repository"])], edges=[]),
+        GraphPayload(
+            nodes=[GraphNode(id=f"{notes_id}:repository", labels=["Repository"])], edges=[]
+        ),
     )
     await graph_repository.replace_cross_repository_edges(
         engine_id,
@@ -345,7 +349,9 @@ class TestGraphTypes:
             ),
         )
 
-        response = await db_client.get(f"/api/v1/repositories/{repo_id}/graph/types", headers=headers)
+        response = await db_client.get(
+            f"/api/v1/repositories/{repo_id}/graph/types", headers=headers
+        )
 
         assert response.status_code == 200
         assert response.json()["counts"] == {"Service": 2, "KafkaTopic": 1}
@@ -355,7 +361,9 @@ class TestGraphTypes:
         headers = {"Authorization": f"Bearer {token}"}
         repo_id = await _select_one(db_client, headers)
 
-        response = await db_client.get(f"/api/v1/repositories/{repo_id}/graph/types", headers=headers)
+        response = await db_client.get(
+            f"/api/v1/repositories/{repo_id}/graph/types", headers=headers
+        )
 
         assert response.status_code == 200
         assert response.json()["counts"] == {}

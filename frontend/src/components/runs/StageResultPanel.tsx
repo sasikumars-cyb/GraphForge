@@ -70,6 +70,7 @@ export function StageResultPanel({
 }) {
   const planningResult = stage === "planning" ? (step.result as unknown as PlanningResult) : null;
   const developmentResult = stage === "development" ? (step.result as unknown as DevelopmentPlanResult) : null;
+  const testingResult = stage === "testing" ? (step.result as unknown as TestPlanResult) : null;
   const reviewResult = stage === "review" ? (step.result as unknown as PRReviewResult) : null;
   const documentationHealthResult =
     stage === "documentation_health" ? (step.result as unknown as DocumentationHealthResult) : null;
@@ -80,16 +81,26 @@ export function StageResultPanel({
       ? (step.result as unknown as RepositoryUnderstandingResult)
       : null;
 
-  const blueprint =
-    (planningResult?.blueprint ?? developmentResult?.blueprint) as BlueprintArtifact | null | undefined;
+  const blueprint = (planningResult?.blueprint ??
+    developmentResult?.blueprint ??
+    testingResult?.blueprint) as BlueprintArtifact | null | undefined;
 
   // The real counts, not a diagram-node-count approximation — see the
   // matching comment on BlueprintExplorerProps for why these must win.
+  // Testing has no "implementation steps" concept of its own — execution
+  // phases (test_execution_timeline's source data) are the closest analog.
   const implementationStepsCount =
-    planningResult?.implementation_steps?.length ?? developmentResult?.implementation_phases?.length;
+    planningResult?.implementation_steps?.length ??
+    developmentResult?.implementation_phases?.length ??
+    testingResult?.execution_order?.length;
   const affectedComponentsCount =
-    planningResult?.affected_components?.length ?? developmentResult?.components?.length;
-  const risksCount = planningResult?.risk_considerations?.length ?? developmentResult?.risks?.length;
+    planningResult?.affected_components?.length ??
+    developmentResult?.components?.length ??
+    testingResult?.affected_components?.length;
+  const risksCount =
+    planningResult?.risk_considerations?.length ??
+    developmentResult?.risks?.length ??
+    testingResult?.risks?.length;
 
   const hasBlueprint = Boolean(blueprint && blueprint.diagrams.length > 0);
   // UX audit P0.2/P0.3: review/documentation_health/api_intelligence/

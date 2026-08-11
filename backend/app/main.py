@@ -91,8 +91,7 @@ def create_app() -> FastAPI:
                 )
             )
             # Ensure knowledge_connections table exists.
-            await conn.execute(
-                text("""
+            await conn.execute(text("""
                 CREATE TABLE IF NOT EXISTS knowledge_connections (
                     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
                     source_type VARCHAR(64) NOT NULL,
@@ -111,14 +110,11 @@ def create_app() -> FastAPI:
                     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
                 )
-            """)
-            )
-            await conn.execute(
-                text("""
+            """))
+            await conn.execute(text("""
                 CREATE INDEX IF NOT EXISTS ix_knowledge_connections_source_type
                 ON knowledge_connections (source_type)
-            """)
-            )
+            """))
             # No admin-promotion SQL here on purpose — the bootstrap admin
             # account is seeded once, by the b5c6d7e8f9a0 migration, not on
             # every process start. An unconditional

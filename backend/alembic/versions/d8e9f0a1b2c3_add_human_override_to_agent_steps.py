@@ -56,9 +56,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint(
-        "fk_agent_steps_overridden_by_user_id", "agent_steps", type_="foreignkey"
-    )
+    op.drop_constraint("fk_agent_steps_overridden_by_user_id", "agent_steps", type_="foreignkey")
     op.drop_column("agent_steps", "overridden_at")
     op.drop_column("agent_steps", "overridden_by_user_id")
     op.drop_column("agent_steps", "human_override")

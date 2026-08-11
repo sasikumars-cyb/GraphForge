@@ -38,7 +38,13 @@ def sample_result() -> ApiIntelligenceResult:
                 base_url="https://api.acme.com",
                 description="Create a widget",
                 parameters=[
-                    ApiParameter(name="name", location="body", type="string", required=True, description="Name")
+                    ApiParameter(
+                        name="name",
+                        location="body",
+                        type="string",
+                        required=True,
+                        description="Name",
+                    )
                 ],
                 request_example='{"name": "Gizmo"}',
                 response_example='{"id": "1"}',
@@ -108,7 +114,10 @@ def test_postman_collection_has_valid_schema_url_and_one_item_per_endpoint(
     sample_result: ApiIntelligenceResult,
 ) -> None:
     collection = render_postman_collection(sample_result)
-    assert collection["info"]["schema"] == "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    assert (
+        collection["info"]["schema"]
+        == "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    )
     assert len(collection["item"]) == 1
     item = collection["item"][0]
     assert item["request"]["method"] == "POST"
@@ -117,7 +126,9 @@ def test_postman_collection_has_valid_schema_url_and_one_item_per_endpoint(
     json.dumps(collection)
 
 
-def test_markdown_summary_includes_scores_and_findings(sample_result: ApiIntelligenceResult) -> None:
+def test_markdown_summary_includes_scores_and_findings(
+    sample_result: ApiIntelligenceResult,
+) -> None:
     md = render_markdown_summary(sample_result)
     assert "**Overall Readiness:** 58/100" in md
     assert "POST /v1/widgets" in md
@@ -139,7 +150,7 @@ def test_html_dashboard_is_self_contained_and_escapes_content() -> None:
     rendered = render_html_dashboard(result)
     assert "<!doctype html>" in rendered.lower()
     assert "cdn." not in rendered.lower()
-    assert '<script src=' not in rendered
+    assert "<script src=" not in rendered
     # The malicious payload must be escaped, not executed.
     assert "<script>alert(1)</script>" not in rendered
     assert "&lt;script&gt;" in rendered
@@ -148,9 +159,19 @@ def test_html_dashboard_is_self_contained_and_escapes_content() -> None:
 def test_html_dashboard_renders_all_required_sections(sample_result: ApiIntelligenceResult) -> None:
     rendered = render_html_dashboard(sample_result)
     for section_id in (
-        "summary", "landscape", "security-score", "risk-heatmap", "endpoints",
-        "auth-flow", "status-matrix", "owasp", "missing", "relationships",
-        "security-findings", "recommendations", "readiness",
+        "summary",
+        "landscape",
+        "security-score",
+        "risk-heatmap",
+        "endpoints",
+        "auth-flow",
+        "status-matrix",
+        "owasp",
+        "missing",
+        "relationships",
+        "security-findings",
+        "recommendations",
+        "readiness",
     ):
         assert f'id="{section_id}"' in rendered
 

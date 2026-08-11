@@ -154,9 +154,7 @@ async def test_ranked_repository_names_and_implementation_candidates_are_unchang
         "streaming-pipeline",
     }
     # Pre-refactor formula: every live candidate's name, unfiltered.
-    assert set(result["implementation_candidates"]) == {
-        i["name"] for i in result["repositories"]
-    }
+    assert set(result["implementation_candidates"]) == {i["name"] for i in result["repositories"]}
     assert set(result["implementation_candidates"]) == {"ingestion-framework", "etl-core"}
 
 

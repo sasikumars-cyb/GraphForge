@@ -835,10 +835,7 @@ def test_factory_creates_deepseek_provider_pointed_at_deepseek_url() -> None:
     provider = create_llm_provider(settings)
     assert isinstance(provider, OpenAIProvider)
     assert provider._model == "deepseek-v4-flash"  # noqa: SLF001
-    assert (
-        provider._base_url  # noqa: SLF001
-        == "https://api.deepseek.com/v1/chat/completions"
-    )
+    assert provider._base_url == "https://api.deepseek.com/v1/chat/completions"  # noqa: SLF001
 
 
 def test_factory_creates_deepseek_pro_model() -> None:

@@ -329,9 +329,9 @@ class DocumentationPlanningAgent:
         context_discovery_result = (
             get_stage_result(workflow, "context_discovery") if workflow else None
         )
-        graph_components: list[dict[str, Any]] = (
-            context_discovery_result or {}
-        ).get("graph_components") or []
+        graph_components: list[dict[str, Any]] = (context_discovery_result or {}).get(
+            "graph_components"
+        ) or []
 
         verification_findings = _collect_verification_findings(
             planning_result, development_result, testing_result

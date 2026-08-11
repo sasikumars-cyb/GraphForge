@@ -141,21 +141,23 @@ def _make_llm_response(
             "executive_summary": "The rate limiter needs a README update and a new runbook.",
             "documentation_impact": documentation_impact,
             "impact_explanation": "New service plus a new API-facing behavior.",
-            "required_updates": required_updates
-            if required_updates is not None
-            else [
-                {
-                    "document": "README.md",
-                    "category": "repository",
-                    "current_status": "Not confirmed — inferred from repository name only.",
-                    "action": "update",
-                    "reason": "New RateLimiterService is not mentioned anywhere.",
-                    "priority": "medium",
-                    "owner": "Backend maintainer",
-                    "estimated_effort": "small",
-                    "dependencies": [],
-                },
-            ],
+            "required_updates": (
+                required_updates
+                if required_updates is not None
+                else [
+                    {
+                        "document": "README.md",
+                        "category": "repository",
+                        "current_status": "Not confirmed — inferred from repository name only.",
+                        "action": "update",
+                        "reason": "New RateLimiterService is not mentioned anywhere.",
+                        "priority": "medium",
+                        "owner": "Backend maintainer",
+                        "estimated_effort": "small",
+                        "dependencies": [],
+                    },
+                ]
+            ),
             "new_documentation": [
                 {
                     "name": "Rate Limiting Runbook",
@@ -506,9 +508,7 @@ async def test_documentation_planning_agent_carries_forward_prior_verification_w
     ):
         output = await DocumentationPlanningAgent().run(context)
 
-    assert any(
-        "billing-service" in w for w in output.result["prior_verification_warnings"]
-    )
+    assert any("billing-service" in w for w in output.result["prior_verification_warnings"])
 
 
 # ---------------------------------------------------------------------------

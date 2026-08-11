@@ -83,7 +83,7 @@ async def test_replaces_the_n_plus_one_with_real_per_repository_counts(
         json={"repositories": [REPO_ENGINE, REPO_NOTES]},
     )
     repos = {r["full_name"]: r["id"] for r in select_response.json()}
-    engine_id, notes_id = repos["ada/engine"], repos["ada/notes"]
+    engine_id, _notes_id = repos["ada/engine"], repos["ada/notes"]
 
     graph_repository = Neo4jGraphRepository(get_driver())
     await graph_repository.replace_repository_graph(
@@ -175,7 +175,9 @@ async def test_domain_grouping_via_patch_reflects_in_the_summary(db_client: Asyn
     assert by_name["ada/notes"]["domain"] is None
 
 
-async def test_only_this_user_own_tracked_repositories_are_summarized(db_client: AsyncClient) -> None:
+async def test_only_this_user_own_tracked_repositories_are_summarized(
+    db_client: AsyncClient,
+) -> None:
     """User-scoped, not admin-wide — the one deliberate deviation from the
     calibration/investigation-intelligence summary-endpoint precedent
     this otherwise mirrors."""
@@ -187,7 +189,12 @@ async def test_only_this_user_own_tracked_repositories_are_summarized(db_client:
     )
 
     token_b = await _register_and_get_token(
-        db_client, {"email": "grace@example.com", "password": "correct-horse-battery-staple", "full_name": "Grace"}
+        db_client,
+        {
+            "email": "grace@example.com",
+            "password": "correct-horse-battery-staple",
+            "full_name": "Grace",
+        },
     )
     response = await db_client.get(
         "/api/v1/architecture/summary", headers={"Authorization": f"Bearer {token_b}"}

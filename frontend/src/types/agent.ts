@@ -386,6 +386,7 @@ export interface TestPlanResult {
   // "verified" badge beside a file path that exists nowhere in the graph.
   // Always render these; an unsurfaced caveat is the same as no caveat.
   verification_warnings?: string[];
+  blueprint?: import("./blueprint").BlueprintArtifact | null;
 }
 
 // --- Documentation Plan Result (agent-specific payload inside step.result) ---

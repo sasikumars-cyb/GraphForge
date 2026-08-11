@@ -58,6 +58,7 @@ from app.models.knowledge_connection import KnowledgeConnection
 
 pytestmark = pytest.mark.asyncio
 
+
 async def _fake_synthesize(state: WorkingContext, session: SessionContext) -> None:
     return None
 
@@ -95,7 +96,9 @@ class _RepoInvestigator:
         self, action: InvestigationAction, session: SessionContext, recorder: Recorder
     ) -> InvestigationOutcome:
         evidence = recorder.evidence("success", "graph looked.")
-        recorder.fact("repository", self._repo_name, value={"name": self._repo_name}, evidence=evidence)
+        recorder.fact(
+            "repository", self._repo_name, value={"name": self._repo_name}, evidence=evidence
+        )
         return InvestigationOutcome(observation="graph found 1 repo.", yielded=True)
 
 
@@ -180,7 +183,9 @@ class TestProviderOutcomeCollection:
         assert row.scope_id == str(connection_id)
         assert row.yielded_evidence is True
 
-    async def test_no_intelligence_configured_writes_nothing(self, db_session: AsyncSession) -> None:
+    async def test_no_intelligence_configured_writes_nothing(
+        self, db_session: AsyncSession
+    ) -> None:
         provider_name = _unique_name("confluence_mcp")
         repo_name = _unique_name("payment-service")
         session = SessionContext(db=db_session, user_id=None)  # intelligence defaults to None

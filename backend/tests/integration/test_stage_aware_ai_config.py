@@ -279,9 +279,10 @@ async def test_scenario_5_recoverable_error_falls_back_to_configured_provider() 
         text = await call_llm_planning("plan this")
 
     assert text == '{"ok": true}'
-    assert [c[0] for c in calls] == ["OpenAIProvider", "GeminiProvider"], (
-        f"Expected a fallback hop to the configured fallback provider. Actual: {calls}"
-    )
+    assert [c[0] for c in calls] == [
+        "OpenAIProvider",
+        "GeminiProvider",
+    ], f"Expected a fallback hop to the configured fallback provider. Actual: {calls}"
 
 
 @pytest.mark.asyncio
@@ -305,9 +306,9 @@ async def test_scenario_5b_fallback_is_off_unless_operator_enables_it() -> None:
     ):
         await call_llm_planning("plan this")
 
-    assert [c[0] for c in calls] == ["OpenAIProvider"], (
-        f"A vendor hop happened without the operator enabling fallback. Actual: {calls}"
-    )
+    assert [c[0] for c in calls] == [
+        "OpenAIProvider"
+    ], f"A vendor hop happened without the operator enabling fallback. Actual: {calls}"
 
 
 @pytest.mark.asyncio
@@ -333,9 +334,9 @@ async def test_scenario_6_non_recoverable_error_does_not_fall_back() -> None:
         await call_llm_planning("plan this")
 
     assert str(exc.value) == "bad key"
-    assert [c[0] for c in calls] == ["OpenAIProvider"], (
-        f"A non-recoverable error must not hop vendors. Actual: {calls}"
-    )
+    assert [c[0] for c in calls] == [
+        "OpenAIProvider"
+    ], f"A non-recoverable error must not hop vendors. Actual: {calls}"
 
 
 # ---------------------------------------------------------------------------

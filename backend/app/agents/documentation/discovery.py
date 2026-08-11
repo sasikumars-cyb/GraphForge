@@ -97,7 +97,9 @@ def _is_external_or_anchor(target: str) -> bool:
     stripped = target.strip()
     if not stripped or stripped.startswith("#"):
         return True
-    return bool(re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", stripped))  # any URI scheme (http:, mailto:, ...)
+    return bool(
+        re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", stripped)
+    )  # any URI scheme (http:, mailto:, ...)
 
 
 def find_broken_links(repo_root: Path, files: list[MarkdownFile]) -> list[BrokenLink]:

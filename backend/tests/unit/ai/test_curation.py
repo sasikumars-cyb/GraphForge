@@ -56,9 +56,7 @@ NPT_29_TEXT = (
 class TestNPT29Regression:
     def test_production_class_lands_in_must_modify(self):
         components = [
-            _component(
-                "c1", "SCDType2Merger", "etl-core", "src/etl_core/scd/scd_type2.py"
-            ),
+            _component("c1", "SCDType2Merger", "etl-core", "src/etl_core/scd/scd_type2.py"),
             _component(
                 "c2",
                 "TestSCDType2Merger",
@@ -115,9 +113,7 @@ class TestNPT29Regression:
 
         test_tier_names = {item.name for item in package.by_tier("relevant_test")}
         assert "TestSCDType2Merger" in test_tier_names
-        assert "TestSCDType2Merger" not in {
-            i.name for i in package.by_tier("must_modify")
-        }
+        assert "TestSCDType2Merger" not in {i.name for i in package.by_tier("must_modify")}
 
     def test_reason_explains_why_anchor_was_selected(self):
         components = [

@@ -57,9 +57,7 @@ def _run_ownership(user_id: uuid.UUID):
     )
 
 
-async def _repository_scope(
-    db: AsyncSession, scope: Scope, user_id: uuid.UUID
-) -> list[Repository]:
+async def _repository_scope(db: AsyncSession, scope: Scope, user_id: uuid.UUID) -> list[Repository]:
     query = select(Repository)
     if scope == "user":
         query = query.where(Repository.user_id == user_id)
@@ -105,12 +103,16 @@ async def _llm_totals(
     db: AsyncSession, scope: Scope, user_id: uuid.UUID
 ) -> tuple[int, int, float, float]:
     """Returns (total_calls, total_tokens, total_cost_usd, avg_latency_ms)."""
-    query = select(
-        sa_func.count(LLMInvocation.id),
-        sa_func.coalesce(sa_func.sum(LLMInvocation.total_tokens), 0),
-        sa_func.coalesce(sa_func.sum(LLMInvocation.estimated_cost_usd), 0.0),
-        sa_func.coalesce(sa_func.avg(LLMInvocation.latency_ms), 0.0),
-    ).select_from(LLMInvocation).join(Run, LLMInvocation.run_id == Run.id)
+    query = (
+        select(
+            sa_func.count(LLMInvocation.id),
+            sa_func.coalesce(sa_func.sum(LLMInvocation.total_tokens), 0),
+            sa_func.coalesce(sa_func.sum(LLMInvocation.estimated_cost_usd), 0.0),
+            sa_func.coalesce(sa_func.avg(LLMInvocation.latency_ms), 0.0),
+        )
+        .select_from(LLMInvocation)
+        .join(Run, LLMInvocation.run_id == Run.id)
+    )
     if scope == "user":
         query = query.outerjoin(Workflow, Run.workflow_id == Workflow.id).where(
             _run_ownership(user_id)
@@ -143,7 +145,9 @@ async def _cost_by_day(
         )
     rows = (await db.execute(query)).all()
     return [
-        CostByDayPoint(day=day.date().isoformat(), cost_usd=float(cost or 0), tokens=int(tokens or 0))
+        CostByDayPoint(
+            day=day.date().isoformat(), cost_usd=float(cost or 0), tokens=int(tokens or 0)
+        )
         for day, cost, tokens in rows
     ]
 
@@ -169,7 +173,12 @@ async def _cost_by_provider(
         )
     rows = (await db.execute(query)).all()
     return [
-        ProviderCost(provider=provider or "unknown", calls=int(calls), cost_usd=float(cost or 0), tokens=int(tokens or 0))
+        ProviderCost(
+            provider=provider or "unknown",
+            calls=int(calls),
+            cost_usd=float(cost or 0),
+            tokens=int(tokens or 0),
+        )
         for provider, calls, cost, tokens in rows
     ]
 
@@ -245,7 +254,9 @@ async def _run_success_by_stage(
         query = query.where(_run_ownership(user_id))
     rows = (await db.execute(query)).all()
     return [
-        RunStageOutcome(stage=stage, total=int(total), succeeded=int(succeeded or 0), failed=int(failed or 0))
+        RunStageOutcome(
+            stage=stage, total=int(total), succeeded=int(succeeded or 0), failed=int(failed or 0)
+        )
         for stage, total, succeeded, failed in rows
     ]
 

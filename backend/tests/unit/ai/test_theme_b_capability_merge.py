@@ -83,6 +83,6 @@ async def test_two_explicit_repositories_score_full_confidence_with_no_unsatisfi
     repository_assessment = state.assessment_for("repository")
     assert repository_assessment is not None
     assert repository_assessment.score == 1.0
-    assert all(s.satisfied for s in repository_assessment.signals), (
-        repository_assessment.explanation()
-    )
+    assert all(
+        s.satisfied for s in repository_assessment.signals
+    ), repository_assessment.explanation()

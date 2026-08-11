@@ -248,12 +248,12 @@ def _file_review_card(fr) -> str:
     )
     return (
         '<details class="file-card">'
-        f"<summary><span class=\"file-path\">{_e(fr.file)}</span>"
+        f'<summary><span class="file-path">{_e(fr.file)}</span>'
         f'<span class="badge" style="background:{risk_color}22;color:{risk_color}">'
         f"{_e(fr.risk.upper())} RISK</span>"
         f'<span class="badge muted">{_e(fr.complexity.upper())} COMPLEXITY</span></summary>'
         f'<div class="file-card-body">'
-        f'<p>{_e(fr.summary)}</p>'
+        f"<p>{_e(fr.summary)}</p>"
         f"<strong>Issues</strong><ul>{issues}</ul>"
         f"<strong>Suggestions</strong><ul>{suggestions}</ul>"
         f"</div></details>"
@@ -480,9 +480,10 @@ def render_html_report(ctx: ReviewReportContext) -> str:
     )
     grouped = _group_findings_by_severity(result.findings)
 
-    findings_html = "".join(
-        _finding_card(f) for sev in _SEVERITY_ORDER for f in grouped.get(sev, [])
-    ) or '<p class="muted">No findings.</p>'
+    findings_html = (
+        "".join(_finding_card(f) for sev in _SEVERITY_ORDER for f in grouped.get(sev, []))
+        or '<p class="muted">No findings.</p>'
+    )
 
     severity_chips = "".join(
         f'<span class="filter-chip" data-filter="{sev}">{sev.capitalize()} '

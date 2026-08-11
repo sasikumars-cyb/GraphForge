@@ -557,11 +557,7 @@ class ConfluenceInvestigator:
             # On resume, the connection may have been fixed since the
             # initial run.
             prev = next(
-                (
-                    e
-                    for e in state.ledger.evidence
-                    if e.provider == self.name and e.action == key
-                ),
+                (e for e in state.ledger.evidence if e.provider == self.name and e.action == key),
                 None,
             )
             if prev is None or prev.outcome != "unavailable":

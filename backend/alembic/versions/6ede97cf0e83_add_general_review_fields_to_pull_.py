@@ -20,9 +20,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column(
-        "pull_request_ai_analyses", sa.Column("quality_score", sa.Float(), nullable=True)
-    )
+    op.add_column("pull_request_ai_analyses", sa.Column("quality_score", sa.Float(), nullable=True))
     op.add_column("pull_request_ai_analyses", sa.Column("risk_score", sa.Float(), nullable=True))
     op.add_column(
         "pull_request_ai_analyses",
@@ -63,9 +61,7 @@ def upgrade() -> None:
     op.add_column(
         "pull_request_ai_analyses", sa.Column("security_score", sa.Float(), nullable=True)
     )
-    op.add_column(
-        "pull_request_ai_analyses", sa.Column("testing_score", sa.Float(), nullable=True)
-    )
+    op.add_column("pull_request_ai_analyses", sa.Column("testing_score", sa.Float(), nullable=True))
     op.add_column(
         "pull_request_ai_analyses", sa.Column("documentation_score", sa.Float(), nullable=True)
     )
