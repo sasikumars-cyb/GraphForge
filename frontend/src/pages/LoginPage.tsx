@@ -49,7 +49,7 @@ export function LoginPage() {
     <main className="flex min-h-screen items-center justify-center bg-canvas px-4 text-fg">
       <div className="w-full max-w-sm">
         <div className="mb-8 flex flex-col items-center gap-2 text-center">
-          <ShieldCheck className="h-8 w-8 text-info-fg" aria-hidden="true" />
+          <ShieldCheck className="h-8 w-8 text-accent-fg" aria-hidden="true" />
           <h1 className="text-xl font-semibold">Sign in to GraphForge</h1>
           <p className="text-sm text-fg-muted">Review pull request risk before it ships.</p>
         </div>
@@ -66,7 +66,7 @@ export function LoginPage() {
               autoComplete="email"
               value={email}
               onChange={(event) => setEmail(event.target.value)}
-              className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
+              className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-accent-line"
             />
           </label>
 
@@ -78,7 +78,7 @@ export function LoginPage() {
               autoComplete="current-password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
+              className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-accent-line"
             />
           </label>
 
@@ -91,7 +91,7 @@ export function LoginPage() {
           <button
             type="submit"
             disabled={isSubmitting}
-            className="mt-1 rounded-md bg-info-solid px-3 py-2 text-sm font-semibold text-black transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:bg-info-bg"
+            className="mt-1 rounded-md bg-accent-solid px-3 py-2 text-sm font-semibold text-accent-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isSubmitting ? "Signing in…" : "Sign in"}
           </button>

@@ -90,13 +90,19 @@ export function MissionControlPage() {
         </Link>
       </div>
 
-      {/* ── Quick actions ──────────────────────────────────────── */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {/* ── Quick actions ──────────────────────────────────────────
+          Borderless by default — these are navigational shortcuts, not
+          content-bearing panels, so they sit at the "interactive
+          surface" tier (calm until touched) rather than competing with
+          the real data cards below for the same bordered-rectangle
+          visual weight. The border only appears on hover/focus, as the
+          affordance that it's clickable. */}
+      <div className="grid grid-cols-1 gap-1 sm:grid-cols-2 lg:grid-cols-3">
         {QUICK_ACTIONS.map((action) => (
           <Link
             key={action.to}
             to={action.to}
-            className="focus-ring group flex items-center gap-3 rounded-xl border border-line-muted bg-surface px-4 py-3.5 transition-colors hover:border-line-strong hover:bg-surface-hover"
+            className="focus-ring group flex items-center gap-3 rounded-xl border border-transparent px-4 py-3.5 transition-colors hover:border-line-muted hover:bg-surface-raised"
           >
             <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-accent-bg text-accent-fg transition-colors group-hover:bg-accent-solid group-hover:text-accent-on-solid">
               <action.icon className="h-4.5 w-4.5" aria-hidden="true" />

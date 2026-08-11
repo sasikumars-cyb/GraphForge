@@ -32,7 +32,7 @@ export function StageNavigation({ nextStage, isSubmitting, onContinue }: StageNa
       type="button"
       onClick={onContinue}
       disabled={isSubmitting}
-      className="inline-flex items-center gap-2 rounded-lg bg-info-solid px-4 py-2.5 text-sm font-medium text-info-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+      className="inline-flex items-center gap-2 rounded-lg bg-accent-solid px-4 py-2.5 text-sm font-medium text-accent-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
       aria-label={label}
     >
       {isSubmitting ? (

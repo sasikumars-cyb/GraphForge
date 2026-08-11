@@ -48,8 +48,8 @@ export function PlanningPage() {
     <div className="flex flex-col gap-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="rounded-lg bg-info-bg p-2 ring-1 ring-inset ring-info-line/30">
-            <Lightbulb className="h-5 w-5 text-info-fg" aria-hidden="true" />
+          <div className="rounded-lg bg-cat-1-bg p-2 ring-1 ring-inset ring-cat-1-line/30">
+            <Lightbulb className="h-5 w-5 text-cat-1-fg" aria-hidden="true" />
           </div>
           <div>
             <h1 className="text-xl font-semibold text-fg">Planning Assistant</h1>
@@ -84,7 +84,7 @@ export function PlanningPage() {
                 disabled={isSubmitting}
                 placeholder="Describe your engineering task, feature, or refactoring goal…"
                 rows={4}
-                className="mt-2 w-full rounded-lg border border-line bg-surface-raised px-4 py-3 text-sm text-fg placeholder-fg-subtle focus:border-info-line disabled:opacity-50"
+                className="mt-2 w-full rounded-lg border border-line bg-surface-raised px-4 py-3 text-sm text-fg placeholder-fg-subtle focus:border-cat-1-line disabled:opacity-50"
                 aria-required="true"
               />
             </div>
@@ -98,7 +98,7 @@ export function PlanningPage() {
                       key={example}
                       type="button"
                       onClick={() => setInput(example)}
-                      className="rounded-md border border-line px-2.5 py-1 text-xs text-fg-muted transition-colors hover:border-info-line/40 hover:text-info-fg"
+                      className="rounded-md border border-line px-2.5 py-1 text-xs text-fg-muted transition-colors hover:border-cat-1-line/40 hover:text-cat-1-fg"
                     >
                       {example}
                     </button>
@@ -111,7 +111,7 @@ export function PlanningPage() {
               <button
                 type="submit"
                 disabled={isSubmitting || !input.trim()}
-                className="inline-flex items-center gap-2 rounded-lg bg-info-solid px-4 py-2 text-sm font-medium text-info-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-lg bg-accent-solid px-4 py-2 text-sm font-medium text-accent-on-solid transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
               >
                 <Send className="h-4 w-4" aria-hidden="true" />
                 {isSubmitting ? "Planning…" : "Generate Plan"}
