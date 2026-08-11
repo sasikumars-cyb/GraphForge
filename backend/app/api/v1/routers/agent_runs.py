@@ -545,7 +545,9 @@ async def create_run(
         agent_id=agent_id,
         registry=global_registry,
     )
-    schedule_title_generation(run.id, subject.display_name, body.model, model_cls=Run)
+    schedule_title_generation(
+        run.id, subject.display_name, body.model, model_cls=Run, goal=body.goal
+    )
 
     return CreateRunResponse(
         run_id=str(run.id),

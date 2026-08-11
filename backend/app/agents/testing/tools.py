@@ -50,25 +50,41 @@ class TestingObservation:
 
 
 class TestRepositoryDiscoveryTool:
-    """Discover all indexed repositories for test scope determination.
+    """Discover all indexed repositories for test scope determination,
+    scoped to `user_id`.
 
     "Indexed" here means `GraphHealthService` reports the repository as
     HEALTHY — see `app.graph.health` for why that isn't the same thing as
     a Postgres `IndexingJob` saying "completed".
+
+    Scoping is mandatory, not optional — see `planning/tools.py`'s
+    `GetIndexedRepositoriesTool` (the reference pattern this class was
+    supposed to duplicate, but originally didn't). `repositories` holds one
+    row per (user, repo) tracking relationship, so an unscoped read returns
+    *other accounts'* repositories, which then reach the LLM prompt, the
+    evidence pool, and the run's visible "Discovered N indexed repositories"
+    summary. That was a real cross-tenant read (see the security
+    investigation this fixes); `user_id` is therefore a required
+    constructor argument, not a filter applied after the fact.
 
     Evidence kind: tool_call
     """
 
     name = "discover_test_repositories"
 
-    def __init__(self, db: AsyncSession, graph_repository: IGraphRepository) -> None:
+    def __init__(
+        self, db: AsyncSession, graph_repository: IGraphRepository, user_id: object
+    ) -> None:
         self._db = db
         self._graph_repository = graph_repository
+        self._user_id = user_id
         self._health_service = GraphHealthService(db, graph_repository)
 
     async def execute(self) -> TestingObservation:
         try:
-            result = await self._db.execute(select(Repository))
+            result = await self._db.execute(
+                select(Repository).where(Repository.user_id == self._user_id)
+            )
             all_repos: list[Repository] = list(result.scalars().all())
 
             health_by_repo_id = {

@@ -921,6 +921,9 @@ class PlanningAgent:
         # from what the tools actually returned. If traversal failed or the
         # graph was empty, this must be False regardless of what the model claims.
         planning_result.graph_context_used = has_graph_data
+        planning_result.grounding_status = verification.grounding_status(
+            graph_unavailable, has_graph_data
+        )
 
         # ------------------------------------------------------------------
         # Verify the LLM's repository_usage claims against ground truth

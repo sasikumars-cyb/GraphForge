@@ -3,11 +3,13 @@ import { Link } from "react-router-dom";
 import { BookOpen, Send, RotateCcw, History } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
+import { RepositoryUnderstandingResultDetails } from "../components/agents/StageResultDetails";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
 import { useAgentRun } from "../hooks/useAgentRun";
 import { useAuth } from "../app/auth-context";
 import { listTrackedRepositories } from "../lib/api/github";
+import type { RepositoryUnderstandingResult } from "../types/agent";
 import type { TrackedRepository } from "../types/github";
 
 export function RepositoryUnderstandingPage() {
@@ -159,21 +161,6 @@ export function RepositoryUnderstandingPage() {
 // Report sub-component
 // ---------------------------------------------------------------------------
 
-function ListSection({ title, items }: { title: string; items: string[] }) {
-  if (items.length === 0) return null;
-  return (
-    <Card title={title} description={`${items.length} found`}>
-      <ul className="list-inside list-disc space-y-1 text-sm text-fg-secondary" role="list">
-        {items.map((item, i) => (
-          <li key={i} className="font-mono text-xs">
-            {item}
-          </li>
-        ))}
-      </ul>
-    </Card>
-  );
-}
-
 function UnderstandingReportView({
   run,
   onNewAnalysis,
@@ -182,23 +169,8 @@ function UnderstandingReportView({
   onNewAnalysis: () => void;
 }) {
   const step = run.steps[0];
-  const result = step?.result as Record<string, unknown> | undefined;
+  const result = step?.result as unknown as RepositoryUnderstandingResult | undefined;
   const evidence = step?.evidence ?? [];
-
-  const executiveSummary = (result?.executive_summary as string) ?? "";
-  const repositoryOverview = (result?.repository_overview as string) ?? "";
-  const architectureOverview = (result?.architecture_overview as string) ?? "";
-  const apiSummary = (result?.api_summary as string) ?? "";
-  const apis = (result?.apis as string[]) ?? [];
-  const databaseSummary = (result?.database_summary as string) ?? "";
-  const databases = (result?.databases as string[]) ?? [];
-  const messagingSummary = (result?.messaging_summary as string) ?? "";
-  const queues = (result?.queues as string[]) ?? [];
-  const externalSystemsSummary = (result?.external_systems_summary as string) ?? "";
-  const integrations = (result?.integrations as string[]) ?? [];
-  const dependencySummary = (result?.dependency_summary as string) ?? "";
-  const dependencies = (result?.dependencies as string[]) ?? [];
-  const interestingFindings = (result?.interesting_findings as string[]) ?? [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -220,105 +192,7 @@ function UnderstandingReportView({
         </div>
       )}
 
-      <Card title="Executive Summary">
-        <p className="text-sm text-fg-secondary">{executiveSummary || "No summary available."}</p>
-      </Card>
-
-      {(repositoryOverview || architectureOverview) && (
-        <Card title="Repository Overview">
-          {repositoryOverview && <p className="text-sm text-fg-secondary">{repositoryOverview}</p>}
-          {architectureOverview && (
-            <p className="mt-2 text-sm text-fg-secondary">
-              <span className="text-xs uppercase tracking-wide text-fg-muted">Architecture: </span>
-              {architectureOverview}
-            </p>
-          )}
-        </Card>
-      )}
-
-      <Card title="API Summary" description={apiSummary || `${apis.length} exposed endpoint(s)`}>
-        {apis.length === 0 ? (
-          <p className="text-sm text-fg-muted">No exposed APIs found.</p>
-        ) : (
-          <ul className="space-y-1 text-sm text-fg-secondary" role="list">
-            {apis.map((api, i) => (
-              <li key={i} className="font-mono text-xs">
-                {api}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      <Card
-        title="Database Summary"
-        description={databaseSummary || `${databases.length} owned table(s)`}
-      >
-        {databases.length === 0 ? (
-          <p className="text-sm text-fg-muted">No owned databases found.</p>
-        ) : (
-          <ul className="space-y-1 text-sm text-fg-secondary" role="list">
-            {databases.map((db, i) => (
-              <li key={i} className="font-mono text-xs">
-                {db}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      <Card
-        title="Messaging Summary"
-        description={messagingSummary || `${queues.length} queue/topic(s)`}
-      >
-        {queues.length === 0 ? (
-          <p className="text-sm text-fg-muted">No queue or topic usage found.</p>
-        ) : (
-          <ul className="space-y-1 text-sm text-fg-secondary" role="list">
-            {queues.map((q, i) => (
-              <li key={i} className="font-mono text-xs">
-                {q}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      <Card
-        title="External Systems"
-        description={externalSystemsSummary || `${integrations.length} integration(s)`}
-      >
-        {integrations.length === 0 ? (
-          <p className="text-sm text-fg-muted">No outbound integrations found.</p>
-        ) : (
-          <ul className="space-y-1 text-sm text-fg-secondary" role="list">
-            {integrations.map((i2, i) => (
-              <li key={i} className="font-mono text-xs">
-                {i2}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      <Card
-        title="Dependency Summary"
-        description={dependencySummary || `${dependencies.length} dependency(ies)`}
-      >
-        {dependencies.length === 0 ? (
-          <p className="text-sm text-fg-muted">No dependencies found.</p>
-        ) : (
-          <ul className="space-y-1 text-sm text-fg-secondary" role="list">
-            {dependencies.map((dep, i) => (
-              <li key={i} className="font-mono text-xs">
-                {dep}
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      <ListSection title="Interesting Findings" items={interestingFindings} />
+      {result && <RepositoryUnderstandingResultDetails result={result} />}
 
       <EvidencePanel evidence={evidence} />
     </div>

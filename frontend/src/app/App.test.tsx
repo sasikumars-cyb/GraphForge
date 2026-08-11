@@ -29,9 +29,9 @@ const FAKE_USER: User = {
 
 function renderApp(initialPath = "/") {
   const router = createMemoryRouter(routes, { initialEntries: [initialPath] });
-  // A fresh QueryClient per render — see ControlCenterPage.test.tsx's
+  // A fresh QueryClient per render — see MissionControlPage.test.tsx's
   // equivalent comment for why (this file's dashboard route now renders
-  // ControlCenterPage, which uses useQuery as of KAN-37).
+  // MissionControlPage, which uses useQuery as of KAN-37).
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -133,7 +133,7 @@ describe("App navigation (authenticated)", () => {
     const nav = await screen.findByRole("navigation");
 
     for (const label of [
-      "Control Center",
+      "Mission Control",
       "AI Workspace",
       "New Workflow",
       "Runs",
@@ -146,12 +146,13 @@ describe("App navigation (authenticated)", () => {
     }
   });
 
-  it("defaults to the Control Center page", async () => {
+  it("defaults to the Mission Control page", async () => {
     renderApp();
-    // Both the Topbar (h1) and the page itself (h2) show the label, so
-    // assert on the page-level heading specifically.
+    // Topbar shows the same label as plain chrome (a <p>, not a heading —
+    // it mirrors the sidebar selection); only the page itself renders it
+    // as the real <h1>, so this assertion is unambiguous either way.
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Control Center" }),
+      await screen.findByRole("heading", { level: 1, name: "Mission Control" }),
     ).toBeInTheDocument();
   });
 

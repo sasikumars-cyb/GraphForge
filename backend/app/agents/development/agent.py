@@ -143,9 +143,17 @@ def _parse_llm_response(raw: str, goal: str) -> DevelopmentPlan:
     """Parse the LLM's JSON response into a DevelopmentPlan."""
     data = parse_json_response(raw, DevelopmentLLMError)
 
+    # `strip_not_indexed_annotation` on `.name`/repository `.name` here,
+    # not just `.file_path` (which already has its own, separately-correct
+    # `file_path_verification` computed below from real repository-scoped
+    # evidence) — defensive: nothing observed in this run's own testing
+    # puts the model's "(not yet indexed)" self-doubt into a component's
+    # *name*, but if it ever does, cleaning at construction means the
+    # stored value is never the polluted one, matching the same contract
+    # `testing/agent.py` uses.
     repositories = [
         AffectedRepository(
-            name=r.get("name", ""),
+            name=verification.strip_not_indexed_annotation(r.get("name", ""))[0],
             owner=r.get("owner", ""),
             reason=r.get("reason", ""),
         )
@@ -154,9 +162,13 @@ def _parse_llm_response(raw: str, goal: str) -> DevelopmentPlan:
 
     components = [
         AffectedComponent(
-            name=c.get("name", ""),
+            name=verification.strip_not_indexed_annotation(c.get("name", ""))[0],
             component_type=c.get("component_type", ""),
             repository=c.get("repository", ""),
+            # file_path is deliberately left as-is, sentinel included: the
+            # canonical status for this field is `file_path_verification`
+            # (computed below from real repository-scoped evidence, never
+            # from this text) — see AffectedComponent's own docstring.
             file_path=c.get("file_path", ""),
             change_description=c.get("change_description", ""),
         )
@@ -244,6 +256,7 @@ class DevelopmentAgent:
         )
 
         db: AsyncSession = context.extras["db"]
+        user_id = context.extras["user_id"]
         # Prefer the hop-budgeted repository RunCoordinator's Context
         # Preparation step builds from this agent's own manifest
         # (max_graph_hops=3 — see manifest.py); construct a plain,
@@ -323,7 +336,9 @@ class DevelopmentAgent:
                 )
             )
         else:
-            repos_tool = RepositoryDiscoveryTool(db=db, graph_repository=graph_repo)
+            repos_tool = RepositoryDiscoveryTool(
+                db=db, graph_repository=graph_repo, user_id=user_id
+            )
             repos_obs = await repos_tool.execute()
             evidence.append(to_evidence(repos_obs, "tool_call"))
 
@@ -437,6 +452,7 @@ class DevelopmentAgent:
         # Never trust the LLM's self-reported graph_context_used — derive it
         # from what the tools actually returned.
         plan.graph_context_used = has_graph_data
+        plan.grounding_status = verification.grounding_status(graph_unavailable, has_graph_data)
 
         # ------------------------------------------------------------------
         # Verify the LLM's specific claims against this run's own tool

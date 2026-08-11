@@ -162,9 +162,17 @@ def _parse_llm_response(raw: str, goal: str) -> TestPlan:
         out_of_scope=scope_data.get("out_of_scope", []),
     )
 
+    # `strip_not_indexed_annotation` here, not just at the verify_claims
+    # call site below: `.component`/`.source_component`/`.target_component`
+    # are what the frontend renders directly, and the LLM sometimes writes
+    # its own "(not yet indexed)" self-doubt straight into these fields
+    # (see that function's docstring). Cleaning at construction means the
+    # *stored* value is never the polluted one — `verified` (set later,
+    # once this run's evidence pool exists) is the single field that
+    # carries the doubt signal from here on, not the name/component text.
     regression_tests = [
         RegressionTest(
-            component=r.get("component", ""),
+            component=verification.strip_not_indexed_annotation(r.get("component", ""))[0],
             description=r.get("description", ""),
             priority=r.get("priority", ""),
             automated=bool(r.get("automated", False)),
@@ -174,8 +182,12 @@ def _parse_llm_response(raw: str, goal: str) -> TestPlan:
 
     integration_tests = [
         IntegrationTest(
-            source_component=t.get("source_component", ""),
-            target_component=t.get("target_component", ""),
+            source_component=verification.strip_not_indexed_annotation(
+                t.get("source_component", "")
+            )[0],
+            target_component=verification.strip_not_indexed_annotation(
+                t.get("target_component", "")
+            )[0],
             relationship=t.get("relationship", ""),
             description=t.get("description", ""),
             priority=t.get("priority", ""),
@@ -186,7 +198,7 @@ def _parse_llm_response(raw: str, goal: str) -> TestPlan:
     edge_cases = [
         EdgeCase(
             description=e.get("description", ""),
-            component=e.get("component", ""),
+            component=verification.strip_not_indexed_annotation(e.get("component", ""))[0],
             severity=e.get("severity", ""),
             category=e.get("category", ""),
         )
@@ -287,6 +299,7 @@ class TestPlanningAgent:
         )
 
         db: AsyncSession = context.extras["db"]
+        user_id = context.extras["user_id"]
         # Prefer the hop-budgeted repository RunCoordinator's Context
         # Preparation step builds from this agent's own manifest
         # (max_graph_hops=3 — see manifest.py); construct a plain,
@@ -383,7 +396,9 @@ class TestPlanningAgent:
                 )
             )
         else:
-            repos_tool = TestRepositoryDiscoveryTool(db=db, graph_repository=graph_repo)
+            repos_tool = TestRepositoryDiscoveryTool(
+                db=db, graph_repository=graph_repo, user_id=user_id
+            )
             repos_obs = await repos_tool.execute()
             evidence.append(to_evidence(repos_obs, "tool_call"))
 
@@ -539,6 +554,9 @@ class TestPlanningAgent:
         # Never trust the LLM's self-reported graph_context_used — derive it
         # from what the tools actually returned.
         test_plan.graph_context_used = has_graph_data
+        test_plan.grounding_status = verification.grounding_status(
+            graph_unavailable, has_graph_data
+        )
 
         # ------------------------------------------------------------------
         # Verify claims against this run's own tool evidence (see
@@ -589,6 +607,7 @@ class TestPlanningAgent:
         test_plan_claims += [t.component for t in test_plan.regression_tests]
         test_plan_claims += [t.source_component for t in test_plan.integration_tests]
         test_plan_claims += [t.target_component for t in test_plan.integration_tests]
+        test_plan_claims += [e.component for e in test_plan.edge_cases if e.component]
         _, component_warnings = check_test_used_as_production(
             test_plan_claims, graph_components_list, task_description
         )
@@ -653,6 +672,23 @@ class TestPlanningAgent:
                 "this run's indexed graph data — unverified.",
                 "component_not_found",
             )
+
+        # Canonical per-item verification state — the one place the
+        # frontend should ever look to decide "show an Unverified badge",
+        # never by inspecting the component/name text itself (that text is
+        # already clean of self-annotation as of `_parse_llm_response`
+        # above; see app.agents.verification's module docstring).
+        unverified_components = set(comp_check.unverified)
+        for rt in test_plan.regression_tests:
+            rt.verified = rt.component not in unverified_components
+        for it in test_plan.integration_tests:
+            it.verified = (
+                it.source_component not in unverified_components
+                and it.target_component not in unverified_components
+            )
+        for ec in test_plan.edge_cases:
+            ec.verified = not ec.component or ec.component not in unverified_components
+
         test_plan.verification_warnings = verification_warnings
         test_plan.verification_findings = [f.to_dict() for f in verification_findings]
         test_plan.component_warnings = to_contract_warnings(component_warnings)

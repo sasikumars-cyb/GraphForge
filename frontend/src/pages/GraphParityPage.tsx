@@ -70,6 +70,18 @@ export function GraphParityPage() {
       .finally(() => setIsRunning(false));
   };
 
+  // UX audit P2.5: Impact Analysis and Dependency Query — the other two
+  // read-only EXPLORE agents, same category as this one — both auto-run
+  // the instant a repository is selected; this page used to be the odd
+  // one out, requiring an extra "Run Parity Check" click for no
+  // documented reason (this is exactly as cheap/read-only as the other
+  // two — see this file's own module docstring). The button stays, for
+  // re-running the same repository on demand.
+  useEffect(() => {
+    if (selectedRepoId) runCheck();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedRepoId]);
+
   return (
     <div className="flex flex-col gap-6">
       <div className="flex items-center gap-3">

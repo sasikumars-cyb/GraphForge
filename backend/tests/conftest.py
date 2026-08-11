@@ -1,19 +1,123 @@
 """Shared pytest fixtures."""
 
 import asyncio
+import os
 from collections.abc import AsyncGenerator
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
-import pytest
-from httpx import ASGITransport, AsyncClient
-from sqlalchemy import delete, select
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+import asyncpg
+from alembic.config import Config as AlembicConfig
 
-from app.core import rate_limit
-from app.database.base import Base
-from app.database.session import AsyncSessionLocal, engine, get_db_session
-from app.main import create_app
-from app.models.background_job import BackgroundJob
-from app.orchestrator.worker import Worker
+from alembic import command as alembic_command
+from app.core.config import Settings
+
+
+# --- Route every test run at its own database, never the dev one --------
+#
+# `test_agent_orchestrator_api.py`'s docstring explains why the `client`
+# fixture below uses real, committed writes rather than the transactional
+# `db_session`: background execution opens its own independent
+# AsyncSessionLocal(), and a rolled-back transaction is invisible to it.
+# That's a genuine constraint, not an oversight — but "real, committed
+# writes" against whatever DATABASE_URL happens to resolve to means every
+# local `pytest` run against the docker-compose dev stack was leaving its
+# fixture rows (e.g. "Add exponential backoff to the retry handler",
+# "Implement JWT auth") permanently in the same Postgres database the dev
+# UI reads from. Confirmed: thousands of leftover workflow rows in the dev
+# DB traced back to exactly these fixture titles.
+#
+# Fix: derive a same-server-different-database URL (`<name>_test`, or
+# `TEST_DATABASE_URL` if explicitly set) *before* any `app.*` module runs
+# `get_settings()` — which is `@lru_cache`d, so whichever `DATABASE_URL`
+# is in `os.environ` the first time it's called wins for the rest of the
+# process. Creating the database on demand (rather than requiring a
+# one-time manual step) means this self-heals identically in CI's
+# ephemeral Postgres service container and in a developer's persistent
+# docker-compose one.
+def _test_database_url() -> str:
+    override = os.environ.get("TEST_DATABASE_URL")
+    if override:
+        return override
+    # `Settings()` (uncached, unlike `get_settings()`) reads DATABASE_URL
+    # from the environment/.env exactly as the app would — this is only to
+    # learn the base URL to derive from, not the one that ends up used.
+    base_url = os.environ.get("DATABASE_URL") or Settings().database_url
+    parts = urlsplit(base_url)
+    base_name = parts.path.lstrip("/") or "graphforge"
+    test_name = base_name if base_name.endswith("_test") else f"{base_name}_test"
+    return urlunsplit(parts._replace(path=f"/{test_name}"))
+
+
+async def _ensure_database_exists(test_url: str) -> None:
+    """`CREATE DATABASE` via asyncpg directly (SQLAlchemy's engine can't:
+    it's already bound to a specific database, and Postgres has no
+    `CREATE DATABASE IF NOT EXISTS`) — connecting to the driver-neutral
+    `postgres` maintenance database, present on every Postgres server,
+    to issue it. Racing another process doing the same (e.g. a parallel
+    CI job) is fine: DuplicateDatabaseError just means it's already there.
+    """
+    parts = urlsplit(test_url)
+    dbname = parts.path.lstrip("/")
+    admin_dsn = urlunsplit(parts._replace(path="/postgres"))
+    # asyncpg wants a plain `postgresql://` DSN, not SQLAlchemy's
+    # `postgresql+asyncpg://`.
+    admin_dsn = admin_dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+    conn = await asyncpg.connect(admin_dsn)
+    try:
+        await conn.execute(f'CREATE DATABASE "{dbname}"')
+    except asyncpg.DuplicateDatabaseError:
+        pass
+    finally:
+        await conn.close()
+
+
+def _run_migrations(test_url: str) -> None:
+    """`Base.metadata.create_all` (the `client`/`db_session` fixtures' own
+    schema setup, below) only creates what's declared on the ORM models —
+    it silently skips anything that exists solely as a raw migration
+    operation, e.g. `44c79114ee64_add_llm_invocations_table`'s composite
+    `ix_llm_invocations_run_id_started_at` index, which has no matching
+    `Index(...)` on the `LLMInvocation` model. Against the persistent dev
+    database that gap never showed up, since some past `alembic upgrade
+    head` had already applied it once and it just stayed. A fresh
+    `<name>_test` database has no such history, so it needs the real
+    migrations run against it too, not just `create_all`.
+    """
+    alembic_cfg = AlembicConfig(str(Path(__file__).parent.parent / "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", str(Path(__file__).parent.parent / "alembic"))
+    alembic_cfg.set_main_option("sqlalchemy.url", test_url)
+    alembic_command.upgrade(alembic_cfg, "head")
+
+
+_TEST_DATABASE_URL = _test_database_url()
+# Must happen before *any* `get_settings()` call in this process — including
+# indirect ones — because it's `@lru_cache`d: whichever `DATABASE_URL` is in
+# `os.environ` the first time it's called wins for the rest of the process,
+# no matter what `os.environ` says afterward. `_run_migrations` below is
+# exactly such an indirect call: Alembic's `env.py` does `get_settings()` of
+# its own to build its config (confirmed the hard way — with this line placed
+# after `_run_migrations` instead, that call cached the real dev DB's URL
+# before this override ever ran, and every "isolated" test DB write actually
+# landed back in the dev database). Set this first, before touching anything
+# that might import `app.*`, and don't reorder it below `_run_migrations` or
+# the imports further down — an import-sorter/E402 autofix that hoists those
+# imports back above this line would silently reintroduce the same bug.
+os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
+asyncio.run(_ensure_database_exists(_TEST_DATABASE_URL))
+_run_migrations(_TEST_DATABASE_URL)
+
+import pytest  # noqa: E402
+from httpx import ASGITransport, AsyncClient  # noqa: E402
+from sqlalchemy import delete, select  # noqa: E402
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker  # noqa: E402
+
+from app.core import rate_limit  # noqa: E402
+from app.database.base import Base  # noqa: E402
+from app.database.session import AsyncSessionLocal, engine, get_db_session  # noqa: E402
+from app.main import create_app  # noqa: E402
+from app.models.background_job import BackgroundJob  # noqa: E402
+from app.orchestrator.worker import Worker  # noqa: E402
 
 
 @pytest.fixture(autouse=True)

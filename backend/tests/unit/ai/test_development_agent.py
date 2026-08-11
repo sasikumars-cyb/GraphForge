@@ -129,7 +129,7 @@ async def test_repository_discovery_with_indexed_repos() -> None:
     mock_graph_repo = AsyncMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=True)
 
-    tool = RepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo)
+    tool = RepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo, user_id="user-1")
     obs = await tool.execute()
 
     assert obs.succeeded is True
@@ -157,7 +157,7 @@ async def test_repository_discovery_full_name_is_canonical_owner_slash_name() ->
     mock_graph_repo = AsyncMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=True)
 
-    tool = RepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo)
+    tool = RepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo, user_id="user-1")
     obs = await tool.execute()
 
     repo = obs.data["indexed_repositories"][0]
@@ -184,7 +184,7 @@ async def test_repository_discovery_none_indexed() -> None:
     mock_graph_repo = AsyncMock()
     mock_graph_repo.has_graph = AsyncMock(return_value=False)
 
-    tool = RepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo)
+    tool = RepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo, user_id="user-1")
     obs = await tool.execute()
 
     assert obs.succeeded is True
@@ -199,7 +199,7 @@ async def test_repository_discovery_db_failure() -> None:
 
     mock_graph_repo = AsyncMock()
 
-    tool = RepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo)
+    tool = RepositoryDiscoveryTool(db=mock_db, graph_repository=mock_graph_repo, user_id="user-1")
     obs = await tool.execute()
 
     assert obs.succeeded is False
@@ -464,7 +464,7 @@ def _make_development_context(display_name: str = "Implement JWT authentication"
     return AgentContext(
         subject=subject,
         goal="develop_change_plan",
-        extras={"db": mock_db},
+        extras={"db": mock_db, "user_id": "user-1"},
     )
 
 

@@ -1,9 +1,22 @@
 import { Link } from "react-router-dom";
-import { Link2, Layers, CircleSlash } from "lucide-react";
+import { AlertTriangle, Link2, CircleSlash } from "lucide-react";
+import type { GroundingStatus } from "../../types/agent";
 
 interface GroundingBannerProps {
-  /** The agent's own report of whether it read the architecture graph. */
+  /** The agent's own report of whether it read the architecture graph —
+   * still used for the success case's exact styling, but `groundingStatus`
+   * (below) is the actual discriminant for which of the three banners
+   * renders; see that field's own docstring for why. */
   graphContextUsed: boolean;
+  /** UX audit P1.3/P1.4: the backend's own classification of *why* this
+   * run isn't grounded (or is) — see app.agents.verification.
+   * grounding_status. Optional only so old persisted results (from before
+   * this field existed) fall back to the previous, less precise two-signal
+   * heuristic rather than crashing; every run generated from now on sets
+   * it. Do not add a fourth way to guess this state — this prop plus
+   * `graphContextUsed`/`repositoriesConsulted` (kept only for the
+   * fallback) are the complete input. */
+  groundingStatus?: GroundingStatus;
   repositoriesConsulted?: string[];
   /** Evidence items on the step, when the caller has them. */
   evidenceCount?: number;
@@ -21,15 +34,21 @@ interface GroundingBannerProps {
  * rendered in the visual weight class of a copyright notice, below the fold
  * of a long card.
  *
- * Three states, not two. A run with no graph is not automatically a problem:
- * a greenfield project legitimately has no repository to index, and
- * PlanningPage already branches on exactly this condition to show
- * GreenfieldRecommendations. So "no graph AND no repositories" is reported
- * neutrally with an offer, while "repositories read but no graph" is the
- * genuinely degraded middle case and is the one flagged amber.
+ * Three states, not two — and, since the UX audit's P1.4 fix, driven by one
+ * backend-computed classification (`groundingStatus`) instead of this
+ * component re-deriving its own guess from `graphContextUsed`/`repos.
+ * length`. That old heuristic could not distinguish "the graph service
+ * itself was unreachable" (genuinely worth a retry) from "nothing is
+ * indexed yet" (genuinely a new/unindexed project, expected) — both
+ * collapsed into the same "No codebase context" copy, which is how a real
+ * infrastructure failure ended up telling a user this was "expected for a
+ * new project." Each state now has its own accurate heading, explanation,
+ * and — critically — its own correct next action (Retry vs. Index a
+ * repository vs. no action needed).
  */
 export function GroundingBanner({
   graphContextUsed,
+  groundingStatus,
   repositoriesConsulted,
   evidenceCount,
   subject,
@@ -42,7 +61,12 @@ export function GroundingBanner({
       : null,
   ].filter(Boolean) as string[];
 
-  if (graphContextUsed) {
+  // Fallback for results persisted before grounding_status existed: the
+  // same two-signal guess this component used to make unconditionally.
+  const status: GroundingStatus =
+    groundingStatus ?? (graphContextUsed ? "grounded" : repos.length > 0 ? "unavailable" : "not_indexed");
+
+  if (status === "grounded") {
     return (
       <Banner
         icon={Link2}
@@ -55,16 +79,15 @@ export function GroundingBanner({
     );
   }
 
-  if (repos.length > 0) {
+  if (status === "unavailable") {
     return (
       <Banner
-        icon={Layers}
+        icon={AlertTriangle}
         tone="warning"
-        heading="Partially grounded"
-        body={`Repositories were consulted, but no architecture graph was available — so this ${subject} could not use dependency or call-path information.`}
+        heading="Architecture graph unavailable"
+        body={`We could not retrieve indexed architecture data for this request, so this ${subject} uses first-principles reasoning instead of repository-grounded evidence. This is an infrastructure issue, not an indexing gap — retrying may succeed once the graph service recovers.`}
         facts={facts}
         repos={repos}
-        action={{ to: "/repositories", label: "Index a repository" }}
       />
     );
   }
@@ -132,10 +155,19 @@ function Banner({
           )}
         </div>
         <p className={`mt-0.5 text-xs ${styles.body}`}>{body}</p>
+        {/* UX audit P1.2: this is the one canonical place the full
+            grounding-scope repo list lives — collapsed by default (the
+            names rarely matter, the count already does via `facts`
+            above) rather than always-on, truncated, ellipsized text. */}
         {repos.length > 0 && (
-          <p className={`mt-1 truncate font-mono text-[11px] ${styles.body}`} title={repos.join(", ")}>
-            {repos.join(" · ")}
-          </p>
+          <details className="mt-1">
+            <summary
+              className={`w-fit cursor-pointer text-[11px] font-medium ${styles.body} hover:underline`}
+            >
+              Show repositories
+            </summary>
+            <p className={`mt-1 font-mono text-[11px] ${styles.body}`}>{repos.join(" · ")}</p>
+          </details>
         )}
       </div>
       {action && (

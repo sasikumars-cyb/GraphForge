@@ -265,7 +265,9 @@ def _build_python_graph(
         )
 
 
-def build_graph(repository_id: str, model: ArchitectureModel) -> GraphPayload:
+def build_graph(
+    repository_id: str, model: ArchitectureModel, repository_name: str | None = None
+) -> GraphPayload:
     nodes: list[GraphNode] = []
     edges: list[GraphEdge] = []
 
@@ -274,7 +276,22 @@ def build_graph(repository_id: str, model: ArchitectureModel) -> GraphPayload:
         GraphNode(
             id=repo_id,
             labels=["Repository"],
-            properties={"language": model.language, "framework": model.framework or ""},
+            properties={
+                # Every other node type sets "name" (see `_classification_
+                # properties` and friends below); the Repository node never
+                # did, so anything rendering a node label off `properties.
+                # name ?? id` (ImpactedNodesTable, BlastRadiusGraph, PR
+                # Review's affected-components list, ...) fell back to the
+                # raw `f"{repository_id}:repository"` id — a UUID with a
+                # suffix — instead of a human name. `repository_name` is
+                # optional (defaults to None, which still writes no "name"
+                # key) so this stays callable without a DB-backed
+                # `Repository` row, same as before (`index_repository`'s
+                # own docstring: "testable without a database at all").
+                **({"name": repository_name} if repository_name else {}),
+                "language": model.language,
+                "framework": model.framework or "",
+            },
         )
     )
 

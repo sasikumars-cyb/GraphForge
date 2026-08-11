@@ -42,6 +42,15 @@ const GOAL_TO_STAGE: Record<string, string> = {
   plan_tests: "testing",
   plan_documentation: "documentation_planning",
   review_readiness: "engineering_review",
+  // UX audit P0.2/P0.3: these four standalone agents had no entry here at
+  // all, so a run reached via Run History fell through to
+  // StageResultPanel's Evidence/Log/JSON-only fallback — the agent's real
+  // result (scores, findings, endpoint catalog, ...) was only ever visible
+  // on the page the run was originally submitted from.
+  review_pr: "review",
+  analyze_documentation_health: "documentation_health",
+  analyze_api_intelligence: "api_intelligence",
+  analyze_repository_understanding: "repository_understanding",
 };
 
 /** Map a Run's goal to the "stage" key StageResultPanel expects. Runs

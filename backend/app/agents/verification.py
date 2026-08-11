@@ -71,6 +71,98 @@ from typing import Any, Literal
 from app.agents.normalization import normalize_path, normalize_text, squash, tokenize
 
 # ---------------------------------------------------------------------------
+# -1. "Not yet indexed" self-annotation — a second, competing source of
+#     truth this module must never let win.
+# ---------------------------------------------------------------------------
+
+# Development/Testing/Planning prompts instruct the LLM: "if a component
+# isn't in the graph, say 'not yet indexed' rather than inventing it" — a
+# reasonable instinct (don't fabricate a real-looking name/path), but it
+# means the model sometimes writes that literal phrase *into* a field this
+# module then treats as a factual claim to verify (`comp.name`,
+# `RegressionTest.component`, ...). That claim always fails verification
+# (the sentinel text obviously isn't real evidence) — correctly — but a
+# frontend that renders the field's raw text unconditionally ends up
+# displaying "order-service-python (not yet indexed)" for a component that
+# *is* genuinely indexed, contradicting the run's own grounding banner.
+#
+# The fix is not to hide the phrase in CSS/string-filtering at render time
+# — it's to never let it become part of the "name" in the first place.
+# `strip_not_indexed_annotation` is the one place that recognizes the
+# model's self-annotation and separates it from the real claim: callers
+# use the returned clean text as the value to store/display, and
+# `had_annotation` as an additional (not exclusive — see `verify_claims`
+# below) signal that this specific field is unconfirmed.
+_NOT_INDEXED_PATTERN = re.compile(
+    r"""
+    \s*
+    (?:
+        [-–—(]\s*not\s+yet\s+indexed\s*\)? |  # " - not yet indexed" / " (not yet indexed)"
+        ^\s*not\s+yet\s+indexed\s*$                      # the whole field is just the sentinel
+    )
+    """,
+    re.IGNORECASE | re.VERBOSE,
+)
+
+
+def strip_not_indexed_annotation(text: str) -> tuple[str, bool]:
+    """Split a model-written field into (clean_text, had_annotation).
+
+    `had_annotation=True` means the model itself flagged this value as
+    unconfirmed — a real signal, but never the final word: `verify_claims`
+    on the *clean* text against this run's real evidence pool is what
+    actually decides verified vs. unverified (a value the model doubted
+    can still turn out to be real; this only ensures the doubt-text itself
+    never becomes part of the displayed name/path).
+    """
+    if not text:
+        return text, False
+    cleaned = _NOT_INDEXED_PATTERN.sub("", text).strip()
+    had_annotation = cleaned != text.strip()
+    if not cleaned:
+        # The whole field *was* the sentinel (e.g. file_path == "not yet
+        # indexed") — nothing real to keep.
+        return "", True
+    return cleaned, had_annotation
+
+
+# ---------------------------------------------------------------------------
+# -0.5. One canonical "why is/isn't this grounded" state — UX audit P1.3/
+#       P1.4.
+# ---------------------------------------------------------------------------
+
+#: "grounded" — the graph was reachable and had real data for this run.
+#: "unavailable" — a genuine infrastructure failure (the graph service
+#:   itself couldn't be reached); retrying later may fix it.
+#: "not_indexed" — the graph was reachable but empty/has nothing relevant
+#:   indexed yet (e.g. a greenfield idea, or a repo that hasn't been
+#:   indexed); indexing a repository is the fix, not retrying.
+GroundingStatus = Literal["grounded", "unavailable", "not_indexed"]
+
+
+def grounding_status(graph_unavailable: bool, has_graph_data: bool) -> GroundingStatus:
+    """Planning/Development/Testing each independently compute
+    `graph_unavailable`/`has_graph_data` to pick their own `confidence_
+    reasoning` prose (three real, distinct states — infra failure vs.
+    genuinely-empty-graph vs. grounded). Until now that was the *only*
+    place the distinction existed: the frontend's GroundingBanner received
+    just `graph_context_used` (collapses "unavailable" and "not_indexed"
+    into the same false state) and re-derived its own two-state banner
+    text independently — which is how a genuine infrastructure failure
+    ended up displayed as "expected for a new project," while the actual
+    accurate explanation sat unused in `confidence_reasoning` next to it.
+    This is the one place that maps the same two booleans to the same
+    three-way answer every caller (backend prose, frontend banner) must
+    agree on — never re-derive this classification separately.
+    """
+    if graph_unavailable:
+        return "unavailable"
+    if has_graph_data:
+        return "grounded"
+    return "not_indexed"
+
+
+# ---------------------------------------------------------------------------
 # 0. Structured warning classification
 # ---------------------------------------------------------------------------
 

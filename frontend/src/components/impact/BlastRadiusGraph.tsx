@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import { ReactFlow, Background, Controls, MarkerType, type Node, type Edge } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { primaryLabel, resolveLabelColors } from "../graph/graphLabels";
+import { humanizeRelationship } from "../../lib/humanizeRelationship";
 import { useTheme } from "../../theme/theme-context";
 import type { Graph, GraphNode as GraphNodeType } from "../../types/graph";
 
@@ -133,7 +134,7 @@ function layoutRadial(graph: Graph): { nodes: Node[]; edges: Edge[] } {
     id: `${edge.source_id}->${edge.target_id}-${edge.type}-${index}`,
     source: edge.source_id,
     target: edge.target_id,
-    label: edge.type,
+    label: humanizeRelationship(edge.type),
     markerEnd: { type: MarkerType.ArrowClosed, color: "var(--gf-graph-edge)" },
     style: { stroke: "var(--gf-graph-edge)", strokeWidth: 1.5 },
     labelStyle: { fill: "var(--gf-graph-edge-label)", fontSize: 9 },

@@ -10,6 +10,7 @@ title generation never blocks workflow/run creation.
 from __future__ import annotations
 
 import logging
+import re
 
 from app.agents.llm import StageAwareLLMProvider
 from app.ai.providers.base import LLMRequestOptions, ResponseFormat
@@ -46,6 +47,60 @@ def _looks_like_a_title(text: str) -> bool:
     return bool(text) and len(text) <= _MAX_TITLE_CHARS and "\n" not in text
 
 
+# UX audit P1.5: two confirmed, concrete title bugs.
+#
+# 1. Repository Understanding — a read-only, no-code-change agent — got
+#    titled "Refactor Payment Service Java Module": the system prompt's own
+#    examples above are all action-verb phrasings ("Refactor...",
+#    "Review..."), so the model defaults to that framing even for an
+#    agent whose objective is never "do X to the codebase", just "explain
+#    what this repo does". Read-only analysis goals below skip the LLM
+#    call entirely — there's no free-text task to summarize, only a
+#    repository name, and no action verb can honestly describe them.
+# 2. Documentation Health and API Intelligence, run against the same
+#    repository, produced titles indistinguishable from one another in Run
+#    History ("Review Order Service Python Code" vs. "...Repository") —
+#    neither one's title said which agent produced it. Every title below
+#    is deterministically prefixed with its agent label, so this can't
+#    happen for any goal, LLM-generated or not.
+_AGENT_LABEL_BY_GOAL: dict[str, str] = {
+    "plan_freeform": "Planning",
+    "develop_change_plan": "Development",
+    "plan_tests": "Testing",
+    "review_pr": "PR Review",
+    "analyze_documentation_health": "Documentation Health",
+    "analyze_api_intelligence": "API Intelligence",
+    "analyze_repository_understanding": "Repository Understanding",
+}
+
+# These goals' "objective" is always a bare repository full_name (e.g.
+# "org/order-service-python") — read-only inspection, never a change — so
+# their title is built deterministically from that name instead of asking
+# an LLM to invent an engineering-task-shaped summary for something that
+# isn't one.
+_READ_ONLY_REPOSITORY_GOALS = frozenset(
+    {
+        "analyze_documentation_health",
+        "analyze_api_intelligence",
+        "analyze_repository_understanding",
+    }
+)
+
+
+def _agent_prefixed(goal: str | None, title: str) -> str:
+    label = _AGENT_LABEL_BY_GOAL.get(goal or "")
+    return f"{label} — {title}" if label else title
+
+
+def _repository_short_name(full_name: str) -> str:
+    """ "org/order-service-python" -> "Order Service Python" — the
+    repository's own name, human-cased, with no owner/org prefix and no
+    action verb invented on top of it."""
+    name = full_name.rsplit("/", 1)[-1]
+    words = re.split(r"[-_\s]+", name)
+    return " ".join(w.capitalize() if w.islower() or w.isupper() else w for w in words if w)
+
+
 def fallback_title(objective: str) -> str:
     """Word-boundary-truncated version of the objective — never cuts a
     word in half, never empty.
@@ -67,14 +122,26 @@ def fallback_title(objective: str) -> str:
     return f"{truncated}…" if truncated else collapsed[:_FALLBACK_MAX_CHARS]
 
 
-async def generate_title(objective: str, *, model: str | None = None) -> str:
+async def generate_title(
+    objective: str, *, model: str | None = None, goal: str | None = None
+) -> str:
     """Generate a concise title for `objective`.
 
     Always returns something usable — on any provider failure (not
     configured, rate limited, timeout, malformed response), logs a
     warning and falls back to a truncated version of the objective
     itself rather than raising and blocking workflow/run creation.
+
+    `goal` (optional — every existing caller that omits it gets exactly the
+    prior behavior) drives two UX-audit fixes (P1.5): read-only,
+    repository-scoped goals never reach the LLM at all (see
+    `_READ_ONLY_REPOSITORY_GOALS`'s own docstring for why), and every
+    result — LLM-generated or fallback — gets its agent label prefixed on,
+    so two different agents run against the same repository never produce
+    indistinguishable titles.
     """
+    if goal in _READ_ONLY_REPOSITORY_GOALS:
+        return _agent_prefixed(goal, _repository_short_name(objective))
     try:
         provider = StageAwareLLMProvider(stage=None, model=model)
         response = await provider.complete(
@@ -84,11 +151,11 @@ async def generate_title(objective: str, *, model: str | None = None) -> str:
         )
         title = response.text.strip().strip('"').strip()
         if _looks_like_a_title(title):
-            return title
+            return _agent_prefixed(goal, title)
         logger.warning(
             "title_generation_unusable_response falling back to truncated objective: %.100r",
             title,
         )
     except AppError as exc:
         logger.warning("title_generation_failed error=%s falling back to truncated objective", exc)
-    return fallback_title(objective)
+    return _agent_prefixed(goal, fallback_title(objective))

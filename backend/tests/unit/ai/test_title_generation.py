@@ -150,3 +150,98 @@ async def test_generate_title_falls_back_when_provider_returns_multiple_lines() 
         title = await generate_title("Add caching to the search service.")
 
     assert title == "Add caching to the search service."
+
+
+# ---------------------------------------------------------------------------
+# UX audit P1.5 — misleading run titles.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_read_only_repository_goal_never_calls_the_llm() -> None:
+    """Regression: Repository Understanding — read-only, no code changes —
+    was titled "Refactor Payment Service Java Module" because the LLM's own
+    example titles are all action-verb phrasings. Read-only, repository-
+    scoped goals must never reach the LLM (and therefore can never produce
+    an action-verb title) at all."""
+    mock_factory = MagicMock(side_effect=AssertionError("must not call the LLM"))
+    with patch("app.agents.title_generation.StageAwareLLMProvider", mock_factory):
+        title = await generate_title(
+            "sasikumars-cyb/payment-service-java",
+            goal="analyze_repository_understanding",
+        )
+
+    mock_factory.assert_not_called()
+    assert title == "Repository Understanding — Payment Service Java"
+    # No action verb ("Refactor", "Fix", "Add", ...) was ever generated.
+    assert "Refactor" not in title
+
+
+@pytest.mark.parametrize(
+    ("goal", "objective", "expected"),
+    [
+        (
+            "analyze_documentation_health",
+            "org/order-service-python",
+            "Documentation Health — Order Service Python",
+        ),
+        (
+            "analyze_api_intelligence",
+            "org/order-service-python",
+            "API Intelligence — Order Service Python",
+        ),
+        (
+            "analyze_repository_understanding",
+            "org/payment-service-java",
+            "Repository Understanding — Payment Service Java",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_read_only_titles_are_distinguishable_per_agent(
+    goal: str, objective: str, expected: str
+) -> None:
+    """Regression: Documentation Health and API Intelligence run against the
+    same repository used to produce indistinguishable titles in Run
+    History — neither said which agent produced it."""
+    title = await generate_title(objective, goal=goal)
+    assert title == expected
+
+
+@pytest.mark.asyncio
+async def test_llm_generated_title_is_prefixed_with_its_agent_label() -> None:
+    with patch(
+        "app.agents.title_generation.StageAwareLLMProvider",
+        return_value=_mock_provider("Add Idempotency Key Handling"),
+    ):
+        title = await generate_title(
+            "Add an idempotency key to the payment endpoint.", goal="plan_freeform"
+        )
+
+    assert title == "Planning — Add Idempotency Key Handling"
+
+
+@pytest.mark.asyncio
+async def test_fallback_title_is_also_prefixed_with_its_agent_label() -> None:
+    with patch(
+        "app.agents.title_generation.StageAwareLLMProvider",
+        side_effect=AppError("Not configured."),
+    ):
+        title = await generate_title("Add retry support.", goal="develop_change_plan")
+
+    assert title == "Development — Add retry support."
+
+
+@pytest.mark.asyncio
+async def test_unknown_goal_is_not_prefixed_and_keeps_prior_behavior() -> None:
+    """Every existing caller that omits `goal` (or passes one this module
+    doesn't recognize) must see byte-identical behavior to before this
+    fix — no accidental prefix on workflow titles, which cover a whole
+    multi-stage objective rather than one agent's goal."""
+    with patch(
+        "app.agents.title_generation.StageAwareLLMProvider",
+        return_value=_mock_provider("A Title"),
+    ):
+        title = await generate_title("Do the thing.", goal="some_future_goal")
+
+    assert title == "A Title"

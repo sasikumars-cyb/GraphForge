@@ -405,7 +405,7 @@ describe("WorkflowPage", () => {
     expect(await screen.findByText("Implementation Steps")).toBeInTheDocument();
   });
 
-  it("does not show a Summary tab for the review stage", async () => {
+  it("shows a Summary tab with the review's own result for the review stage (UX audit P0.2/P0.3 — a review_pr-goal run used to fall through to Evidence/Log/JSON only)", async () => {
     vi.mocked(workflowsApi.getWorkflow).mockResolvedValue(
       makeWorkflow({
         current_stage: "review",
@@ -434,7 +434,11 @@ describe("WorkflowPage", () => {
     renderWorkflowPage();
 
     await screen.findByText("Implement JWT auth");
-    expect(screen.queryByRole("tab", { name: /Summary/ })).not.toBeInTheDocument();
+    expect(await screen.findByRole("tab", { name: /Summary/ })).toBeInTheDocument();
+    // ReviewResultDetails renders `result.executive_summary` under a
+    // "Review Summary" card — makeRun's default result always has one
+    // (its "A plan." stub), regardless of which stage/goal is under test.
+    expect(await screen.findByText("A plan.")).toBeInTheDocument();
   });
 
   it("reveals the Workflow Replay panel only after the toggle is clicked", async () => {

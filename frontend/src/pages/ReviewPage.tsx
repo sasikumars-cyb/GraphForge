@@ -1,14 +1,18 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { Search, Send, RotateCcw, History, ExternalLink } from "lucide-react";
+import { Search, Send, RotateCcw, History } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
 import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
+import { ReviewResultDetails } from "../components/agents/StageResultDetails";
+import {
+  pullRequestIdFromSubject,
+  ViewVisualReportButton,
+} from "../components/agents/ViewVisualReportButton";
 import { useAgentRun } from "../hooks/useAgentRun";
-import { useAuth } from "../app/auth-context";
-import { getReviewReportHtml } from "../lib/api/analysis";
+import type { PRReviewResult } from "../types/agent";
 
 const PR_URL_PATTERN = /^https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+\/?$/;
 
@@ -143,70 +147,18 @@ export function ReviewPage() {
 }
 
 // ---------------------------------------------------------------------------
-// Result sub-component
+// Result sub-component — the header/metadata/evidence chrome specific to
+// this page's live-submission view; the result content itself is
+// ReviewResultDetails (see StageResultDetails.tsx), shared with
+// RunDetailPage so the exact same run reached from History renders
+// identically instead of falling back to raw Evidence/Log/JSON.
 // ---------------------------------------------------------------------------
 
 function ReviewResultView({ run, onNewReview }: { run: NonNullable<ReturnType<typeof useAgentRun>["run"]>; onNewReview: () => void }) {
-  const { token } = useAuth();
-  const [isOpeningReport, setIsOpeningReport] = useState(false);
-  const [reportError, setReportError] = useState<string | null>(null);
   const step = run.steps[0];
-  const result = step?.result as Record<string, unknown> | undefined;
+  const result = step?.result as unknown as PRReviewResult | undefined;
   const evidence = step?.evidence ?? [];
-
-  // subject_id is "pr:<uuid>" for pull_request subjects (see
-  // resolve_pr_subject in app/agents/review_adapter.py) - the visual
-  // report endpoint keys off that same pull request id.
-  const pullRequestId = run.subject.subject_id.startsWith("pr:")
-    ? run.subject.subject_id.slice(3)
-    : null;
-
-  async function handleOpenReport() {
-    if (!token || !pullRequestId) return;
-    const reportWindow = window.open("", "_blank");
-    setIsOpeningReport(true);
-    setReportError(null);
-    try {
-      const html = await getReviewReportHtml(token, pullRequestId);
-      const blobUrl = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-      if (reportWindow) {
-        reportWindow.location.href = blobUrl;
-      } else {
-        setReportError("Pop-up blocked - allow pop-ups for this site to view the report.");
-      }
-    } catch (err) {
-      reportWindow?.close();
-      setReportError(err instanceof Error ? err.message : "Failed to load the visual report.");
-    } finally {
-      setIsOpeningReport(false);
-    }
-  }
-
-  const summary = (result?.executive_summary as string) ?? "";
-  const breakingChanges = (result?.breaking_changes as Array<Record<string, unknown>>) ?? [];
-  const migrationAdvice = (result?.migration_advice as Array<Record<string, unknown>>) ?? [];
-  const suggestedReviewers = (result?.suggested_reviewers as Array<Record<string, unknown>>) ?? [];
-  const regressionTests = (result?.regression_tests as Array<Record<string, unknown>>) ?? [];
-
-  const qualityScore = result?.quality_score as number | null | undefined;
-  const riskScore = result?.risk_score as number | null | undefined;
-  const mergeRecommendation = result?.merge_recommendation as string | null | undefined;
-  const findings = (result?.findings as Array<Record<string, unknown>>) ?? [];
-  const architectureObservations = (result?.architecture_observations as string[]) ?? [];
-  const maintainabilityObservations = (result?.maintainability_observations as string[]) ?? [];
-  const reliabilityObservations = (result?.reliability_observations as string[]) ?? [];
-  const testingReview = (result?.testing_review as string) ?? "";
-  const documentationReview = (result?.documentation_review as string) ?? "";
-  const positiveFindings = (result?.positive_findings as string[]) ?? [];
-  const suggestedImprovements = (result?.suggested_improvements as string[]) ?? [];
-
-  const hasReviewScorecard =
-    qualityScore != null || riskScore != null || Boolean(mergeRecommendation);
-  const severityOrder = ["critical", "high", "medium", "low"];
-  const sortedFindings = [...findings].sort(
-    (a, b) =>
-      severityOrder.indexOf(a.severity as string) - severityOrder.indexOf(b.severity as string),
-  );
+  const pullRequestId = pullRequestIdFromSubject(run.goal, run.subject.subject_id);
 
   return (
     <div className="flex flex-col gap-6">
@@ -219,18 +171,7 @@ function ReviewResultView({ run, onNewReview }: { run: NonNullable<ReturnType<ty
           )}
         </div>
         <div className="flex items-center gap-2">
-          {result && pullRequestId && (
-            <button
-              type="button"
-              onClick={() => void handleOpenReport()}
-              disabled={isOpeningReport}
-              title="Opens the full executive dashboard - score bars, filterable findings, per-file review cards"
-              className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-fg-muted ring-1 ring-inset ring-line transition-colors hover:bg-surface-raised hover:text-fg-secondary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
-              {isOpeningReport ? "Opening…" : "View Visual Report"}
-            </button>
-          )}
+          {result && <ViewVisualReportButton pullRequestId={pullRequestId} />}
           <button
             type="button"
             onClick={onNewReview}
@@ -241,12 +182,6 @@ function ReviewResultView({ run, onNewReview }: { run: NonNullable<ReturnType<ty
           </button>
         </div>
       </div>
-
-      {reportError && (
-        <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
-          {reportError}
-        </div>
-      )}
 
       {/* Run metadata */}
       <Card title="Run Details">
@@ -303,234 +238,10 @@ function ReviewResultView({ run, onNewReview }: { run: NonNullable<ReturnType<ty
         </div>
       )}
 
-      {/* Review summary */}
-      {summary && (
-        <Card title="Review Summary">
-          <p className="text-sm text-fg-secondary">{summary}</p>
-        </Card>
-      )}
-
-      {/* Scorecard: quality/risk score + merge recommendation */}
-      {hasReviewScorecard && (
-        <Card title="Scorecard">
-          <div className="flex flex-wrap items-center gap-6">
-            {qualityScore != null && (
-              <div>
-                <dt className="text-xs text-fg-muted">Quality Score</dt>
-                <dd className="text-2xl font-semibold text-fg">{Math.round(qualityScore)}<span className="text-sm text-fg-muted">/100</span></dd>
-              </div>
-            )}
-            {riskScore != null && (
-              <div>
-                <dt className="text-xs text-fg-muted">Risk Score</dt>
-                <dd className="text-2xl font-semibold text-fg">{Math.round(riskScore)}<span className="text-sm text-fg-muted">/100</span></dd>
-              </div>
-            )}
-            {mergeRecommendation && (
-              <div>
-                <dt className="text-xs text-fg-muted">Merge Recommendation</dt>
-                <dd className="mt-1">
-                  <span className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 ring-inset ${mergeRecommendationStyles(mergeRecommendation)}`}>
-                    {mergeRecommendationLabel(mergeRecommendation)}
-                  </span>
-                </dd>
-              </div>
-            )}
-          </div>
-        </Card>
-      )}
-
-      {/* Findings, grouped by severity */}
-      {sortedFindings.length > 0 && (
-        <Card title="Findings" description={`${sortedFindings.length} found`}>
-          <ul className="space-y-3" role="list">
-            {sortedFindings.map((f, i) => (
-              <li key={i} className={`rounded-lg border px-4 py-3 ${findingSeverityStyles(f.severity as string)}`}>
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-fg">{f.title as string}</span>
-                  <span className="rounded-full bg-surface px-2 py-0.5 text-xs uppercase tracking-wide text-fg-muted ring-1 ring-inset ring-line">
-                    {f.severity as string}
-                  </span>
-                  <span className="text-xs text-fg-muted">{f.category as string}</span>
-                </div>
-                <p className="mt-1 text-sm text-fg-secondary">{f.description as string}</p>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      {/* Observations */}
-      {(architectureObservations.length > 0 ||
-        maintainabilityObservations.length > 0 ||
-        reliabilityObservations.length > 0) && (
-        <Card title="Observations">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            <ObservationList label="Architecture" items={architectureObservations} />
-            <ObservationList label="Maintainability" items={maintainabilityObservations} />
-            <ObservationList label="Reliability" items={reliabilityObservations} />
-          </div>
-        </Card>
-      )}
-
-      {/* Testing & Documentation review */}
-      {(testingReview || documentationReview) && (
-        <Card title="Testing & Documentation">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {testingReview && (
-              <div>
-                <h4 className="text-xs font-medium text-fg-muted">Testing Review</h4>
-                <p className="mt-1 text-sm text-fg-secondary">{testingReview}</p>
-              </div>
-            )}
-            {documentationReview && (
-              <div>
-                <h4 className="text-xs font-medium text-fg-muted">Documentation Review</h4>
-                <p className="mt-1 text-sm text-fg-secondary">{documentationReview}</p>
-              </div>
-            )}
-          </div>
-        </Card>
-      )}
-
-      {/* Positive findings + suggested improvements */}
-      {(positiveFindings.length > 0 || suggestedImprovements.length > 0) && (
-        <Card title="What's Working & What to Improve">
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <ObservationList label="Positive Findings" items={positiveFindings} />
-            <ObservationList label="Suggested Improvements" items={suggestedImprovements} />
-          </div>
-        </Card>
-      )}
-
-      {/* Breaking changes */}
-      {breakingChanges.length > 0 && (
-        <Card title="Breaking Changes" description={`${breakingChanges.length} found`}>
-          <ul className="space-y-3" role="list">
-            {breakingChanges.map((bc, i) => (
-              <li key={i} className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-sm font-medium text-danger-fg">{bc.component as string}</span>
-                  {Boolean(bc.severity) && (
-                    <span className="rounded-full bg-danger-bg px-2 py-0.5 text-xs text-danger-fg ring-1 ring-inset ring-danger-line/30">
-                      {bc.severity as string}
-                    </span>
-                  )}
-                </div>
-                <p className="mt-1 text-sm text-fg-secondary">{bc.description as string}</p>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      {/* Migration advice */}
-      {migrationAdvice.length > 0 && (
-        <Card title="Migration Advice" description={`${migrationAdvice.length} recommendation${migrationAdvice.length === 1 ? "" : "s"}`}>
-          <ul className="space-y-2" role="list">
-            {migrationAdvice.map((ma, i) => (
-              <li key={i} className="rounded-lg border border-line-muted bg-surface px-4 py-3">
-                <span className="text-xs font-medium text-fg-muted">{ma.component as string}</span>
-                <p className="mt-0.5 text-sm text-fg-secondary">{ma.advice as string}</p>
-                {Boolean(ma.priority) && (
-                  <span className="mt-1 inline-block text-xs text-fg-muted">Priority: {ma.priority as string}</span>
-                )}
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      {/* Suggested reviewers */}
-      {suggestedReviewers.length > 0 && (
-        <Card title="Suggested Reviewers">
-          <ul className="space-y-2" role="list">
-            {suggestedReviewers.map((sr, i) => (
-              <li key={i} className="flex items-center gap-3 text-sm">
-                <span className="font-medium text-fg-secondary">{sr.reviewer as string}</span>
-                <span className="text-fg-muted">—</span>
-                <span className="text-fg-muted">{sr.reason as string}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
-
-      {/* Regression tests */}
-      {regressionTests.length > 0 && (
-        <Card title="Regression Tests" description={`${regressionTests.length} suggested`}>
-          <ul className="space-y-2" role="list">
-            {regressionTests.map((rt, i) => (
-              <li key={i} className="rounded-lg border border-line-muted bg-surface px-4 py-3">
-                <span className="text-xs font-medium text-fg-muted">{rt.component as string}</span>
-                <p className="mt-0.5 text-sm text-fg-secondary">{rt.test_description as string}</p>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
+      {result && <ReviewResultDetails result={result} />}
 
       {/* Evidence */}
       <EvidencePanel evidence={evidence} />
     </div>
   );
-}
-
-function ObservationList({ label, items }: { label: string; items: string[] }) {
-  if (items.length === 0) return null;
-  return (
-    <div>
-      <h4 className="text-xs font-medium text-fg-muted">{label}</h4>
-      <ul className="mt-1 space-y-1" role="list">
-        {items.map((item, i) => (
-          <li key={i} className="text-sm text-fg-secondary">
-            • {item}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
-function findingSeverityStyles(severity: string): string {
-  switch (severity) {
-    case "critical":
-      return "border-danger-line/40 bg-danger-bg";
-    case "high":
-      return "border-danger-line/20 bg-danger-bg/50";
-    case "medium":
-      return "border-warning-line/30 bg-warning-bg";
-    default:
-      return "border-line-muted bg-surface";
-  }
-}
-
-function mergeRecommendationStyles(recommendation: string): string {
-  switch (recommendation) {
-    case "approve":
-      return "bg-success-bg text-success-fg ring-success-line/30";
-    case "approve_with_comments":
-      return "bg-warning-bg text-warning-fg ring-warning-line/30";
-    case "request_changes":
-      return "bg-danger-bg text-danger-fg ring-danger-line/30";
-    case "block":
-      return "bg-danger-bg text-danger-fg ring-danger-line/50";
-    default:
-      return "bg-surface text-fg-muted ring-line";
-  }
-}
-
-function mergeRecommendationLabel(recommendation: string): string {
-  switch (recommendation) {
-    case "approve":
-      return "Approve";
-    case "approve_with_comments":
-      return "Approve with Comments";
-    case "request_changes":
-      return "Request Changes";
-    case "block":
-      return "Block";
-    default:
-      return recommendation;
-  }
 }

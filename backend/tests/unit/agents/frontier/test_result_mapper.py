@@ -47,7 +47,11 @@ def test_to_agent_output_lowers_confidence_on_partial_failure() -> None:
     )
 
     assert output.confidence.score == 0.5
-    assert "1 failed" in output.confidence.reasoning
+    # UX audit P2.1: reasoning is plain, domain language now, not an
+    # internal "N service call(s)" phrasing — the raw counts still exist
+    # in full on the per-call Evidence items (asserted below).
+    assert "could not be reached" in output.confidence.reasoning
+    assert "service call" not in output.confidence.reasoning
     failed_evidence = [e for e in output.evidence if e.status == "failed"]
     assert len(failed_evidence) == 1
     assert failed_evidence[0].reference == "engineering_intelligence:dependency_query"

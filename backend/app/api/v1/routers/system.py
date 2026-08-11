@@ -4,7 +4,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.ai.config.resolver import env_credentials_for
+from app.ai.config.resolver import env_credentials_for, resolve
+from app.ai.config.store import current_snapshot
 from app.ai.providers.registry import all_providers, get_provider_spec
 from app.api.v1.dependencies import get_current_user
 from app.core.config import get_settings
@@ -43,8 +44,41 @@ async def system_status(
     # Center reported "Degraded / AI Provider: none" while every agent run
     # was in fact succeeding. Reading the registry means any provider added
     # there is reported here automatically.
-    active_spec = get_provider_spec(settings.ai_provider)
-    active_key = active_spec.key if active_spec else settings.ai_provider.strip().lower()
+    #
+    # The active provider itself is resolved through app.ai.config.resolver
+    # — the same DB-backed configuration layer every real LLM call goes
+    # through (see app.agents.llm.StageAwareLLMProvider and the identical,
+    # already-fixed precedent in app.api.v1.routers.agent_runs's
+    # `run.provider` assignment) — not the raw AI_PROVIDER env var. Reading
+    # the env var directly ignored a default provider set via the Settings
+    # page (AISettings.default_provider), so this endpoint kept reporting
+    # the vendor from .env even after the user changed it in the UI. Falls
+    # back to the env value only if resolution itself fails, so a
+    # misconfiguration still reports something rather than 500ing.
+    try:
+        resolved = resolve()
+        active_key = resolved.key
+        active_model: str | None = resolved.model
+    except Exception:
+        active_spec = get_provider_spec(settings.ai_provider)
+        active_key = active_spec.key if active_spec else settings.ai_provider.strip().lower()
+        active_model = None
+
+    # Read alongside the env credentials below so "configured" recognizes a
+    # key entered through Settings → AI Providers, not only one set via
+    # AI_PROVIDER-family env vars. Settings stores keys in Postgres
+    # (AIProviderConfig, encrypted at rest) rather than in .env, so a
+    # provider configured entirely through the UI — e.g. this session's
+    # DeepSeek — had no env credential to find and was reported
+    # "Not configured" here even while Settings itself showed it Healthy
+    # and it was actively serving every LLM call. `current_snapshot()` is
+    # the same in-memory, DB-backed snapshot `resolve()` reads api_key from
+    # (see resolver.resolve's `provider_record.api_key or env_key`
+    # precedence) — reusing it here keeps this endpoint's notion of
+    # "configured" identical to what resolution actually uses, rather than
+    # a second, narrower definition that only happened to agree when
+    # nothing was configured through the UI yet.
+    snapshot = current_snapshot()
 
     providers: list[ProviderStatus] = []
     for spec in all_providers():
@@ -54,18 +88,24 @@ async def system_status(
             # is missing configuration it can't actually accept yet.
             continue
         api_key, env_model = env_credentials_for(spec.key, settings)
+        stored_record = snapshot.provider(spec.key)
+        has_credential = bool(api_key) or bool(stored_record and stored_record.api_key)
         # A provider with no API key requirement (Bedrock's AWS credential
         # chain, a local Ollama) is configured as soon as it's declared —
         # there is no key to check, and the credential chain can only be
         # validated by making a real call, which a status endpoint must not do.
-        configured = True if not spec.requires_api_key else bool(api_key)
+        configured = True if not spec.requires_api_key else has_credential
         is_active = spec.key == active_key
         providers.append(
             ProviderStatus(
                 name=spec.key,
                 configured=configured,
                 active=is_active,
-                model=(env_model or spec.resolve_default_model()) if is_active else None,
+                model=(
+                    (active_model or env_model or spec.resolve_default_model())
+                    if is_active
+                    else None
+                ),
             )
         )
 

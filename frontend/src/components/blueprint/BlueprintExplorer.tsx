@@ -515,10 +515,23 @@ export function BlueprintExplorer({
   // literal's `value` at its own narrow type (number here, the template
   // string there), and a type predicate can only narrow that inferred
   // union, never widen it back to `string | number`.
+  // UX audit P2.4: a "0 Affected Components" tile (a real, observed case —
+  // an ungrounded/greenfield Planning result has nothing to name yet)
+  // reads as broken, not informative — an unexplained zero looks like the
+  // count failed to load rather than "there is genuinely nothing here".
+  // Suppressed rather than shown with an explanation: the GroundingBanner
+  // above this component already explains *why* nothing was found, so a
+  // second explanation here would just repeat it.
   const statItems: (false | { label: string; value: string | number })[] = [
-    implementationSteps != null && { label: "Implementation Steps", value: implementationSteps },
-    affectedComponents != null && { label: "Affected Components", value: affectedComponents },
-    risks != null && { label: "Risks Identified", value: risks },
+    Boolean(implementationSteps) && {
+      label: "Implementation Steps",
+      value: implementationSteps as number,
+    },
+    Boolean(affectedComponents) && {
+      label: "Affected Components",
+      value: affectedComponents as number,
+    },
+    Boolean(risks) && { label: "Risks Identified", value: risks as number },
     stats.confidencePct != null && { label: "Confidence", value: `${stats.confidencePct}%` },
   ];
   const visibleStatItems = statItems.filter(
@@ -589,13 +602,19 @@ export function BlueprintExplorer({
                   aria-current={isActive ? "true" : undefined}
                 >
                   {section.title}
-                  <span
-                    className={`rounded-full px-1 py-0.5 text-[9px] font-semibold ${
-                      isActive ? "bg-accent-bg text-accent-fg" : "bg-surface-raised text-fg-muted"
-                    }`}
-                  >
-                    {section.diagrams.length}
-                  </span>
+                  {/* UX audit P2.3: every section currently has exactly one
+                      diagram, so this badge always read "1" — a count that
+                      never varies communicates nothing. Only shown once a
+                      section can actually have more than one. */}
+                  {section.diagrams.length > 1 && (
+                    <span
+                      className={`rounded-full px-1 py-0.5 text-[9px] font-semibold ${
+                        isActive ? "bg-accent-bg text-accent-fg" : "bg-surface-raised text-fg-muted"
+                      }`}
+                    >
+                      {section.diagrams.length}
+                    </span>
+                  )}
                 </button>
               );
             })}
@@ -634,9 +653,11 @@ export function BlueprintExplorer({
                     <h2 className="text-sm font-semibold tracking-tight text-fg">
                       {section.title}
                     </h2>
-                    <span className="rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-fg-muted">
-                      {section.diagrams.length}
-                    </span>
+                    {section.diagrams.length > 1 && (
+                      <span className="rounded bg-surface-raised px-1.5 py-0.5 text-[10px] font-medium text-fg-muted">
+                        {section.diagrams.length}
+                      </span>
+                    )}
                   </div>
                   {section.description && (
                     <p className="mt-0.5 text-xs text-fg-muted">{section.description}</p>
