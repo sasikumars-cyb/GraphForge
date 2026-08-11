@@ -4,12 +4,11 @@ import {
   ArrowUpFromLine,
   ChevronDown,
   Compass,
-  Info,
   Search,
-  Sparkles,
   X,
 } from "lucide-react";
 import { RiskBadge } from "../RiskBadge";
+import { ProvenanceTag } from "../intelligence/ProvenanceTag";
 import { primaryLabel, resolveLabelColors } from "../graph/graphLabels";
 import type { Graph, GraphEdge, GraphNode } from "../../types/graph";
 import type { RiskLevel } from "../../types/domain";
@@ -179,11 +178,15 @@ export function NodeDetailPanel({
 
       <div className="flex flex-col gap-5 px-4 py-4">
         {/* ── Impact — the "why does this matter" read ─────────── */}
+        {/* ProvenanceTag "derived", not "AI insight": this is a
+            deterministic count over loaded edges, not a model judgment —
+            see ProvenanceTag's own docstring on why that distinction is
+            drawn in the icon/color, not just a caption underneath. */}
         <section>
-          <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold tracking-wide text-fg-muted uppercase">
-            <Sparkles className="h-3.5 w-3.5 text-accent-fg" aria-hidden="true" />
-            Impact
-          </p>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-xs font-semibold tracking-wide text-fg-muted uppercase">Impact</p>
+            <ProvenanceTag kind="derived" />
+          </div>
           <div className="rounded-lg border border-line-muted bg-surface-raised p-3">
             <div className="flex items-center justify-between gap-2">
               <span className="text-xs font-medium text-fg-secondary">Blast radius</span>
@@ -201,10 +204,6 @@ export function NodeDetailPanel({
                   can ripple into {dependedOnByEntries.length === 1 ? "it" : "all of them"}.
                 </>
               )}
-            </p>
-            <p className="mt-1.5 flex items-start gap-1 text-[11px] text-fg-subtle">
-              <Info className="mt-0.5 h-3 w-3 shrink-0" aria-hidden="true" />
-              Derived from direct edges in the graph as currently loaded, not an AI judgment.
             </p>
           </div>
         </section>
