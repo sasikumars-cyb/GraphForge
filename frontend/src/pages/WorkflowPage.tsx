@@ -341,11 +341,18 @@ export function WorkflowPage() {
           )
         }
       >
-        <PipelineGraph
-          stages={workflow.stages}
-          selectedRunId={selectedRunId}
-          onSelectStage={setSelectedRunId}
-        />
+        {/* Contained horizontal scroll as the floor, not the plan: min-w-0
+            + wrapping labels (see PipelineGraph) mean 6 stages fit without
+            it down to ~640px. Below that, this scrolls just the pipeline
+            row instead of the whole page picking up a horizontal
+            scrollbar that hides the sidebar nav off-screen. */}
+        <div className="-mx-1 overflow-x-auto px-1">
+          <PipelineGraph
+            stages={workflow.stages}
+            selectedRunId={selectedRunId}
+            onSelectStage={setSelectedRunId}
+          />
+        </div>
         {currentStageInfo?.status === "running" && currentStageInfo.live_progress && (
           <div className="mt-3">
             <LiveProgressChecklist progress={currentStageInfo.live_progress} />

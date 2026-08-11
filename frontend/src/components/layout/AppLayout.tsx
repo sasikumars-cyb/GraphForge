@@ -28,8 +28,16 @@ export function AppLayout() {
             onMenuClick={() => setSidebarOpen(true)}
             onOpenPalette={() => setPaletteOpen(true)}
           />
-          <main className="flex-1 overflow-y-auto p-4 md:p-8">
-            <div className="mx-auto max-w-6xl">
+          <main className="flex-1 overflow-y-auto p-4 md:p-8 xl:p-10">
+            {/* Fluid up to a generous ceiling rather than the old fixed
+                max-w-6xl (1152px): on a 1440-1920px demo monitor that left
+                nearly half the viewport as dead margin and forced every
+                two-column panel grid into ~560px columns, which is what
+                was truncating mission titles and squeezing the stage
+                tracker. 1920px still keeps line lengths and card widths
+                sane — this isn't "full bleed", just no longer laptop-width
+                on a 4K display. */}
+            <div className="mx-auto max-w-[1920px]">
               <Outlet />
             </div>
           </main>
