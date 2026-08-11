@@ -158,7 +158,7 @@
   --gf-graph-cluster: color-mix(in srgb, #64748b 6%, transparent);
   --gf-graph-cluster-line: #94a3b8;
   --gf-graph-selected: #6366f1;
-  --gf-graph-incoming: #0a7350;
+  --gf-graph-incoming: #c07c08;
   --gf-graph-outgoing: #096e9c;
   /* Node border stroke width — 1px everywhere except High Contrast (see
      that theme block), which doubles it. That theme's own node fills are
@@ -259,7 +259,7 @@
   --gf-graph-cluster: color-mix(in srgb, #94a3b8 5%, transparent);
   --gf-graph-cluster-line: #475569;
   --gf-graph-selected: #a5aeff;
-  --gf-graph-incoming: #10b981;
+  --gf-graph-incoming: #f59e0b;
   --gf-graph-outgoing: #0ea5e9;
 
   --gf-node-1-bg: #172b4c;
@@ -353,7 +353,7 @@
   --gf-graph-cluster: color-mix(in srgb, #7c85ab 5%, transparent);
   --gf-graph-cluster-line: #333b5c;
   --gf-graph-selected: #aeb4ff;
-  --gf-graph-incoming: #10b981;
+  --gf-graph-incoming: #f59e0b;
   --gf-graph-outgoing: #0ea5e9;
 
   --gf-node-1-bg: #122447;
@@ -447,7 +447,7 @@
   --gf-graph-cluster: color-mix(in srgb, #6f88ab 5%, transparent);
   --gf-graph-cluster-line: #374b68;
   --gf-graph-selected: #93a8ff;
-  --gf-graph-incoming: #10b981;
+  --gf-graph-incoming: #f59e0b;
   --gf-graph-outgoing: #0ea5e9;
 
   --gf-node-1-bg: #152a48;
@@ -541,7 +541,7 @@
   --gf-graph-cluster: color-mix(in srgb, #000000 4%, transparent);
   --gf-graph-cluster-line: #717171;
   --gf-graph-selected: #6a63ff;
-  --gf-graph-incoming: #075239;
+  --gf-graph-incoming: #996206;
   --gf-graph-outgoing: #075071;
   --gf-node-border-width: 2px;
 

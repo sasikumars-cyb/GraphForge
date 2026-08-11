@@ -234,7 +234,7 @@ export function MetricsPage() {
                     value: r.components,
                   }))}
                   valueFormatter={formatCount}
-                  color="var(--gf-info-fg, #3b82f6)"
+                  color="var(--gf-info-fg, #096e9c)"
                   label="Components per indexed repository"
                 />
               </Card>
