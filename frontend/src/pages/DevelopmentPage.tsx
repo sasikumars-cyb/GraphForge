@@ -6,6 +6,7 @@ import { EvidencePanel } from "../components/EvidencePanel";
 import { ConfidenceBadge } from "../components/agents/ConfidenceBadge";
 import { RunProgress } from "../components/agents/RunProgress";
 import { RunStatusBadge } from "../components/agents/RunStatusBadge";
+import { RunDetailsAccordion } from "../components/agents/RunDetailsAccordion";
 import { DevelopmentResultDetails } from "../components/agents/StageResultDetails";
 import {
   PlanningRunPicker,
@@ -217,56 +218,6 @@ function DevelopmentResultView({
         </button>
       </div>
 
-      {/* Run metadata */}
-      <Card title="Run Details">
-        <dl className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm sm:grid-cols-3 lg:grid-cols-4">
-          <div>
-            <dt className="text-xs text-fg-muted">Goal</dt>
-            <dd className="text-fg-secondary">Change Plan</dd>
-          </div>
-          <div>
-            <dt className="text-xs text-fg-muted">Subject</dt>
-            <dd className="truncate text-fg-secondary" title={run.subject.display_name}>
-              {run.subject.display_name}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-fg-muted">Status</dt>
-            <dd>
-              <RunStatusBadge status={run.status} />
-            </dd>
-          </div>
-          <div>
-            <dt className="text-xs text-fg-muted">Confidence</dt>
-            <dd>
-              {step?.confidence ? (
-                <ConfidenceBadge confidence={step.confidence} />
-              ) : (
-                <span className="text-fg-muted">—</span>
-              )}
-            </dd>
-          </div>
-          {run.started_at && (
-            <div>
-              <dt className="text-xs text-fg-muted">Started</dt>
-              <dd className="text-fg-secondary">{new Date(run.started_at).toLocaleString()}</dd>
-            </div>
-          )}
-          {run.completed_at && (
-            <div>
-              <dt className="text-xs text-fg-muted">Completed</dt>
-              <dd className="text-fg-secondary">{new Date(run.completed_at).toLocaleString()}</dd>
-            </div>
-          )}
-          {step?.latency_ms != null && (
-            <div>
-              <dt className="text-xs text-fg-muted">Duration</dt>
-              <dd className="text-fg-secondary">{(step.latency_ms / 1000).toFixed(1)}s</dd>
-            </div>
-          )}
-        </dl>
-      </Card>
-
       {/* Error */}
       {run.status === "failed" && run.error_message && (
         <div className="rounded-lg border border-danger-line/30 bg-danger-bg px-4 py-3 text-sm text-danger-fg">
@@ -274,11 +225,18 @@ function DevelopmentResultView({
         </div>
       )}
 
-      {/* Development Plan Result */}
+      {/* The implementation story leads — what used to be here first was
+          a "Run Details" card (goal/subject/status/confidence/timestamps),
+          i.e. metadata about the run before any of what it actually
+          produced. Moved to a collapsed accordion at the bottom, matching
+          the pattern Planning already established. */}
       {result && <DevelopmentResultDetails result={result} />}
 
       {/* Evidence */}
       <EvidencePanel evidence={evidence} />
+
+      {/* Run metadata (collapsible) */}
+      <RunDetailsAccordion run={run} step={step} goalLabel="Change Plan" />
     </div>
   );
 }
