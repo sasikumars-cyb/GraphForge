@@ -8,7 +8,7 @@ function renderBanner(props: Partial<Parameters<typeof WorkflowApprovalBanner>[0
   return render(
     <MemoryRouter>
       <WorkflowApprovalBanner
-        workflowTitle="Add rate limiting"
+        refineObjective="Add rate limiting"
         workflowId="wf-1"
         status="awaiting_approval"
         isSubmitting={false}

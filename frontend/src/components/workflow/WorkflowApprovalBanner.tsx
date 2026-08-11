@@ -2,7 +2,10 @@ import { useNavigate } from "react-router-dom";
 import { CheckCircle2, Loader2, PenLine, ShieldQuestion, XCircle } from "lucide-react";
 
 interface WorkflowApprovalBannerProps {
-  workflowTitle: string;
+  /** The workflow's FULL original request (`original_prompt`), not its
+   * short AI-generated `title` — see ApprovalGateBanner's identical prop
+   * for why passing the title silently re-scopes a refined workflow. */
+  refineObjective: string;
   /** This workflow's own id — threaded into "Refine"'s parentId so the
    * next draft carries this one's blueprint forward instead of starting
    * cold (see NewWorkflowPage's parentId handling). */
@@ -25,7 +28,7 @@ interface WorkflowApprovalBannerProps {
  * onApprove/onReject straight through to the real backend mutation), just
  * scoped to the whole workflow rather than one stage. */
 export function WorkflowApprovalBanner({
-  workflowTitle,
+  refineObjective,
   workflowId,
   status,
   isSubmitting,
@@ -34,7 +37,7 @@ export function WorkflowApprovalBanner({
 }: WorkflowApprovalBannerProps) {
   const navigate = useNavigate();
 
-  const refineHref = `/workflows/new?title=${encodeURIComponent(workflowTitle)}&parentId=${encodeURIComponent(workflowId)}`;
+  const refineHref = `/workflows/new?title=${encodeURIComponent(refineObjective)}&parentId=${encodeURIComponent(workflowId)}`;
 
   if (status === "approved") {
     return (
