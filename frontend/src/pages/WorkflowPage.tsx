@@ -321,6 +321,21 @@ export function WorkflowPage() {
         />
       )}
 
+      {/* The investigation narrative — what GraphForge found, how sure it
+          is, what it recommends — leads the page. It used to render far
+          below the Pipeline mechanics (stage tiles, replay controls),
+          which put "here are six technical boxes" ahead of "here's what
+          was actually discovered." The stages still exist below; they
+          support the story now instead of opening it. */}
+      {(canContinue || phase === "awaiting_clarification") && discoveryResult && (
+        <ContextExplorerPanel
+          workflowId={workflow.workflow_id}
+          result={discoveryResult}
+          humanOverride={discoveryStep?.human_override ?? null}
+          onOverridden={() => loadWorkflow(false)}
+        />
+      )}
+
       <Card
         title="Pipeline"
         action={
@@ -488,18 +503,6 @@ export function WorkflowPage() {
           />
         )}
       </div>
-
-      {/* Supplementary evidence, not an action prompt — coexists with
-          whichever banner above is showing rather than competing with it,
-          so it stays outside the action zone. */}
-      {(canContinue || phase === "awaiting_clarification") && discoveryResult && (
-        <ContextExplorerPanel
-          workflowId={workflow.workflow_id}
-          result={discoveryResult}
-          humanOverride={discoveryStep?.human_override ?? null}
-          onOverridden={() => loadWorkflow(false)}
-        />
-      )}
 
       {stageTabs.length > 1 && (
         <div className="flex flex-wrap gap-2">
