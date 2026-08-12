@@ -21,6 +21,7 @@ import {
   BookOpen,
   Radar,
   Layers,
+  ListTree,
   type LucideIcon,
 } from "lucide-react";
 
@@ -43,6 +44,13 @@ export interface WorkspaceCapability {
   available: boolean;
   /** Backend goal string (passed to useAgentRun) */
   goal?: string;
+  /** Omit from the AI Workspace catalog entirely — the route/page stays
+   * live (other capabilities still deep-link into it, e.g. Migration
+   * Assistant's "Create planning workflow"/"Validate migration"
+   * actions), only the catalog card is hidden. Distinct from
+   * `available: false` ("Coming Soon" — not built yet); this is "built,
+   * but not surfaced as its own entry point." */
+  hidden?: boolean;
 }
 
 export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
@@ -56,6 +64,7 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     category: "plan",
     available: true,
     goal: "plan_freeform",
+    hidden: true,
   },
   {
     slug: "development",
@@ -78,6 +87,7 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     category: "test",
     available: true,
     goal: "plan_tests",
+    hidden: true,
   },
   {
     slug: "pr-review",
@@ -182,7 +192,16 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     icon: ArrowRightLeft,
     color: "orange",
     category: "plan",
-    available: false,
+    available: true,
+  },
+  {
+    slug: "refinement-planner",
+    name: "Refinement Planner",
+    description: "Turn requirements into a refinement-ready engineering plan.",
+    icon: ListTree,
+    color: "sky",
+    category: "plan",
+    available: true,
   },
   {
     slug: "dependency-explorer",

@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { Lightbulb, Send, RotateCcw, History } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
@@ -27,7 +27,17 @@ const EXAMPLES = [
 
 export function PlanningPage() {
   const [input, setInput] = useState("");
+  const [searchParams] = useSearchParams();
   const { run, isSubmitting, error, submit, reset } = useAgentRun();
+
+  // Deep-linked from a conversational turn's "Create migration plan"
+  // action (Migration Assistant, Ask GraphForge) — prefills the input
+  // with the investigation's own text rather than auto-submitting, so
+  // the user reviews/edits it before this becomes a real Planning run.
+  useEffect(() => {
+    const prefill = searchParams.get("prefill");
+    if (prefill) setInput(prefill);
+  }, [searchParams]);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();

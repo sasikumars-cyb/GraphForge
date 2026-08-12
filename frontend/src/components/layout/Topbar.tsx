@@ -2,7 +2,6 @@ import { useLocation } from "react-router-dom";
 import { Menu, Search } from "lucide-react";
 import { NAV_ITEMS } from "./nav-items";
 import { WORKSPACE_CAPABILITIES } from "../../config/workspace-capabilities";
-import { StatusBadge } from "../StatusBadge";
 
 interface TopbarProps {
   onMenuClick: () => void;
@@ -60,7 +59,6 @@ export function Topbar({ onMenuClick, onOpenPalette }: TopbarProps) {
           <span>Jump to…</span>
           <kbd className="rounded border border-line px-1 text-[10px]">⌘K</kbd>
         </button>
-        <StatusBadge label="Sample data" tone="info" />
       </div>
     </header>
   );

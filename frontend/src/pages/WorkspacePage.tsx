@@ -111,6 +111,7 @@ export function WorkspacePage() {
   const [activeCategory, setActiveCategory] = useState<CapabilityCategory | "all">("all");
 
   const filtered = WORKSPACE_CAPABILITIES.filter((cap) => {
+    if (cap.hidden) return false;
     const matchesSearch =
       !search ||
       cap.name.toLowerCase().includes(search.toLowerCase()) ||
@@ -119,8 +120,13 @@ export function WorkspacePage() {
     return matchesSearch && matchesCategory;
   });
 
-  const available = filtered.filter((c) => c.available);
-  const comingSoon = filtered.filter((c) => !c.available);
+  // Alphabetical within each group — the catalog has grown past the size
+  // where source-file insertion order reads as intentional; a stable,
+  // predictable ordering the reader doesn't have to reverse-engineer
+  // beats one that just reflects the order capabilities were added.
+  const byName = (a: WorkspaceCapability, b: WorkspaceCapability) => a.name.localeCompare(b.name);
+  const available = filtered.filter((c) => c.available).sort(byName);
+  const comingSoon = filtered.filter((c) => !c.available).sort(byName);
 
   return (
     <div className="flex flex-col gap-6">

@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { FlaskConical, Send, RotateCcw, History } from "lucide-react";
 import { Card } from "../components/Card";
 import { EvidencePanel } from "../components/EvidencePanel";
@@ -25,7 +25,15 @@ const EXAMPLES = [
 export function TestingPage() {
   const [input, setInput] = useState("");
   const [planningRunId, setPlanningRunId] = useState<string | null>(null);
+  const [searchParams] = useSearchParams();
   const { run, isSubmitting, error, submit, reset } = useAgentRun();
+
+  // Deep-linked from a conversational turn's "Validate migration" action
+  // — prefills rather than auto-submits, same as Planning's own prefill.
+  useEffect(() => {
+    const prefill = searchParams.get("prefill");
+    if (prefill) setInput(prefill);
+  }, [searchParams]);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();

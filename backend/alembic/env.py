@@ -21,6 +21,7 @@ from app.models.background_job import BackgroundJob  # noqa: F401
 from app.models.belief import Belief, Hypothesis  # noqa: F401
 from app.models.confidence_calibration import ConfidenceCalibration  # noqa: F401
 from app.models.contradiction import Contradiction, ContradictionParty  # noqa: F401
+from app.models.conversation import Conversation, ConversationMessage  # noqa: F401
 from app.models.decision import Decision, Recommendation  # noqa: F401
 from app.models.engineering_artifact import EngineeringArtifact  # noqa: F401
 from app.models.engineering_evidence_pack import EngineeringEvidencePackRecord  # noqa: F401

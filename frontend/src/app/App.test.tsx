@@ -133,7 +133,7 @@ describe("App navigation (authenticated)", () => {
     const nav = await screen.findByRole("navigation");
 
     for (const label of [
-      "Mission Control",
+      "Ask GraphForge",
       "AI Workspace",
       "New Workflow",
       "Runs",
@@ -146,11 +146,16 @@ describe("App navigation (authenticated)", () => {
     }
   });
 
-  it("defaults to the Mission Control page", async () => {
+  it("defaults to the Ask GraphForge home page", async () => {
     renderApp();
     // Topbar shows the same label as plain chrome (a <p>, not a heading —
     // it mirrors the sidebar selection); only the page itself renders it
     // as the real <h1>, so this assertion is unambiguous either way.
+    expect(await screen.findByRole("heading", { level: 1, name: "GraphForge" })).toBeInTheDocument();
+  });
+
+  it("still renders Mission Control at its own route", async () => {
+    renderApp("/mission-control");
     expect(
       await screen.findByRole("heading", { level: 1, name: "Mission Control" }),
     ).toBeInTheDocument();

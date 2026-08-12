@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Radar, Send, RotateCcw, History } from "lucide-react";
 import { Card } from "../components/Card";
@@ -29,6 +29,7 @@ const MAX_HOPS = 2;
  */
 export function ImpactAnalysisPage() {
   const { token } = useAuth();
+  const [searchParams] = useSearchParams();
   const [selectedRepoId, setSelectedRepoId] = useState("");
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const { run, isSubmitting, error: reportError, submit, reset } = useAgentRun();
@@ -39,6 +40,17 @@ export function ImpactAnalysisPage() {
     enabled: token !== null,
   });
   const repositories = repositoriesQuery.data ?? [];
+
+  // Deep-linked from Ask GraphForge's impact answer ("Explore impact"
+  // action) — preselects the repository the answer already resolved, so
+  // the blast-radius graph is already showing instead of an empty picker.
+  useEffect(() => {
+    const preselect = searchParams.get("repository");
+    if (preselect) {
+      setSelectedRepoId(preselect);
+      setSelectedNode(null);
+    }
+  }, [searchParams]);
 
   const blastRadiusQuery = useQuery({
     queryKey: ["blast-radius", selectedRepoId, MAX_HOPS],

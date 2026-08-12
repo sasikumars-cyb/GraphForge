@@ -76,9 +76,8 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </nav>
 
         <div className="border-t border-line-muted px-5 py-4">
-          <p className="text-xs text-fg-muted">Sample data — no repositories connected yet.</p>
           {user && (
-            <div className="mt-3 flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2">
               <div className="min-w-0">
                 <p className="truncate text-sm font-medium text-fg-secondary">{user.full_name}</p>
                 <p className="truncate text-xs text-fg-muted">{user.email}</p>

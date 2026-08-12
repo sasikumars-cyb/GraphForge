@@ -36,7 +36,7 @@ from app.tools.implementations.jira_tool import extract_issue_key
 # Confirmed against a real one: this was reference detection dropping a
 # personal-space Confluence link entirely, indistinguishable from "the text
 # contains no Confluence link" (KAN-46).
-_CONFLUENCE_URL_RE = re.compile(
+CONFLUENCE_URL_RE = re.compile(
     r"https?://[\w.-]+\.atlassian\.net/wiki/(?:spaces/[\w~-]+/pages/(\d+)|display/[\w-]+/[\w%-]+)"
 )
 
@@ -84,7 +84,7 @@ def detect_references(
             )
         )
 
-    confluence_match = _CONFLUENCE_URL_RE.search(text)
+    confluence_match = CONFLUENCE_URL_RE.search(text)
     if confluence_match is not None:
         references.append(
             Reference(

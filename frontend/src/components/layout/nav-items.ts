@@ -1,5 +1,4 @@
 import {
-  Radar,
   GitMerge,
   FolderGit2,
   Network,
@@ -9,6 +8,7 @@ import {
   Sparkles,
   History,
   CheckCircle2,
+  MessageCircleQuestion,
   type LucideIcon,
 } from "lucide-react";
 
@@ -30,8 +30,13 @@ export interface NavSection {
  *
  * Navigation is organised around user journeys — not implementation concepts.
  *
- * • Mission Control — prioritization + intelligence + current state (not
- *   configuration; see MissionControlPage's own docstring)
+ * • Ask GraphForge (/) — the primary entry point: ask a free-text
+ *   question, get an evidence-backed answer, jump into whichever of the
+ *   sections below actually has the depth behind that answer. See
+ *   HomePage's own docstring.
+ * • Mission Control still exists (`/mission-control`, unlinked so an old
+ *   bookmark keeps working) but is deliberately not in the sidebar — Ask
+ *   GraphForge is the one prioritization/current-state surface now.
  * • Build — create and execute AI-powered engineering work
  * • Monitor — observe execution history and status
  * • Knowledge — understand the codebase
@@ -42,7 +47,10 @@ export interface NavSection {
  * sidebar changes.
  */
 export const NAV_SECTIONS: NavSection[] = [
-  { section: null, items: [{ label: "Mission Control", path: "/", icon: Radar }] },
+  {
+    section: null,
+    items: [{ label: "Ask GraphForge", path: "/", icon: MessageCircleQuestion }],
+  },
   {
     section: "Build",
     items: [

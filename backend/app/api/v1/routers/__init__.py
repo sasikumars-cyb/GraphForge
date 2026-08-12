@@ -7,8 +7,10 @@ from app.api.v1.routers.ai_analysis import router as ai_analysis_router
 from app.api.v1.routers.ai_workspace import router as ai_workspace_router
 from app.api.v1.routers.api_intelligence import router as api_intelligence_router
 from app.api.v1.routers.architecture import router as architecture_router
+from app.api.v1.routers.ask import router as ask_router
 from app.api.v1.routers.auth import router as auth_router
 from app.api.v1.routers.calibration import router as calibration_router
+from app.api.v1.routers.conversations import router as conversations_router
 from app.api.v1.routers.documentation import router as documentation_router
 from app.api.v1.routers.engineering_sessions import router as engineering_sessions_router
 from app.api.v1.routers.github import router as github_router
@@ -45,6 +47,8 @@ api_router.include_router(oauth_apps_router)
 api_router.include_router(repositories_router)
 api_router.include_router(architecture_router)
 api_router.include_router(impact_router)
+api_router.include_router(ask_router)
+api_router.include_router(conversations_router)
 api_router.include_router(pull_requests_router)
 api_router.include_router(ai_analysis_router)
 api_router.include_router(ai_workspace_router)

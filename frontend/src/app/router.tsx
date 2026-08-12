@@ -3,6 +3,7 @@ import { AppLayout } from "../components/layout/AppLayout";
 import { RequireAuth } from "../components/layout/RequireAuth";
 import { LoginPage } from "../pages/LoginPage";
 import { OAuthCallbackPage } from "../pages/OAuthCallbackPage";
+import { HomePage } from "../pages/HomePage";
 import { MissionControlPage } from "../pages/MissionControlPage";
 import { WorkspacePage } from "../pages/WorkspacePage";
 import { PlanningPage } from "../pages/PlanningPage";
@@ -16,6 +17,9 @@ import { GraphParityPage } from "../pages/GraphParityPage";
 import { RepositoryUnderstandingPage } from "../pages/RepositoryUnderstandingPage";
 import { ImpactAnalysisPage } from "../pages/ImpactAnalysisPage";
 import { DependencyQueryPage } from "../pages/DependencyQueryPage";
+import { MigrationAssistantPage } from "../pages/MigrationAssistantPage";
+import { RefinementPlannerPage } from "../pages/RefinementPlannerPage";
+import { RefinementGraphPage } from "../pages/RefinementGraphPage";
 import { RunHistoryPage } from "../pages/RunHistoryPage";
 import { RunDetailPage } from "../pages/RunDetailPage";
 import { PullRequestsPage } from "../pages/PullRequestsPage";
@@ -47,7 +51,8 @@ export const routes: RouteObject[] = [
       {
         element: <AppLayout />,
         children: [
-          { path: "/", element: <MissionControlPage /> },
+          { path: "/", element: <HomePage /> },
+          { path: "/mission-control", element: <MissionControlPage /> },
 
           // ── Build: AI Workspace ──────────────────────────────────
           { path: "/workspace", element: <WorkspacePage /> },
@@ -65,6 +70,12 @@ export const routes: RouteObject[] = [
           },
           { path: "/workspace/impact-analysis", element: <ImpactAnalysisPage /> },
           { path: "/workspace/dependency-query", element: <DependencyQueryPage /> },
+          { path: "/workspace/migration-assistant", element: <MigrationAssistantPage /> },
+          { path: "/workspace/refinement-planner", element: <RefinementPlannerPage /> },
+          {
+            path: "/workspace/refinement-planner/graph/:conversationId",
+            element: <RefinementGraphPage />,
+          },
 
           // ── Build: Workflows ─────────────────────────────────────
           { path: "/workflows/new", element: <NewWorkflowPage /> },

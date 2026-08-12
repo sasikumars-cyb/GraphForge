@@ -1,22 +1,41 @@
-import { Database, GitBranch, Sparkles, UserCheck2, type LucideIcon } from "lucide-react";
+import {
+  ClipboardList,
+  Database,
+  GitBranch,
+  Sparkles,
+  UserCheck2,
+  type LucideIcon,
+} from "lucide-react";
 
 /**
  * The GraphForge design system's single answer to "where did this claim
  * come from" — used everywhere the app shows something that isn't
  * obviously the user's own input: a fact retrieved verbatim from a source
  * system, a number GraphForge computed from graph structure, a claim an
- * LLM actually generated, or a call a human made.
+ * LLM actually generated, an AI-suggested action, or a call a human made.
  *
  * This exists because trust in an AI product lives or dies on the user
- * being able to tell these four apart at a glance, every time, in the same
+ * being able to tell these apart at a glance, every time, in the same
  * visual language — not because any one instance needs decoration. Kept
  * deliberately restrained: one icon, one word, one tone per kind, and
- * `ai_insight` is the *only* one that uses the accent color. A page that
- * tags everything as AI-generated (including plain retrieved facts and
- * arithmetic) is the "purple gradient around everything labeled AI"
- * anti-pattern this was built to prevent.
+ * `ai_insight`/`recommendation` are the only two that use the accent
+ * color. A page that tags everything as AI-generated (including plain
+ * retrieved facts and arithmetic) is the "purple gradient around
+ * everything labeled AI" anti-pattern this was built to prevent.
+ *
+ * `ai_insight` vs `recommendation`: an insight is a claimed
+ * *interpretation* ("this looks like the highest-risk path"); a
+ * recommendation is a suggested *action* ("test these repositories
+ * first"). Migration Assistant is what first needed the distinction —
+ * see its own risk/plan language — but it applies anywhere GraphForge
+ * suggests doing something, not just concluding something.
  */
-export type ProvenanceKind = "fact" | "derived" | "ai_insight" | "human_decision";
+export type ProvenanceKind =
+  | "fact"
+  | "derived"
+  | "ai_insight"
+  | "human_decision"
+  | "recommendation";
 
 const PROVENANCE: Record<
   ProvenanceKind,
@@ -52,6 +71,15 @@ const PROVENANCE: Record<
     label: "Human decision",
     icon: UserCheck2,
     className: "bg-success-bg text-success-fg ring-success-line/40",
+  },
+  // An AI-suggested *action* (a migration phase, a test to run) — distinct
+  // from `ai_insight` (an AI-suggested *interpretation*). See this
+  // module's own docstring for why conflating the two would blur a
+  // distinction Migration Assistant's risk/plan language depends on.
+  recommendation: {
+    label: "Recommendation",
+    icon: ClipboardList,
+    className: "bg-accent-bg text-accent-fg ring-accent-line/40",
   },
 };
 

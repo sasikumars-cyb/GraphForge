@@ -1,5 +1,5 @@
-import { useState, type FormEvent } from "react";
-import { Link } from "react-router-dom";
+import { useEffect, useState, type FormEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { Layers, Send, RotateCcw, History } from "lucide-react";
 import { Card } from "../components/Card";
@@ -23,6 +23,7 @@ import { listTrackedRepositories } from "../lib/api/github";
  */
 export function DependencyQueryPage() {
   const { token } = useAuth();
+  const [searchParams] = useSearchParams();
   const [selectedRepoId, setSelectedRepoId] = useState("");
   const { run, isSubmitting, error, submit, reset } = useAgentRun();
 
@@ -33,6 +34,15 @@ export function DependencyQueryPage() {
   });
   const repositories = repositoriesQuery.data ?? [];
   const selectedRepo = repositories.find((r) => r.id === selectedRepoId);
+
+  // Deep-linked from Ask GraphForge's dependency answer ("View dependency
+  // graph" action) — preselects the repository the answer already
+  // resolved, so the user lands here already looking at it instead of
+  // having to re-pick it from the list.
+  useEffect(() => {
+    const preselect = searchParams.get("repository");
+    if (preselect) setSelectedRepoId(preselect);
+  }, [searchParams]);
 
   function selectRepository(id: string) {
     setSelectedRepoId(id);

@@ -137,6 +137,12 @@ STAGE_IMPACT_ANALYSIS = "impact_analysis"
 # (app.agents.dependency_query). Same note as STAGE_DOCUMENTATION_REVIEW
 # above: an AI-provider config resolution key only, not a Workflow stage.
 STAGE_DEPENDENCY_QUERY = "dependency_query"
+# The Home page's conversational investigation loop
+# (`app.services.conversation_service`) — an AI Workspace config resolution
+# key only, like every other STAGE_* below `STAGE_GENERATE_CODE`; not a
+# Workflow stage and not an agent registered with the Orchestrator (a
+# conversation turn is a single `complete()` call, not an `AgentManifest`).
+STAGE_ASK = "ask"
 
 
 # agent_id -> the stage key that agent resolves under when a run carries no
