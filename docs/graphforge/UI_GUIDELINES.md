@@ -1,8 +1,30 @@
 # UI_GUIDELINES.md — GraphForge
 
+> **Historical notice (documentation cleanup pass):** this document was
+> written for an earlier product shape — a `Dashboard`/`PullRequestDetail`-
+> centric tool with raw Tailwind color classes (`slate-950`, `rose-500`,
+> …) and a proposed `Projects`/`Knowledge Graph`/`Agents`/`Pipeline` nav
+> that was never built as described. The product has since moved to the
+> conversational **AI Workspace** paradigm (Ask GraphForge, Refinement
+> Planner, Migration Assistant, Planning/Development/Testing) and a
+> **semantic design-token system** (`frontend/src/styles/tokens.css` —
+> `bg-surface`, `text-fg-muted`, `text-danger-fg`, etc. — never a raw
+> Tailwind color class). The Color Palette and Page Wireframes/Navigation
+> sections below are **historical, not current** — removed rather than
+> silently left wrong. The Interaction/Loading/Empty/Error/Animation/
+> Accessibility/Consistency conventions further down are still
+> directionally followed in spirit, but verify exact class names against
+> current code before relying on them literally.
+>
+> **No fully current design-system document exists yet** — that's a real
+> documentation gap, not something this cleanup pass fabricated a
+> replacement for. For the actual current source of truth, read
+> `frontend/src/styles/tokens.css` (colors/tokens) and
+> `frontend/src/components/layout/nav-items.ts` (navigation) directly.
+
 Evolves the existing dark-themed Tailwind UI (Card/Table/StatusBadge/RiskBadge, sidebar +
 topbar `AppLayout`). No visual reset. New surfaces must be indistinguishable in craft from the
-existing Dashboard/PullRequestDetail pages.
+existing pages.
 
 ## Design System
 
@@ -11,140 +33,10 @@ existing Dashboard/PullRequestDetail pages.
 - **Base unit**: 4px spacing scale (`gap-1`…`gap-6` as already used). No new spacing scale.
 - **Corners**: `rounded-md` for buttons/badges, `rounded-lg` for cards/panels — existing
   convention, keep consistent as new components are added.
-- **Elevation**: no drop shadows; surfaces are distinguished by background layer
-  (`bg-slate-950` page → `bg-slate-900`/`Card` → `bg-slate-800/60` nested panel → `bg-slate-800/80`
-  chip), matching the existing three-layer depth already in `PullRequestDetailPage`.
+- **Elevation**: no drop shadows; surfaces are distinguished by background layer, not a shadow.
 
-## Color Palette
-
-| Token | Hex (Tailwind) | Usage |
-|---|---|---|
-| Background | `slate-950` | Page background |
-| Surface | `slate-900` | Card background |
-| Surface nested | `slate-800/60`–`slate-800/80` | Panels, chips, list rows |
-| Border | `slate-800` | Card/panel borders |
-| Text primary | `slate-50`/`slate-200` | Headings, key values |
-| Text secondary | `slate-400`/`slate-500` | Labels, metadata, captions |
-| Primary action | `sky-600` / hover `sky-500` | Deterministic/AI run actions (existing) |
-| Agentic action | `violet-600` / hover `violet-500` | Agent-invoking actions (existing: "Investigate") |
-| Publish / external-write action | `emerald-600` / hover `emerald-500` | Actions with an external side effect (existing: "Publish Review") |
-| Danger | `rose-500`/`rose-300` on `rose-500/10` bg | Errors, HIGH risk, blocking urgency |
-| Warning | `amber` tones | MEDIUM risk, advisory urgency |
-| Success | `emerald` tones | LOW risk, completed states |
-
-**Rule**: color communicates *category of action or risk*, never decoration. A new button color
-must map to a new action category defined here — do not introduce a color for visual variety.
-
-## Navigation
-
-Existing sidebar retained, extended with the SDLC-continuous surfaces:
-
-```
-Dashboard
-Pull Requests
-Repositories
-Architecture
-Projects          [NEW — Jira/Confluence-resolved work items]
-Knowledge Graph   [NEW — org-wide graph search/explore, generalizes Architecture page]
-Agents            [NEW — cross-cutting agent run history/timeline]
-Pipeline          [NEW — SDLC-stage board]
-Reports
-Settings
-```
-
-`Architecture` (existing, single-repo dependency view) is retained as a scoped entry point into
-the same graph that `Knowledge Graph` exposes org-wide — they share the `DependencyGraph`
-component, not a duplicate implementation.
-
-## Page Wireframes
-
-### Dashboard (existing, retained)
-
-```
-┌─ Topbar ────────────────────────────────────────────────┐
-│ GraphForge            [user] [logout]                    │
-├─ Sidebar ─┬───────────────────────────────────────────────┤
-│ Dashboard │  Risk summary cards (HIGH/MED/LOW counts)      │
-│ ...       │  Recent pull requests table                   │
-│           │  Recent agent activity  [NEW strip]            │
-└───────────┴───────────────────────────────────────────────┘
-```
-
-### Projects (new)
-
-```
-┌───────────────────────────────────────────────────────────┐
-│ Projects                                    [+ New scope]  │
-├───────────────────────────────────────────────────────────┤
-│ ┌ Card: ENG-421 ──────────┐ ┌ Card: ENG-430 ─────────────┐│
-│ │ Story · Requirement Agent│ │ Story · Planning Agent     ││
-│ │ status: clarified         │ │ status: planned            ││
-│ │ linked: 2 PRs, 1 ADR       │ │ linked: 0 PRs               ││
-│ └───────────────────────────┘ └────────────────────────────┘│
-└───────────────────────────────────────────────────────────┘
-```
-
-Cards here are the existing `Card` component — same title/description/action-slot shape used on
-`PullRequestDetailPage` today, applied to a `Story` subject instead of a `PullRequest`.
-
-### Knowledge Graph (new, generalizes existing Architecture page)
-
-```
-┌───────────────────────────────────────────────────────────┐
-│ Knowledge Graph        [search: "order.cancelled"    ] 🔍 │
-├───────────────────────────────────────────────────────────┤
-│                                                             │
-│              [ existing DependencyGraph canvas,            │
-│                extended node types: Story/Doc/Test/Release]│
-│                                                             │
-├─ Node detail panel (right, on select) ─────────────────────┤
-│ order-service (Repository)                                 │
-│ Owners: @alice, @bob        [from CODEOWNERS]               │
-│ Recent PRs: #12, #14                                        │
-│ ADRs: ADR-0008                                               │
-└───────────────────────────────────────────────────────────┘
-```
-
-### Agents (new)
-
-```
-┌───────────────────────────────────────────────────────────┐
-│ Agents                            [Filter: agent, status]  │
-├───────────────────────────────────────────────────────────┤
-│ Run  Agent        Subject         Confidence  Status  Time │
-│ ───  ───────────  ──────────────  ──────────  ──────  ──── │
-│ #88  Review       PR #14          88%         done    2m   │
-│ #87  Planning     ENG-421         —           running 12s  │
-│ #86  Architecture PR #12          71%         done    5m   │
-└───────────────────────────────────────────────────────────┘
-        ↓ click a row →
-┌─ Run #88 detail (existing ReasoningLogPanel pattern) ──────┐
-│ Step 1: Plan → goal, plan text                             │
-│ Step 2: read_dependency_graph → observation summary         │
-│ Step 3: Decide → decision text                              │
-│ Evidence: [links to graph nodes, tool outputs]               │
-└─────────────────────────────────────────────────────────────┘
-```
-
-This reuses the existing `ReasoningLogPanel` component verbatim — it was already agent-agnostic
-in its props (`steps: ReasoningStep[]`); the Agents page is its first cross-agent, cross-PR
-consumer instead of being embedded only in `PullRequestDetailPage`.
-
-### Pipeline (new)
-
-```
-┌───────────────────────────────────────────────────────────┐
-│ Pipeline — ENG-421                                          │
-├────────┬────────┬────────┬────────┬────────┬────────┬─────┤
-│Require │ Plan   │ Design │ Build  │ Review │ Test   │Release│
-│  ✓     │  ✓     │  ●     │        │        │        │       │
-│clarified│planned │running │        │        │        │       │
-└────────┴────────┴────────┴────────┴────────┴────────┴─────┘
-```
-
-Each column is a `StageCard` — a thin wrapper around the existing `Card` + `StatusBadge`
-components representing one agent's latest run against this Subject. Clicking a column links to
-its `Agents` run detail (above).
+**Rule**: color communicates *category of action or risk*, never decoration — expressed today via
+semantic tokens (`bg-danger-bg`/`text-danger-fg`, etc. — see `tokens.css`), not raw Tailwind hues.
 
 ## Cards
 

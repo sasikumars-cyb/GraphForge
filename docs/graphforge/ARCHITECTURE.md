@@ -188,6 +188,44 @@ Redis. This is a deliberate, temporary substitution: Redis-backing is required b
 multi-process/multi-replica deployment, and this note should be removed once that migration
 happens.
 
+## Conversational AI Workspace
+
+**Current, built** (not a future phase) — a separate, simpler layer from the Agent Orchestrator
+above, added after this document's original Phase 1–3 framing was written. One backend service,
+`app.services.conversation_service.ConversationService`, drives every conversational surface in
+the product:
+
+- **Ask GraphForge** (`mode="general"`) — free-text engineering questions, grounded against the
+  Knowledge Graph (repository/dependency resolution, blast-radius impact).
+- **Migration Assistant** (`mode="migration"`) — parses a "migrate X to Y" question into a real
+  (source, target) technology pair, finds every repository whose *real* indexed dependencies
+  reference the source technology, and computes blast radius per repository
+  (`app.services.migration_grounding`).
+- **Refinement Planner** (`mode="refinement"`) — turns a real Jira issue or a pasted requirement
+  into an Epic/Stories/Tasks/Spikes breakdown, grounded against the same Knowledge Graph
+  (`app.services.refinement_grounding`).
+
+**Shared state model**: one `Conversation` (Postgres) holds an ordered list of
+`ConversationMessage` rows; each assistant turn's `payload` carries mode-specific structured data
+(e.g. a `RefinementPlan`) alongside the natural-language answer. `InvestigationState` is **recomputed
+fresh from the full message history on every turn** — never persisted separately — so a follow-up
+question ("what depends on that?", "what happens if that ticket slips?") resolves pronouns and
+references against the same state the previous answer was grounded in, without the caller
+repeating any ID.
+
+**Provenance discipline** (the one rule every mode shares): anything computable from the graph —
+blast radius, critical path, downstream impact, dependency edges — is computed by a pure,
+deterministic function and tagged `derived`; anything proposed by the LLM (a work breakdown, a
+spike recommendation, acceptance criteria) is tagged `ai_insight`/`recommendation`; anything
+fetched verbatim from an external system (a real Jira issue) is tagged `fact`. The UI never lets
+these blur — see `ProvenanceTag` (frontend) and each mode's `_parse_*`/`compute_*` split in
+`conversation_service.py` / `*_grounding.py`.
+
+**Known, honest gap**: Confluence has no free-text search API available to this integration — a
+bare Confluence reference (URL or named page) is detected and answered with a deterministic
+clarification ("paste the requirement, or reference a Jira issue that links to this page"), never
+silently ignored or faked.
+
 ## Backend
 
 Reused wholesale: FastAPI, async SQLAlchemy, Alembic, the `IVersionControlProvider` /
@@ -388,11 +426,11 @@ Three additive axes, none of which requires touching the others:
 
 ## Plugin Architecture
 
-Phase 1–2: agents and integrations are compiled-in Python packages, registered at startup via
-static imports (`agents/_framework/registry.py` imports every agent subpackage's `manifest.py`).
-This keeps deployment simple and typed — no dynamic code loading, no plugin marketplace security
-surface, yet. Phase 3+ (see `ROADMAP.md`) revisits a true out-of-process plugin protocol
-(agents as sidecar services communicating over a typed RPC contract) once there is real demand
+Agents and integrations are compiled-in Python packages, registered at startup via static imports
+(`agents/_framework/registry.py` imports every agent subpackage's `manifest.py`). This keeps
+deployment simple and typed — no dynamic code loading, no plugin marketplace security surface,
+today. A true out-of-process plugin protocol (agents as sidecar services communicating over a
+typed RPC contract) remains a deliberately deferred idea, revisited only once there is real demand
 for third-party or customer-authored agents — not before, to avoid building marketplace
 infrastructure for a market of zero external developers.
 

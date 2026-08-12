@@ -64,7 +64,6 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     category: "plan",
     available: true,
     goal: "plan_freeform",
-    hidden: true,
   },
   {
     slug: "development",
@@ -87,7 +86,6 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     category: "test",
     available: true,
     goal: "plan_tests",
-    hidden: true,
   },
   {
     slug: "pr-review",
@@ -121,6 +119,7 @@ export const WORKSPACE_CAPABILITIES: WorkspaceCapability[] = [
     category: "review",
     available: true,
     goal: "analyze_api_intelligence",
+    hidden: true,
   },
   {
     slug: "graph-parity",

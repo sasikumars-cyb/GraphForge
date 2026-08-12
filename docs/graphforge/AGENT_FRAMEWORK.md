@@ -165,9 +165,9 @@ Every `AgentStep` records, uniformly across all agents:
 | Tool-call count | Cost/complexity signal |
 | **Confidence calibration** | Post-hoc: did human feedback (thumbs up/down, PR outcome) agree with the confidence score? Tracked per agent, per prompt version — this is how a prompt regression is caught before it's a silent quality drop. |
 
-Calibration tracking is Phase 2 (requires a feedback-capture mechanism not yet built — see
-`ROADMAP.md`); the other metrics are captured from Phase 1 since they're free byproducts of the
-existing execution loop.
+Calibration tracking is implemented (`app.models.confidence_calibration`, `/api/v1/calibration` —
+one row per `AgentStep` + human approve/reject decision pair); the other metrics are free
+byproducts of the existing execution loop.
 
 ## Extensibility — Adding a New Agent
 

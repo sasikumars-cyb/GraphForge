@@ -10,7 +10,9 @@ Settings
 ├── Integrations       (all users)     — External systems (GitHub, Jira, Confluence, Neo4j)
 ├── AI Providers       (admin only)    — Providers, profiles, models, health, fallback
 │                                        (Settings tab; distinct from the /workspace agent-execution catalog)
-├── Tool Registry      (admin only)    — Agent capabilities, health, enable/disable
+├── Agents             (admin only)    — Tool Registry: agent capabilities, health, enable/disable
+│                                        (UI tab labeled "Agents"; backend concept is still the
+│                                        Tool Registry, `/api/v1/tools/*`, named that way below)
 ├── Security           (admin only)    — Credentials, encryption, access control
 └── Advanced           (admin only)    — Diagnostics, feature flags, telemetry
 ```
