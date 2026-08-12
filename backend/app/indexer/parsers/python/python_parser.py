@@ -16,34 +16,24 @@ from app.indexer.extractors.python.functions import extract_module_functions
 from app.indexer.extractors.python.imports import extract_imports
 from app.indexer.extractors.python.kafka import extract_kafka_consumers, extract_kafka_producers
 from app.indexer.extractors.python.spark import (
+    extract_spark_sql_references,
     extract_spark_table_reads,
     extract_spark_table_writes,
 )
+from app.indexer.extractors.python.sql_files import extract_sql_file_references
 from app.indexer.models.architecture import ArchitectureModel, PythonModule, SourceLocation
 from app.indexer.parsers.base import ILanguageParser
 from app.indexer.parsers.python.dependency_parser import parse_python_dependencies
+from app.indexer.scanner.skip_directories import SKIP_DIRECTORIES
 
 logger = logging.getLogger(__name__)
 
 _PYTHON_LANGUAGE = Language(tspython.language())
 
-_SKIP_DIRECTORIES = {
-    ".git",
-    ".venv",
-    "venv",
-    "node_modules",
-    "__pycache__",
-    ".mypy_cache",
-    ".pytest_cache",
-    "build",
-    "dist",
-    "site-packages",
-}
-
 
 def _iter_python_files(repo_root: Path) -> Iterator[Path]:
     for path in repo_root.rglob("*.py"):
-        if any(part in _SKIP_DIRECTORIES for part in path.parts):
+        if any(part in SKIP_DIRECTORIES for part in path.parts):
             continue
         yield path
 
@@ -90,6 +80,12 @@ class PythonParser(ILanguageParser):
             )
             model.spark_table_writes.extend(
                 extract_spark_table_writes(root, source, str(relative_path))
+            )
+            sql_reads, sql_writes = extract_spark_sql_references(root, source, str(relative_path))
+            model.spark_table_reads.extend(sql_reads)
+            model.spark_table_writes.extend(sql_writes)
+            model.python_sql_file_references.extend(
+                extract_sql_file_references(root, source, str(relative_path))
             )
             model.kafka_producers.extend(
                 extract_kafka_producers(root, source, str(relative_path), module_name)

@@ -59,6 +59,7 @@ from app.knowledge_engine.validators.deterministic_structural import (
     DETERMINISTIC_STRUCTURAL_VALIDATORS,
 )
 from app.knowledge_engine.validators.evidence_keyword import EVIDENCE_KEYWORD_VALIDATORS
+from app.knowledge_engine.validators.generic_structural import GENERIC_STRUCTURAL_VALIDATORS
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,7 @@ ALL_VALIDATORS: tuple[KnowledgeValidator, ...] = (
     *DETERMINISTIC_STRUCTURAL_VALIDATORS,
     *CROSS_REPO_VALIDATORS,
     *EVIDENCE_KEYWORD_VALIDATORS,
+    *GENERIC_STRUCTURAL_VALIDATORS,
 )
 
 

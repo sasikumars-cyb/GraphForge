@@ -19,6 +19,7 @@ from app.knowledge_engine.validators.deterministic_structural import (
     DETERMINISTIC_STRUCTURAL_VALIDATORS,
 )
 from app.knowledge_engine.validators.evidence_keyword import EVIDENCE_KEYWORD_VALIDATORS
+from app.knowledge_engine.validators.generic_structural import GENERIC_STRUCTURAL_VALIDATORS
 from app.knowledge_engine.validators.registry import ALL_VALIDATORS, run_validators
 
 pytestmark = pytest.mark.asyncio
@@ -142,7 +143,7 @@ async def test_repeated_runs_are_identical() -> None:
 def test_all_validators_is_the_union_of_every_family() -> None:
     assert set(ALL_VALIDATORS) == set(DETERMINISTIC_STRUCTURAL_VALIDATORS) | set(
         CROSS_REPO_VALIDATORS
-    ) | set(EVIDENCE_KEYWORD_VALIDATORS)
+    ) | set(EVIDENCE_KEYWORD_VALIDATORS) | set(GENERIC_STRUCTURAL_VALIDATORS)
 
 
 async def test_all_validators_parity_for_deterministic_hypothesis() -> None:

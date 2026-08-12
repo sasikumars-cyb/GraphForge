@@ -85,6 +85,10 @@ def _data_table_node_id(repository_id: str, table_name: str) -> str:
     return f"{repository_id}:data-table:{table_name}"
 
 
+def _sql_file_node_id(repository_id: str, sql_file_path: str) -> str:
+    return f"{repository_id}:sql-file:{sql_file_path}"
+
+
 def _build_python_graph(
     repository_id: str,
     repo_id: str,
@@ -217,15 +221,27 @@ def _build_python_graph(
             if target_id is not None and target_id != source_id:
                 edges.append(GraphEdge(source_id=source_id, target_id=target_id, type="CALLS"))
 
-    # Spark table reads/writes are attributed to the module they were found
-    # in (not the individual function) - a spark.py extractor result only
-    # carries a bare function name, which is ambiguous against a same-named
-    # method on an unrelated class in the same file; the module is the
-    # coarsest unambiguous owner, matching this codebase's no-guessing
+    # Spark table reads/writes are attributed to the specific Function node
+    # when `function_name` resolves unambiguously via the exact same
+    # `function_node_id_by_bare_name` map the CALLS-resolution loop above
+    # already built (a spark.py extractor result only carries a bare
+    # function name, ambiguous against a same-named method on an unrelated
+    # class - this is the same "ambiguous, so don't guess" question CALLS
+    # resolution already answers, reused rather than re-solved); the
+    # module is the fallback, coarsest unambiguous owner whenever it
+    # doesn't (no `function_name` at all - module-level code - or an
+    # ambiguous/unregistered one), matching this codebase's no-guessing
     # precedent for anything it can't resolve deterministically.
     module_id_by_file_path = {
         m.location.file_path: module_node_id_by_name[m.name] for m in model.python_modules
     }
+
+    def _owning_node_id(function_name: str | None, module_id: str) -> str:
+        if function_name:
+            function_id = function_node_id_by_bare_name.get(function_name)
+            if function_id is not None:
+                return function_id
+        return module_id
 
     for read in model.spark_table_reads:
         owning_module_id = module_id_by_file_path.get(read.location.file_path)
@@ -237,7 +253,7 @@ def _build_python_graph(
         )
         edges.append(
             GraphEdge(
-                source_id=owning_module_id,
+                source_id=_owning_node_id(read.function_name, owning_module_id),
                 target_id=table_id,
                 type="READS_FROM",
                 properties={"function_name": read.function_name or ""},
@@ -254,13 +270,87 @@ def _build_python_graph(
         )
         edges.append(
             GraphEdge(
-                source_id=owning_module_id,
+                source_id=_owning_node_id(write.function_name, owning_module_id),
                 target_id=table_id,
                 type="WRITES_TO",
                 properties={
                     "method_name": write.method_name,
                     "function_name": write.function_name or "",
                 },
+            )
+        )
+
+    # --- `.sql` files: SqlFile nodes, their own READS_FROM/WRITES_TO
+    # DataTable edges (same relationship types as the Spark case above -
+    # no second table-lineage relationship vocabulary), and LOADS_SQL edges
+    # from whichever Python module/function statically named that file. ---
+    sql_file_node_id_by_path = {
+        f.name: _sql_file_node_id(repository_id, f.name) for f in model.sql_files
+    }
+    for sql_file in model.sql_files:
+        nodes.append(
+            GraphNode(
+                id=sql_file_node_id_by_path[sql_file.name],
+                labels=["SqlFile"],
+                properties={"name": sql_file.name, "file_path": sql_file.location.file_path},
+            )
+        )
+
+    for ref in model.sql_table_references:
+        sql_file_id = sql_file_node_id_by_path.get(ref.sql_file)
+        if sql_file_id is None:
+            continue
+        table_id = _data_table_node_id(repository_id, ref.table_name)
+        nodes.append(
+            GraphNode(id=table_id, labels=["DataTable"], properties={"name": ref.table_name})
+        )
+        edge_type = "READS_FROM" if ref.access == "read" else "WRITES_TO"
+        edges.append(
+            GraphEdge(
+                source_id=sql_file_id,
+                target_id=table_id,
+                type=edge_type,
+                properties={"statement": ref.statement, "line": ref.line},
+            )
+        )
+
+    # Bare filename (no directory) -> node id, but only when unambiguous
+    # across every `.sql` file discovered in the repository - the same
+    # "ambiguous, so don't guess" shape `function_node_id_by_bare_name`
+    # already applies to CALLS resolution above, applied here to a second
+    # kind of bare-name reference. A registry entry like
+    # `SQL_FILE_MAP = {"account": "account.sql"}` names a bare filename,
+    # with no directory context to disambiguate it if two different `.sql`
+    # files in the repo happen to share that basename.
+    sql_file_id_by_basename: dict[str, str | None] = {}
+    for sql_file in model.sql_files:
+        basename = sql_file.name.rsplit("/", 1)[-1]
+        if basename in sql_file_id_by_basename:
+            sql_file_id_by_basename[basename] = None
+        else:
+            sql_file_id_by_basename[basename] = sql_file_node_id_by_path[sql_file.name]
+
+    def _resolve_sql_file_id(sql_filename: str) -> str | None:
+        # An exact relative-path match (e.g. "pipeline/sql/account.sql")
+        # is unambiguous by construction - prefer it over the basename map.
+        exact = sql_file_node_id_by_path.get(sql_filename)
+        if exact is not None:
+            return exact
+        basename = sql_filename.rsplit("/", 1)[-1]
+        return sql_file_id_by_basename.get(basename)
+
+    for python_ref in model.python_sql_file_references:
+        sql_file_id = _resolve_sql_file_id(python_ref.sql_filename)
+        if sql_file_id is None:
+            continue
+        owning_module_id = module_id_by_file_path.get(python_ref.location.file_path)
+        if owning_module_id is None:
+            continue
+        edges.append(
+            GraphEdge(
+                source_id=_owning_node_id(python_ref.function_name, owning_module_id),
+                target_id=sql_file_id,
+                type="LOADS_SQL",
             )
         )
 

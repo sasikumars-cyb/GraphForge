@@ -42,7 +42,7 @@ export function WorkspaceSection() {
             <span className="text-fg-muted">Organization name</span>
             <input
               type="text"
-              defaultValue="Acme Engineering"
+              defaultValue="Cybage Engineering"
               className="rounded-md border border-line bg-canvas px-3 py-2 text-fg focus:border-info-line"
             />
           </label>

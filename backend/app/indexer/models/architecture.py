@@ -176,6 +176,55 @@ class SparkTableWrite:
     function_name: str | None = None
 
 
+@dataclass(frozen=True)
+class SqlFile:
+    """One `.sql` file discovered anywhere in the repository - independent
+    of the repo's detected language (see `indexer/extractors/
+    sql_file_extractor.py`, which is run unconditionally, not gated behind
+    which `ILanguageParser` ran). `name` is its path relative to the
+    repository root, doubling as its identity - `PythonModule` has both a
+    dotted `name` and a `location.file_path`; a `.sql` file has no module
+    naming convention, so the two are the same string here.
+    """
+
+    name: str
+    location: SourceLocation
+
+
+@dataclass(frozen=True)
+class SqlTableReference:
+    """One table reference found inside a `.sql` file's text - the
+    file-based counterpart to `SparkTableRead`/`SparkTableWrite`. See
+    `extractors/sql_lineage.py` for what `statement` can be and exactly
+    which SQL shapes are (and are not) recognized.
+    """
+
+    sql_file: str
+    table_name: str
+    access: str  # "read" | "write"
+    statement: str
+    line: int
+
+
+@dataclass(frozen=True)
+class PythonSqlFileReference:
+    """A Python module's static, literal reference to a `.sql` file's
+    name - either a resolvable `open("...")`-style call, or an entry in a
+    module-level literal filename registry (a dict/list). See
+    `extractors/python/sql_files.py` for exactly what each rule covers.
+
+    `sql_filename` is the literal text as written in the Python source - a
+    bare filename (`"account.sql"`) or a relative path
+    (`"pipeline/sql/account.sql"`), never yet resolved against the actual
+    `.sql` files discovered in the repository; `indexer/graph/builder.py`
+    is what performs that (ambiguity-safe) resolution.
+    """
+
+    sql_filename: str
+    location: SourceLocation
+    function_name: str | None = None
+
+
 @dataclass
 class ArchitectureModel:
     """The aggregate result of parsing one repository."""
@@ -192,3 +241,13 @@ class ArchitectureModel:
     python_dependencies: list[PythonDependency] = field(default_factory=list)
     spark_table_reads: list[SparkTableRead] = field(default_factory=list)
     spark_table_writes: list[SparkTableWrite] = field(default_factory=list)
+    # Populated unconditionally by `indexer/services/indexing_service.py`
+    # after language-specific parsing (see that module) - `.sql` files are
+    # not gated behind which `ILanguageParser` ran, since they commonly sit
+    # alongside Python (or Java) source rather than being "the" language.
+    sql_files: list[SqlFile] = field(default_factory=list)
+    sql_table_references: list[SqlTableReference] = field(default_factory=list)
+    # Populated by `PythonParser` (language-specific: only Python source
+    # can statically reference a `.sql` filename the way
+    # `extractors/python/sql_files.py` looks for).
+    python_sql_file_references: list[PythonSqlFileReference] = field(default_factory=list)

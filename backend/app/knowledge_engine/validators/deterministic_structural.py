@@ -125,10 +125,42 @@ class StructuralEndpointExistenceValidator(KnowledgeValidator):
     async def validate(
         self, hypothesis: Hypothesis, pack: EngineeringEvidencePack
     ) -> ValidationResult:
-        node_evidence_by_id = node_evidence_items_by_node_id(pack)
         identity = GeneratorIdentity(kind="deterministic", name=self.name, version="1.0.0")
         provenance = _provenance(pack.id, identity)
 
+        # RFC-07 hardening: this validator's "both endpoints exist ->
+        # confirms at tier 3" logic was only ever sound for a hypothesis
+        # whose own claim already came from a deterministic AST parser -
+        # there, endpoint existence is independent corroboration of an
+        # already-strong, parser-derived fact. `IMPORTS`/`CALLS`/
+        # `DEPENDS_ON` are also the generic-language fallback's relationship
+        # vocabulary (see `generic_structural.py`), and this validator's
+        # `applies_to` is matched purely by relationship_type, not by which
+        # generator produced the hypothesis — so it was unintentionally
+        # granting a bare "A exists, B exists" LLM hypothesis the exact
+        # same tier-3 confirmation a real parser finding gets, letting
+        # endpoint existence alone reach VERIFIED. A hypothesis whose own
+        # `generator_confidence` is advisory-only and whose claim was never
+        # deterministically derived gets no opinion from this validator at
+        # all — `generic_structural.py`'s own, deliberately weaker
+        # `EndpointExistenceValidator` (tier 1) is what covers that case.
+        if hypothesis.provenance.generator.kind != "deterministic":
+            return ValidationResult(
+                hypothesis_id=hypothesis.id,
+                validator_name=self.name,
+                verdict="no_signal",
+                evidence_used=(),
+                source_type="structural_endpoint_existence",
+                evidence_reliability_tier=0,
+                explanation=(
+                    "hypothesis was not produced by the deterministic parser generator - "
+                    "this validator's endpoint-existence-as-corroboration logic does not "
+                    "apply outside that context"
+                ),
+                provenance=provenance,
+            )
+
+        node_evidence_by_id = node_evidence_items_by_node_id(pack)
         source_item = node_evidence_by_id.get(hypothesis.source_entity)
         target_item = node_evidence_by_id.get(hypothesis.target_entity)
 
@@ -301,10 +333,37 @@ class DependencyCoordinateWellFormedValidator(KnowledgeValidator):
     async def validate(
         self, hypothesis: Hypothesis, pack: EngineeringEvidencePack
     ) -> ValidationResult:
-        node_evidence_by_id = node_evidence_items_by_node_id(pack)
         identity = GeneratorIdentity(kind="deterministic", name=self.name, version="1.0.0")
         provenance = _provenance(pack.id, identity)
 
+        # RFC-07 hardening: same reasoning as
+        # `StructuralEndpointExistenceValidator` - `is_python_shaped` below
+        # only means "has a `name` property," which every generic-fallback
+        # `SourceFile`/`GenericSymbol` node also carries incidentally, not
+        # because it's a genuine dependency coordinate. Left unguarded,
+        # this validator would confirm at tier 3 for ANY generic DEPENDS_ON
+        # hypothesis whose target merely exists - restoring exactly the
+        # "endpoint existence alone reaches VERIFIED" flaw this cycle set
+        # out to fix, just through a second validator. Scope back to the
+        # deterministic generator's own hypotheses, which this validator's
+        # shape-checking logic actually assumes.
+        if hypothesis.provenance.generator.kind != "deterministic":
+            return ValidationResult(
+                hypothesis_id=hypothesis.id,
+                validator_name=self.name,
+                verdict="no_signal",
+                evidence_used=(),
+                source_type="dependency_coordinate_well_formed",
+                evidence_reliability_tier=0,
+                explanation=(
+                    "hypothesis was not produced by the deterministic parser generator - "
+                    "this validator's Maven/Python dependency-coordinate shape checks do "
+                    "not apply outside that context"
+                ),
+                provenance=provenance,
+            )
+
+        node_evidence_by_id = node_evidence_items_by_node_id(pack)
         target_item = node_evidence_by_id.get(hypothesis.target_entity)
         if target_item is None:
             return ValidationResult(

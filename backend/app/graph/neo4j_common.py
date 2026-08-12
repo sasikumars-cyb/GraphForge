@@ -35,6 +35,9 @@ _ALLOWED_LABELS = frozenset(
         "Function",
         "PythonDependency",
         "DataTable",
+        "SqlFile",
+        "SourceFile",
+        "GenericSymbol",
         "TestRailProject",
         "TestSuite",
         "TestSection",
@@ -53,6 +56,7 @@ _ALLOWED_REL_TYPES = frozenset(
         "INHERITS_FROM",
         "READS_FROM",
         "WRITES_TO",
+        "LOADS_SQL",
         # Cross-repository relationships — see
         # app.indexer.graph.cross_repo_linker, the only writer of these.
         # Unlike every other relationship above, both endpoints of these

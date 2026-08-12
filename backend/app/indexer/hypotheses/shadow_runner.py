@@ -165,7 +165,7 @@ async def to_knowledge_relationship(
     return relationship, confidence, explanation, confirms, contradicts
 
 
-async def _reason_hypotheses(
+async def reason_hypotheses(
     hypotheses: list[Hypothesis],
     pack: EngineeringEvidencePack,
     engine: DefaultConfidenceEngine,
@@ -211,6 +211,7 @@ async def run_shadow_hypothesis_generation(
     model: ArchitectureModel,
     db: AsyncSession | None = None,
     repository_evidence_facts: list[RepositoryEvidenceFact] | None = None,
+    repository_name: str | None = None,
 ) -> None:
     """Best-effort only. Never raises — a failure here must never fail
     repository indexing (see this module's docstring). The caller is
@@ -224,6 +225,13 @@ async def run_shadow_hypothesis_generation(
     generator reads — additive only, the deterministic generator's own
     node/edge evidence is unaffected, it simply ignores evidence `kind`s
     it doesn't recognize.
+
+    `repository_name` must be the same value passed to the direct-write
+    `build_graph` call for this same run (`index_repository`'s own
+    `repository_name` parameter) - omitting it produces a Repository node
+    with no `name` property in the materialized graph, a real mismatch
+    found via "authoritative" mode's shadow-compare diagnostic (see
+    `architecture_model_to_evidence_pack`'s own docstring).
     """
     parser_identity = _generator_identity(model)
     started_at = time.monotonic()
@@ -233,6 +241,7 @@ async def run_shadow_hypothesis_generation(
             commit_sha=commit_sha,
             model=model,
             identity=parser_identity,
+            repository_name=repository_name,
         )
         if repository_evidence_facts:
             extra_items = repository_evidence_facts_to_items(
@@ -268,7 +277,7 @@ async def run_shadow_hypothesis_generation(
         hypotheses = await deterministic_generator.generate(pack)
         total_hypotheses += len(hypotheses)
         generators_run.append(parser_identity.name)
-        relationships, explanations, confirms, contradicts = await _reason_hypotheses(
+        relationships, explanations, confirms, contradicts = await reason_hypotheses(
             hypotheses,
             pack,
             engine,
@@ -307,7 +316,7 @@ async def run_shadow_hypothesis_generation(
 
         total_hypotheses += len(hypotheses)
         generators_run.append(registered.identity.name)
-        relationships, explanations, confirms, contradicts = await _reason_hypotheses(
+        relationships, explanations, confirms, contradicts = await reason_hypotheses(
             hypotheses,
             pack,
             engine,

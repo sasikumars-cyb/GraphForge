@@ -161,12 +161,26 @@ def architecture_model_to_evidence_pack(
     model: ArchitectureModel,
     identity: GeneratorIdentity,
     schema_version: str = "v1",
+    repository_name: str | None = None,
 ) -> EngineeringEvidencePack:
     """Convert one parser's `ArchitectureModel` into the evidence pack its
     paired `DeterministicParserHypothesisGenerator` reads from, via the
     existing `build_graph` — see this module's docstring for why that
-    reuse, rather than re-deriving topology, is the correct choice."""
-    payload: GraphPayload = build_graph(repository_id, model)
+    reuse, rather than re-deriving topology, is the correct choice.
+
+    `repository_name` (optional, defaults to None like `build_graph`'s own
+    parameter) must be passed through identically to whatever
+    `index_repository` gave the direct-write `build_graph` call for the
+    same run - found missing here via the "authoritative" mode activation's
+    shadow-compare investigation: the Repository node's `name` property was
+    silently absent from every materialized graph (present only in the
+    direct-write path), because this call site never received it. Every
+    other node type reads `name` from the parsed model itself, not from an
+    argument - the Repository node is the one exception, since its "name"
+    is really the caller's own `repository.full_name`, unknowable from
+    `ArchitectureModel` alone.
+    """
+    payload: GraphPayload = build_graph(repository_id, model, repository_name=repository_name)
     pack_id = f"pack:{repository_id}:{commit_sha}:{identity.name}"
 
     provenance = Provenance(

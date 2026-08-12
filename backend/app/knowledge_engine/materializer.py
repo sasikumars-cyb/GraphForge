@@ -221,6 +221,76 @@ async def _cross_repo_edges(
     return edges
 
 
+# RFC-07 promotion gate — the two confidence states ADR 0018's own roadmap
+# names for this: "Promotion gated to Verified/Highly Likely only." A
+# relationship sitting at Likely/Candidate/Rejected/Conflicting is real,
+# explainable Engineering Memory (queryable via the parity/learning APIs),
+# but must never silently become authoritative graph truth - this is the
+# one place that boundary is enforced for single-repository relationships
+# a generator proposed without also pre-baking a `graph_edge` evidence
+# item for them (the deterministic generator always does, via
+# `architecture_model_to_evidence_pack`, so this never touches its edges;
+# see `_RFC07_PROMOTABLE_STATES`'s use below).
+_RFC07_PROMOTABLE_STATES = frozenset({"verified", "highly_likely"})
+
+
+def _relationship_provenance_summary(record: KnowledgeRelationshipRecord) -> dict[str, object]:
+    """Best-effort, additive-only properties recovered straight from the
+    record itself - no extra I/O, unlike `_cross_repo_edge_properties`
+    (which reads a second evidence pack): a generic-generator-promoted
+    edge has no evidence pack of its own to recover extra topology-
+    specific properties from, only what `KnowledgeRelationship` itself
+    already carries (generator identity, explanation)."""
+    properties: dict[str, object] = {}
+    if record.provenance:
+        generator = record.provenance[0].get("generator") if record.provenance[0] else None
+        if isinstance(generator, dict) and generator.get("name"):
+            properties["generator"] = generator["name"]
+            properties["extraction_method"] = generator.get("kind", "")
+    if record.explanation:
+        summary = record.explanation.get("summary")
+        if isinstance(summary, str) and summary:
+            properties["explanation"] = summary
+    return properties
+
+
+def _promoted_single_repo_edges(
+    current_relationships: list[KnowledgeRelationshipRecord],
+    already_covered: frozenset[tuple[str, str, str]],
+) -> list[GraphEdge]:
+    """Single-repository relationships promoted directly from validated
+    Engineering Memory - the RFC-07 activation for any generator that
+    doesn't pre-bake its own `graph_edge` evidence item the way the
+    deterministic generator does (see `generic_language_generator.py`,
+    today's only such generator). Additive only: `already_covered` (every
+    `(type, source, target)` triple the pack's own `graph_edge:*` items
+    already produced) is never touched or overridden here, so this can
+    never collapse the deterministic generator's legitimate same-triple
+    multiplicity (see this module's own docstring) - it only ever adds
+    edges the pack had nothing to say about at all.
+    """
+    edges: list[GraphEdge] = []
+    for record in current_relationships:
+        if record.relationship_type in _CROSS_REPO_RELATIONSHIP_TYPES:
+            continue
+        if record.confidence_state not in _RFC07_PROMOTABLE_STATES:
+            continue
+        key = (record.relationship_type, record.source_entity, record.target_entity)
+        if key in already_covered:
+            continue
+        properties = _relationship_provenance_summary(record)
+        properties["confidence"] = record.confidence_state
+        edges.append(
+            GraphEdge(
+                source_id=record.source_entity,
+                target_id=record.target_entity,
+                type=record.relationship_type,
+                properties=properties,
+            )
+        )
+    return edges
+
+
 async def materialize_repository_graph(db: AsyncSession, repository_id: uuid.UUID) -> GraphPayload:
     """Rebuild one repository's `GraphPayload` entirely from Engineering
     Memory + its evidence packs — no parsing, no cloning, no reasoning.
@@ -234,15 +304,26 @@ async def materialize_repository_graph(db: AsyncSession, repository_id: uuid.UUI
 
     nodes: list[GraphNode] = []
     single_repo_edges: list[GraphEdge] = []
+    covered_relationship_keys: frozenset[tuple[str, str, str]] = frozenset()
     if pack is not None:
         nodes = [
             node for item in pack.items if (node := _node_from_evidence_item(item)) is not None
         ]
         single_repo_edges = _single_repo_edges_from_pack(pack, confidence_by_relationship)
+        covered_relationship_keys = frozenset(
+            (e.type, e.source_id, e.target_id) for e in single_repo_edges
+        )
+
+    # RFC-07: relationships a generator proposed without pre-baking their
+    # own `graph_edge` evidence (see `_promoted_single_repo_edges`'s own
+    # docstring) - additive, never overlapping `single_repo_edges` above.
+    promoted_edges = _promoted_single_repo_edges(current_relationships, covered_relationship_keys)
 
     cross_repo_edges = await _cross_repo_edges(memory, current_relationships)
 
-    return GraphPayload(nodes=nodes, edges=single_repo_edges + cross_repo_edges)
+    return GraphPayload(
+        nodes=nodes, edges=single_repo_edges + promoted_edges + cross_repo_edges
+    )
 
 
 async def rematerialize_repository_graph(

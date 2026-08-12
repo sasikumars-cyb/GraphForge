@@ -12,6 +12,8 @@ import pytest
 
 FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "spring_boot_sample"
 PYTHON_FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "python_sample"
+PYTHON_SPARK_FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "python_spark_sample"
+GO_FIXTURE_ROOT = Path(__file__).parent.parent / "fixtures" / "go_sample"
 
 _GIT_AUTHOR = ["-c", "user.email=test@example.com", "-c", "user.name=Test"]
 
@@ -42,6 +44,33 @@ def python_git_repo(tmp_path: Path) -> Path:
     `python_sample` fixture."""
     repo_path = tmp_path / "python-repo"
     shutil.copytree(PYTHON_FIXTURE_ROOT, repo_path)
+    _init_git_repo(repo_path)
+    return repo_path
+
+
+@pytest.fixture
+def python_spark_git_repo(tmp_path: Path) -> Path:
+    """A real local git repository whose working tree is a copy of the
+    `python_spark_sample` fixture - a small Spark/Databricks-shaped
+    repository (a `spark.sql(...)` INSERT...SELECT, a standalone `.sql`
+    file, and a literal filename registry) used only by the SQL-lineage
+    end-to-end integration test. Deliberately separate from
+    `python_git_repo`'s `python_sample` fixture so existing tests that
+    assert exact counts against that fixture are untouched."""
+    repo_path = tmp_path / "python-spark-repo"
+    shutil.copytree(PYTHON_SPARK_FIXTURE_ROOT, repo_path)
+    _init_git_repo(repo_path)
+    return repo_path
+
+
+@pytest.fixture
+def go_git_repo(tmp_path: Path) -> Path:
+    """A real local git repository whose working tree is a copy of the
+    `go_sample` fixture - RFC-07's proof language: GraphForge has no
+    `ILanguageParser`, and no `detect_language()` rule, for Go at all.
+    Used only by the generic-language-fallback integration test."""
+    repo_path = tmp_path / "go-repo"
+    shutil.copytree(GO_FIXTURE_ROOT, repo_path)
     _init_git_repo(repo_path)
     return repo_path
 

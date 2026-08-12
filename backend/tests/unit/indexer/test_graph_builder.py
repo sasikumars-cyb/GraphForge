@@ -14,9 +14,12 @@ from app.indexer.models.architecture import (
     PythonFunction,
     PythonImport,
     PythonModule,
+    PythonSqlFileReference,
     SourceLocation,
     SparkTableRead,
     SparkTableWrite,
+    SqlFile,
+    SqlTableReference,
 )
 
 LOCATION = SourceLocation(file_path="Order.java")
@@ -520,3 +523,311 @@ def test_java_production_controller_is_not_flagged_is_test() -> None:
     controller_id = "repo-1:controller:com.example.OrderController"
     node = next(n for n in graph.nodes if n.id == controller_id)
     assert node.properties["is_test"] is False
+
+
+# ---------------------------------------------------------------------------
+# spark.sql() / .sql file table lineage (data-flow gap the architecture
+# audit found - see docs/architecture-diagrams/06 and the extractors this
+# exercises: sql_lineage.py, python/sql_files.py, sql_file_extractor.py).
+# ---------------------------------------------------------------------------
+
+
+def test_spark_read_attributes_to_specific_function_when_unambiguous() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="jobs.report",
+                package="jobs",
+                location=PY_LOCATION,
+                functions=[PythonFunction(name="merge_schema", location=PY_LOCATION)],
+            ),
+        ],
+        spark_table_reads=[
+            SparkTableRead(
+                table_name="bronze.customers", location=PY_LOCATION, function_name="merge_schema"
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    function_id = "repo-1:function:jobs.report.merge_schema"
+    table_id = "repo-1:data-table:bronze.customers"
+    edge_key = (function_id, table_id, "READS_FROM")
+    assert edge_key in {(e.source_id, e.target_id, e.type) for e in graph.edges}
+    # Falls back to nothing at the module level for this same edge - it's
+    # attributed once, to the function, not duplicated onto the module too.
+    module_id = "repo-1:module:jobs.report"
+    assert (module_id, table_id, "READS_FROM") not in {
+        (e.source_id, e.target_id, e.type) for e in graph.edges
+    }
+
+
+def test_spark_write_falls_back_to_module_when_function_name_is_ambiguous() -> None:
+    # "write_report" is a method on two unrelated classes in the same
+    # module - matches CALLS resolution's own ambiguity precedent.
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="jobs.report",
+                package="jobs",
+                location=PY_LOCATION,
+                classes=[
+                    PythonClass(
+                        name="A",
+                        location=PY_LOCATION,
+                        methods=[PythonFunction(name="write_report", location=PY_LOCATION)],
+                    ),
+                    PythonClass(
+                        name="B",
+                        location=PY_LOCATION,
+                        methods=[PythonFunction(name="write_report", location=PY_LOCATION)],
+                    ),
+                ],
+            ),
+        ],
+        spark_table_writes=[
+            SparkTableWrite(
+                table_name="gold.report",
+                method_name="saveAsTable",
+                location=PY_LOCATION,
+                function_name="write_report",
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    module_id = "repo-1:module:jobs.report"
+    table_id = "repo-1:data-table:gold.report"
+    assert (module_id, table_id, "WRITES_TO") in {
+        (e.source_id, e.target_id, e.type) for e in graph.edges
+    }
+
+
+def test_sql_file_creates_node_and_reads_from_edge_to_data_table() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        sql_files=[SqlFile(name="pipeline/sql/account.sql", location=SourceLocation(
+            file_path="pipeline/sql/account.sql"
+        ))],
+        sql_table_references=[
+            SqlTableReference(
+                sql_file="pipeline/sql/account.sql",
+                table_name="catalog.schema.account_raw",
+                access="read",
+                statement="SELECT",
+                line=1,
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    sql_file_id = "repo-1:sql-file:pipeline/sql/account.sql"
+    table_id = "repo-1:data-table:catalog.schema.account_raw"
+    assert any(n.id == sql_file_id and n.labels == ["SqlFile"] for n in graph.nodes)
+    assert any(n.id == table_id and n.labels == ["DataTable"] for n in graph.nodes)
+    assert (sql_file_id, table_id, "READS_FROM") in {
+        (e.source_id, e.target_id, e.type) for e in graph.edges
+    }
+
+
+def test_sql_file_write_reference_creates_writes_to_edge() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        sql_files=[
+            SqlFile(name="pipeline/sql/insert.sql", location=SourceLocation(file_path="pipeline/sql/insert.sql"))
+        ],
+        sql_table_references=[
+            SqlTableReference(
+                sql_file="pipeline/sql/insert.sql",
+                table_name="catalog.schema.account",
+                access="write",
+                statement="INSERT_INTO",
+                line=1,
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    sql_file_id = "repo-1:sql-file:pipeline/sql/insert.sql"
+    table_id = "repo-1:data-table:catalog.schema.account"
+    assert (sql_file_id, table_id, "WRITES_TO") in {
+        (e.source_id, e.target_id, e.type) for e in graph.edges
+    }
+
+
+def test_python_module_registry_reference_creates_loads_sql_edge() -> None:
+    # The real sql_registry.py shape: a module-level dict names filenames
+    # with no enclosing function - the LOADS_SQL edge is module-level.
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="pipeline.config.sql_registry",
+                package="pipeline.config",
+                location=SourceLocation(file_path="pipeline/config/sql_registry.py"),
+            ),
+        ],
+        sql_files=[
+            SqlFile(
+                name="pipeline/sql/account.sql",
+                location=SourceLocation(file_path="pipeline/sql/account.sql"),
+            )
+        ],
+        python_sql_file_references=[
+            PythonSqlFileReference(
+                sql_filename="account.sql",
+                location=SourceLocation(file_path="pipeline/config/sql_registry.py"),
+                function_name=None,
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    module_id = "repo-1:module:pipeline.config.sql_registry"
+    sql_file_id = "repo-1:sql-file:pipeline/sql/account.sql"
+    assert (module_id, sql_file_id, "LOADS_SQL") in {
+        (e.source_id, e.target_id, e.type) for e in graph.edges
+    }
+
+
+def test_python_function_reference_attributes_loads_sql_to_function() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="pipeline.sql.query_loader",
+                package="pipeline.sql",
+                location=SourceLocation(file_path="pipeline/sql/query_loader.py"),
+                functions=[
+                    PythonFunction(
+                        name="direct_load",
+                        location=SourceLocation(file_path="pipeline/sql/query_loader.py"),
+                    )
+                ],
+            ),
+        ],
+        sql_files=[
+            SqlFile(
+                name="pipeline/sql/account.sql",
+                location=SourceLocation(file_path="pipeline/sql/account.sql"),
+            )
+        ],
+        python_sql_file_references=[
+            PythonSqlFileReference(
+                sql_filename="pipeline/sql/account.sql",
+                location=SourceLocation(file_path="pipeline/sql/query_loader.py"),
+                function_name="direct_load",
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    function_id = "repo-1:function:pipeline.sql.query_loader.direct_load"
+    sql_file_id = "repo-1:sql-file:pipeline/sql/account.sql"
+    assert (function_id, sql_file_id, "LOADS_SQL") in {
+        (e.source_id, e.target_id, e.type) for e in graph.edges
+    }
+
+
+def test_ambiguous_basename_reference_is_skipped_not_guessed() -> None:
+    # Two different .sql files share the basename "account.sql" in
+    # different directories - a bare-filename reference to "account.sql"
+    # must not arbitrarily pick one.
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="pipeline.config.sql_registry",
+                package="pipeline.config",
+                location=SourceLocation(file_path="pipeline/config/sql_registry.py"),
+            ),
+        ],
+        sql_files=[
+            SqlFile(
+                name="pipeline/sql/account.sql",
+                location=SourceLocation(file_path="pipeline/sql/account.sql"),
+            ),
+            SqlFile(
+                name="pipeline/sql/legacy/account.sql",
+                location=SourceLocation(file_path="pipeline/sql/legacy/account.sql"),
+            ),
+        ],
+        python_sql_file_references=[
+            PythonSqlFileReference(
+                sql_filename="account.sql",
+                location=SourceLocation(file_path="pipeline/config/sql_registry.py"),
+                function_name=None,
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    assert not any(e.type == "LOADS_SQL" for e in graph.edges)
+
+
+def test_unresolvable_sql_filename_reference_produces_no_edge() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="pipeline.config.sql_registry",
+                package="pipeline.config",
+                location=SourceLocation(file_path="pipeline/config/sql_registry.py"),
+            ),
+        ],
+        sql_files=[],
+        python_sql_file_references=[
+            PythonSqlFileReference(
+                sql_filename="does_not_exist.sql",
+                location=SourceLocation(file_path="pipeline/config/sql_registry.py"),
+                function_name=None,
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    assert not any(e.type == "LOADS_SQL" for e in graph.edges)
+
+
+def test_same_table_referenced_via_spark_and_sql_file_merges_to_one_node() -> None:
+    # A table named identically by an inline spark.sql()/DataFrameWriter
+    # call and a standalone .sql file must resolve to the exact same
+    # DataTable node id - real cross-source lineage merging, not two
+    # disconnected facts about "the same" table.
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(name="jobs.report", package="jobs", location=PY_LOCATION),
+        ],
+        spark_table_reads=[
+            SparkTableRead(table_name="catalog.schema.customer", location=PY_LOCATION)
+        ],
+        sql_files=[
+            SqlFile(name="pipeline/sql/x.sql", location=SourceLocation(file_path="pipeline/sql/x.sql"))
+        ],
+        sql_table_references=[
+            SqlTableReference(
+                sql_file="pipeline/sql/x.sql",
+                table_name="catalog.schema.customer",
+                access="write",
+                statement="INSERT_INTO",
+                line=1,
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    table_nodes = [n for n in graph.nodes if n.labels == ["DataTable"]]
+    assert len(table_nodes) == 1
+    assert table_nodes[0].id == "repo-1:data-table:catalog.schema.customer"

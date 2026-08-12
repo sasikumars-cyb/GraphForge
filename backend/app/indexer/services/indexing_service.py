@@ -12,18 +12,25 @@ any failure determining what changed — see `_attempt_incremental_index`.
 """
 
 import logging
+import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.crypto import decrypt_secret
 from app.core.exceptions import AppError
+from app.graph.interfaces import IGraphRepository
+from app.graph.models import GraphPayload
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
+from app.indexer.extractors.sql_file_extractor import extract_sql_files
 from app.indexer.graph.builder import build_graph
 from app.indexer.graph.cross_repo_linker import relink_account
+from app.indexer.hypotheses.generic_language_runner import run_generic_language_fallback
 from app.indexer.hypotheses.repository_evidence import extract_repository_evidence
 from app.indexer.hypotheses.shadow_runner import run_shadow_hypothesis_generation
 from app.indexer.models.architecture import ArchitectureModel
@@ -37,6 +44,7 @@ from app.indexer.scanner.incremental import (
 )
 from app.indexer.scanner.language_detector import DetectedLanguage, detect_language
 from app.indexer.scanner.repository_cloner import clone_repository, resolve_head_commit_sha
+from app.knowledge_engine.materializer import materialize_repository_graph
 from app.knowledge_engine.shadow_compare import shadow_compare_materialized_graph
 from app.models.github_connection import GitHubConnection
 from app.models.repository import Repository
@@ -44,6 +52,25 @@ from app.models.repository import Repository
 logger = logging.getLogger(__name__)
 
 IndexingSummary = dict[str, int]
+
+# The only three values `Settings.graph_authority_mode` is recognized for -
+# see that field's own docstring. An unrecognized value degrades to the
+# safest, zero-behavior-change default rather than raising: a typo in an
+# operator's env var must never turn into an indexing outage.
+_VALID_GRAPH_AUTHORITY_MODES = frozenset({"shadow", "shadow_compare", "authoritative"})
+_DEFAULT_GRAPH_AUTHORITY_MODE = "shadow_compare"
+
+
+def _graph_authority_mode() -> str:
+    mode = get_settings().graph_authority_mode
+    if mode not in _VALID_GRAPH_AUTHORITY_MODES:
+        logger.warning(
+            "unknown_graph_authority_mode configured=%r falling_back_to=%r",
+            mode,
+            _DEFAULT_GRAPH_AUTHORITY_MODE,
+        )
+        return _DEFAULT_GRAPH_AUTHORITY_MODE
+    return mode
 
 
 class UnsupportedRepositoryError(AppError):
@@ -72,6 +99,68 @@ def _summarize(model: ArchitectureModel) -> IndexingSummary:
             len(m.functions) + sum(len(c.methods) for c in m.classes) for m in model.python_modules
         ),
         "python_dependencies": len(model.python_dependencies),
+        "sql_files": len(model.sql_files),
+        "sql_table_references": len(model.sql_table_references),
+    }
+
+
+async def _attempt_generic_language_fallback(
+    *,
+    repository_id: str,
+    repo_path: Path,
+    language: DetectedLanguage,
+    commit_sha: str,
+    db: AsyncSession | None,
+    repository_name: str | None,
+) -> IndexingSummary | None:
+    """RFC-07 — the "relax the hard 422 gate" activation: when no
+    `ILanguageParser` matches (the caller's `get_parser(language)` already
+    returned None), try the generic evidence/LLM fallback instead of
+    unconditionally failing. Returns `None` (caller then raises
+    `UnsupportedRepositoryError` exactly as before) when the fallback
+    isn't applicable or didn't produce anything - never partially
+    succeeds silently.
+
+    Two preconditions, both required: `Settings.enable_generic_language_fallback`
+    (off by default - a real LLM call, opt-in the same way
+    `enable_frontier_llm_generator` is) and `db is not None` (there is no
+    `ArchitectureModel`/`build_graph()` output for this path to fall back
+    to the way "authoritative" mode's `_write_repository_graph` can -
+    Engineering Memory persistence is the *only* way anything from this
+    path reaches a graph at all, so without a session there is nothing
+    useful this function can do).
+    """
+    if db is None or not get_settings().enable_generic_language_fallback:
+        return None
+
+    pack = await run_generic_language_fallback(
+        repository_id=repository_id,
+        commit_sha=commit_sha,
+        repo_root=repo_path,
+        language_label=str(language),
+        db=db,
+        repository_name=repository_name,
+    )
+    if pack is None:
+        return None
+
+    graph_repository = Neo4jGraphRepository(get_driver())
+    try:
+        materialized = await materialize_repository_graph(db, uuid.UUID(repository_id))
+    except Exception:
+        logger.exception(
+            "generic_language_materialization_failed repository_id=%s", repository_id
+        )
+        return None
+
+    await graph_repository.replace_repository_graph(repository_id, materialized)
+
+    source_file_count = sum(1 for item in pack.items if item.kind == "source_file")
+    return {
+        "generic_language_fallback": 1,
+        "generic_language_files_discovered": source_file_count,
+        "materialized_nodes": len(materialized.nodes),
+        "materialized_edges": len(materialized.edges),
     }
 
 
@@ -126,6 +215,16 @@ async def index_repository(
                 on_commit_resolved(commit_sha)
         parser = get_parser(language) if language != DetectedLanguage.UNSUPPORTED else None
         if parser is None:
+            fallback_summary = await _attempt_generic_language_fallback(
+                repository_id=repository_id,
+                repo_path=repo_path,
+                language=language,
+                commit_sha=ref,
+                db=db,
+                repository_name=repository_name,
+            )
+            if fallback_summary is not None:
+                return fallback_summary
             raise UnsupportedRepositoryError(
                 f"Repository language/framework is not supported yet "
                 f"(detected: {language}). Java + Spring Boot (Maven) and "
@@ -133,6 +232,11 @@ async def index_repository(
             )
 
         model = parser.parse(repo_path)
+        # Repo-wide `.sql` file discovery/lineage - unconditional, not
+        # owned by any one `ILanguageParser` (see sql_file_extractor.py's
+        # own docstring for why). Must run inside this `with` block too,
+        # same as the parse above: the clone doesn't outlive it.
+        model.sql_files, model.sql_table_references = extract_sql_files(repo_path)
         # Frontier Hypothesis Generator (ADR 0018) Finding 1: README/
         # manifest/config content isn't recoverable from `ArchitectureModel`
         # and the clone won't exist past this block — read it now, while
@@ -142,33 +246,117 @@ async def index_repository(
 
     graph = build_graph(repository_id, model, repository_name=repository_name)
     graph_repository = Neo4jGraphRepository(get_driver())
-    await graph_repository.replace_repository_graph(repository_id, graph)
+    mode = _graph_authority_mode() if db is not None else "shadow"
+
+    # In "authoritative" mode the write is deferred until after shadow
+    # hypothesis generation has had a chance to persist evidence this run
+    # can materialize from (see `_write_repository_graph`). Every other
+    # mode keeps today's exact ordering — write the builder's graph
+    # immediately, unchanged from before this activation.
+    if mode != "authoritative":
+        await graph_repository.replace_repository_graph(repository_id, graph)
 
     # ADR 0018 RFC-02B/RFC-04: shadow-mode only, after the real graph is
-    # already committed — never raises, never affects `graph` or this
-    # function's return value. See `run_shadow_hypothesis_generation`'s own
-    # docstring for why `ref` stands in for a commit SHA here, and why `db`
-    # is optional.
+    # already committed (for "shadow"/"shadow_compare") — never raises,
+    # never affects `graph` or this function's return value. See
+    # `run_shadow_hypothesis_generation`'s own docstring for why `ref`
+    # stands in for a commit SHA here, and why `db` is optional.
     await run_shadow_hypothesis_generation(
         repository_id=repository_id,
         commit_sha=ref,
         model=model,
         db=db,
         repository_evidence_facts=repository_evidence_facts,
+        repository_name=repository_name,
     )
 
     # KAN-16 — shadow-compare the Materializer's projection against the
-    # graph just written, on every real indexing run (not just the one
-    # fixture the replay test covers). Diagnostic only: runs after shadow
-    # hypothesis generation has had a chance to persist evidence for this
-    # exact commit, never raises, never affects `graph` or this function's
-    # return value. `db is None` (every pre-RFC-04 call site and test)
-    # skips this the same way it skips shadow persistence itself - there's
-    # no Engineering Memory to materialize from without a session.
-    if db is not None:
+    # builder's graph, on every real indexing run in "shadow_compare" or
+    # "authoritative" mode (not just the one fixture the replay test
+    # covers). Diagnostic only in "shadow_compare" (logs mismatches, never
+    # affects what's written); in "authoritative" mode this same log is
+    # what makes a divergence between the two paths visible even after
+    # cutover, rather than silently invisible once the builder's payload
+    # stops being written. Runs after shadow hypothesis generation has had
+    # a chance to persist evidence for this exact commit. `db is None`
+    # (every pre-RFC-04 call site and test) skips this the same way it
+    # skips shadow persistence itself - there's no Engineering Memory to
+    # materialize from without a session.
+    if db is not None and mode in ("shadow_compare", "authoritative"):
         await shadow_compare_materialized_graph(db, repository_id, graph)
 
+    if mode == "authoritative":
+        await _write_repository_graph(
+            db=db,  # type: ignore[arg-type]  # mode is only "authoritative" when db is not None
+            graph_repository=graph_repository,
+            repository_id=repository_id,
+            fallback_graph=graph,
+        )
+
     return _summarize(model)
+
+
+async def _write_repository_graph(
+    *,
+    db: AsyncSession,
+    graph_repository: IGraphRepository,
+    repository_id: str,
+    fallback_graph: GraphPayload,
+) -> None:
+    """The one write for "authoritative" mode: materialize Engineering
+    Memory (just persisted by `run_shadow_hypothesis_generation` above)
+    into a `GraphPayload` and write *that* — ADR 0018's stated end state,
+    "Neo4j becomes a synced, rebuildable projection" of Engineering Memory,
+    not the builder's direct output.
+
+    Two failure modes are handled explicitly, both falling back to
+    `fallback_graph` (the builder's own payload) rather than leaving the
+    repository with no graph at all or a corrupted one:
+
+    - Materialization raises (a Postgres error, a malformed evidence item)
+      - caught here, not left to crash the whole indexing run over what
+        is, for now, still a migration-safety measure.
+    - Materialization succeeds but is suspiciously empty while the
+      builder's own payload is not - the one shape a partial/failed
+      Engineering Memory write could produce that wouldn't raise at all
+      (e.g. `run_shadow_hypothesis_generation` failed to persist for a
+      reason it swallows internally, per its own "never raises" contract).
+      An authoritative write must never silently wipe a repository's graph
+      to empty; a same-content builder write is always safer than that.
+
+    This is the intentional trust boundary: `fallback_graph` is always a
+    fully deterministic, already-validated-by-tests payload (the same one
+    every non-authoritative mode writes as-is), so falling back to it never
+    trades a trustworthy graph for an untrustworthy one - only for a less
+    complete one (no confidence/provenance properties this run).
+    """
+    try:
+        materialized = await materialize_repository_graph(db, uuid.UUID(repository_id))
+    except Exception:
+        logger.exception(
+            "graph_materialization_failed repository_id=%s falling_back_to=builder_graph",
+            repository_id,
+        )
+        await graph_repository.replace_repository_graph(repository_id, fallback_graph)
+        return
+
+    if not materialized.nodes and fallback_graph.nodes:
+        logger.error(
+            "graph_materialization_empty repository_id=%s builder_node_count=%d "
+            "falling_back_to=builder_graph",
+            repository_id,
+            len(fallback_graph.nodes),
+        )
+        await graph_repository.replace_repository_graph(repository_id, fallback_graph)
+        return
+
+    await graph_repository.replace_repository_graph(repository_id, materialized)
+    logger.info(
+        "graph_materialized_authoritative repository_id=%s node_count=%d edge_count=%d",
+        repository_id,
+        len(materialized.nodes),
+        len(materialized.edges),
+    )
 
 
 async def _index_changed_files(
@@ -204,6 +392,14 @@ async def _index_changed_files(
         html_url, changed_files, head_sha, access_token
     ) as work_dir:
         model = parser.parse(work_dir)
+        # `work_dir` only ever contains the files in `changed_files` (see
+        # `materialize_changed_files`'s own docstring) - so this naturally
+        # stays scoped to exactly the `.sql` files this incremental update
+        # touched, matching `file_paths`/the deletion scope below. Running
+        # the unscoped, repo-wide `extract_sql_files` here would be
+        # incorrect only if `work_dir` held more than the changed files;
+        # it doesn't.
+        model.sql_files, model.sql_table_references = extract_sql_files(work_dir)
 
     graph = build_graph(repository_id, model, repository_name=repository_name)
     graph_repository = Neo4jGraphRepository(get_driver())
@@ -322,7 +518,20 @@ async def run_indexing(db: AsyncSession, repository: Repository) -> IndexingSumm
     access_token = await _get_access_token(db, repository.user_id)
 
     head_sha: str | None
-    incremental = await _attempt_incremental_index(repository, access_token)
+    # "authoritative" mode always takes the full `index_repository` path:
+    # KAN-32's incremental path (`_index_changed_files`) never runs shadow
+    # hypothesis generation and never persists to Engineering Memory (see
+    # its own module docstring - only `index_repository` does), so
+    # materializing from Engineering Memory after an incremental update
+    # would read a stale, pre-change evidence pack and write a stale
+    # authoritative graph. A full re-index is slower but never wrong;
+    # that's the explicit tradeoff documented on
+    # `Settings.graph_authority_mode`.
+    incremental = (
+        None
+        if _graph_authority_mode() == "authoritative"
+        else await _attempt_incremental_index(repository, access_token)
+    )
     if incremental is not None:
         summary, head_sha = incremental
     else:

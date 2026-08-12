@@ -221,6 +221,42 @@ class Settings(BaseSettings):
     # run.
     enable_frontier_llm_generator: bool = Field(default=False)
 
+    # Off by default, same reasoning as `enable_frontier_llm_generator`
+    # immediately above: enabling this adds a real LLM call, on a
+    # repository whose language has no deterministic parser at all
+    # (RFC-07's generic fallback - see
+    # app.indexer.hypotheses.generic_language_runner). With this off
+    # (the default), an unsupported-language repository behaves exactly
+    # as it always has: `index_repository` raises `UnsupportedRepositoryError`
+    # (422), zero behavior change for any existing installation.
+    enable_generic_language_fallback: bool = Field(default=False)
+
+    # --- Graph authority mode (ADR 0018 activation — Evidence -> Hypothesis
+    # -> Validation -> Confidence -> Knowledge -> Materializer -> Neo4j) ---
+    # One of "shadow" | "shadow_compare" | "authoritative":
+    #   "shadow"          - write the deterministic builder's graph only;
+    #     shadow hypothesis generation still runs and still persists to
+    #     Engineering Memory (RFC-02B/04, unchanged), but the comparison
+    #     diagnostic (KAN-16) is skipped.
+    #   "shadow_compare"  - (default; today's actual, unchanged behavior)
+    #     same as "shadow" plus the comparison diagnostic - logs mismatches,
+    #     never affects what gets written.
+    #   "authoritative"   - the Materializer's projection of Engineering
+    #     Memory (knowledge_engine.materializer) becomes the graph actually
+    #     written to Neo4j, in place of the builder's direct output. See
+    #     indexer/services/indexing_service.py's `_write_repository_graph`
+    #     for the exact fallback behavior if materialization is empty or
+    #     raises - the graph is never left un-written or silently wiped.
+    # Applies only when a DB session is available (every real run through
+    # `run_indexing`); every DB-less caller (tests, ad-hoc `index_repository`
+    # calls) always behaves as "shadow" regardless of this setting, since
+    # there is no Engineering Memory to materialize from without one.
+    # "authoritative" also forces every run through the full
+    # `index_repository` path, never KAN-32's incremental one - the
+    # incremental path never persists to Engineering Memory, so
+    # materializing from it would read a stale, pre-change evidence pack.
+    graph_authority_mode: str = Field(default="shadow_compare")
+
     @model_validator(mode="after")
     def _reject_insecure_defaults_in_production(self) -> "Settings":
         """Fail fast rather than run production on a publicly-known secret.
