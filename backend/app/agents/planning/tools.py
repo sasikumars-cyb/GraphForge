@@ -27,6 +27,15 @@ from app.models.repository import Repository
 
 logger = logging.getLogger(__name__)
 
+# How many repositories "deserve deeper attention" by default — originally
+# just `format_graph_context`'s own default arg. Named and exported so other
+# callers that need the same "how many top-ranked repositories are worth
+# looking at more closely" judgment (e.g. Context Discovery's candidate
+# corroboration funnel, `reasoning.capabilities.CANDIDATE_FUNNEL_WIDTH`)
+# reuse this one number rather than each picking their own — one existing,
+# independently-justified default, not a value tuned for any one ticket.
+DEFAULT_CANDIDATE_LIMIT = 4
+
 
 # ---------------------------------------------------------------------------
 # Observation — mirrors the Review Agent's Observation shape but is
@@ -455,7 +464,7 @@ def format_graph_context(
     repos_observation: PlanningObservation,
     traverse_observation: PlanningObservation,
     relevance_terms: list[str] | None = None,
-    max_repos: int = 4,
+    max_repos: int = DEFAULT_CANDIDATE_LIMIT,
     max_components_per_repo: int | None = None,
 ) -> str:
     """Format graph tool observations into a compact, LLM-readable context.

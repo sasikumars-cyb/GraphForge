@@ -207,6 +207,15 @@ def _select(
        or a live hypothesis specifically calls for more evidence there.
     3. Cheaper actions win ties, so a local graph query is preferred over a
        multi-turn MCP conversation.
+    4. Among same-cost actions, the action's own `priority` wins next
+       (lower first) — an investigator's chance to carry an upstream
+       ranking signal (e.g. RFC-0011's candidate funnel: scope the highest-
+       lexically-ranked unconfirmed repository first) into this tie-break.
+       Only after that does `key` decide — `key` is a dedupe identity, not
+       a ranking signal, so it must never be the thing that determines
+       *which* same-cost, same-priority action runs first among several
+       real candidates; see `InvestigationAction.priority`'s docstring for
+       the PROT-5764 live-benchmark failure this specifically fixes.
 
     Still deliberately not an LLM call. `priority_boost` is itself a plain
     dict computed once, earlier, by a deterministic function reading the
@@ -221,13 +230,13 @@ def _select(
     by_capability = {a.capability: a for a in assessments}
     boost = priority_boost or {}
 
-    def sort_key(entry: tuple[InvestigationAction, Investigator]) -> tuple[int, float, int, str]:
+    def sort_key(entry: tuple[InvestigationAction, Investigator]) -> tuple[int, float, int, float, str]:
         action, _ = entry
         assessment = by_capability.get(action.targets)
         necessity = assessment.necessity if assessment else "recommended"
         score = assessment.score if assessment else 1.0
         adjusted_score = score - boost.get(action.targets, 0.0)
-        return (necessity_rank[necessity], adjusted_score, action.cost, action.key)
+        return (necessity_rank[necessity], adjusted_score, action.cost, action.priority, action.key)
 
     return sorted(candidates, key=sort_key)[0]
 

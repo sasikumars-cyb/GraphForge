@@ -94,6 +94,22 @@ class InvestigationAction:
     expensive multi-turn MCP conversations. The human is deliberately not
     modelled here: asking a person is not an action the engine can choose,
     it's what happens when there are no actions left.
+
+    `priority` breaks ties among same-cost actions that all target the same
+    capability, lower first (0.0 is the default and sorts before anything
+    positive). It exists specifically so an investigator proposing several
+    actions *for the same capability in one cycle* — e.g. RFC-0011's
+    candidate-corroboration funnel, one scoped graph traversal per ranked
+    repository — can carry its own upstream ranking signal into `_select`'s
+    tie-break, instead of `_select` falling through to `key` and sorting
+    those actions alphabetically. Without this, `_select`'s deterministic
+    ordering is *unintentionally* alphabetical by whatever string the
+    action's target happens to be (a repository name, in this case) — see
+    `reasoning.engine._select`'s sort key and RFC-0011's PROT-5764 live
+    benchmark, which is exactly how this was found: the two lowest-ranked
+    members of a 4-candidate funnel sorted first alphabetically and
+    exhausted the cycle budget before the two highest-ranked ones — one of
+    them the actual answer — were ever investigated.
     """
 
     provider: str
@@ -102,6 +118,7 @@ class InvestigationAction:
     targets: str
     params: dict[str, Any] = field(default_factory=dict)
     cost: int = 1
+    priority: float = 0.0
     action_id: str = field(default_factory=lambda: f"act_{uuid.uuid4().hex[:8]}")
 
 

@@ -1435,6 +1435,18 @@ def _make_two_repo_context() -> tuple[AgentContext, MagicMock]:
     mock_other_repo.full_name = "acme/ds-team-gpc-svc"
     mock_result = MagicMock()
     mock_result.scalars.return_value.all.return_value = [mock_target_repo, mock_other_repo]
+    # Neither of this fixture's two repositories is named explicitly, so
+    # RFC-0011's candidate-corroboration funnel now legitimately queries for
+    # a GitHub connection while trying to corroborate the ranking survivors
+    # (`GitHubInvestigator`'s new suggested-candidate path) — previously
+    # unreachable for a two-way ranking tie, since neither the old
+    # single-candidate "scope" branch nor the explicit-reference GitHub
+    # fetch ever fired here. `scalar_one_or_none` must resolve to "no
+    # connection" (`None`), the correct, graceful real-world answer for a
+    # test double with no GitHub account configured — not fall through to
+    # this same blanket `mock_result`, whose auto-generated attributes
+    # crash `decrypt_secret` on a non-token `MagicMock`.
+    mock_result.scalar_one_or_none.return_value = None
     mock_db.execute.return_value = mock_result
 
     return context, mock_graph_repo

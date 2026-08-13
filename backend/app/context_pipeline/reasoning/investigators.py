@@ -43,7 +43,13 @@ from app.context_pipeline.providers import (
     GraphProvider,
     JiraProvider,
 )
-from app.context_pipeline.reasoning.capabilities import GRAPH_TRAVERSAL_ACTION, TIE_RATIO
+from app.context_pipeline.reasoning.capabilities import (
+    CANDIDATE_FUNNEL_WIDTH,
+    GRAPH_TRAVERSAL_ACTION,
+    SOURCE_RETRIEVAL_WIDTH,
+    TIE_RATIO,
+    ranked_repository_names,
+)
 from app.context_pipeline.reasoning.investigation import (
     InvestigationAction,
     InvestigationOutcome,
@@ -80,6 +86,20 @@ def _search_terms(state: WorkingContext) -> list[str]:
     """
     text = state.derived.get("enriched_text") or state.metadata.goal
     return list(analyse(text).search_terms)
+
+
+def _ticket_terms(state: WorkingContext) -> list[str]:
+    """The request's own specific vocabulary only (field/function/entity
+    names pulled from the brief itself) — deliberately excludes the fixed,
+    generic capability keywords `_search_terms` also folds in ("batch",
+    "spark", "airflow", ...), which every repository built from the same
+    scaffold matches equally well and so cannot discriminate between
+    candidates. Recorded onto the `repository_ranking` fact so later,
+    fact-only reasoning (`capabilities._corroborated_ranking_candidates`)
+    can check whether fetched source content actually mentions something
+    specific to this request, not just its architecture shape."""
+    text = state.derived.get("enriched_text") or state.metadata.goal
+    return list(analyse(text).ticket_terms)
 
 
 # ---------------------------------------------------------------------------
@@ -677,6 +697,63 @@ class GitHubInvestigator:
                     cost=2,
                 )
             )
+        if actions:
+            return actions
+
+        # -- corroborate via source (RFC-0011): the funnel's most expensive
+        # stage, reached only for a ranked candidate the cheap graph stage
+        # already scoped (`scope_architecture:{name}` already attempted —
+        # see `GraphInvestigator.propose`) but could not corroborate via a
+        # real cross-repository relationship. Bounded to
+        # `SOURCE_RETRIEVAL_WIDTH` candidates, best-ranked first — never
+        # "fetch every ranked repository". A candidate whose source WAS
+        # fetched but doesn't mention this request's own vocabulary simply
+        # stays uncorroborated (see `capabilities._corroborated_ranking_
+        # candidates`) — this is how source evidence can reject a lexical
+        # leader, not only confirm one.
+        repository = state.assessment_for("repository")
+        if repository is None or repository.satisfied:
+            return actions
+        by_name = {f.subject: f for f in ledger.facts_of("repository")}
+        relationship_targets = {f.subject for f in ledger.facts_of("repository_relationship")}
+        eligible = [
+            name
+            for name in ranked_repository_names(ledger, limit=CANDIDATE_FUNNEL_WIDTH)
+            if ledger.attempted("graph", f"scope_architecture:{name}")
+            and name not in relationship_targets
+        ][:SOURCE_RETRIEVAL_WIDTH]
+        # `enumerate` over `eligible`'s own best-ranked-first order becomes
+        # each action's `priority` — same reasoning as `GraphInvestigator`'s
+        # corroboration branch: several same-capability, same-cost actions
+        # proposed in one cycle must not fall through to alphabetical
+        # `action.key` ordering when a real ranking signal already exists.
+        for rank, name in enumerate(eligible):
+            repo_fact = by_name.get(name)
+            full_name = (repo_fact.value.get("full_name") if repo_fact else None) or name
+            key = f"fetch_pull_request:{full_name}"
+            if full_name in retrieved or ledger.attempted(self.name, key):
+                continue
+            actions.append(
+                InvestigationAction(
+                    provider=self.name,
+                    key=key,
+                    intent=f"'{name}' still isn't confirmed after checking its graph "
+                    "relationships — I'll read its source directly to look for evidence "
+                    "that actually corroborates it.",
+                    targets="repository",
+                    params={
+                        "reference": {
+                            "type": ReferenceType.GITHUB_REPOSITORY.value,
+                            "provider": "github",
+                            "confidence": 0.5,
+                            "raw_value": full_name,
+                            "normalized_value": full_name,
+                        }
+                    },
+                    cost=2,
+                    priority=rank,
+                )
+            )
         return actions
 
     async def run(
@@ -969,11 +1046,69 @@ class GraphInvestigator:
                     params={
                         "query": self._query_text(state),
                         "search_terms": _search_terms(state),
+                        "ticket_terms": _ticket_terms(state),
                     },
                     cost=1,
                 )
             )
             return actions
+
+        # -- corroborate (RFC-0011): repository knowledge exists but nothing
+        # is confidently identified yet — only ranking survivors, which
+        # `capabilities._repository_signals` deliberately does not treat as
+        # "identified" on their own (a lone lexical winner is not evidence
+        # the request is actually about that repository). Scope-traverse a
+        # BOUNDED set of the top-ranked candidates (`CANDIDATE_FUNNEL_WIDTH`,
+        # not every indexed repository) specifically to gather the
+        # cross-repository-relationship evidence that can corroborate — or
+        # fail to corroborate — one of them. Reuses the exact same scoped
+        # traversal ("scope_architecture:{target}") the post-identification
+        # branch below already used for a single confirmed repository; the
+        # only change is *when* it's allowed to fire and for how many
+        # candidates at once.
+        if repository is not None and not repository.satisfied:
+            # `enumerate` over `ranked_repository_names`'s own best-first
+            # order becomes each action's `priority` — the funnel's ranking
+            # signal, carried through to `_select`'s tie-break. Without
+            # this, every one of these same-capability, same-cost actions
+            # ties on `_select`'s remaining criteria and falls through to
+            # `action.key` (`scope_architecture:{target}`), which sorts
+            # *alphabetically by repository name* — an accident of string
+            # comparison, not a relevance judgement. On PROT-5764's live
+            # benchmark that meant the #3 and #4 ranked candidates (whose
+            # names happened to sort first) were investigated before #1
+            # and #2, exhausting the cycle budget before the actual answer
+            # — ranked #2 — was ever scoped. Rank position, not the name,
+            # must decide investigation order here.
+            for rank, target in enumerate(ranked_repository_names(ledger, limit=CANDIDATE_FUNNEL_WIDTH)):
+                key = f"scope_architecture:{target}"
+                if ledger.attempted(self.name, key):
+                    continue
+                actions.append(
+                    InvestigationAction(
+                        provider=self.name,
+                        key=key,
+                        intent=f"'{target}' ranks closely against this request but isn't "
+                        "confirmed yet — I'll traverse its dependencies specifically to look "
+                        "for corroborating evidence before I rely on it.",
+                        targets="repository",
+                        params={
+                            "repository": target,
+                            "query": self._query_text(state),
+                            "search_terms": _search_terms(state),
+                            # Tells `run()` not to let this single, still-
+                            # unconfirmed candidate overwrite the shared
+                            # full-repository ranking Planning reads —
+                            # see `run()`'s own note on `derived
+                            # ["ranked_repositories"]`.
+                            "corroboration_probe": True,
+                        },
+                        cost=1,
+                        priority=rank,
+                    )
+                )
+            if actions:
+                return actions
 
         # -- scope: an owner is known; go deeper on it specifically. Only
         # worth doing when architecture is still unsatisfied — if the graph
@@ -1113,7 +1248,13 @@ class GraphInvestigator:
             derived["graph_context_text"] = ContextBuilder().build([result]).context_text
 
         observation, ranked = self._record_observations(
-            recorder, repo_facts, components, terms, focus, unhealthy
+            recorder,
+            repo_facts,
+            components,
+            terms,
+            focus,
+            unhealthy,
+            ticket_terms=action.params.get("ticket_terms"),
         )
         recorded_relationships = self._record_relationships(
             recorder, result.data.get("cross_repository_edges", []), repo_facts, repos_evidence
@@ -1128,7 +1269,7 @@ class GraphInvestigator:
                 f" Found {len(recorded_relationships)} relationship(s) to other repositories "
                 "in the knowledge graph."
             )
-        if ranked:
+        if ranked and not action.params.get("corroboration_probe"):
             # The full relevance ordering of every indexed repository, best
             # first — distinct from the candidate shortlist. Planning consumes
             # this as a *ranking* (star ratings by position, `[0]` as the target
@@ -1138,6 +1279,15 @@ class GraphInvestigator:
             # genuine tie two repositories both looked like the target, which is
             # exactly the component-misattribution hole its regression test
             # guards.
+            #
+            # RFC-0011's new candidate-corroboration probes are excluded here
+            # for the same underlying reason, from the opposite direction: a
+            # probe's `focus` is a single *unconfirmed* candidate among
+            # several, not "the" repository — letting it overwrite this
+            # single-repo-first ordering would non-deterministically flip
+            # which of several tied candidates Planning treats as the target,
+            # depending on nothing more meaningful than which corroboration
+            # probe happened to run last.
             derived["ranked_repositories"] = ranked
         return InvestigationOutcome(
             observation=observation,
@@ -1243,6 +1393,7 @@ class GraphInvestigator:
         terms: list[str],
         focus: str | None,
         unhealthy: list[dict[str, Any]],
+        ticket_terms: list[str] | None = None,
     ) -> tuple[str, list[str]]:
         """Record what this query observed about repository ranking —
         nothing more. Interpretation of what these observations mean for
@@ -1342,7 +1493,16 @@ class GraphInvestigator:
         recorder.fact(
             "repository_ranking",
             "ranking",
-            value={"scored": [[score, name] for score, name in scored]},
+            value={
+                "scored": [[score, name] for score, name in scored],
+                # The request's own specific vocabulary, separate from the
+                # generic capability terms folded into `terms` above —
+                # `capabilities._corroborated_ranking_candidates` reads this
+                # back to check fetched source content for something that
+                # actually discriminates between candidates, not just
+                # architecture shape every sibling scaffold shares.
+                "ticket_terms": list(ticket_terms or []),
+            },
         )
 
         if not scored or scored[0][0] <= 0:

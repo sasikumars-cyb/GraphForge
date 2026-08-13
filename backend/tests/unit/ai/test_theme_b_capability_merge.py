@@ -49,11 +49,15 @@ def test_implementation_candidates_is_no_longer_a_registered_capability() -> Non
     assert "implementation_candidates" not in {c.key for c in CAPABILITIES}
 
 
-def test_repository_capability_owns_four_signals_including_the_folded_one() -> None:
+def test_repository_capability_owns_five_signals_including_the_folded_one() -> None:
     repository = BY_KEY["repository"]
     signal_labels = {s.label for s in repository.signals(Ledger())}
     assert "Candidate implementation sites found" in signal_labels
-    assert len(signal_labels) == 4
+    # RFC-0011 (repository candidate verification) added a fifth signal,
+    # "Suggested candidate corroborated by independent evidence" — see
+    # `capabilities._repository_signals`.
+    assert "Suggested candidate corroborated by independent evidence" in signal_labels
+    assert len(signal_labels) == 5
 
 
 @pytest.mark.asyncio

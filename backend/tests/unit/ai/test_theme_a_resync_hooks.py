@@ -133,7 +133,9 @@ def test_every_resync_hook_has_a_ledger_only_signature() -> None:
     accepts anything beyond a single `Ledger` couldn't be called by
     `engine._resync` at all, and couldn't plausibly reach a session/tool
     registry to perform I/O."""
-    assert len(LEDGER_RESYNC_HOOKS) == 4
+    # RFC-0011 (repository candidate verification) added a fifth hook,
+    # `resync_corroborated_candidates` — see `capabilities.py`.
+    assert len(LEDGER_RESYNC_HOOKS) == 5
     for hook in LEDGER_RESYNC_HOOKS:
         params = list(inspect.signature(hook).parameters.values())
         assert len(params) == 1, f"{hook.__name__} must take exactly one argument"

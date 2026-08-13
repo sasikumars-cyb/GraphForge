@@ -44,7 +44,9 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.context_pipeline.reasoning.ledger import Ledger
+from app.agents.planning.tools import DEFAULT_CANDIDATE_LIMIT
+from app.agents.text_relevance import tokenize
+from app.context_pipeline.reasoning.ledger import Inference, Ledger
 
 Necessity = Literal["required", "recommended", "not_applicable"]
 
@@ -348,15 +350,62 @@ def _repository_signals(ledger: Ledger) -> list[ConfidenceSignal]:
     # Explicit candidates (the request itself named the repository, or a
     # human's claim was corroborated) always satisfy "identified" on their
     # own, however many *suggested* candidates also exist — two repositories
-    # the request named together is not ambiguity. Ambiguity is only ever
-    # among suggested candidates with no explicit match, which is exactly
-    # the `len(candidates) == 1` fallback below.
+    # the request named together is not ambiguity. Ambiguity is otherwise
+    # among however many candidates remain once uncorroborated ranking
+    # survivors are excluded — exactly the pre-existing `len(candidates) ==
+    # 1` fallback, just no longer counting a candidate this module cannot
+    # yet trust on its own.
     explicit_candidates = [c for c in candidates if c.value.get("source") == "explicit"]
-    identified = bool(explicit_candidates) or len(candidates) == 1
+    # RFC-0011 (repository candidate verification) — the fix for "a lone
+    # lexical-ranking survivor was treated as equivalent to an explicitly
+    # identified repository": only a candidate `resync_ranked_candidates`
+    # itself tagged `basis: "ranking"` (a genuine multi-repository ranking
+    # leader) is held to the corroboration requirement below. Every other
+    # candidate — explicit, the sole-indexed-repository case, or anything
+    # constructed without a `basis` at all (e.g. a fixture/test predating
+    # this field, or a future candidate source that hasn't adopted it) —
+    # keeps its original, unambiguous behavior unchanged: there was no real
+    # ranking competition to have won unverified in the first place.
+    # Checking `== "ranking"` specifically, rather than trying to enumerate
+    # every *other* legitimate origin, is deliberately the conservative,
+    # backward-compatible reading.
+    ranking_candidates = [c for c in candidates if c.value.get("basis") == "ranking"]
+    # A ranking candidate must be independently corroborated before it
+    # counts as identified — a real cross-repository graph relationship, or
+    # fetched source content that mentions this request's own specific
+    # vocabulary — see `_corroborated_ranking_candidates`.
+    corroborated_candidates = _corroborated_ranking_candidates(ledger)
+    uncorroborated_ranking_candidates = [c for c in ranking_candidates if c not in corroborated_candidates]
+    # Every candidate this signal can trust right now: everything except an
+    # uncorroborated ranking survivor.
+    trustworthy_candidates = [c for c in candidates if c not in uncorroborated_ranking_candidates]
+
+    # Which trustworthy candidate(s) actually decide "is there exactly one
+    # answer" — deliberately NOT just `trustworthy_candidates` itself.
+    # `resync_corroborated_candidates` can promote a candidate for *either*
+    # endpoint of a real cross-repository relationship (RFC-0011's
+    # bidirectional evidence — a caller and its dependency corroborate each
+    # other regardless of which one the ticket's own ranking favored), so a
+    # corroborated ranking leader (e.g. the sibling that actually owns the
+    # ticket) can end up alongside a freshly-promoted candidate for the
+    # *other* endpoint (e.g. a shared library it merely depends on). Those
+    # two are not competing hypotheses for "which repository owns this
+    # ticket" — one is the answer, the other is corroborating context — so
+    # counting both toward ambiguity would be wrong. A corroborated ranking
+    # leader is decisive on its own; only when there is no such leader does
+    # any other trustworthy candidate (a freshly-promoted corroboration, the
+    # sole-indexed-repository case, etc.) get to stand on its own merits.
+    decisive_candidates = (
+        explicit_candidates
+        or corroborated_candidates
+        or trustworthy_candidates
+    )
+
+    identified = bool(explicit_candidates) or len(decisive_candidates) == 1
     identified_fact_ids = (
         [fid for c in explicit_candidates for fid in c.supporting_fact_ids]
         if explicit_candidates
-        else (candidates[0].supporting_fact_ids if identified else [])
+        else (decisive_candidates[0].supporting_fact_ids if identified else [])
     )
     repo_names = {f.subject for f in repositories}
     matched_refs = [
@@ -391,12 +440,50 @@ def _repository_signals(ledger: Ledger) -> list[ConfidenceSignal]:
             identified,
             3.0,
             detail=(
-                f"{len(candidates)} repositories are equally plausible"
-                if len(candidates) > 1
-                else "no repository could be matched to this request"
+                f"{len(uncorroborated_ranking_candidates)} repositories rank closely against "
+                "this request but none is independently corroborated by a cross-repository "
+                "relationship or matching source content yet"
+                if uncorroborated_ranking_candidates and not identified
+                else (
+                    f"{len(decisive_candidates)} repositories are equally plausible"
+                    if len(decisive_candidates) > 1
+                    else "no repository could be matched to this request"
+                )
             ),
             evidence_ids=ledger.evidence_for("repository"),
             fact_ids=identified_fact_ids,
+        ),
+        signal(
+            "Suggested candidate corroborated by independent evidence",
+            # Deliberately *not* a second independent readiness gate — it
+            # mirrors `identified`'s own truth value rather than inventing a
+            # separate one, so an empty ledger or a not-yet-ranked request
+            # reports unsatisfied here too (no false "trivially satisfied"
+            # credit — see the regression this fixed: `overall_confidence`
+            # of a brand-new, evidence-free ledger must stay exactly 0.0).
+            # What this signal adds beyond `identified` is visibility: once
+            # true, its `detail`/evidence specifically say *how* — explicit
+            # reference, unambiguous suggestion, or genuine corroboration —
+            # which `identified` alone doesn't distinguish.
+            identified,
+            1.0,
+            detail=(
+                f"{len(uncorroborated_ranking_candidates)} ranked candidate(s) have not been "
+                "confirmed by a real cross-repository relationship or by fetched source "
+                "content mentioning this request's own vocabulary"
+                if uncorroborated_ranking_candidates
+                else "no repository has been identified or independently corroborated yet"
+            ),
+            evidence_ids=(
+                ledger.evidence_for("repository_relationship", "pull_request")
+                if corroborated_candidates
+                else ledger.evidence_for("repository")
+            ),
+            fact_ids=(
+                [fid for c in corroborated_candidates for fid in c.supporting_fact_ids]
+                if corroborated_candidates
+                else identified_fact_ids
+            ),
         ),
         signal(
             "Request names a repository that matched an indexed one",
@@ -459,6 +546,17 @@ def _repository_question(ctx: QuestionContext) -> ClarificationQuestion | None:
             "separate them on the evidence I have."
         )
         options = candidates
+    elif len(candidates) == 1:
+        # Reached only when a lone `basis: "ranking"` candidate exists but
+        # `_repository_signals` could not corroborate it (RFC-0011) — genuinely
+        # different from "nothing matched at all", and worded that way rather
+        # than reusing the empty-candidates message below.
+        why = (
+            f"'{candidates[0]}' ranks closely against this request, but I couldn't confirm "
+            "it with a cross-repository relationship or matching source content, so I'm not "
+            "confident enough to select it automatically."
+        )
+        options = candidates
     else:
         why = (
             "Nothing in the request matched any indexed repository strongly enough for me "
@@ -501,6 +599,23 @@ def _verify_repository(ledger: Ledger, claim: str) -> bool:
 # because both a narration and a decision need to agree on what "tied"
 # means, not because the investigator makes the decision too.
 TIE_RATIO = 0.9
+
+# RFC-0011 (repository candidate verification) — the staged candidate
+# funnel's two width limits. Both are bounds on *how many candidates get
+# deeper attention*, not new thresholds invented for one ticket:
+#
+# - `CANDIDATE_FUNNEL_WIDTH` reuses `DEFAULT_CANDIDATE_LIMIT`, the existing
+#   "how many top-ranked repositories deserve a closer look" default
+#   `format_graph_context` already used to decide what reaches an LLM
+#   prompt — the same judgment, reused for "what deserves a graph query"
+#   instead of "what deserves a token budget".
+# - `SOURCE_RETRIEVAL_WIDTH` narrows further, matching the funnel shape
+#   itself (top-N ranked -> cheap graph corroboration -> a smaller top-K
+#   -> the strictly more expensive source-content fetch) — real GitHub
+#   calls are the single most expensive step available to Context
+#   Discovery, so only the survivors of the cheap stage reach it.
+CANDIDATE_FUNNEL_WIDTH = DEFAULT_CANDIDATE_LIMIT
+SOURCE_RETRIEVAL_WIDTH = 3
 
 
 def _has_live_candidate(ledger: Ledger, name: str) -> bool:
@@ -638,7 +753,16 @@ def resync_ranked_candidates(ledger: Ledger) -> None:
                 kind="repository_candidate",
                 statement=only.subject,
                 supporting_fact_ids=[only.fact_id],
-                value={"source": "suggested", "reason": "Only indexed repository."},
+                # `basis: "sole_repository"`, not `"ranking"` — there was no
+                # actual competition to rank against, so this candidate is
+                # exempt from the corroboration requirement `_repository_
+                # signals` applies to a genuine ranking leader (see
+                # `RANKING_BASIS` below).
+                value={
+                    "source": "suggested",
+                    "reason": "Only indexed repository.",
+                    "basis": "sole_repository",
+                },
             )
             statement = (
                 f"This work belongs to '{only.subject}' — it is the only indexed repository, "
@@ -684,7 +808,18 @@ def resync_ranked_candidates(ledger: Ledger) -> None:
             kind="repository_candidate",
             statement=name,
             supporting_fact_ids=[fact.fact_id],
-            value={"source": "suggested", "reason": "Ranks closely against this request's terms."},
+            # `basis: "ranking"` — a lexical-ranking survivor, explicitly
+            # NOT treated as equivalent to an explicit or sole-repository
+            # candidate. `_repository_signals` requires independent
+            # corroboration (a real cross-repository relationship, or
+            # fetched source content that mentions this request's own
+            # vocabulary) before a `"ranking"`-basis candidate counts as
+            # "identified" — see `_corroborated_ranking_candidates`.
+            value={
+                "source": "suggested",
+                "reason": "Ranks closely against this request's terms.",
+                "basis": "ranking",
+            },
         )
 
     if len(leaders) == 1 and not _is_explicit_repository(ledger, leaders[0]):
@@ -700,6 +835,181 @@ def resync_ranked_candidates(ledger: Ledger) -> None:
                     statement=statement,
                     supporting_fact_ids=[leader_fact.fact_id],
                 )
+
+
+def ranked_repository_names(ledger: Ledger, *, limit: int = CANDIDATE_FUNNEL_WIDTH) -> list[str]:
+    """The top `limit` repository names from the most recent ranking, best
+    first, excluding whatever is already explicit — the candidate funnel's
+    first stage. Pure read of the `repository_ranking` fact `GraphInvestigator`
+    already records; used by `GraphInvestigator.propose` to decide which
+    ranking survivors are worth a bounded, scoped corroboration query, so a
+    ranking of 62 repositories never turns into 62 graph queries.
+
+    Deliberately reads every scored repository, not only the `TIE_RATIO`
+    "leaders" `resync_ranked_candidates` promotes to a live candidate — a
+    repository that just misses the tie cutoff is exactly the kind of thing
+    corroborating evidence should be able to promote ahead of a leader that
+    only *looks* strong lexically (requirement: cross-repository relationships
+    usable as evidence *before* selection, not only to confirm it after).
+    """
+    ranking_facts = ledger.facts_of("repository_ranking")
+    if not ranking_facts:
+        return []
+    scored: list[list[Any]] = ranking_facts[-1].value.get("scored") or []
+    names = [
+        name
+        for _score, name in scored
+        if not _is_explicit_repository(ledger, name)
+    ]
+    return names[:limit]
+
+
+def _ranking_ticket_terms(ledger: Ledger) -> frozenset[str]:
+    """The request's own specific vocabulary (field/function/entity names —
+    see `classifier.PlanningProfile.ticket_terms`), tokenized, as recorded
+    onto the most recent `repository_ranking` fact by `GraphInvestigator`.
+
+    Deliberately NOT the full `search_terms` used for lexical ranking
+    itself — that list also contains the fixed, generic capability
+    vocabulary ("batch", "spark", "airflow", ...) every sibling repository
+    built from the same scaffold matches equally well. Source-content
+    corroboration needs the discriminating half only, or it would just be
+    re-deriving the same lexical signal a second time under a different
+    name.
+    """
+    ranking_facts = ledger.facts_of("repository_ranking")
+    if not ranking_facts:
+        return frozenset()
+    terms = ranking_facts[-1].value.get("ticket_terms") or []
+    return tokenize(" ".join(str(t) for t in terms))
+
+
+def _corroboration_evidence(ledger: Ledger) -> dict[str, list[str]]:
+    """Repository name -> supporting fact ids, for every repository
+    independently corroborated by evidence beyond a lexical ranking score —
+    the funnel's "cheap graph/relationship corroboration" and "source
+    evidence retrieval" stages, read back as a pure function of facts
+    (never stored as a flag anywhere, matching how every other signal in
+    this module is re-derived fresh each cycle rather than cached).
+
+    Two independent kinds of corroboration, either is sufficient, and a
+    repository can be cited by both:
+
+    - A real cross-repository graph edge (`repository_relationship` fact —
+      `app.indexer.graph.cross_repo_linker`) targets it. Cheap: already
+      gathered by `GraphInvestigator`'s existing scoped-traversal machinery
+      once `propose` schedules a corroboration query for it (see
+      `GraphInvestigator.propose`'s corroborate branch) — no new traversal
+      logic, only a new *trigger* for the traversal that already existed.
+    - Fetched source content (`pull_request` fact — `GitHubInvestigator`)
+      for it actually mentions this request's own specific vocabulary
+      (`_ranking_ticket_terms`), not merely the generic capability keywords
+      every sibling scaffold shares. A repository whose source WAS fetched
+      but does not mention any of that vocabulary is simply absent here —
+      this is how source evidence can reject a lexical leader rather than
+      merely rubber-stamp it.
+
+    Deliberately not scoped to already-live candidates: a repository that
+    just missed the lexical ranking's `TIE_RATIO` cutoff — and so never
+    became a `basis: "ranking"` candidate at all — is exactly the kind of
+    thing corroborating evidence should be able to promote ahead of a
+    leader that only *looks* strong lexically (requirement: cross-
+    repository relationships usable as evidence *before* selection, not
+    only to confirm it after). See `resync_corroborated_candidates`, the
+    hook that actually promotes one.
+    """
+    evidence: dict[str, list[str]] = {}
+    for fact in ledger.facts_of("repository_relationship"):
+        # Both endpoints, not only the target `fact.subject` records: for a
+        # *ranked* candidate (as opposed to `resync_relationship_
+        # candidates`'s explicit-source case), the discriminating fact is
+        # usually "this candidate has a real dependency edge to something,"
+        # not specifically which direction it points — the PROT-5764 shape
+        # exactly: the caller repository is the *source* of a real
+        # DEPENDS_ON_REPOSITORY edge to the shared library, and that edge
+        # is what makes the caller verifiably real and connected, versus a
+        # lexically-identical sibling with no graph edges at all.
+        evidence.setdefault(fact.subject, []).append(fact.fact_id)
+        source_repo = str(fact.value.get("source_repository", ""))
+        if source_repo:
+            evidence.setdefault(source_repo, []).append(fact.fact_id)
+
+    ticket_terms = _ranking_ticket_terms(ledger)
+    if ticket_terms:
+        by_name = {f.subject: f for f in ledger.facts_of("repository")}
+        for fact in ledger.facts_of("pull_request"):
+            matched_repo = next(
+                (
+                    name
+                    for name, repo_fact in by_name.items()
+                    if fact.subject == (repo_fact.value.get("full_name") or name)
+                ),
+                None,
+            )
+            if matched_repo is not None and tokenize(fact.text) & ticket_terms:
+                evidence.setdefault(matched_repo, []).append(fact.fact_id)
+    return evidence
+
+
+def _corroborated_ranking_candidates(ledger: Ledger) -> list[Inference]:
+    """Live `basis: "ranking"` candidates (TIE_RATIO leaders) that are also
+    independently corroborated — see `_corroboration_evidence`. A ranking
+    leader that already has its own `repository_candidate` inference only
+    needs to be *unblocked*, not re-promoted; a non-leader repository with
+    corroborating evidence is promoted separately, by
+    `resync_corroborated_candidates`.
+    """
+    candidates = [
+        c
+        for c in ledger.live_inferences("repository_candidate")
+        if c.value.get("source") == "suggested" and c.value.get("basis") == "ranking"
+    ]
+    if not candidates:
+        return []
+    evidence = _corroboration_evidence(ledger)
+    return [c for c in candidates if c.statement in evidence]
+
+
+def resync_corroborated_candidates(ledger: Ledger) -> None:
+    """Promotes `source: "suggested", basis: "corroborated"` candidates for
+    a repository that never won the lexical ranking outright — never
+    became a `basis: "ranking"` `TIE_RATIO` leader — but is independently
+    corroborated by a real cross-repository relationship or by fetched
+    source content matching this request's own vocabulary (see
+    `_corroboration_evidence`).
+
+    This is the mechanism that actually satisfies "cross-repository
+    relationships must be usable as evidence before final repository
+    selection, not only after selection": without it, corroboration could
+    only ever *unblock* a repository the lexical ranking had already
+    chosen as its leader (see `_corroborated_ranking_candidates`), never
+    promote a different one the ranking alone ranked lower.
+
+    Skips anything already explicit or already a live candidate under any
+    basis — corroboration only ever adds a new candidate here, never
+    duplicates or reinterprets one another hook already produced (ADR
+    0010, invariant I3 — order-independent, idempotent).
+    """
+    by_name = {f.subject: f for f in ledger.facts_of("repository")}
+    if not by_name:
+        return
+    for name, fact_ids in _corroboration_evidence(ledger).items():
+        repo_fact = by_name.get(name)
+        if repo_fact is None or _is_explicit_repository(ledger, name) or _has_live_candidate(ledger, name):
+            continue
+        ledger.add_inference(
+            kind="repository_candidate",
+            statement=name,
+            supporting_fact_ids=[repo_fact.fact_id, *fact_ids],
+            value={
+                "source": "suggested",
+                "reason": (
+                    "Independently corroborated by a cross-repository relationship or "
+                    "matching source content."
+                ),
+                "basis": "corroborated",
+            },
+        )
 
 
 def resync_relationship_candidates(ledger: Ledger) -> None:
@@ -762,6 +1072,7 @@ LEDGER_RESYNC_HOOKS: tuple[Callable[[Ledger], None], ...] = (
     resync_verified_claim_candidates,
     resync_ranked_candidates,
     resync_relationship_candidates,
+    resync_corroborated_candidates,
 )
 
 
