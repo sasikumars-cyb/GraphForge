@@ -125,6 +125,30 @@ class IGraphRepository(ABC):
         relationship into a suggested repository."""
         raise NotImplementedError
 
+    async def get_incoming_cross_repository_edge_count(self, repository_id: str) -> int:
+        """How many *distinct* other repositories have an outgoing cross-
+        repository edge (`get_outgoing_cross_repository_edges`'s own
+        `_CROSS_REPO_REL_TYPES`) into `repository_id`'s Repository node —
+        the graph-wide fan-in Context Discovery uses to recognize a
+        repository as shared infrastructure (a provider many tenants
+        legitimately depend on) rather than mistaking that popularity for
+        evidence about any one caller.
+
+        Deliberately a *count query*, not `get_outgoing_cross_repository_
+        edges` run in reverse for every other indexed repository — this is
+        the one-hop, single-target shape a real deployment can afford to
+        run per candidate, the same "cheap, bounded, no new traversal
+        machinery" discipline `get_outgoing_cross_repository_edges` and
+        `get_kafka_topic_edges` already follow.
+
+        Concrete, not abstract: existing `IGraphRepository` implementations
+        (including test fakes) that never override this keep working
+        unchanged and simply report 0 ("fan-in not computed"), which
+        degrades to today's behavior — real fan-in is opt-in per backend,
+        not a forced migration.
+        """
+        return 0
+
     @abstractmethod
     async def get_neighborhood(
         self,

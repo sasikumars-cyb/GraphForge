@@ -162,11 +162,15 @@ class FakeInvestigator:
 def test_fact_kind_gains_call_edge_without_losing_existing_values() -> None:
     kinds = set(get_args(FactKind))
     assert "call_edge" in kinds
+    # RFC-0014 added "source_file" — actual fetched file content, kept a
+    # distinct kind from "pull_request" (repository metadata/PR text) so
+    # evidence provenance stays honestly distinguishable.
     assert kinds == {
         "reference",
         "work_item",
         "document",
         "pull_request",
+        "source_file",
         "repository",
         "repository_ranking",
         "component",

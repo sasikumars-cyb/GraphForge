@@ -427,12 +427,14 @@ async def test_relink_account_fetches_each_repositorys_nodes_at_most_once(
     try:
         await relink_account(graph_repository=counting, db=db_session, user_id=user.id)
 
-        # 4 node-label reads per repo (FeignClient/KafkaTopic/MavenDependency/
-        # PythonDependency) + 1 get_kafka_topic_edges per repo = 5*N, not
-        # 5*N*(N-1). get_full_graph is never called at all now — Kafka
-        # producer/consumer direction is read via the targeted
-        # get_kafka_topic_edges query instead (see Weakness #2 fix).
-        assert counting.calls["get_nodes_by_label"] == 4 * len(repos)
+        # 6 node-label reads per repo (FeignClient/KafkaTopic/MavenDependency/
+        # PythonDependency/PythonImport/Repository — the last two added by
+        # RFC-0012's source-level import signal, see `_load_repo_nodes`) +
+        # 1 get_kafka_topic_edges per repo = 7*N, not 7*N*(N-1).
+        # get_full_graph is never called at all now — Kafka producer/
+        # consumer direction is read via the targeted get_kafka_topic_edges
+        # query instead (see Weakness #2 fix).
+        assert counting.calls["get_nodes_by_label"] == 6 * len(repos)
         assert counting.calls["get_kafka_topic_edges"] == len(repos)
         assert "get_full_graph" not in counting.calls
         # One scoped write per repository — never more than N.

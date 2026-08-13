@@ -38,13 +38,19 @@ rather than scored 1.0 by default. Absent knowledge is absent, not perfect.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.agents.planning.tools import DEFAULT_CANDIDATE_LIMIT
+from app.agents.planning.tools import (
+    DEFAULT_CANDIDATE_LIMIT,
+    _TEST_RELEVANCE_FACTOR,
+    _is_test_component,
+    _match_text,
+)
 from app.agents.text_relevance import tokenize
 from app.context_pipeline.reasoning.ledger import Inference, Ledger
 
@@ -475,7 +481,7 @@ def _repository_signals(ledger: Ledger) -> list[ConfidenceSignal]:
                 else "no repository has been identified or independently corroborated yet"
             ),
             evidence_ids=(
-                ledger.evidence_for("repository_relationship", "pull_request")
+                ledger.evidence_for("repository_relationship", "pull_request", "source_file")
                 if corroborated_candidates
                 else ledger.evidence_for("repository")
             ),
@@ -616,6 +622,213 @@ TIE_RATIO = 0.9
 #   Discovery, so only the survivors of the cheap stage reach it.
 CANDIDATE_FUNNEL_WIDTH = DEFAULT_CANDIDATE_LIMIT
 SOURCE_RETRIEVAL_WIDTH = 3
+
+# RFC-0014 — the funnel's source-retrieval stage now fetches actual file
+# *content*, not repository metadata (see `GitHubInvestigator`'s escalation
+# branch) — bounded per candidate the same way `SOURCE_RETRIEVAL_WIDTH`
+# bounds candidates: at most this many files, per candidate, ranked by how
+# many of the ticket's own vocabulary words their already-indexed name
+# matches (`component` facts the graph-corroboration stage already
+# recorded — no new GitHub call needed to pick *which* files). Each file
+# itself is separately capped by `GitHubTool._build_file_result`'s
+# existing `_MAX_CHARS` (8000) — reused, not re-invented. Worst-case
+# GitHub API calls added by this stage: `SOURCE_RETRIEVAL_WIDTH *
+# MAX_SOURCE_FILES_PER_CANDIDATE`.
+MAX_SOURCE_FILES_PER_CANDIDATE = 2
+
+# RFC-0015 — generic term specificity, derived from the corpus this
+# investigation has actually observed (every scoped candidate's own
+# indexed `component` names — see `_term_document_frequencies`), never a
+# fixed word list. The live PROT-5764 benchmark exposed exactly why this
+# is needed: raw token overlap treated "validation"/"failed"/"client"
+# (generic ETL/programming vocabulary present in most scoped candidates)
+# as equally strong evidence as a term specific to this one ticket's
+# actual concept — this module is what tells those apart, purely from
+# how common each term is *within what this run has already scoped*, no
+# hardcoded word anywhere.
+
+
+def _term_document_frequencies(
+    ledger: Ledger, *, exclude_repository: str | None = None
+) -> tuple[dict[str, int], int]:
+    """term -> number of distinct scoped repositories *other than
+    `exclude_repository`* with at least one `component` whose own name
+    contains it, plus the total number of such other repositories. The
+    corpus is exactly "every candidate this run has already scoped" — no
+    separate, expensive corpus-building pass: this data is already in the
+    ledger by the time source selection or corroboration runs, the same
+    reason RFC-0014's file selection needed no new GitHub call to pick
+    *which* files.
+
+    `exclude_repository` is always the specific candidate a term match is
+    being scored *for* — the question this answers is "how common is this
+    term among the OTHER candidates," not "including the one candidate
+    whose own component is obviously why the term matched in the first
+    place." Without the exclusion, a term unique to exactly the correct
+    candidate would still show `df=1` (itself) rather than the `df=0`
+    ("no *competing* candidate shares this") that actually reflects how
+    specific it is.
+    """
+    repos_by_term: dict[str, set[str]] = {}
+    all_repos: set[str] = set()
+    for fact in ledger.facts_of("component"):
+        repo = str(fact.value.get("repository") or "")
+        if not repo or repo == exclude_repository:
+            continue
+        all_repos.add(repo)
+        # RFC-0017 — `_match_text` (name + type + file_path), the same
+        # match text `app.agents.planning.tools.rank_repositories` already
+        # uses for repository-level ranking, not the bare symbol name. A
+        # file's own path is frequently the only place domain vocabulary
+        # appears (a function named `main` inside `pipeline/validation/
+        # schema_validator.py` is otherwise invisible to name-only
+        # matching) — reusing the existing, already-tested match-text
+        # shape here instead of re-deriving a narrower one a second time.
+        for term in tokenize(_match_text(fact.value)):
+            repos_by_term.setdefault(term, set()).add(repo)
+    return {term: len(repos) for term, repos in repos_by_term.items()}, len(all_repos)
+
+
+def _term_specificity_weights(
+    ledger: Ledger, terms: frozenset[str], *, exclude_repository: str | None = None
+) -> dict[str, float]:
+    """One weight per term in `terms`, in (0.0, 1.0] — 1.0 for a term no
+    *other* scoped candidate's own symbols contain (maximally specific:
+    nothing competing already examined shares it), approaching 0.0 for a
+    term that appears in every other scoped candidate's symbols (every
+    sibling scaffold has it, so it can't discriminate between them).
+    Classic IDF, normalized to a fixed `[0, 1]` range so it can be
+    compared against a fixed threshold regardless of how many candidates
+    happen to be scoped this run:
+
+        idf(term)    = ln((N + 1) / (df(term) + 1))
+        weight(term) = idf(term) / ln(N + 1)        (= 1.0 exactly when df=0)
+
+    `N` is the number of distinct *other scoped* repositories observed so
+    far (see `exclude_repository` on `_term_document_frequencies`) —
+    deliberately not a global, all-repositories corpus (a fresh, expensive
+    full-fleet scan); "common relative to what this investigation has
+    actually looked at" is the same generic, cheap proxy this module
+    already uses elsewhere (RFC-0012's relationship degree, computed the
+    same way — from ledger facts already gathered, not a new query).
+    """
+    document_frequency, n = _term_document_frequencies(ledger, exclude_repository=exclude_repository)
+    # `n <= 1`, not just `n == 0`: with at most one *other* scoped
+    # repository's components to compare against, there is no basis to
+    # call any term "common" — every term trivially has `df == n` for the
+    # one repo that has it, which would otherwise score every match as
+    # maximally generic regardless of what the term actually is. Treat
+    # everything as maximally specific until there's a real corpus (two
+    # or more other scoped repositories) to judge commonality against.
+    if n <= 1:
+        return dict.fromkeys(terms, 1.0)
+    denom = math.log(n + 1) or 1.0
+    return {
+        term: math.log((n + 1) / (document_frequency.get(term, 0) + 1)) / denom for term in terms
+    }
+
+
+# A single highly-specific term (weight at/above this) is sufficient
+# evidence on its own; below it, only *multiple* independently-moderate
+# terms together clear the bar (see `_matched_term_specificity`) — Phase
+# 2's "a term occurring in only a few repositories should contribute
+# more" and "a phrase/multi-token concept should be stronger than
+# isolated common words," made concrete as two independent ways to clear
+# the same bar, rather than one blended score a handful of common words
+# could still add up to by sheer count.
+_STRONG_TERM_WEIGHT = 0.6
+_MODERATE_TERM_WEIGHT = 0.3
+_MIN_MODERATE_TERM_MATCHES = 2
+
+# RFC-0017 — how many of a match's own strongest terms the continuous
+# co-occurrence score (below) considers. Bounded, not "all matched terms,"
+# specifically so that piling on more merely-generic terms can't keep
+# inflating the score without limit — three is the same "several
+# independent signals" shape `_MIN_MODERATE_TERM_MATCHES` already used,
+# now applied continuously instead of as a hard per-term cliff.
+_MAX_COMBINATION_TERMS = 3
+
+
+def _matched_term_specificity(matched_terms: set[str], weights: dict[str, float]) -> float:
+    """The specificity score for one set of matched terms — the highest of
+    three independent ways to earn it: "my single strongest term's own
+    weight," the original discrete "how many independently-moderate terms
+    do I have together" bonus (RFC-0015), and a continuous co-occurrence
+    score (RFC-0017, below). `0.0` for no matches.
+
+    RFC-0017's continuous score exists because the discrete bonus above
+    has a hard cliff: it only credits terms that *individually* already
+    clear `_MODERATE_TERM_WEIGHT`, so three terms that are each genuinely
+    on-topic but only moderately rare (e.g. "schema"/"pipeline"/
+    "validation" all appearing in a shared ETL vocabulary) contribute
+    *nothing* if none of them alone reaches 0.3 — even though together
+    they are a real, specific, multi-concept match a single incidental
+    high-weight term (one rare word in an unrelated function) would
+    otherwise beat outright. Verified against the live PROT-5764 benchmark
+    before this was added: exactly this shape was why `schema_validator.py`
+    scored below `logger.py` even after including file-path text.
+
+    The combination itself is a bounded noisy-OR — `1 - product(1 - w)`
+    over the `_MAX_COMBINATION_TERMS` strongest matched terms — chosen
+    over a plain sum specifically for its diminishing-returns shape: it
+    reduces to exactly the single term's own weight when only one term
+    matched (so it never changes the single-strong-term case), and each
+    additional weak term contributes less than the last, so several
+    genuinely common terms still cannot inflate a match past what a
+    handful of independent, real-but-moderate signals plausibly deserve.
+    Bounding to the `_MAX_COMBINATION_TERMS` strongest matches (not every
+    matched term) is what keeps piling on arbitrarily many generic words
+    from ever winning by sheer count — see
+    `test_many_generic_terms_never_outscore_one_highly_specific_term`.
+    """
+    term_weights = sorted((weights.get(t, 0.0) for t in matched_terms), reverse=True)
+    if not term_weights:
+        return 0.0
+    strongest = term_weights[0]
+    moderate_count = sum(1 for w in term_weights if w >= _MODERATE_TERM_WEIGHT)
+    discrete_multi_term_score = (
+        min(1.0, moderate_count / _MIN_MODERATE_TERM_MATCHES) if moderate_count else 0.0
+    )
+    remaining_after_top = 1.0
+    for w in term_weights[:_MAX_COMBINATION_TERMS]:
+        remaining_after_top *= 1.0 - w
+    continuous_cooccurrence_score = 1.0 - remaining_after_top
+    return max(strongest, discrete_multi_term_score, continuous_cooccurrence_score)
+
+
+# Below this, matched vocabulary is evidence of a shared scaffold/domain
+# at best, not a specific behavioral connection to this ticket — the same
+# "must clear a bar to count as corroboration" shape RFC-0012 already
+# established for relationship evidence (`_MIN_RELATIONSHIP_SPECIFICITY`),
+# applied here to lexical/source evidence instead of relationship degree.
+MIN_SOURCE_EVIDENCE_SPECIFICITY = 0.6
+
+# RFC-0012 (Problem A) — a relationship's own weight, by confidence tier.
+# Every `repository_relationship` fact carries a `confidence` (`app.
+# indexer.graph.cross_repo_linker`'s own hand-assigned vocabulary):
+# "structural" for a literal, unambiguous match (a `@FeignClient` target,
+# a Kafka topic literal) — the strongest evidence this module ever sees;
+# "heuristic" for a name-coordinate match (a manifest dependency, or a
+# source-level import — RFC-0012 Problem B) — real, but a guess; and
+# "ambiguous" for a source-level import that matched more than one
+# indexed repository at once (`cross_repo_linker._downgrade_ambiguous_
+# imports`) — evidence an import happened, not evidence of *which*
+# repository it names. `0.0` here isn't "excluded from the graph" (the
+# fact still exists, still visible), it's "excluded from single-handedly
+# deciding a repository is identified" — see `_corroboration_evidence`.
+_RELATIONSHIP_CONFIDENCE_WEIGHT = {"structural": 1.0, "heuristic": 0.6, "ambiguous": 0.0}
+
+# RFC-0012 (Problem A) — below this weight, a relationship no longer
+# counts as corroborating evidence on its own. Not a blacklist of any
+# specific repository or dependency: every relationship is still weighed
+# by the same formula regardless of what it points at — a shared library
+# depended on by only one caller in what this run has observed still
+# clears this bar exactly like any other single-caller relationship
+# would. What changes the outcome is purely how many *distinct* callers
+# this run has observed sharing the same target (see
+# `_relationship_degree`) — the graph-theoretic notion of degree/fan-in,
+# not a name.
+_MIN_RELATIONSHIP_SPECIFICITY = 0.5
 
 
 def _has_live_candidate(ledger: Ledger, name: str) -> bool:
@@ -884,6 +1097,86 @@ def _ranking_ticket_terms(ledger: Ledger) -> frozenset[str]:
     return tokenize(" ".join(str(t) for t in terms))
 
 
+def _relationship_degree(ledger: Ledger) -> dict[str, int]:
+    """Target repository name -> its fan-in — how many *distinct*
+    repositories have a real cross-repository relationship edge into it —
+    the graph-theoretic notion of "how common is this target as a
+    dependency" that separates a high-degree shared dependency from a
+    rare, specific one (RFC-0012, Problem A).
+
+    RFC-0016 fix: prefers `target_consumer_count`, the graph-wide fan-in
+    `Neo4jGraphTool` now attaches to every `repository_relationship`
+    fact's value (one `get_incoming_cross_repository_edge_count` read per
+    distinct target — see `app.tools.implementations.neo4j_tool`), over
+    counting distinct source repositories *this run's ledger happens to
+    already contain a fact for*.
+
+    The two are not the same thing, and the gap matters: `GraphInvestigator`
+    only ever scopes a bounded handful of top-ranked candidates per run
+    (`CANDIDATE_FUNNEL_WIDTH`), so a shared repository with dozens of real
+    consumers graph-wide would previously show a "degree" of at most
+    however many of *those few scoped candidates* happened to point at it
+    — sometimes 1, making a genuinely popular shared library score as if
+    it had a single, rare, discriminating caller. Reading the real
+    graph-wide count fixes that without changing the funnel width, the
+    weighting formula, or any threshold below.
+
+    Facts without `target_consumer_count` (synthetic ledgers built
+    directly in tests, or a backend that hasn't populated it) fall back to
+    the original within-ledger distinct-source count — this is a strict
+    enrichment, not a breaking change to the fact shape.
+    """
+    sources_by_target: dict[str, set[str]] = {}
+    graph_wide_count: dict[str, int] = {}
+    for fact in ledger.facts_of("repository_relationship"):
+        source_repo = str(fact.value.get("source_repository", ""))
+        if source_repo:
+            sources_by_target.setdefault(fact.subject, set()).add(source_repo)
+        count = fact.value.get("target_consumer_count")
+        if isinstance(count, int) and count > 0:
+            # Every fact targeting the same subject carries the same
+            # graph-wide truth; `max` just tolerates a fact recorded
+            # before an index refresh sitting alongside a fresher one.
+            graph_wide_count[fact.subject] = max(graph_wide_count.get(fact.subject, 0), count)
+    return {
+        target: graph_wide_count.get(target, len(sources))
+        for target, sources in sources_by_target.items()
+    }
+
+
+# RFC-0016 — below this graph-wide fan-in, a repository is just a normal
+# node with a couple of callers; at/above it, enough *independent* other
+# repositories route through it that treating it as shared infrastructure
+# (a provider, not a tenant-specific implementation) is the better
+# explanation than coincidence. `3` mirrors `_MIN_MODERATE_TERM_MATCHES`'s
+# own reasoning (RFC-0015): two is still plausibly two related teams
+# sharing code by accident; three or more independent callers is the
+# point a *capability* is the more likely explanation. Purely structural
+# (a count), never a name — the same repository with 2 consumers today and
+# 3 tomorrow changes role automatically as the graph grows.
+_SHARED_PROVIDER_MIN_CONSUMERS = 3
+
+
+def repository_role(consumer_count: int) -> str:
+    """Classify a repository's architectural role from its graph-wide
+    fan-in alone — `"shared_provider"` (many independent repositories
+    depend on it — likely a capability/library other repos consume) or
+    `"consumer"` (an ordinary node in the dependency graph).
+
+    Deliberately just a label derived from a count, not a blacklist or an
+    exclusion: `_corroboration_evidence` still lets a `shared_provider`
+    become the identified repository whenever *other* evidence (ticket-
+    specific lexical/source-content specificity, RFC-0015) points at it
+    directly — a shared provider can absolutely be the repository a ticket
+    is actually about (e.g. "the shared library itself has a bug"). The
+    role only affects how much weight its *relationship edges* carry as
+    evidence for identification, via `_relationship_degree`'s existing
+    `base_weight / target_degree` formula — nothing here is a second,
+    parallel gate.
+    """
+    return "shared_provider" if consumer_count >= _SHARED_PROVIDER_MIN_CONSUMERS else "consumer"
+
+
 def _corroboration_evidence(ledger: Ledger) -> dict[str, list[str]]:
     """Repository name -> supporting fact ids, for every repository
     independently corroborated by evidence beyond a lexical ranking score —
@@ -896,11 +1189,12 @@ def _corroboration_evidence(ledger: Ledger) -> dict[str, list[str]]:
     repository can be cited by both:
 
     - A real cross-repository graph edge (`repository_relationship` fact —
-      `app.indexer.graph.cross_repo_linker`) targets it. Cheap: already
-      gathered by `GraphInvestigator`'s existing scoped-traversal machinery
-      once `propose` schedules a corroboration query for it (see
-      `GraphInvestigator.propose`'s corroborate branch) — no new traversal
-      logic, only a new *trigger* for the traversal that already existed.
+      `app.indexer.graph.cross_repo_linker`) targets it, and clears the
+      specificity bar below. Cheap: already gathered by `GraphInvestigator`'s
+      existing scoped-traversal machinery once `propose` schedules a
+      corroboration query for it (see `GraphInvestigator.propose`'s
+      corroborate branch) — no new traversal logic, only a new *trigger*
+      for the traversal that already existed.
     - Fetched source content (`pull_request` fact — `GitHubInvestigator`)
       for it actually mentions this request's own specific vocabulary
       (`_ranking_ticket_terms`), not merely the generic capability keywords
@@ -908,6 +1202,19 @@ def _corroboration_evidence(ledger: Ledger) -> dict[str, list[str]]:
       but does not mention any of that vocabulary is simply absent here —
       this is how source evidence can reject a lexical leader rather than
       merely rubber-stamp it.
+
+    RFC-0012 (Problem A) — a relationship fact is no longer unconditional
+    evidence. Its weight is `confidence_weight(fact) / degree(target)`
+    (see `_RELATIONSHIP_CONFIDENCE_WEIGHT`/`_relationship_degree`): a
+    "structural" edge to a target only one repository in this run points
+    at scores 1.0 and always counts; a "heuristic" edge to a target three
+    different repositories all point at scores 0.2 and is excluded below
+    `_MIN_RELATIONSHIP_SPECIFICITY` — a high-degree shared dependency
+    (a library many unrelated repositories legitimately use) is weaker
+    identification evidence than a rare, specific one, exactly the same
+    way regardless of which repository or library is involved. Nothing is
+    blacklisted: the same target can still corroborate a caller whenever
+    this run has only observed one caller for it.
 
     Deliberately not scoped to already-live candidates: a repository that
     just missed the lexical ranking's `TIE_RATIO` cutoff — and so never
@@ -919,7 +1226,14 @@ def _corroboration_evidence(ledger: Ledger) -> dict[str, list[str]]:
     hook that actually promotes one.
     """
     evidence: dict[str, list[str]] = {}
+    degree = _relationship_degree(ledger)
     for fact in ledger.facts_of("repository_relationship"):
+        confidence = str(fact.value.get("confidence", "heuristic"))
+        base_weight = _RELATIONSHIP_CONFIDENCE_WEIGHT.get(confidence, 0.0)
+        target_degree = max(degree.get(fact.subject, 1), 1)
+        weight = base_weight / target_degree
+        if weight < _MIN_RELATIONSHIP_SPECIFICITY:
+            continue
         # Both endpoints, not only the target `fact.subject` records: for a
         # *ranked* candidate (as opposed to `resync_relationship_
         # candidates`'s explicit-source case), the discriminating fact is
@@ -936,6 +1250,24 @@ def _corroboration_evidence(ledger: Ledger) -> dict[str, list[str]]:
 
     ticket_terms = _ranking_ticket_terms(ledger)
     if ticket_terms:
+        # RFC-0015 — lexical/source matches must clear the same kind of
+        # specificity bar relationship evidence already does (RFC-0012):
+        # *which* words matched, not merely *whether* any did. Weights are
+        # specific to *which candidate* a match is being scored for (see
+        # `_term_specificity_weights`'s `exclude_repository`), so this
+        # caches one weight map per repository rather than one shared map
+        # for all of them — a term unique to exactly the correct
+        # candidate must score as specific *for that candidate*, not be
+        # diluted by counting the candidate's own match against itself.
+        weights_by_repo: dict[str, dict[str, float]] = {}
+
+        def _weights_for(repo: str) -> dict[str, float]:
+            if repo not in weights_by_repo:
+                weights_by_repo[repo] = _term_specificity_weights(
+                    ledger, ticket_terms, exclude_repository=repo
+                )
+            return weights_by_repo[repo]
+
         by_name = {f.subject: f for f in ledger.facts_of("repository")}
         for fact in ledger.facts_of("pull_request"):
             matched_repo = next(
@@ -946,9 +1278,107 @@ def _corroboration_evidence(ledger: Ledger) -> dict[str, list[str]]:
                 ),
                 None,
             )
-            if matched_repo is not None and tokenize(fact.text) & ticket_terms:
-                evidence.setdefault(matched_repo, []).append(fact.fact_id)
+            matched_terms = tokenize(fact.text) & ticket_terms
+            if matched_repo is None or not matched_terms:
+                continue
+            score = _matched_term_specificity(matched_terms, _weights_for(matched_repo))
+            if score < MIN_SOURCE_EVIDENCE_SPECIFICITY:
+                continue
+            evidence.setdefault(matched_repo, []).append(fact.fact_id)
+        # RFC-0014 — actual file *content* (`source_file` facts —
+        # `GitHubInvestigator`'s bounded escalation fetch, see
+        # `_select_relevant_source_files`), kept distinct from the
+        # `pull_request` branch above (repository metadata/PR text): the
+        # fact's own `repository` property already says which candidate it
+        # belongs to, no `full_name` reconstruction needed, because this
+        # module controls exactly how that fact gets written.
+        #
+        # RFC-0015 — the live PROT-5764 benchmark's actual failure mode:
+        # a fetched file whose only overlap with the ticket was generic
+        # ETL/programming vocabulary ("validation", "failed", "client")
+        # used to corroborate on *any* overlap at all. Same specificity
+        # bar as the `pull_request` branch above now applies here too.
+        for fact in ledger.facts_of("source_file"):
+            repo_name = str(fact.value.get("repository", ""))
+            matched_terms = tokenize(fact.text) & ticket_terms
+            if not repo_name or not matched_terms:
+                continue
+            score = _matched_term_specificity(matched_terms, _weights_for(repo_name))
+            if score < MIN_SOURCE_EVIDENCE_SPECIFICITY:
+                continue
+            evidence.setdefault(repo_name, []).append(fact.fact_id)
     return evidence
+
+
+def _select_relevant_source_files(
+    ledger: Ledger, repository: str, *, limit: int = MAX_SOURCE_FILES_PER_CANDIDATE
+) -> list[str]:
+    """RFC-0014 — this repository's own already-indexed components
+    (functions/classes/modules — `component` facts, recorded by the
+    graph-corroboration stage's own scoped traversal, which always runs
+    *before* a candidate is eligible for source escalation), ranked by how
+    many of the ticket's own specific vocabulary words (`_ranking_ticket_
+    terms`) their name matches, reduced to the distinct file paths of the
+    top `limit`.
+
+    No new GitHub call needed to produce this list — the symbol/file map
+    already exists from a stage this candidate already passed through to
+    reach here (`GraphInvestigator`'s scoped traversal records a
+    `component` fact, with `file_path`, for every function/class/module in
+    scope). This is what replaces "fetch repository metadata and hope the
+    repo name happens to share a word with the ticket" with "fetch the
+    file(s) whose own indexed symbols actually match what the ticket is
+    about" — entirely generic: no filename, symbol name, or ticket term is
+    ever hardcoded here, only the request's own vocabulary and the
+    repository's own already-indexed structure.
+
+    Deliberately no fallback when nothing matches (empty ticket_terms, or
+    no component whose name shares any word with them): "nothing indexed
+    corresponds to what this ticket is actually about" is a real, honest
+    answer, not a reason to guess at some other file.
+
+    RFC-0015 — ranked by *specificity* (`_matched_term_specificity`), not
+    raw overlap count: a component matching one rare term outranks one
+    matching three generic ones. Selection itself still only requires
+    *some* match (any specificity > 0) — the file is worth reading to see
+    what it actually contains; the specificity bar that decides whether
+    its *fetched content* is strong enough to corroborate the repository
+    is enforced later, in `_corroboration_evidence`, not here. A component
+    name is a cheap hint about where to look, not the evidence itself.
+
+    RFC-0017 — matched against `_match_text` (name + type + file_path,
+    `app.agents.planning.tools`'s existing repository-ranking match text,
+    reused rather than re-derived) instead of the bare component name: a
+    file's own path is frequently the only place domain vocabulary
+    appears (a function named `main` inside `pipeline/validation/
+    schema_validator.py` was previously invisible to name-only matching).
+    Also applies the same test-code discount (`_is_test_component`/
+    `_TEST_RELEVANCE_FACTOR`) `rank_repositories` already uses — without
+    it, a repository's test suite (routinely the majority of its indexed
+    components) can win a top-`limit` cutoff on vocabulary the test
+    merely exercises, crowding out the production file actually worth
+    reading.
+    """
+    ticket_terms = _ranking_ticket_terms(ledger)
+    if not ticket_terms:
+        return []
+    weights = _term_specificity_weights(ledger, ticket_terms, exclude_repository=repository)
+    scored: dict[str, float] = {}
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("repository") != repository:
+            continue
+        file_path = str(fact.value.get("file_path") or "")
+        if not file_path:
+            continue
+        matched_terms = tokenize(_match_text(fact.value)) & ticket_terms
+        if not matched_terms:
+            continue
+        score = _matched_term_specificity(matched_terms, weights)
+        if _is_test_component(fact.value):
+            score *= _TEST_RELEVANCE_FACTOR
+        scored[file_path] = max(scored.get(file_path, 0.0), score)
+    ranked = sorted(scored.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [path for path, _score in ranked[:limit]]
 
 
 def _corroborated_ranking_candidates(ledger: Ledger) -> list[Inference]:

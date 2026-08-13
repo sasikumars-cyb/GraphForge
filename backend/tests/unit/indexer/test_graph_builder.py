@@ -241,8 +241,109 @@ def test_python_unresolved_import_produces_no_edge() -> None:
     )
 
     graph = build_graph("repo-1", model)
+    # No *module-to-module* IMPORTS edge — "requests" isn't one of this
+    # repository's own modules. RFC-0012 below adds a different, deliberate
+    # edge (repo -DEPENDS_ON-> PythonImport node) for the same import; this
+    # assertion is unaffected by that, by design (see the "DEPENDS_ON, not
+    # IMPORTS" comment in `graph/builder.py`).
     import_edges = [e for e in graph.edges if e.type == "IMPORTS"]
     assert import_edges == []
+
+
+def test_python_unresolved_import_produces_a_python_import_node() -> None:
+    """RFC-0012 — the source-level import evidence path: an import that
+    doesn't resolve to one of this repository's own modules still becomes
+    a `PythonImport` node, unconditionally, the same way an undeclared-
+    but-unresolved dependency isn't silently dropped."""
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="app.services.order_service",
+                package="app.services",
+                location=PY_LOCATION,
+                imports=[
+                    PythonImport(
+                        module="shared_jobs",
+                        location=PY_LOCATION,
+                        imported_names=["GatherTrackTraceErrorsSharedJob"],
+                    )
+                ],
+            )
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    import_nodes = [n for n in graph.nodes if n.labels == ["PythonImport"]]
+    assert len(import_nodes) == 1
+    node = import_nodes[0]
+    assert node.properties["module"] == "shared_jobs"
+    assert node.properties["imported_names"] == ["GatherTrackTraceErrorsSharedJob"]
+
+    edge_types = {(e.source_id, e.target_id, e.type) for e in graph.edges}
+    assert ("repo-1:repository", node.id, "DEPENDS_ON") in edge_types
+
+
+def test_python_unresolved_imports_of_the_same_top_level_module_are_deduplicated() -> None:
+    """Requirement #3 — multiple imports of the same target, from
+    different files and different names imported, collapse into one
+    `PythonImport` node with every distinct name/file merged in, not one
+    node per occurrence."""
+    other_location = SourceLocation(file_path="app/other_service.py")
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="app.services.order_service",
+                package="app.services",
+                location=PY_LOCATION,
+                imports=[
+                    PythonImport(
+                        module="shared_jobs", location=PY_LOCATION, imported_names=["ErrorLogger"]
+                    ),
+                    # A second, differently-shaped import of the same
+                    # top-level package in the *same* file - still one node.
+                    PythonImport(module="shared_jobs.errors", location=PY_LOCATION),
+                ],
+            ),
+            PythonModule(
+                name="app.other_service",
+                package="app",
+                location=other_location,
+                imports=[
+                    PythonImport(
+                        module="shared_jobs",
+                        location=other_location,
+                        imported_names=["StartEvent"],
+                    )
+                ],
+            ),
+        ],
+    )
+
+    graph = build_graph("repo-1", model)
+    import_nodes = [n for n in graph.nodes if n.labels == ["PythonImport"] and n.properties["module"] == "shared_jobs"]
+    assert len(import_nodes) == 1, "one node per top-level package, regardless of how many files/names import it"
+    node = import_nodes[0]
+    assert set(node.properties["imported_names"]) == {"ErrorLogger", "StartEvent"}
+    assert set(node.properties["file_paths"]) == {PY_LOCATION.file_path, other_location.file_path}
+
+
+def test_repository_node_carries_its_own_package_name_when_declared() -> None:
+    model = ArchitectureModel(language="python", framework=None, package_name="shared_jobs")
+    graph = build_graph("repo-1", model, repository_name="up-databricks-shared-jobs")
+    repo_node = next(n for n in graph.nodes if n.id == "repo-1:repository")
+    assert repo_node.properties["package_name"] == "shared_jobs"
+    assert repo_node.properties["name"] == "up-databricks-shared-jobs"
+
+
+def test_repository_node_omits_package_name_when_none_declared() -> None:
+    model = ArchitectureModel(language="python", framework=None)
+    graph = build_graph("repo-1", model)
+    repo_node = next(n for n in graph.nodes if n.id == "repo-1:repository")
+    assert "package_name" not in repo_node.properties
 
 
 def test_python_call_graph_edge_for_unambiguous_bare_name() -> None:

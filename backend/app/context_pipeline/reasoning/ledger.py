@@ -50,6 +50,18 @@ FactKind = Literal[
     "document",
     # A pull request / GitHub issue actually retrieved.
     "pull_request",
+    # RFC-0014 — actual source *file content* fetched from a candidate
+    # repository (as opposed to `pull_request`, which also covers
+    # repository *metadata* — description/language/topics — fetched via
+    # the same investigator for a different purpose). Subject is
+    # `"{full_name}::{path}"`; `value` carries `repository`/`full_name`/
+    # `path`; `text` is the file's own (bounded) content. Kept a distinct
+    # kind specifically so evidence provenance stays honestly
+    # distinguishable: "this repository was corroborated by its own
+    # source code" is a materially different claim from "by its metadata"
+    # or "by its name," and collapsing them into one fact kind would lose
+    # that distinction downstream.
+    "source_file",
     # A repository that exists and is indexed in the knowledge graph.
     "repository",
     # The relevance-ranked scoring of every indexed repository against the

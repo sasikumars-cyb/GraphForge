@@ -40,7 +40,7 @@ from __future__ import annotations
 import logging
 import re
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from sqlalchemy import func, select
@@ -120,6 +120,22 @@ class RepoNodes:
     # including hand-built test fixtures with no `IndexingJob` row at all,
     # to supply one.
     graph_version: str | None = None
+    # RFC-0012 — every `PythonImport` node this repository's own source
+    # produced (see `graph/builder.py`'s `_build_python_graph`): an import
+    # that never resolved to one of this repository's own modules, so it
+    # names something external — usually a third-party package, sometimes
+    # another indexed repository's own published package used but never
+    # declared in a manifest. Matched against other repositories by
+    # `_source_level_import` below, exactly like `python_dependencies` is
+    # matched by `_shared_dependency_name`, just from a different evidence
+    # source (source code, not a manifest).
+    python_imports: list[GraphNode] = field(default_factory=list)
+    # RFC-0012 — this repository's own self-declared package/distribution
+    # name (PEP 621/Poetry), when it has one — see `ArchitectureModel.
+    # package_name`'s docstring for why this is commonly *different* from
+    # `name` (the git repository name) and why a source import can only
+    # ever be matched against this, not `name` alone.
+    package_name: str | None = None
 
 
 def _repository_node_id(repository_id: str) -> str:
@@ -201,6 +217,68 @@ def _shared_dependency_name(source: RepoNodes, other: RepoNodes) -> list[GraphEd
     ]
 
 
+def _source_level_import(source: RepoNodes, other: RepoNodes) -> list[GraphEdge]:
+    """`source`'s own code importing a module whose name matches another
+    indexed repository's identity — its git repository name *or* its
+    self-declared package name (`other.package_name`; see `RepoNodes.
+    package_name`'s docstring for why both are checked: a repository's
+    published package name is frequently not its repository name).
+
+    RFC-0012 — the generic source-level counterpart to
+    `_shared_dependency_name` above: that rule only sees a dependency the
+    manifest actually *declares*; a repository can genuinely depend on
+    another one's package purely through an `import` statement — module-
+    level or deferred inside a function body, `extract_imports` (see
+    `graph/builder.py`) doesn't distinguish — with no manifest entry at
+    all (an environment-provided/runtime-installed package, most
+    commonly). This rule is what makes that dependency visible instead of
+    invisible to `cross_repo_linker` entirely.
+
+    Deliberately the *only* rule of the four whose edges get a further,
+    cross-pair pass after this function returns (see `compute_edges`'s
+    ambiguity handling below) — an import is looked up against one `other`
+    repository at a time here, exactly like every other rule, but unlike a
+    Feign target or a manifest coordinate, an unresolved import name is
+    genuinely more likely to coincidentally match more than one indexed
+    repository (a short, common package name is far more likely to arise
+    from an *unresolved* import than from a deliberately-declared
+    dependency) — `compute_edges` is where that global view exists, this
+    function's job is only to report every match it finds, honestly,
+    without trying to guess ambiguity from a single pair.
+
+    Reuses `_identifier_match` unchanged, per the same exact-or-suffix-
+    stripped-normalization, never-substring rule every other rule here
+    already relies on — deliberately not hardened further for imports
+    specifically (e.g. no minimum-length/generic-word denylist): that kind
+    of blacklist is exactly what a shared/common-name heuristic would look
+    like, and this module's job is to report matches, not decide which
+    ones are trustworthy enough to keep — that judgment belongs entirely
+    to the specificity/degree weighting downstream (RFC-0012 Problem A,
+    `capabilities._corroboration_evidence`), which sees every repository's
+    matches at once and can tell "rare" from "common," something no
+    single pairwise rule here ever can.
+    """
+    matched: list[str] = []
+    for imp in source.python_imports:
+        module = str(imp.properties.get("module", ""))
+        if not module:
+            continue
+        if _identifier_match(module, other.name) or (
+            other.package_name and _identifier_match(module, other.package_name)
+        ):
+            matched.append(module)
+    if not matched:
+        return []
+    return [
+        GraphEdge(
+            source_id=_repository_node_id(source.repository_id),
+            target_id=_repository_node_id(other.repository_id),
+            type="IMPORTS_REPOSITORY",
+            properties={"confidence": "heuristic", "imports": sorted(set(matched))},
+        )
+    ]
+
+
 @dataclass(frozen=True)
 class CrossRepoLinkRule:
     name: str
@@ -224,6 +302,11 @@ CROSS_REPO_LINK_RULES: tuple[CrossRepoLinkRule, ...] = (
         name="shared_dependency_name",
         rel_type="DEPENDS_ON_REPOSITORY",
         find_edges=_shared_dependency_name,
+    ),
+    CrossRepoLinkRule(
+        name="source_level_import",
+        rel_type="IMPORTS_REPOSITORY",
+        find_edges=_source_level_import,
     ),
 )
 
@@ -266,6 +349,18 @@ async def _load_repo_nodes(
     python_dependencies = await graph_repository.get_nodes_by_label(
         repository_id, "PythonDependency"
     )
+    python_imports = await graph_repository.get_nodes_by_label(repository_id, "PythonImport")
+    # The repository's own self-declared package name lives as a property
+    # on its own `Repository` node (see `graph/builder.py`'s `build_graph`)
+    # — reusing `get_nodes_by_label` for it rather than adding a new
+    # `IGraphRepository` method, since exactly one `Repository` node ever
+    # exists per `repository_id` and this already filters on it.
+    repository_nodes = await graph_repository.get_nodes_by_label(repository_id, "Repository")
+    package_name = (
+        str(repository_nodes[0].properties.get("package_name") or "") or None
+        if repository_nodes
+        else None
+    )
 
     # Producer/consumer direction lives on the PRODUCES_TO/CONSUMES_FROM
     # edge from whichever component owns it, not on the KafkaTopic node
@@ -296,6 +391,8 @@ async def _load_repo_nodes(
         produces_topic_names=frozenset(produces),
         consumes_topic_names=frozenset(consumes),
         graph_version=graph_version,
+        python_imports=python_imports,
+        package_name=package_name,
     )
 
 
@@ -348,8 +445,58 @@ def compute_edges(nodes_by_repo: dict[str, RepoNodes]) -> dict[str, list[GraphEd
                             },
                         )
                     )
-        edges_by_repo[repo_id] = edges
+        edges_by_repo[repo_id] = _downgrade_ambiguous_imports(edges)
     return edges_by_repo
+
+
+def _downgrade_ambiguous_imports(edges: list[GraphEdge]) -> list[GraphEdge]:
+    """RFC-0012 — one source repository's `IMPORTS_REPOSITORY` edges (from
+    `_source_level_import`) only, downgraded when the *same* imported
+    module name matched more than one other indexed repository.
+
+    This is deliberately a pass over one source repository's *already-
+    computed* edges, not something `_source_level_import` decides pairwise
+    — a single `(source, other)` pair has no way to know whether the same
+    import also matched some *other* repository; only this wider view
+    (every edge `compute_edges` produced for `source`, across every
+    `other`) can. Every other rule (`_feign_service_calls`,
+    `_kafka_topic_overlap`, `_shared_dependency_name`) is untouched here —
+    a Feign target or a manifest coordinate is already exact-matched
+    against one specific name by construction and doesn't need this;
+    imports are the one signal source generic enough to plausibly collide.
+
+    Ambiguous matches are downgraded, never dropped — "X matches multiple
+    repositories -> ambiguous / weaker evidence," not "-> no evidence":
+    the import genuinely happened and is still worth showing, it just
+    should never single-handedly identify one specific repository over
+    another it matched equally well. `confidence: "ambiguous"` is a new,
+    deliberately-named-lower tier alongside the existing "structural"/
+    "heuristic" vocabulary (see `capabilities._corroboration_evidence`,
+    which excludes it from corroboration entirely).
+    """
+    match_counts: dict[str, int] = {}
+    for edge in edges:
+        if edge.type != "IMPORTS_REPOSITORY":
+            continue
+        for module in edge.properties.get("imports", []):
+            match_counts[module] = match_counts.get(module, 0) + 1
+
+    downgraded: list[GraphEdge] = []
+    for edge in edges:
+        if edge.type == "IMPORTS_REPOSITORY" and any(
+            match_counts.get(module, 0) > 1 for module in edge.properties.get("imports", [])
+        ):
+            downgraded.append(
+                GraphEdge(
+                    source_id=edge.source_id,
+                    target_id=edge.target_id,
+                    type=edge.type,
+                    properties={**edge.properties, "confidence": "ambiguous"},
+                )
+            )
+        else:
+            downgraded.append(edge)
+    return downgraded
 
 
 async def relink_account(

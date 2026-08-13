@@ -34,6 +34,7 @@ _ALLOWED_LABELS = frozenset(
         "Class",
         "Function",
         "PythonDependency",
+        "PythonImport",
         "DataTable",
         "SqlFile",
         "SourceFile",
@@ -66,6 +67,15 @@ _ALLOWED_REL_TYPES = frozenset(
         "CALLS_SERVICE",
         "SHARES_TOPIC",
         "DEPENDS_ON_REPOSITORY",
+        # RFC-0012 — a source-level import (see `cross_repo_linker.
+        # _source_level_import`) matching another indexed repository's own
+        # name or self-declared package name. Deliberately its own type,
+        # not folded into DEPENDS_ON_REPOSITORY: the evidence is a step
+        # weaker (an unresolved import can be ambiguous across several
+        # indexed repositories in a way a manifest-declared coordinate
+        # rarely is), and downstream corroboration needs to tell them
+        # apart, not just by `confidence` but by kind.
+        "IMPORTS_REPOSITORY",
     }
 )
 

@@ -23,7 +23,10 @@ from app.indexer.extractors.python.spark import (
 from app.indexer.extractors.python.sql_files import extract_sql_file_references
 from app.indexer.models.architecture import ArchitectureModel, PythonModule, SourceLocation
 from app.indexer.parsers.base import ILanguageParser
-from app.indexer.parsers.python.dependency_parser import parse_python_dependencies
+from app.indexer.parsers.python.dependency_parser import (
+    parse_python_dependencies,
+    parse_python_package_name,
+)
 from app.indexer.scanner.skip_directories import SKIP_DIRECTORIES
 
 logger = logging.getLogger(__name__)
@@ -56,6 +59,7 @@ class PythonParser(ILanguageParser):
     def parse(self, repo_root: Path) -> ArchitectureModel:
         model = ArchitectureModel(language="python", framework=None)
         model.python_dependencies = parse_python_dependencies(repo_root)
+        model.package_name = parse_python_package_name(repo_root)
 
         for python_file in _iter_python_files(repo_root):
             relative_path = python_file.relative_to(repo_root)

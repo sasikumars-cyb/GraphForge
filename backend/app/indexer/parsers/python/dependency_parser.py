@@ -85,3 +85,38 @@ def parse_python_dependencies(repo_root: Path) -> list[PythonDependency]:
         return _parse_requirements_txt(requirements_path)
 
     return []
+
+
+def parse_python_package_name(repo_root: Path) -> str | None:
+    """The repository's own self-declared distribution name — PEP 621
+    `[project.name]` or Poetry's `[tool.poetry.name]` — as distinct from
+    its git repository name (`Repository.name`). The two commonly differ
+    (a repo named `up-databricks-shared-jobs` publishing a package named
+    `shared_jobs` is exactly the real-world case this exists for): a
+    source file elsewhere doing `import shared_jobs` names the *package*,
+    never the git repo, so matching an import against `Repository.name`
+    alone would silently miss it.
+
+    Deliberately not folded into `parse_python_dependencies` above — this
+    reads the manifest's *own identity*, not what it depends on. Returns
+    `None` for anything without a `pyproject.toml`, or one that doesn't
+    declare a name (both ordinary, not errors — a `requirements.txt`-only
+    repository or a monorepo subpackage has no single self-name here).
+    """
+    pyproject_path = repo_root / "pyproject.toml"
+    if not pyproject_path.is_file():
+        return None
+    try:
+        data = tomllib.loads(pyproject_path.read_text(encoding="utf-8", errors="ignore"))
+    except tomllib.TOMLDecodeError:
+        return None
+
+    project_name = data.get("project", {}).get("name")
+    if isinstance(project_name, str) and project_name.strip():
+        return project_name.strip()
+
+    poetry_name = data.get("tool", {}).get("poetry", {}).get("name")
+    if isinstance(poetry_name, str) and poetry_name.strip():
+        return poetry_name.strip()
+
+    return None

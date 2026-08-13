@@ -46,9 +46,13 @@ from app.context_pipeline.providers import (
 from app.context_pipeline.reasoning.capabilities import (
     CANDIDATE_FUNNEL_WIDTH,
     GRAPH_TRAVERSAL_ACTION,
+    MAX_SOURCE_FILES_PER_CANDIDATE,
     SOURCE_RETRIEVAL_WIDTH,
     TIE_RATIO,
+    _corroboration_evidence,
+    _select_relevant_source_files,
     ranked_repository_names,
+    repository_role,
 )
 from app.context_pipeline.reasoning.investigation import (
     InvestigationAction,
@@ -700,27 +704,52 @@ class GitHubInvestigator:
         if actions:
             return actions
 
-        # -- corroborate via source (RFC-0011): the funnel's most expensive
-        # stage, reached only for a ranked candidate the cheap graph stage
-        # already scoped (`scope_architecture:{name}` already attempted —
-        # see `GraphInvestigator.propose`) but could not corroborate via a
-        # real cross-repository relationship. Bounded to
+        # -- corroborate via source (RFC-0011, escalation path widened by
+        # RFC-0013, made evidence-real by RFC-0014): the funnel's most
+        # expensive stage, reached only for a ranked candidate the cheap
+        # graph stage already scoped (`scope_architecture:{name}` already
+        # attempted — see `GraphInvestigator.propose`) but whose
+        # relationship evidence isn't independently sufficient. Bounded to
         # `SOURCE_RETRIEVAL_WIDTH` candidates, best-ranked first — never
         # "fetch every ranked repository". A candidate whose source WAS
         # fetched but doesn't mention this request's own vocabulary simply
         # stays uncorroborated (see `capabilities._corroborated_ranking_
         # candidates`) — this is how source evidence can reject a lexical
         # leader, not only confirm one.
+        #
+        # RFC-0014 — this fetches actual *file content* now
+        # (`_select_relevant_source_files`, bounded to `MAX_SOURCE_FILES_
+        # PER_CANDIDATE`), not repository metadata: fetching `/repos/{owner}
+        # /{repo}` and calling that "reading its source" meant this stage's
+        # only real signal was frequently the repository's own *name*
+        # showing up in its own metadata text — corroborating a candidate
+        # via what's structurally still a name match, dressed up as
+        # "source evidence". See `_run_source_file_fetch` for the fetch
+        # itself.
         repository = state.assessment_for("repository")
         if repository is None or repository.satisfied:
             return actions
         by_name = {f.subject: f for f in ledger.facts_of("repository")}
-        relationship_targets = {f.subject for f in ledger.facts_of("repository_relationship")}
+        # RFC-0013 — *already independently corroborated* (RFC-0012's
+        # specificity-weighted evidence: confidence tier ÷ relationship
+        # degree, at or above the sufficiency bar), not merely "has some
+        # relationship fact of any strength." The pre-RFC-0012 version of
+        # this check excluded a candidate the moment *any* relationship
+        # fact named it — exactly wrong once relationship evidence is
+        # weighted, since a common/shared-dependency relationship (weak by
+        # design) would then wrongly exempt a candidate from the one
+        # remaining stage that could actually resolve it. Reusing
+        # `_corroboration_evidence` directly (rather than re-deriving the
+        # same weighting a second way) is what keeps "strongly corroborated
+        # already, skip source retrieval" and "weakly related, escalate to
+        # source retrieval" from ever silently drifting apart — the same
+        # weighting decides both.
+        already_corroborated = set(_corroboration_evidence(ledger))
         eligible = [
             name
             for name in ranked_repository_names(ledger, limit=CANDIDATE_FUNNEL_WIDTH)
             if ledger.attempted("graph", f"scope_architecture:{name}")
-            and name not in relationship_targets
+            and name not in already_corroborated
         ][:SOURCE_RETRIEVAL_WIDTH]
         # `enumerate` over `eligible`'s own best-ranked-first order becomes
         # each action's `priority` — same reasoning as `GraphInvestigator`'s
@@ -730,26 +759,28 @@ class GitHubInvestigator:
         for rank, name in enumerate(eligible):
             repo_fact = by_name.get(name)
             full_name = (repo_fact.value.get("full_name") if repo_fact else None) or name
-            key = f"fetch_pull_request:{full_name}"
-            if full_name in retrieved or ledger.attempted(self.name, key):
+            key = f"fetch_source_files:{full_name}"
+            if ledger.attempted(self.name, key):
+                continue
+            file_paths = _select_relevant_source_files(
+                ledger, name, limit=MAX_SOURCE_FILES_PER_CANDIDATE
+            )
+            if not file_paths:
+                # Nothing already indexed for this repository shares a word
+                # with the ticket's own vocabulary — no fetch, no guess.
+                # This is a real, honest outcome (see `_select_relevant_
+                # source_files`'s own docstring), not a reason to fall back
+                # to fetching repository metadata instead.
                 continue
             actions.append(
                 InvestigationAction(
                     provider=self.name,
                     key=key,
                     intent=f"'{name}' still isn't confirmed after checking its graph "
-                    "relationships — I'll read its source directly to look for evidence "
-                    "that actually corroborates it.",
+                    f"relationships — I'll read {', '.join(file_paths)} to look for "
+                    "evidence that actually corroborates it.",
                     targets="repository",
-                    params={
-                        "reference": {
-                            "type": ReferenceType.GITHUB_REPOSITORY.value,
-                            "provider": "github",
-                            "confidence": 0.5,
-                            "raw_value": full_name,
-                            "normalized_value": full_name,
-                        }
-                    },
+                    params={"full_name": full_name, "repository": name, "file_paths": file_paths},
                     cost=2,
                     priority=rank,
                 )
@@ -759,6 +790,13 @@ class GitHubInvestigator:
     async def run(
         self, action: InvestigationAction, session: SessionContext, recorder: Recorder
     ) -> InvestigationOutcome:
+        # RFC-0014 — the escalation branch above proposes a bounded set of
+        # actual file paths (`params["file_paths"]`), never a generic
+        # `Reference`; every other branch (explicit PR/issue/repository
+        # references) is unchanged from before.
+        if "file_paths" in action.params:
+            return await self._run_source_file_fetch(action, session, recorder)
+
         from app.core.config import get_settings
         from app.services.github_service import get_decrypted_access_token
         from app.tools import ToolExecutor, get_tool_registry
@@ -812,6 +850,87 @@ class GitHubInvestigator:
         )
         return InvestigationOutcome(
             observation=f"I read {reference.normalized_value} for the surrounding code context.",
+            yielded=True,
+        )
+
+    async def _run_source_file_fetch(
+        self, action: InvestigationAction, session: SessionContext, recorder: Recorder
+    ) -> InvestigationOutcome:
+        """RFC-0014 — fetches actual file *content* for the bounded set of
+        paths `propose()`'s escalation branch selected, via the existing
+        `GitHubTool.get_file_contents` (already bounded to 8000 chars per
+        file — reused unchanged, not re-invented). One `source_file` fact
+        per successfully-fetched file, all citing the same evidence record
+        — the same one-evidence-many-facts shape `GraphInvestigator`'s own
+        scoped traversal already uses for `component`/`topic` facts.
+        """
+        from app.core.config import get_settings
+        from app.services.github_service import get_decrypted_access_token
+        from app.tools.implementations.github_tool import GitHubTool
+
+        full_name = str(action.params["full_name"])
+        repository = str(action.params["repository"])
+        file_paths = list(action.params["file_paths"])
+        owner_repo = full_name.split("/", 1)
+
+        token = (
+            await get_decrypted_access_token(session.db, session.user_id)
+            if session.user_id is not None
+            else None
+        )
+        if token is None or len(owner_repo) != 2:
+            recorder.evidence(
+                "unavailable",
+                f"Cannot read source for {full_name}: no GitHub account is connected."
+                if token is None
+                else f"'{full_name}' isn't a valid owner/repo reference.",
+            )
+            return InvestigationOutcome(
+                observation=f"I wanted to read {full_name}'s source but couldn't — no GitHub "
+                "account is connected.",
+                yielded=False,
+            )
+
+        owner, repo = owner_repo
+        tool = GitHubTool(
+            {
+                "github_token": token,
+                "github_mcp_server_url": get_settings().github_mcp_default_server_url,
+                "github_mcp_api_key": token,
+            }
+        )
+
+        fetched: list[tuple[str, str]] = []
+        for path in file_paths:
+            result = await tool.get_file_contents(owner, repo, path)
+            content = str(result.data.get("content") or "") if result.success else ""
+            if content:
+                fetched.append((path, content))
+
+        if not fetched:
+            recorder.evidence(
+                "not_found", f"Could not read {', '.join(file_paths)} from {full_name}."
+            )
+            return InvestigationOutcome(
+                observation=f"I couldn't read source for {full_name}.", yielded=False
+            )
+
+        fetched_paths = [path for path, _content in fetched]
+        evidence = recorder.evidence(
+            "success",
+            f"Read {len(fetched)} source file(s) from {full_name}: {', '.join(fetched_paths)}.",
+        )
+        for path, content in fetched:
+            recorder.fact(
+                "source_file",
+                f"{full_name}::{path}",
+                value={"repository": repository, "full_name": full_name, "path": path},
+                text=content,
+                evidence=evidence,
+            )
+        return InvestigationOutcome(
+            observation=f"I read {', '.join(fetched_paths)} from {full_name} for corroborating "
+            "evidence.",
             yielded=True,
         )
 
@@ -1525,14 +1644,31 @@ class GraphInvestigator:
     @staticmethod
     def _relationship_reason(source_repo: str, rel_type: str, properties: dict[str, Any]) -> str:
         if rel_type == "CALLS_SERVICE":
-            return f"Called by {source_repo} via a Feign client."
-        if rel_type == "SHARES_TOPIC":
+            base = f"Called by {source_repo} via a Feign client."
+        elif rel_type == "SHARES_TOPIC":
             topics = properties.get("topics") or []
             topic_text = ", ".join(f"'{t}'" for t in topics) if topics else "a Kafka topic"
-            return f"Shares Kafka topic {topic_text} with {source_repo}."
-        if rel_type == "DEPENDS_ON_REPOSITORY":
-            return f"{source_repo} declares a dependency matching this repository's name."
-        return f"Related to {source_repo} in the knowledge graph."
+            base = f"Shares Kafka topic {topic_text} with {source_repo}."
+        elif rel_type == "DEPENDS_ON_REPOSITORY":
+            base = f"{source_repo} declares a dependency matching this repository's name."
+        elif rel_type == "IMPORTS_REPOSITORY":
+            base = f"{source_repo}'s source code imports a module matching this repository's name."
+        else:
+            base = f"Related to {source_repo} in the knowledge graph."
+        # RFC-0016 — surface the target's graph-wide architectural role
+        # alongside the raw edge reason, so a report/synthesis reading this
+        # fact's evidence trail sees *why* this one relationship carries
+        # less identifying weight than a rare, specific edge would (a
+        # generic, structural signal, never this specific repository or
+        # capability by name).
+        consumer_count = properties.get("target_consumer_count")
+        if isinstance(consumer_count, int) and repository_role(consumer_count) == "shared_provider":
+            base += (
+                f" This target is shared infrastructure — {consumer_count} distinct "
+                "repositories in the graph depend on it, so this edge alone is weak "
+                "evidence for identifying any one of them."
+            )
+        return base
 
     def _record_relationships(
         self,

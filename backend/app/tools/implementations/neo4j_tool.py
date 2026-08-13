@@ -147,6 +147,15 @@ class Neo4jGraphTool:
             else:
                 edge_source_repos = indexed_repos
             cross_repository_edges: list[dict[str, Any]] = []
+            # Graph-wide fan-in per distinct target, not per edge — a
+            # target hit by 5 edges from 5 different sources only needs its
+            # count fetched once. This is the architectural-role signal
+            # Context Discovery uses to recognize a repository as shared
+            # infrastructure (see `app.context_pipeline.reasoning.
+            # capabilities._relationship_degree`, which now reads this
+            # instead of re-deriving an under-counted proxy from whichever
+            # edges happened to already be in one run's ledger).
+            consumer_counts: dict[str, int] = {}
             for repo in edge_source_repos:
                 edges = await graph_repo.get_outgoing_cross_repository_edges(repo["id"])
                 for edge in edges:
@@ -154,12 +163,20 @@ class Neo4jGraphTool:
                     target_name = id_to_name.get(target_repository_id)
                     if target_name is None:
                         continue
+                    if target_repository_id not in consumer_counts:
+                        consumer_counts[
+                            target_repository_id
+                        ] = await graph_repo.get_incoming_cross_repository_edge_count(
+                            target_repository_id
+                        )
+                    properties = dict(edge.properties)
+                    properties["target_consumer_count"] = consumer_counts[target_repository_id]
                     cross_repository_edges.append(
                         {
                             "source_repository": repo["name"],
                             "target_repository": target_name,
                             "type": edge.type,
-                            "properties": dict(edge.properties),
+                            "properties": properties,
                         }
                     )
 

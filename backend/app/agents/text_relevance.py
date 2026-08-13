@@ -15,8 +15,62 @@ from __future__ import annotations
 import math
 import re
 
-_TOKEN_BOUNDARY_RE = re.compile(r"[^a-z0-9]+")
+_SEGMENT_BOUNDARY_RE = re.compile(r"[^a-zA-Z0-9]+")
 _CAMEL_BOUNDARY_RE = re.compile(r"([a-z0-9])([A-Z])")
+_MIN_TOKEN_LENGTH = 3
+
+# RFC-0017 — a segment this short is exempted from both camelCase-boundary
+# splitting and the minimum-length filter below when its *shape* (not its
+# specific spelling) marks it as a short code rather than an ordinary word:
+# a digit anywhere in it ("S3"), or more than one uppercase letter ("TnT",
+# "UDW", "API"). Deliberately shape-based and length-bounded, not a name
+# lookup — it fires for any acronym-shaped 2-5 character segment, never a
+# specific one. Below this length, splitting "TnT" the normal way (camel-
+# boundary insert, then a 3-character minimum) leaves "tn"/"t", both too
+# short to survive — the acronym vanishes entirely even though it may be
+# the single most specific term in the text it came from.
+_MIN_ACRONYM_LENGTH = 2
+_MAX_ACRONYM_LENGTH = 5
+
+# RFC-0017 — conservative regular-plural stripping only, never a general
+# stemmer: derivationally related but distinct words (validate/validation/
+# validator) are deliberately left untouched — merging those would be a
+# much larger, riskier claim than "schema and schemas are the same word."
+# The skip-suffixes below are the common English shapes where a trailing
+# "s" is NOT a plural marker (class/status/basis/chaos), guarding against
+# exactly the over-stripping failure mode ("process" -> "proces") a naive
+# `word.rstrip("s")` would produce.
+_NOT_A_PLURAL_SUFFIXES = ("ss", "us", "is", "os")
+_MIN_LENGTH_TO_STRIP_PLURAL = 5
+
+
+def _is_acronym_shaped(segment: str) -> bool:
+    if not (_MIN_ACRONYM_LENGTH <= len(segment) <= _MAX_ACRONYM_LENGTH):
+        return False
+    has_digit = any(c.isdigit() for c in segment)
+    upper_count = sum(1 for c in segment if c.isupper())
+    return has_digit or upper_count > 1
+
+
+def _normalize_plural(word: str) -> str:
+    """Strip a regular English plural marker, conservatively. Only two
+    shapes are handled — trailing "ies" (`policies` -> `policy`) and a
+    plain trailing "s" outside the `_NOT_A_PLURAL_SUFFIXES` guard — because
+    those are the only two shapes safe to apply without a real dictionary.
+    This is not a complete stemmer and does not try to be one: irregular
+    plurals, and non-plural words that merely end in "s" in a shape this
+    guard doesn't catch (e.g. "always"), are known, accepted gaps — see
+    RFC-0017's write-up for why a full stemmer/NLP dependency was not used.
+    """
+    if word.endswith("ies") and len(word) > _MIN_LENGTH_TO_STRIP_PLURAL:
+        return word[:-3] + "y"
+    if (
+        word.endswith("s")
+        and not word.endswith(_NOT_A_PLURAL_SUFFIXES)
+        and len(word) > _MIN_LENGTH_TO_STRIP_PLURAL
+    ):
+        return word[:-1]
+    return word
 
 
 def tokenize(text: str) -> frozenset[str]:
@@ -36,9 +90,30 @@ def tokenize(text: str) -> frozenset[str]:
     "rate", "attribute"} — two-token overlap naturally outscores any
     single incidental one-token match without needing separate phrase
     handling.
+
+    RFC-0017 — each `[^a-zA-Z0-9]+`-delimited segment is handled one of
+    two ways before the result: an acronym-shaped segment (`_is_acronym_
+    shaped`) is kept whole, lowercased, bypassing both camelCase-splitting
+    and the length minimum (so "TnT", "S3", "UDW" survive as single
+    tokens); every other segment goes through the original camelCase-
+    boundary split, is lowercased, has a conservative plural suffix
+    stripped (`_normalize_plural`), and is kept only if still >=
+    `_MIN_TOKEN_LENGTH` characters — unchanged from before for ordinary
+    words.
     """
-    spaced = _CAMEL_BOUNDARY_RE.sub(r"\1_\2", text)
-    return frozenset(t for t in _TOKEN_BOUNDARY_RE.split(spaced.lower()) if len(t) >= 3)
+    tokens: set[str] = set()
+    for segment in _SEGMENT_BOUNDARY_RE.split(text):
+        if not segment:
+            continue
+        if _is_acronym_shaped(segment):
+            tokens.add(segment.lower())
+            continue
+        spaced = _CAMEL_BOUNDARY_RE.sub(r"\1_\2", segment)
+        for sub in spaced.lower().split("_"):
+            sub = _normalize_plural(sub)
+            if len(sub) >= _MIN_TOKEN_LENGTH:
+                tokens.add(sub)
+    return frozenset(tokens)
 
 
 def relevance(text: str, terms: list[str], weights: dict[str, float] | None = None) -> float:

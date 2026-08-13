@@ -82,7 +82,23 @@ def build_candidate_pack_and_hypotheses(
     hypotheses: list[Hypothesis] = []
 
     rule_names = {rule.name for rule in CROSS_REPO_LINK_RULES}
-    assert rule_names == {"feign_service_calls", "kafka_topic_overlap", "shared_dependency_name"}, (
+    assert rule_names == {
+        "feign_service_calls",
+        "kafka_topic_overlap",
+        "shared_dependency_name",
+        # RFC-0012 added "source_level_import" — deliberately *not* mirrored
+        # into Engineering Memory here yet. Its ambiguity handling
+        # (`cross_repo_linker._downgrade_ambiguous_imports`) is computed
+        # across *every* repository pair at once (`compute_edges`'s global
+        # view), not per-pair like every rule this module already mirrors —
+        # reproducing it here would mean this module also needs that same
+        # global view, a real extension, not a one-line addition. Left as a
+        # known, explicit gap (see RFC-0012's final report) rather than a
+        # rushed, incomplete mirror of a signal this pairwise shape can't
+        # correctly represent yet. This assertion still exists specifically
+        # so the *next* new rule can't slip in unnoticed either.
+        "source_level_import",
+    }, (
         "cross_repo_linker.CROSS_REPO_LINK_RULES changed shape — this module's "
         "reuse of it needs a matching update, not a silent mismatch"
     )

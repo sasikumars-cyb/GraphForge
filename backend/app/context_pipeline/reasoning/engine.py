@@ -40,6 +40,8 @@ import time
 
 from app.context_pipeline.reasoning import capabilities
 from app.context_pipeline.reasoning.capabilities import (
+    CANDIDATE_FUNNEL_WIDTH,
+    SOURCE_RETRIEVAL_WIDTH,
     CapabilityAssessment,
     ClarificationQuestion,
     QuestionContext,
@@ -66,10 +68,37 @@ from app.investigation_intelligence.contracts import (
 
 logger = logging.getLogger(__name__)
 
+# RFC-0013 — the genuine floor of one-off setup work a discovery run needs
+# before any *candidate-specific* investigation starts: parse the request,
+# survey+traverse the architecture graph, fetch the referenced work item
+# (Jira/etc.), and re-parse whatever that fetch returned. Each still costs
+# one cycle — see `investigate()`'s free-action batching below for why
+# *several simultaneously available* free (cost=0) actions in the same
+# cycle no longer do, which is what makes this a tight, real ceiling
+# rather than padding.
+_BOOTSTRAP_CYCLES = 4
+
 # How many gather-and-reassess cycles one discovery run may perform. Reached
 # only by a genuinely tangled request — the normal path terminates early
 # because investigators stop proposing once requirements are met.
-MAX_CYCLES = 8
+#
+# RFC-0013 — sized to let a fully-tangled request actually traverse the
+# candidate funnel it already promises, not open-ended: bootstrap +
+# CANDIDATE_FUNNEL_WIDTH (every funnel candidate gets one scoped graph
+# query) + SOURCE_RETRIEVAL_WIDTH (the narrower set of those that can
+# escalate to a source fetch). Before this, `MAX_CYCLES=8` was smaller
+# than `_BOOTSTRAP_CYCLES + CANDIDATE_FUNNEL_WIDTH` alone (4+4=8, leaving
+# *nothing* for source retrieval even in the best case) — a live PROT-5764
+# benchmark run exhausted the entire budget on bootstrap (6 cycles, before
+# the free-action batching fix below) plus two funnel candidates' graph
+# corroboration, starving source retrieval out completely regardless of
+# whether either candidate actually needed it. This is still exactly as
+# bounded as the funnel constants it's derived from — not a blanket
+# increase, and not the primary fix (see `investigate()`'s free-action
+# batching, which is what actually reclaims the wasted bootstrap cycles;
+# this widening is what then gives the reclaimed room somewhere useful to
+# go).
+MAX_CYCLES = _BOOTSTRAP_CYCLES + CANDIDATE_FUNNEL_WIDTH + SOURCE_RETRIEVAL_WIDTH
 
 # How many times the human may be asked across one discovery run. Past this,
 # remaining blocking gaps are reported as unresolvable rather than becoming
@@ -648,134 +677,168 @@ async def investigate(
         state.metadata.iteration += 1
         iteration = state.metadata.iteration
 
-        _resync(state)
-        state.refresh_assessments()
+        # RFC-0013 — one *cycle* (one `iteration` count against `max_cycles`)
+        # may now run several *free* actions back to back, not just one.
+        # Before this, several simultaneously-available cost=0 actions from
+        # the same investigator (e.g. `request_parser`'s `match_repository_
+        # names` and `match_tracked_repository_names`, both unlocked by the
+        # exact same precondition) each burned a full cycle purely because
+        # `_select` only ever returns one action — pure bookkeeping cost, no
+        # additional evidence gathered per cycle spent. A cycle still ends
+        # after exactly one *paid* action (unchanged from before — cost is
+        # still what makes an action worth rationing), so this only
+        # reclaims cycles that were never doing evidence-gathering work in
+        # the first place; see this module's `MAX_CYCLES` docstring for why
+        # this pairs with the funnel-derived widening there, not a
+        # replacement for it.
+        stop_early = False
+        while True:
+            _resync(state)
+            state.refresh_assessments()
 
-        candidates = _candidate_actions(state, pool)
+            candidates = _candidate_actions(state, pool)
 
-        # Free actions (deterministic local parsing, no network, no tokens)
-        # always run before anything is judged sufficient, and before any paid
-        # retrieval. Two reasons, both learned the hard way:
-        #
-        # - Bootstrap. Until the request has been parsed, a work item looks
-        #   "not applicable" because no reference has been recognized yet — so
-        #   ranking parsing against retrieval by capability necessity puts it
-        #   last and the graph query wins, after which requirements look met
-        #   and the referenced ticket is never fetched at all.
-        # - Honesty. A signal like "the request names a known repository" can
-        #   only be satisfied by a parse pass that costs nothing to run, so
-        #   skipping it understates confidence rather than saving work.
-        free = [c for c in candidates if c[0].cost == 0]
-        if not free:
-            if not unmet(state.assessments):
-                exhausted_by_cycle_budget = False
-                break
-            if not candidates:
-                exhausted_by_cycle_budget = False
-                break
+            # Free actions (deterministic local parsing, no network, no
+            # tokens) always run before anything is judged sufficient, and
+            # before any paid retrieval. Two reasons, both learned the hard
+            # way:
+            #
+            # - Bootstrap. Until the request has been parsed, a work item
+            #   looks "not applicable" because no reference has been
+            #   recognized yet — so ranking parsing against retrieval by
+            #   capability necessity puts it last and the graph query wins,
+            #   after which requirements look met and the referenced ticket
+            #   is never fetched at all.
+            # - Honesty. A signal like "the request names a known
+            #   repository" can only be satisfied by a parse pass that costs
+            #   nothing to run, so skipping it understates confidence rather
+            #   than saving work.
+            free = [c for c in candidates if c[0].cost == 0]
+            if not free:
+                if not unmet(state.assessments):
+                    exhausted_by_cycle_budget = False
+                    stop_early = True
+                    break
+                if not candidates:
+                    exhausted_by_cycle_budget = False
+                    stop_early = True
+                    break
 
-        priority_boost = state.derived.get("investigation_priority") or {}
-        candidate_pool = free or candidates
-        action, investigator = _select(candidate_pool, state.assessments, priority_boost)
-        state.transcript.say("intent", action.intent, iteration=iteration)
-        await _report_progress(
-            session,
-            iteration=iteration,
-            max_iterations=max_cycles,
-            completed_labels=completed_step_labels,
-            active_label=_step_label(action),
-        )
-
-        # Captured before the action runs — the decision context `_select()`
-        # actually used, for Investigation Intelligence's own record of it
-        # (ADR 0021 §3). `state.assessments` isn't touched again until the
-        # next cycle's `_resync`+`refresh_assessments`, so these stay valid
-        # right up to the recording call below.
-        assessments_before = state.assessments
-        assessment_before = state.assessment_for(action.targets)
-        confidence_before = state.confidence
-        boost_applied = priority_boost.get(action.targets, 0.0)
-
-        recorder = Recorder(state.ledger, action, iteration)
-        before = len(state.ledger.evidence)
-        start = time.monotonic()
-        try:
-            outcome = await investigator.run(action, session, recorder)
-        except Exception as exc:  # noqa: BLE001 - one provider must not kill discovery
-            logger.exception(
-                "context_discovery_investigation_failed provider=%s key=%s",
-                action.provider,
-                action.key,
-            )
-            if len(state.ledger.evidence) == before:
-                # The investigator raised before recording anything. Record
-                # the failure ourselves so the attempt is still visible and,
-                # critically, so `attempted()` sees it and we don't retry it
-                # forever.
-                recorder.evidence("failed", f"{action.provider} raised an error: {exc}")
-            outcome = InvestigationOutcome(
-                observation=f"My attempt to use {action.provider} failed, so I moved on.",
-                yielded=False,
-            )
-        latency_ms = int((time.monotonic() - start) * 1000)
-
-        state.derived.update(outcome.derived)
-        state.derived["enriched_text"] = render_enriched_text(state)
-
-        new_evidence = [e.evidence_id for e in state.ledger.evidence[before:]]
-
-        if session.intelligence is not None:
-            await _record_provider_outcomes(
-                state=state,
-                session=session,
-                action=action,
+            priority_boost = state.derived.get("investigation_priority") or {}
+            candidate_pool = free or candidates
+            action, investigator = _select(candidate_pool, state.assessments, priority_boost)
+            state.transcript.say("intent", action.intent, iteration=iteration)
+            await _report_progress(
+                session,
                 iteration=iteration,
-                candidates=candidate_pool,
-                assessments_before=assessments_before,
-                assessment_before=assessment_before,
-                boost_applied=boost_applied,
-                confidence_before=confidence_before,
-                latency_ms=latency_ms,
-                new_evidence_ids=new_evidence,
-                yielded=outcome.yielded,
+                max_iterations=max_cycles,
+                completed_labels=completed_step_labels,
+                active_label=_step_label(action),
             )
 
-        state.transcript.say(
-            "observation", outcome.observation, iteration=iteration, evidence_ids=new_evidence
-        )
-        completed_step_labels.append(_step_label(action))
-        await _report_progress(
-            session,
-            iteration=iteration,
-            max_iterations=max_cycles,
-            completed_labels=completed_step_labels,
-            active_label=None,
-        )
+            # Captured before the action runs — the decision context
+            # `_select()` actually used, for Investigation Intelligence's
+            # own record of it (ADR 0021 §3). `state.assessments` isn't
+            # touched again until this same inner loop's next pass (or the
+            # next outer cycle's) `_resync`+`refresh_assessments`, so these
+            # stay valid right up to the recording call below.
+            assessments_before = state.assessments
+            assessment_before = state.assessment_for(action.targets)
+            confidence_before = state.confidence
+            boost_applied = priority_boost.get(action.targets, 0.0)
 
-        # Mid-loop re-synthesis: engineering understanding actively driving
-        # the *next* action, not just summarizing the last one. Gated three
-        # ways so "understanding drives investigation" doesn't become "an
-        # LLM call every cycle": only after a real (paid) retrieval that
-        # actually yielded something new, only when the evidence count has
-        # moved since the last synthesis at all (a `not_found`/`failed`
-        # outcome that added evidence but taught nothing new doesn't
-        # deserve a fresh reasoning pass), and only within
-        # `MAX_MID_LOOP_SYNTHESIS_CALLS`. The always-run call after the loop
-        # exits (below) is what guarantees Planning gets understanding
-        # regardless of whether this budget was ever spent.
-        if (
-            action.cost > 0
-            and outcome.yielded
-            and state.metadata.synthesis_calls < MAX_MID_LOOP_SYNTHESIS_CALLS
-            and len(state.ledger.evidence) != state.derived.get("_last_synthesis_evidence_count")
-        ):
-            from app.context_pipeline.reasoning.understanding import (
-                synthesize_engineering_understanding,
+            recorder = Recorder(state.ledger, action, iteration)
+            before = len(state.ledger.evidence)
+            start = time.monotonic()
+            try:
+                outcome = await investigator.run(action, session, recorder)
+            except Exception as exc:  # noqa: BLE001 - one provider must not kill discovery
+                logger.exception(
+                    "context_discovery_investigation_failed provider=%s key=%s",
+                    action.provider,
+                    action.key,
+                )
+                if len(state.ledger.evidence) == before:
+                    # The investigator raised before recording anything.
+                    # Record the failure ourselves so the attempt is still
+                    # visible and, critically, so `attempted()` sees it and
+                    # we don't retry it forever.
+                    recorder.evidence("failed", f"{action.provider} raised an error: {exc}")
+                outcome = InvestigationOutcome(
+                    observation=f"My attempt to use {action.provider} failed, so I moved on.",
+                    yielded=False,
+                )
+            latency_ms = int((time.monotonic() - start) * 1000)
+
+            state.derived.update(outcome.derived)
+            state.derived["enriched_text"] = render_enriched_text(state)
+
+            new_evidence = [e.evidence_id for e in state.ledger.evidence[before:]]
+
+            if session.intelligence is not None:
+                await _record_provider_outcomes(
+                    state=state,
+                    session=session,
+                    action=action,
+                    iteration=iteration,
+                    candidates=candidate_pool,
+                    assessments_before=assessments_before,
+                    assessment_before=assessment_before,
+                    boost_applied=boost_applied,
+                    confidence_before=confidence_before,
+                    latency_ms=latency_ms,
+                    new_evidence_ids=new_evidence,
+                    yielded=outcome.yielded,
+                )
+
+            state.transcript.say(
+                "observation", outcome.observation, iteration=iteration, evidence_ids=new_evidence
+            )
+            completed_step_labels.append(_step_label(action))
+            await _report_progress(
+                session,
+                iteration=iteration,
+                max_iterations=max_cycles,
+                completed_labels=completed_step_labels,
+                active_label=None,
             )
 
-            await synthesize_engineering_understanding(state, session)
-            state.derived["_last_synthesis_evidence_count"] = len(state.ledger.evidence)
-            await _apply_memory_priority_boost(state, session)
+            # Mid-loop re-synthesis: engineering understanding actively
+            # driving the *next* action, not just summarizing the last one.
+            # Gated three ways so "understanding drives investigation"
+            # doesn't become "an LLM call every cycle": only after a real
+            # (paid) retrieval that actually yielded something new, only
+            # when the evidence count has moved since the last synthesis at
+            # all (a `not_found`/`failed` outcome that added evidence but
+            # taught nothing new doesn't deserve a fresh reasoning pass),
+            # and only within `MAX_MID_LOOP_SYNTHESIS_CALLS`. The always-run
+            # call after the loop exits (below) is what guarantees Planning
+            # gets understanding regardless of whether this budget was ever
+            # spent.
+            if (
+                action.cost > 0
+                and outcome.yielded
+                and state.metadata.synthesis_calls < MAX_MID_LOOP_SYNTHESIS_CALLS
+                and len(state.ledger.evidence) != state.derived.get("_last_synthesis_evidence_count")
+            ):
+                from app.context_pipeline.reasoning.understanding import (
+                    synthesize_engineering_understanding,
+                )
+
+                await synthesize_engineering_understanding(state, session)
+                state.derived["_last_synthesis_evidence_count"] = len(state.ledger.evidence)
+                await _apply_memory_priority_boost(state, session)
+
+            if not free:
+                # Just ran a *paid* action — exactly one per outer cycle,
+                # unchanged from before this fix. Free actions, in
+                # contrast, keep this inner loop going (same `iteration`
+                # count) to pick up whatever else is now available for
+                # free, if anything.
+                break
+
+        if stop_early:
+            break
 
     # Carried forward so a resumed run's second `investigate()` call
     # continues the same live checklist rather than restarting it empty —

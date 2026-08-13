@@ -251,3 +251,10 @@ class ArchitectureModel:
     # can statically reference a `.sql` filename the way
     # `extractors/python/sql_files.py` looks for).
     python_sql_file_references: list[PythonSqlFileReference] = field(default_factory=list)
+    # The repository's own self-declared package/distribution name (PEP 621
+    # `[project.name]` / Poetry `[tool.poetry.name]`) — distinct from its
+    # git repository name, and often different from it (see
+    # `parsers.python.dependency_parser.parse_python_package_name`'s
+    # docstring). `None` for anything without that identity (non-Python
+    # repos, or a Python repo with no `pyproject.toml`).
+    package_name: str | None = None

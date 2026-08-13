@@ -55,3 +55,27 @@ def test_import_inside_a_function_is_still_found(parse_python: ParsePython) -> N
     root, source = parse_python("def f():\n    import json\n    return json.dumps({})\n")
     imports = extract_imports(root, source, "mod.py")
     assert [i.module for i in imports] == ["json"]
+
+
+def test_from_import_deferred_inside_a_try_except_in_a_function_is_still_found(
+    parse_python: ParsePython,
+) -> None:
+    """RFC-0012 — the exact shape the PROT-5764 benchmark's real source
+    uses: a `from X import Y` deferred inside a function body, itself
+    inside a `try`/`except` (the "best-effort, optional dependency"
+    pattern). `extract_imports`'s unconditional recursion already covers
+    this — this test is the regression guard for that fact, not a
+    behavior change."""
+    source_text = (
+        "def emit(spark):\n"
+        "    try:\n"
+        "        from shared_jobs import GatherTrackTraceErrorsSharedJob\n"
+        "    except Exception:\n"
+        "        return\n"
+        "    GatherTrackTraceErrorsSharedJob().run(spark)\n"
+    )
+    root, source = parse_python(source_text)
+    imports = extract_imports(root, source, "mod.py")
+    assert len(imports) == 1
+    assert imports[0].module == "shared_jobs"
+    assert imports[0].imported_names == ["GatherTrackTraceErrorsSharedJob"]

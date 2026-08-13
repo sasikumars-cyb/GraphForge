@@ -81,6 +81,10 @@ def _python_dependency_node_id(repository_id: str, name: str) -> str:
     return f"{repository_id}:python-dependency:{name}"
 
 
+def _python_import_node_id(repository_id: str, module: str) -> str:
+    return f"{repository_id}:python-import:{module}"
+
+
 def _data_table_node_id(repository_id: str, table_name: str) -> str:
     return f"{repository_id}:data-table:{table_name}"
 
@@ -142,6 +146,30 @@ def _build_python_graph(
         pending_calls.append((node_id, function.calls))
         return node_id
 
+    # RFC-0012 — source-level import evidence: an import this repository's
+    # own `python_modules` never resolve to one of *its own* modules names
+    # something external — a third-party package most of the time, but
+    # sometimes another indexed repository's own published package, used
+    # but never declared in `pyproject.toml`/`requirements.txt` (see
+    # `parsers.python.dependency_parser.parse_python_package_name`'s
+    # docstring for the real case this covers). Recorded unconditionally,
+    # exactly like `PythonDependency` records every manifest-declared
+    # dependency unconditionally — matching against other repositories
+    # happens later, in `cross_repo_linker`, never here; an import of `os`
+    # or `pandas` simply never matches any indexed repository's name and
+    # so never becomes a cross-repository edge, no filtering needed at
+    # this layer. Keyed by top-level package (`shared_jobs`, not
+    # `shared_jobs.errors`) — that's the distributable unit an indexed
+    # repository's own name/package identity can actually match, and it's
+    # also the natural, generic deduplication key for requirement #3
+    # ("multiple imports from the same target are deduplicated"): every
+    # `import shared_jobs` / `from shared_jobs import X` / `from
+    # shared_jobs.errors import Y` anywhere in the repository — module-
+    # level or deferred inside a function body, `extract_imports` doesn't
+    # distinguish — collapses into one node, with every distinct imported
+    # name and file path merged into it.
+    unresolved_imports: dict[str, dict[str, set[str]]] = {}
+
     for module in model.python_modules:
         module_id = module_node_id_by_name[module.name]
         nodes.append(
@@ -163,6 +191,17 @@ def _build_python_graph(
                 edges.append(
                     GraphEdge(source_id=module_id, target_id=target_module_id, type="IMPORTS")
                 )
+                continue
+            if target_module_id is not None:
+                continue  # a module importing itself - not a real signal either way
+            top_level = imp.module.split(".", 1)[0]
+            if not top_level:
+                continue
+            entry = unresolved_imports.setdefault(
+                top_level, {"imported_names": set(), "file_paths": set()}
+            )
+            entry["imported_names"].update(imp.imported_names)
+            entry["file_paths"].add(module.location.file_path)
 
         for function in module.functions:
             function_id = register_function(function, f"{module.name}.{function.name}", None)
@@ -213,6 +252,38 @@ def _build_python_graph(
                     method, f"{module.name}.{python_class.name}.{method.name}", python_class.name
                 )
                 edges.append(GraphEdge(source_id=class_id, target_id=method_id, type="CONTAINS"))
+
+    for top_level, entry in unresolved_imports.items():
+        node_id = _python_import_node_id(repository_id, top_level)
+        nodes.append(
+            GraphNode(
+                id=node_id,
+                labels=["PythonImport"],
+                properties={
+                    # "name", matching every other node type's own
+                    # grounding-location convention (`_classification_
+                    # properties` and friends) — Knowledge Engine's
+                    # structural validators require *some* grounding
+                    # (`file_path` or `name`) on every node a hypothesis
+                    # touches; a `PythonImport` has no single file_path of
+                    # its own (it can be imported from several), so `name`
+                    # is the honest one to provide, same as
+                    # `PythonDependency` already does.
+                    "name": top_level,
+                    "module": top_level,
+                    "imported_names": sorted(entry["imported_names"]),
+                    "file_paths": sorted(entry["file_paths"]),
+                },
+            )
+        )
+        # "DEPENDS_ON", matching `PythonDependency`'s own repo-level edge
+        # type exactly, not "IMPORTS" — "IMPORTS" already means one of
+        # this repository's own modules importing another (see the loop
+        # above); reusing it here would make `test_python_unresolved_
+        # import_produces_no_edge`'s existing "an external import produces
+        # no *module-to-module* IMPORTS edge" assertion ambiguous with
+        # this new, deliberately different repo-to-evidence edge.
+        edges.append(GraphEdge(source_id=repo_id, target_id=node_id, type="DEPENDS_ON"))
 
     for source_id, calls in pending_calls:
         for raw_call in calls:
@@ -379,6 +450,14 @@ def build_graph(
                 # `Repository` row, same as before (`index_repository`'s
                 # own docstring: "testable without a database at all").
                 **({"name": repository_name} if repository_name else {}),
+                # RFC-0012 — the repository's own self-declared package
+                # identity (PEP 621/Poetry `name`), when it has one, so
+                # `cross_repo_linker`'s import-matching rule can match a
+                # `from X import Y` elsewhere in the fleet against *this*
+                # repository's actual published name, not just its git
+                # repository name — the two are commonly different (see
+                # `ArchitectureModel.package_name`'s docstring).
+                **({"package_name": model.package_name} if model.package_name else {}),
                 "language": model.language,
                 "framework": model.framework or "",
             },

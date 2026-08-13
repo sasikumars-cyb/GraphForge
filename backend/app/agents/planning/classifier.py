@@ -35,6 +35,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from app.agents.text_relevance import _is_acronym_shaped
+
 
 @dataclass(frozen=True)
 class Capability:
@@ -597,7 +599,7 @@ def derive_pattern(capabilities: tuple[Capability, ...]) -> ArchitecturePattern:
     return _PATTERNS[best_key]
 
 
-_TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_]{3,}")
+_TOKEN_RE = re.compile(r"[a-zA-Z][a-zA-Z0-9_]*")
 
 # Locators — URLs and absolute filesystem paths — name *where something
 # lives*, never *what the work is about*. They are also the densest source
@@ -828,12 +830,25 @@ def extract_key_terms(text: str, max_terms: int = 40) -> tuple[str, ...]:
     the fixed capability-keyword vocabulary in `_CAPABILITIES`, which
     describes architecture shapes ("loader", "validator") and has no way to
     know about any one codebase's actual identifiers.
+
+    RFC-0017 — the 4-character minimum has one exception, shape-based
+    exactly like `app.agents.text_relevance.tokenize`'s own
+    (`_is_acronym_shaped`, reused rather than re-implemented here): a
+    short run that is acronym-shaped (a digit anywhere in it, or more than
+    one uppercase letter — "TnT", "S3", "UDW") is kept regardless of
+    length. The regex itself now matches on the *original*, un-lowered
+    text specifically so this shape check has real case information to
+    look at — lowercasing first, as the old implementation did, destroys
+    exactly the signal ("TnT" vs "tnt") this needs.
     """
     if not text:
         return ()
     seen: list[str] = []
-    for match in _TOKEN_RE.finditer(strip_locators(text).lower()):
-        token = match.group(0)
+    for match in _TOKEN_RE.finditer(strip_locators(text)):
+        raw = match.group(0)
+        if len(raw) < 4 and not _is_acronym_shaped(raw):
+            continue
+        token = raw.lower()
         if token in _GENERIC_STOPWORDS or token in seen:
             continue
         seen.append(token)

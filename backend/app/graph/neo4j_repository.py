@@ -27,7 +27,9 @@ from app.graph.neo4j_common import (
 # crosses repository boundaries - `replace_cross_repository_edges`'s delete
 # is scoped to exactly these so it can never touch the per-repository edges
 # `replace_repository_graph` owns.
-_CROSS_REPO_REL_TYPES = frozenset({"CALLS_SERVICE", "SHARES_TOPIC", "DEPENDS_ON_REPOSITORY"})
+_CROSS_REPO_REL_TYPES = frozenset(
+    {"CALLS_SERVICE", "SHARES_TOPIC", "DEPENDS_ON_REPOSITORY", "IMPORTS_REPOSITORY"}
+)
 
 
 def _repository_node_id(repository_id: str) -> str:
@@ -501,6 +503,20 @@ class Neo4jGraphRepository(IGraphRepository):
             )
             for record in records
         ]
+
+    async def get_incoming_cross_repository_edge_count(self, repository_id: str) -> int:
+        target_node_id = _repository_node_id(repository_id)
+        async with self._driver.session() as session:
+            result = await session.run(
+                f"""
+                MATCH (a)-[r]->(b {{id: $target_node_id}})
+                WHERE type(r) IN {list(_CROSS_REPO_REL_TYPES)!r}
+                RETURN count(DISTINCT a) AS consumer_count
+                """,
+                target_node_id=target_node_id,
+            )
+            record = await result.single()
+            return int(record["consumer_count"]) if record else 0
 
     async def get_neighborhood(
         self,

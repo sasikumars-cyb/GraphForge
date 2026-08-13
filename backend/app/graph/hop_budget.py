@@ -149,6 +149,13 @@ class GraphHopBudgetRepository(IGraphRepository):
         self._consume(repository_id, "get_outgoing_cross_repository_edges")
         return await self._inner.get_outgoing_cross_repository_edges(repository_id)
 
+    async def get_incoming_cross_repository_edge_count(self, repository_id: str) -> int:
+        # Same budget accounting as the outgoing count above — a fan-in
+        # query is still one read against `repository_id`'s own graph
+        # neighborhood, just the reverse direction.
+        self._consume(repository_id, "get_incoming_cross_repository_edge_count")
+        return await self._inner.get_incoming_cross_repository_edge_count(repository_id)
+
     async def get_neighborhood(
         self,
         repository_id: str,
