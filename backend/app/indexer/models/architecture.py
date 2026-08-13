@@ -225,6 +225,53 @@ class PythonSqlFileReference:
     function_name: str | None = None
 
 
+@dataclass(frozen=True)
+class ConfigFile:
+    """RFC-0019 — one `.yml`/`.yaml`/`.json` deployment/config file
+    discovered anywhere in the repository, independent of its detected
+    language (see `extractors/config_file_extractor.py`, run
+    unconditionally, the same "not owned by any one `ILanguageParser`"
+    shape `SqlFile` already uses). Its nested keys and scalar values are
+    flattened into `flattened_text` — a bounded, generic "key value key
+    value ..." blob, deliberately not a structured/typed representation
+    of any particular config schema (not a Databricks-bundle model, not a
+    Kubernetes-manifest model) — so an operational identifier that lives
+    in configuration rather than code (a tenant code, job/workflow name,
+    environment name, ...) becomes searchable exactly the way a parsed
+    source symbol's own name already is, through the same `component`
+    evidence shape (see `graph/builder.py`'s `_build_python_graph`, which
+    gives this the same `["Component", "ConfigFile"]` label secondary
+    Function/Module/Class already use) rather than a parallel evidence
+    model.
+    """
+
+    name: str
+    location: SourceLocation
+    flattened_text: str
+
+
+@dataclass(frozen=True)
+class ConfigPathReference:
+    """RFC-0019 — a scalar value inside a config file that has the shape
+    of a reference to another file (contains a path separator and ends in
+    a common source-file extension) — the config-file counterpart to
+    `PythonSqlFileReference`. Carries the raw candidate string only;
+    resolving it against a file this repository's own parser actually
+    discovered (in-repo only, ambiguity-safe, the same ADR 0007
+    "no-guessing" discipline `PythonSqlFileReference` resolution already
+    follows) happens in `graph/builder.py`. A reference to a file in
+    *another* repository is deliberately never resolved here — that is
+    `cross_repo_linker`'s job, out of scope for this generic extractor —
+    but the raw string still ends up in `ConfigFile.flattened_text`, so
+    it stays lexically matchable even when it can't become a graph edge.
+    """
+
+    config_file: str
+    key: str
+    referenced_text: str
+    location: SourceLocation
+
+
 @dataclass
 class ArchitectureModel:
     """The aggregate result of parsing one repository."""
@@ -251,6 +298,11 @@ class ArchitectureModel:
     # can statically reference a `.sql` filename the way
     # `extractors/python/sql_files.py` looks for).
     python_sql_file_references: list[PythonSqlFileReference] = field(default_factory=list)
+    # RFC-0019 — populated unconditionally, same as `sql_files` above:
+    # deployment/config files commonly sit alongside source rather than
+    # being "the" detected language.
+    config_files: list[ConfigFile] = field(default_factory=list)
+    config_path_references: list[ConfigPathReference] = field(default_factory=list)
     # The repository's own self-declared package/distribution name (PEP 621
     # `[project.name]` / Poetry `[tool.poetry.name]`) — distinct from its
     # git repository name, and often different from it (see

@@ -12,6 +12,7 @@ agents never write to the graph directly (GraphWriter rule from AGENT_FRAMEWORK.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from dataclasses import dataclass, field
 from typing import Any
@@ -246,6 +247,42 @@ class TraverseArchitectureGraphTool:
             try:
                 # Components: Controllers, Services, FeignClients
                 components = await self._graph_repository.get_nodes_by_label(repo_id, "Component")
+
+                # RFC-0020 — `ConfigFile -[:REFERENCES]-> source file` edges
+                # (app.indexer.graph.builder's config-file section, RFC-0019),
+                # resolved here to the referencing config's own `file_path`
+                # (not its raw node id) so `_select_relevant_source_files`
+                # (app.context_pipeline.reasoning.capabilities) can look the
+                # referencing file straight up in the same `scored` dict it
+                # already builds for every component — no new id-resolution
+                # logic needed downstream, no second scoring system.
+                #
+                # Isolated in its own try/except, deliberately separate from
+                # the `except Exception` around this whole per-repository
+                # block: a references lookup failing (an older backend that
+                # predates this method, a test double that doesn't stub it)
+                # must degrade to "no reference boost this repository," not
+                # silently zero out every one of its components — the exact
+                # regression a shared try/except around both calls produced.
+                referencing_config_paths_by_target_id: dict[str, list[str]] = {}
+                try:
+                    file_path_by_node_id = {
+                        node.id: node.properties.get("file_path", "") for node in components
+                    }
+                    references = await self._graph_repository.get_references_edges(repo_id)
+                    for edge in references:
+                        source_path = file_path_by_node_id.get(edge.source_id)
+                        if source_path:
+                            referencing_config_paths_by_target_id.setdefault(edge.target_id, []).append(
+                                source_path
+                            )
+                except Exception as exc:
+                    logger.warning(
+                        "planning_tool_references_edges_failed_for_repo repo=%s error=%s",
+                        repo_name,
+                        str(exc),
+                    )
+
                 for node in components:
                     all_components.append(
                         {
@@ -257,6 +294,9 @@ class TraverseArchitectureGraphTool:
                             ),
                             "repository": repo_name,
                             "file_path": node.properties.get("file_path", ""),
+                            "referenced_by_config_file_paths": referencing_config_paths_by_target_id.get(
+                                node.id, []
+                            ),
                         }
                     )
 
@@ -402,18 +442,53 @@ def rank_score(
     return score * _TEST_RELEVANCE_FACTOR if _is_test_component(component) else score
 
 
+# RFC-0018 — repository ranking measures strength/concentration of
+# evidence, not volume of matching components (see `rank_repositories`).
+# `_BREADTH_CAP` bounds how many of a repository's own matching components
+# can ever contribute breadth credit — a repository with 900 weakly
+# matching components (e.g. a large test suite whose directory naming
+# happens to share a word with the request) gets the identical credit as
+# one with exactly `_BREADTH_CAP`, closing off unbounded volume as a way
+# to win. `_BREADTH_WEIGHT` is chosen so the *maximum possible* breadth
+# credit (`log1p(_BREADTH_CAP) * _BREADTH_WEIGHT ≈ 0.30`) lands at this
+# codebase's own existing `_MODERATE_TERM_WEIGHT` scale (RFC-0015,
+# `app.context_pipeline.reasoning.capabilities`) — reusing an
+# already-justified "one moderate signal" ceiling rather than a new
+# number, so breadth alone can never be mistaken for one highly specific
+# match. Calibrated against a fully generic NOISE/SPECIFIC/BROAD/LUCKY
+# synthetic benchmark (see `tests/unit/ai/test_planning_agent.py`), never
+# against any real ticket or repository.
+_BREADTH_CAP = 20
+_BREADTH_WEIGHT = 0.1
+
+
 def rank_repositories(
     indexed_repos: list[dict[str, str]],
     components: list[dict[str, Any]],
     relevance_terms: list[str] | None = None,
 ) -> list[tuple[float, str]]:
-    """Score and sort indexed repositories by keyword/component overlap with
-    the required capabilities. Returns (score, name) pairs, best first —
-    the single source of truth for repository ranking, used both to decide
-    which repositories reach the LLM prompt (`format_graph_context` below)
-    and to pick the top candidate for the entity/tenant mismatch check
-    (see app.agents.verification.check_entity_mismatch), so both paths
-    agree on which repository was actually selected.
+    """Score and sort indexed repositories by strength of evidence for the
+    required capabilities — not by how many components merely contain a
+    matching word. Returns (score, name) pairs, best first — the single
+    source of truth for repository ranking, used both to decide which
+    repositories reach the LLM prompt (`format_graph_context` below) and to
+    pick the top candidate for the entity/tenant mismatch check (see
+    app.agents.verification.check_entity_mismatch), so both paths agree on
+    which repository was actually selected.
+
+    RFC-0018 — a repository's own component contribution is `max(component
+    scores) + breadth_credit`, not `sum(component scores)`. The old sum
+    let a repository with hundreds of weakly-matching components (most
+    commonly: a large test suite whose file paths happen to share one
+    common word with the request) outrank a smaller repository with one
+    genuinely decisive match, discount notwithstanding (`_TEST_RELEVANCE_
+    FACTOR` shrinks each test component's own score, but summing hundreds
+    of them still swamps a handful of full-weight production matches).
+    `max` makes the strongest single piece of evidence the primary signal;
+    the log-scaled, capped `breadth_credit` (see `_BREADTH_CAP`/`_BREADTH_
+    WEIGHT` above) restores a bounded amount of credit for genuine breadth
+    (many *independently* relevant files) without reopening the door to
+    volume alone winning.
     """
     terms = relevance_terms or []
     by_repo: dict[str, list[dict[str, Any]]] = {}
@@ -425,8 +500,10 @@ def rank_repositories(
         if not terms:
             return 0.0
         total = relevance(name, terms, weights) * 2
-        for comp in by_repo.get(name, []):
-            total += rank_score(comp, terms, weights)
+        comp_scores = [rank_score(comp, terms, weights) for comp in by_repo.get(name, [])]
+        if comp_scores:
+            matching = sum(1 for s in comp_scores if s > 0)
+            total += max(comp_scores) + math.log1p(min(matching, _BREADTH_CAP)) * _BREADTH_WEIGHT
         return total
 
     return sorted(

@@ -32,8 +32,10 @@ from app.agents.planning.tools import (
     GetIndexedRepositoriesTool,
     PlanningObservation,
     TraverseArchitectureGraphTool,
+    _match_text,
     format_graph_context,
     rank_repositories,
+    rank_score,
     to_evidence,
 )
 from app.agents.text_relevance import relevance, term_weights
@@ -531,6 +533,198 @@ def test_rank_repositories_does_not_reward_a_zero_df_term_matching_only_a_repo_n
         "the repository with a real, indexed component match must outrank one "
         "whose only 'match' is an unmeasured term appearing in its bare name"
     )
+
+
+# ---------------------------------------------------------------------------
+# RFC-0018 — repository-ranking aggregation: strength/concentration of
+# evidence, not volume of matching components. Fully generic terms
+# ("alpha"/"beta"/"gamma") and synthetic repository names throughout —
+# nothing here names any real ticket, repository, or company. This is the
+# repository-level analogue of RFC-0015's Phase 8 component-level
+# adversarial benchmark, and a permanent regression guard against the
+# exact PROT-5764-shaped failure the RFC-0018 audit found empirically: a
+# repository with hundreds of weakly-matching test components (most
+# commonly a large test suite whose directory naming happens to share one
+# common word with the request) must never outrank a smaller repository
+# with genuinely decisive evidence.
+# ---------------------------------------------------------------------------
+
+
+def _mk_component(name: str, file_path: str, *, is_test: bool = False) -> dict[str, Any]:
+    return {"id": name, "name": name, "type": "Function", "file_path": file_path, "is_test": is_test}
+
+
+def _repository_ranking_benchmark() -> tuple[list[dict[str, str]], list[dict[str, Any]]]:
+    """NOISE / SPECIFIC / BROAD / LUCKY, as designed and calibrated in the
+    RFC-0018 audit (never against any real ticket)."""
+    terms_repo = {
+        "noise-repo": [
+            _mk_component(f"test_thing_{i}", f"tests/alpha_suite_tests/test_thing_{i}.py", is_test=True)
+            for i in range(900)
+        ],
+        "specific-repo": [
+            _mk_component("do_alpha_beta_gamma_thing", "core/alpha_beta_gamma.py"),
+            _mk_component("helper_one", "core/helper.py"),
+            _mk_component("helper_two", "core/helper2.py"),
+        ],
+        "broad-repo": (
+            [_mk_component(f"alpha_worker_{i}", f"workers/alpha_worker_{i}.py") for i in range(15)]
+            + [_mk_component(f"beta_helper_{i}", f"helpers/beta_helper_{i}.py") for i in range(10)]
+        ),
+        "lucky-repo": [
+            _mk_component("gamma_alpha_beta_coincidence", "misc/one_off.py"),
+            _mk_component("unrelated", "misc/other.py"),
+        ],
+    }
+    indexed_repos = [{"name": name} for name in terms_repo]
+    components = [
+        {**comp, "repository": repo_name} for repo_name, comps in terms_repo.items() for comp in comps
+    ]
+    return indexed_repos, components
+
+
+def test_repository_ranking_noise_does_not_win_from_volume_alone() -> None:
+    """Requirement 1/2 — hundreds of weakly-matching test components must
+    not outrank a repository with one genuinely decisive match, the exact
+    empirical PROT-5764-shaped regression RFC-0018 found and fixed."""
+    indexed_repos, components = _repository_ranking_benchmark()
+    ranked = rank_repositories(indexed_repos, components, ["alpha", "beta", "gamma"])
+    scores = dict((name, score) for score, name in ranked)
+    assert scores["specific-repo"] > scores["noise-repo"], scores
+    assert ranked[0][1] != "noise-repo", ranked
+
+
+def test_repository_ranking_broad_gets_meaningful_breadth_credit() -> None:
+    """Requirement 3 — many *independently* relevant production files must
+    score meaningfully above a repository with no real matches, AND above
+    what its own single strongest match alone would earn — breadth still
+    counts for something, just not unboundedly."""
+    indexed_repos, components = _repository_ranking_benchmark()
+    weights = term_weights(
+        ["alpha", "beta", "gamma"],
+        [_match_text(c) for c in components],
+    )
+    broad_components = [c for c in components if c["repository"] == "broad-repo"]
+    broad_max_alone = max(rank_score(c, ["alpha", "beta", "gamma"], weights) for c in broad_components)
+
+    ranked = rank_repositories(indexed_repos, components, ["alpha", "beta", "gamma"])
+    scores = dict((name, score) for score, name in ranked)
+    assert scores["broad-repo"] > scores["noise-repo"], scores
+    # The breadth credit must be a real, non-trivial boost over what
+    # broad-repo's single best component would have scored alone — proving
+    # breadth is actually contributing, not merely along for the ride.
+    assert scores["broad-repo"] > broad_max_alone * 1.5, (scores["broad-repo"], broad_max_alone)
+
+
+def test_repository_ranking_lucky_gets_no_artificial_advantage_from_being_small() -> None:
+    """Requirement 4 — a tiny repository with exactly one incidental match
+    must score identically to another repository of a different size with
+    the same single strongest match (`specific-repo` has 3 components,
+    `lucky-repo` has 2) — nothing in the formula rewards small component
+    count on its own."""
+    indexed_repos, components = _repository_ranking_benchmark()
+    ranked = rank_repositories(indexed_repos, components, ["alpha", "beta", "gamma"])
+    scores = dict((name, score) for score, name in ranked)
+    assert scores["lucky-repo"] == pytest.approx(scores["specific-repo"], rel=1e-9), scores
+
+
+def test_repository_ranking_one_specific_match_beats_many_generic_matches() -> None:
+    """Requirement 5 — restated directly with a large spread of generic
+    terms distributed thinly across many components (rather than the same
+    handful of terms repeated), to prove the property holds beyond the
+    exact NOISE fixture shape above."""
+    generic_terms = [f"term{i}" for i in range(10)]
+    noisy_components = [
+        _mk_component(f"generic_handler_{i}", f"src/generic_handler_{i}.py") for i in range(200)
+    ]
+    # Every noisy component matches exactly one generic term each — spread
+    # thin, never concentrated — while the specific repo has one component
+    # matching every specific term at once.
+    for i, comp in enumerate(noisy_components):
+        comp["name"] = f"{generic_terms[i % len(generic_terms)]}_handler_{i}"
+    specific_terms = ["uniqueconceptone", "uniqueconcepttwo", "uniqueconceptthree"]
+    specific_components = [
+        _mk_component("uniqueconceptone_uniqueconcepttwo_uniqueconceptthree", "core/impl.py"),
+    ]
+    indexed_repos = [{"name": "noisy-repo"}, {"name": "specific-repo-2"}]
+    components = [{**c, "repository": "noisy-repo"} for c in noisy_components] + [
+        {**c, "repository": "specific-repo-2"} for c in specific_components
+    ]
+    ranked = rank_repositories(indexed_repos, components, generic_terms + specific_terms)
+    scores = dict((name, score) for score, name in ranked)
+    assert scores["specific-repo-2"] > scores["noisy-repo"], scores
+    assert ranked[0][1] == "specific-repo-2", ranked
+
+
+def test_repository_ranking_breadth_credit_is_bounded_at_the_cap() -> None:
+    """Boundary case: a repository's breadth credit must stop growing once
+    its count of matching components exceeds the cap — guards against a
+    future change accidentally re-uncapping the breadth term and
+    reopening the volume-wins failure mode."""
+    indexed_repos = [{"name": "many-matches"}, {"name": "few-matches"}]
+    # Both repos' components match identically (single-term, same weight)
+    # — the only difference is component COUNT, deliberately spanning the
+    # cap boundary.
+    many = [_mk_component(f"alpha_thing_{i}", f"a/alpha_thing_{i}.py") for i in range(200)]
+    few = [_mk_component(f"alpha_thing_{i}", f"a/alpha_thing_{i}.py") for i in range(5)]
+    components = [{**c, "repository": "many-matches"} for c in many] + [
+        {**c, "repository": "few-matches"} for c in few
+    ]
+    ranked = rank_repositories(indexed_repos, components, ["alpha"])
+    scores = dict((name, score) for score, name in ranked)
+    # More matches still earns *some* extra breadth credit below the cap...
+    assert scores["many-matches"] > scores["few-matches"], scores
+    # ...but the gap must be small (log-scaled, capped), not proportional
+    # to the ~40x difference in component count.
+    assert scores["many-matches"] - scores["few-matches"] < 0.5, scores
+
+
+def test_repository_ranking_with_no_matches_scores_zero_as_before() -> None:
+    """A repository with zero matching components must still score exactly
+    0 (unchanged from the pre-RFC-0018 SUM behavior) — the new formula
+    must not invent a nonzero floor score out of nothing."""
+    indexed_repos = [{"name": "irrelevant-repo"}]
+    components = [_mk_component("totally_unrelated", "x/y.py")]
+    components[0]["repository"] = "irrelevant-repo"
+    ranked = rank_repositories(indexed_repos, components, ["zzznonexistentterm"])
+    assert ranked[0][0] == 0.0, ranked
+
+
+# ---------------------------------------------------------------------------
+# RFC-0019 — config/deployment evidence (`ConfigFile`-shaped components,
+# see app.indexer.extractors.config_file_extractor) participates in
+# repository ranking through the exact same `rank_repositories` used for
+# every other component — no new ranking logic. "alpha"/"beta" are
+# structurally interchangeable synthetic operational identifiers, not any
+# real ticket value — nothing here names TnT, Avangrid, or PROT-5764.
+# ---------------------------------------------------------------------------
+
+
+def test_config_evidence_breaks_a_tie_between_identical_source_evidence_repositories() -> None:
+    """Two repositories have byte-identical source-code evidence (the same
+    matching component, same score) — the only difference is which
+    repository's config/deployment evidence names the ticket's own
+    operational identifier. Config evidence alone must be enough to break
+    the tie in favor of the repository the ticket actually names."""
+
+    def shared_source_component(repo: str) -> dict[str, Any]:
+        return _mk_component("process_shared_event", "core/shared_event.py")
+
+    comp_a = shared_source_component("repo-a")
+    comp_a["repository"] = "repo-a"
+    comp_b = shared_source_component("repo-b")
+    comp_b["repository"] = "repo-b"
+    config_a = _mk_component("identifier alpha env production", "deploy/job_a.yml")
+    config_a["repository"] = "repo-a"
+    config_b = _mk_component("identifier beta env production", "deploy/job_b.yml")
+    config_b["repository"] = "repo-b"
+
+    indexed_repos = [{"name": "repo-a"}, {"name": "repo-b"}]
+    components = [comp_a, comp_b, config_a, config_b]
+
+    ranked = rank_repositories(indexed_repos, components, ["shared", "event", "beta"])
+    scores = dict((name, score) for score, name in ranked)
+    assert scores["repo-b"] > scores["repo-a"], scores
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
+from app.agents.planning.tools import rank_repositories
 from app.context_pipeline.reasoning.capabilities import (
     CANDIDATE_FUNNEL_WIDTH,
     MAX_SOURCE_FILES_PER_CANDIDATE,
@@ -32,7 +33,9 @@ from app.context_pipeline.reasoning.capabilities import (
     _matched_term_specificity,
     _relationship_degree,
     _repository_signals,
+    _select_dependency_expansion_files,
     _select_relevant_source_files,
+    _structural_specificity,
     _term_specificity_weights,
     ranked_repository_names,
     repository_role,
@@ -1783,3 +1786,950 @@ def test_select_relevant_source_files_discounts_test_components() -> None:
     assert selected == ["core/quota_guard.py"], (
         "the production file must outrank the equally-matching test file once discounted"
     )
+
+
+# ---------------------------------------------------------------------------
+# 12. RFC-0019 — config/deployment evidence in the corroboration/
+#     specificity pipeline. "alpha"/"beta" are structurally interchangeable
+#     synthetic operational identifiers; nothing here names TnT, Avangrid,
+#     PROT-5764, or any real repository.
+# ---------------------------------------------------------------------------
+
+
+def test_config_evidence_corroborates_the_ticket_named_repository_over_an_identical_sibling() -> None:
+    """Two candidates have identical component-level source evidence
+    (the same matching function, same file shape); only their config
+    evidence differs. Fetched config content naming the ticket's own
+    operational identifier must be able to corroborate that repository,
+    exactly like any other `source_file` evidence — the same specificity
+    gate (RFC-0015), the same corroboration mechanism, no special case."""
+    ledger = _ranked_ledger([("repo-alpha", 5.0), ("repo-beta", 5.0), ("repo-gamma", 4.0)])
+    _set_ticket_terms(ledger, ["shared", "event", "beta"])
+    # Identical source-code evidence in both repo-alpha and repo-beta.
+    _add_component(
+        ledger, repository="repo-alpha", name="process_shared_event", file_path="core/shared_event.py"
+    )
+    _add_component(
+        ledger, repository="repo-beta", name="process_shared_event", file_path="core/shared_event.py"
+    )
+    _add_component(ledger, repository="repo-gamma", name="unrelated_stuff", file_path="x/y.py")
+    # Config/deployment evidence differs: only repo-beta's config names "beta".
+    _add_component(
+        ledger,
+        repository="repo-alpha",
+        name="identifier alpha env production",
+        file_path="deploy/job_a.yml",
+    )
+    _add_component(
+        ledger,
+        repository="repo-beta",
+        name="identifier beta env production",
+        file_path="deploy/job_b.yml",
+    )
+    _add_source_file(
+        ledger, repository="repo-beta", path="deploy/job_b.yml", text="identifier beta env production"
+    )
+
+    evidence = _corroboration_evidence(ledger)
+    assert "repo-beta" in evidence, "config evidence naming the ticket's identifier must corroborate"
+    assert "repo-alpha" not in evidence, (
+        "identical source evidence alone, without matching config evidence, must not corroborate"
+    )
+
+
+def test_config_evidence_file_is_selected_for_fetch_when_it_matches_the_ticket() -> None:
+    """The config file itself must be a candidate for source retrieval —
+    `_select_relevant_source_files` reading `ConfigFile`-shaped components
+    exactly like any other component, no new selection logic."""
+    ledger = _ranked_ledger([("repo-beta", 5.0), ("repo-alpha", 4.0), ("repo-gamma", 4.0)])
+    _set_ticket_terms(ledger, ["beta"])
+    _add_component(ledger, repository="repo-beta", name="unrelated_symbol", file_path="core/x.py")
+    _add_component(
+        ledger,
+        repository="repo-beta",
+        name="identifier beta env production",
+        file_path="deploy/job_b.yml",
+    )
+    _add_component(ledger, repository="repo-alpha", name="unrelated_stuff", file_path="a/y.py")
+    _add_component(ledger, repository="repo-gamma", name="also_unrelated", file_path="g/z.py")
+
+    selected = _select_relevant_source_files(ledger, "repo-beta")
+    assert "deploy/job_b.yml" in selected
+
+
+# ---------------------------------------------------------------------------
+# 13. RFC-0020 — structural config references vs. lexical file ranking.
+#     Fully generic vocabulary ("gamma"/"acme-corp"/"services/main.py" are
+#     structurally interchangeable placeholders); nothing here names any
+#     real ticket, organization, workflow, or repository.
+# ---------------------------------------------------------------------------
+
+
+def test_config_reference_boost_pulls_in_a_structurally_referenced_file() -> None:
+    """The exact RFC-0020 audit finding, reproduced generically: a config
+    file's own decisive identifier sits *after* a long run of unrelated
+    filler (proving the truncation fix keeps it searchable at all), and
+    the config structurally references a source file with zero lexical
+    match of its own — that file must only be selected once the
+    `referenced_by_config_file_paths` boost is applied, never before."""
+    ledger = _ranked_ledger(
+        [("metadata-repo", 5.0), ("operational-repo", 5.0), ("filler-repo", 4.0)]
+    )
+    _set_ticket_terms(ledger, ["gamma", "acme-corp"])
+
+    _add_component(
+        ledger,
+        repository="metadata-repo",
+        name=(
+            "organization acme-corp description internal platform component "
+            "for the acme-corp systems team acme-corp"
+        ),
+        file_path="catalog-info.yaml",
+    )
+    filler = " ".join(f"boilerplate_field_{i} noise_value_{i}" for i in range(60))
+    _add_component(
+        ledger,
+        repository="operational-repo",
+        name=f"organization acme-corp {filler} late_discriminator gamma",
+        file_path="deploy/job.yml",
+    )
+    _add_component(
+        ledger, repository="operational-repo", name="run_entrypoint", file_path="services/main.py"
+    )
+    _add_component(ledger, repository="filler-repo", name="unrelated_stuff", file_path="x/y.py")
+
+    # Before the reference is attached: services/main.py has no lexical
+    # match of its own and must not be selected.
+    selected_before = _select_relevant_source_files(ledger, "operational-repo")
+    assert "services/main.py" not in selected_before
+    assert "deploy/job.yml" in selected_before, (
+        "the late 'gamma' field must still be searchable — the truncation fix"
+    )
+
+    # Attach the structural reference exactly as `TraverseArchitectureGraphTool`
+    # populates it from a real `REFERENCES` edge (RFC-0019/0020).
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("file_path") == "services/main.py":
+            fact.value["referenced_by_config_file_paths"] = ["deploy/job.yml"]
+
+    selected_after = _select_relevant_source_files(ledger, "operational-repo")
+    assert "services/main.py" in selected_after, "the structurally referenced file must be boosted in"
+    assert "deploy/job.yml" in selected_after, "the referencing config's own match must still count"
+
+
+def test_config_reference_boost_never_exceeds_the_referencing_configs_own_score() -> None:
+    """A file referenced by an *irrelevant* config (one that never scored
+    above 0) must not be boosted into selection out of nothing — the
+    boost is conditional evidence propagation, never a free pass."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["gamma"])
+    _add_component(
+        ledger, repository="repo-a", name="totally_unrelated_config", file_path="deploy/job.yml"
+    )
+    _add_component(ledger, repository="repo-a", name="run_entrypoint", file_path="services/main.py")
+    _add_component(ledger, repository="repo-b", name="also_unrelated", file_path="x/y.py")
+
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("file_path") == "services/main.py":
+            fact.value["referenced_by_config_file_paths"] = ["deploy/job.yml"]
+
+    selected = _select_relevant_source_files(ledger, "repo-a")
+    assert selected == [], "nothing scored, so nothing — including the referenced file — is selected"
+
+
+def test_operational_identifier_beats_common_organization_mention_in_ranking() -> None:
+    """Cross-repository requirement: generic organization-name metadata
+    must not outrank a specific operational config match at the
+    repository-ranking level either (`rank_repositories`, RFC-0018) —
+    'acme-corp' is common to both repos (mirrors the real audit finding:
+    the org name appeared in both sibling repos' metadata), so only
+    'gamma' can discriminate."""
+    filler = " ".join(f"boilerplate_field_{i} noise_value_{i}" for i in range(60))
+    metadata_component = {
+        "id": "metadata-config",
+        "name": "organization acme-corp description internal platform component acme-corp",
+        "type": "ConfigFile",
+        "file_path": "catalog-info.yaml",
+        "repository": "metadata-repo",
+    }
+    operational_component = {
+        "id": "operational-config",
+        "name": f"organization acme-corp {filler} late_discriminator gamma",
+        "type": "ConfigFile",
+        "file_path": "deploy/job.yml",
+        "repository": "operational-repo",
+    }
+
+    indexed_repos = [{"name": "metadata-repo"}, {"name": "operational-repo"}]
+    components = [metadata_component, operational_component]
+
+    ranked = rank_repositories(indexed_repos, components, ["gamma", "acme-corp"])
+    scores = dict((name, score) for score, name in ranked)
+    assert scores["operational-repo"] > scores["metadata-repo"], scores
+
+
+# ---------------------------------------------------------------------------
+# 14. RFC-0021 — evidence-aware file-selection tie-breaking. Fully generic
+#     vocabulary; nothing here names any real ticket, organization,
+#     workflow, or repository.
+# ---------------------------------------------------------------------------
+
+
+def test_structural_reference_wins_an_exact_score_tie_over_lexical_only() -> None:
+    """Case 1: a lexically-matching file and a structurally-referenced
+    file land at the *exact same* score — the structural reference must
+    win the tie, where the old alphabetical-only tie-break would pick
+    whichever name happened to sort first."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["delta"])
+    # "aaa_lexical_only.py" sorts alphabetically before "zzz_referenced.py"
+    # — if the old alphabetical fallback were still deciding this, the
+    # lexical-only file would win. It must not.
+    _add_component(ledger, repository="repo-a", name="aaa_lexical_only_delta", file_path="aaa_lexical_only.py")
+    _add_component(ledger, repository="repo-a", name="config_naming_delta", file_path="config.yml")
+    _add_component(ledger, repository="repo-b", name="unrelated_stuff", file_path="x/y.py")
+    # zzz_referenced.py has no lexical match of its own — only the
+    # structural reference from config.yml (same score as aaa_lexical_only.py).
+    _add_component(ledger, repository="repo-a", name="no_match_here", file_path="zzz_referenced.py")
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("file_path") == "zzz_referenced.py":
+            fact.value["referenced_by_config_file_paths"] = ["config.yml"]
+
+    selected = _select_relevant_source_files(ledger, "repo-a", limit=1)
+    assert selected == ["zzz_referenced.py"], (
+        "the structurally-referenced file must win the exact-score tie, "
+        f"not the alphabetically-earlier lexical-only file: got {selected}"
+    )
+
+
+def test_stronger_lexical_score_still_beats_weaker_structural_reference() -> None:
+    """Case 2: structural provenance is a tie-break, never an override —
+    a file with a genuinely higher score must still win even against a
+    structurally-referenced file with a lower (boosted) score."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0), ("repo-c", 4.0)])
+    _set_ticket_terms(ledger, ["delta", "epsilon", "zeta"])
+    # strong-match.py matches all three terms -> high specificity.
+    _add_component(
+        ledger, repository="repo-a", name="delta_epsilon_zeta_handler", file_path="strong_match.py"
+    )
+    # weak-config.yml matches only one common-ish term -> lower specificity.
+    _add_component(ledger, repository="repo-a", name="delta_only", file_path="weak_config.yml")
+    _add_component(ledger, repository="repo-b", name="delta_epsilon_zeta_other", file_path="x/other1.py")
+    _add_component(ledger, repository="repo-c", name="delta_epsilon_zeta_third", file_path="x/other2.py")
+
+    _add_component(ledger, repository="repo-a", name="referenced_by_weak_config", file_path="weakly_referenced.py")
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("file_path") == "weakly_referenced.py":
+            fact.value["referenced_by_config_file_paths"] = ["weak_config.yml"]
+
+    selected = _select_relevant_source_files(ledger, "repo-a", limit=1)
+    assert selected == ["strong_match.py"], (
+        "a genuinely higher lexical score must still win over a lower-scoring "
+        f"structurally-referenced file: got {selected}"
+    )
+
+
+def test_equal_score_with_no_structural_evidence_keeps_alphabetical_order() -> None:
+    """Case 3: when neither tied file has structural provenance, behavior
+    is unchanged from before RFC-0021 — alphabetical order decides."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["epsilon"])
+    _add_component(ledger, repository="repo-a", name="epsilon_first", file_path="aaa_file.py")
+    _add_component(ledger, repository="repo-a", name="epsilon_second", file_path="zzz_file.py")
+    _add_component(ledger, repository="repo-b", name="unrelated", file_path="x/y.py")
+
+    selected = _select_relevant_source_files(ledger, "repo-a", limit=1)
+    assert selected == ["aaa_file.py"], (
+        f"with no structural evidence on either side, alphabetical order must decide: got {selected}"
+    )
+
+
+def test_structural_tie_break_does_not_fire_when_scores_differ_even_slightly() -> None:
+    """Explicit regression guard: the structural tie-break must only ever
+    activate on an *exact* score tie. A referenced file whose boosted
+    score is even marginally lower than a competing lexical-only file's
+    score must still lose — proving `-kv[1]` alone still fully decides
+    ordering whenever scores are not byte-for-byte equal."""
+    ledger = _ranked_ledger(
+        [("repo-a", 5.0), ("repo-b", 4.0), ("repo-c", 4.0), ("repo-d", 4.0)]
+    )
+    _set_ticket_terms(ledger, ["delta", "epsilon"])
+    # slightly_stronger.py matches two terms; the referencing config
+    # matches only one -> its boosted target scores strictly lower.
+    _add_component(ledger, repository="repo-a", name="delta_epsilon_combo", file_path="slightly_stronger.py")
+    _add_component(ledger, repository="repo-a", name="delta_only_config", file_path="lesser_config.yml")
+    _add_component(ledger, repository="repo-b", name="delta_epsilon_combo_2", file_path="x/o1.py")
+    _add_component(ledger, repository="repo-c", name="delta_only_2", file_path="x/o2.py")
+    _add_component(ledger, repository="repo-d", name="delta_epsilon_combo_3", file_path="x/o3.py")
+
+    _add_component(ledger, repository="repo-a", name="referenced_target", file_path="boosted_but_lower.py")
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("file_path") == "boosted_but_lower.py":
+            fact.value["referenced_by_config_file_paths"] = ["lesser_config.yml"]
+
+    weights = _term_specificity_weights(
+        ledger, frozenset({"delta", "epsilon"}), exclude_repository="repo-a"
+    )
+    stronger_score = _matched_term_specificity({"delta", "epsilon"}, weights)
+    weaker_score = _matched_term_specificity({"delta"}, weights)
+    assert stronger_score > weaker_score, "fixture must produce a real, non-tied score gap"
+
+    selected = _select_relevant_source_files(ledger, "repo-a", limit=1)
+    assert selected == ["slightly_stronger.py"], (
+        f"any real score gap, however small, must still decide ordering: got {selected}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 15. RFC-0022 — dependency-aware source investigation. Fully generic
+#     vocabulary ("File A/B/C/D" are the literal roles requested); nothing
+#     here names any real ticket, repository, or company.
+# ---------------------------------------------------------------------------
+
+
+def test_file_a_is_selected_from_lexical_evidence_alone() -> None:
+    """Requirement 1: the strong initial entrypoint is still found purely
+    by the existing, unmodified lexical selection — RFC-0022 adds nothing
+    to this stage."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["zeta"])
+    _add_component(ledger, repository="repo-a", name="zeta_entrypoint", file_path="file_a.py")
+    _add_component(ledger, repository="repo-b", name="unrelated", file_path="x/y.py")
+
+    selected = _select_relevant_source_files(ledger, "repo-a")
+    assert selected == ["file_a.py"]
+
+
+def test_dependency_targets_become_eligible_via_real_graph_relationships() -> None:
+    """Requirements 2/3: B and C, reached via a real CALLS/IMPORTS edge
+    from the already-fetched File A, become eligible and inherit a score
+    capped at A's own true score — never exceeding it."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["zeta"])
+    _add_component(ledger, repository="repo-a", name="zeta_entrypoint", file_path="file_a.py")
+    _add_component(ledger, repository="repo-b", name="unrelated", file_path="x/y.py")
+
+    a_score = _score_candidate_source_files_for_test(ledger, "repo-a")["file_a.py"]
+    assert a_score > 0
+
+    dependency_targets = {"file_b.py": {"file_a.py"}, "file_c.py": {"file_a.py"}}
+    selected = _select_dependency_expansion_files(ledger, "repo-a", dependency_targets)
+    assert set(selected) == {"file_b.py", "file_c.py"}
+
+
+def test_dependency_score_never_exceeds_the_fetched_sources_own_score() -> None:
+    """Requirement 3, explicit: the propagated score is capped, matching
+    RFC-0020's own principle exactly — never manufactured, never larger
+    than what made the source file relevant enough to fetch."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["zeta"])
+    _add_component(ledger, repository="repo-a", name="zeta_entrypoint", file_path="file_a.py")
+    _add_component(ledger, repository="repo-b", name="unrelated", file_path="x/y.py")
+
+    scored = _score_candidate_source_files_for_test(ledger, "repo-a")
+    a_score = scored["file_a.py"]
+
+    dependency_targets = {"file_b.py": {"file_a.py"}}
+    selected = _select_dependency_expansion_files(ledger, "repo-a", dependency_targets)
+    assert selected == ["file_b.py"]
+    # Recompute what the propagation actually produced, the same way
+    # `_select_dependency_expansion_files` does internally, to assert the
+    # cap directly rather than only its ranking consequence.
+    from app.context_pipeline.reasoning.capabilities import _REFERENCE_BOOST_FACTOR
+
+    assert a_score * _REFERENCE_BOOST_FACTOR <= a_score + 1e-9
+
+
+def test_unrelated_strong_lexical_file_is_not_pulled_in_without_a_real_edge() -> None:
+    """Requirement 4: File D has a strong lexical match of its own but no
+    real CALLS/IMPORTS edge from File A — dependency expansion must never
+    consider it merely because it shares vocabulary. `_select_dependency_
+    expansion_files` only ever evaluates files that are literal keys in
+    `dependency_targets`, so D — never listed there — cannot leak in."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["zeta"])
+    _add_component(ledger, repository="repo-a", name="zeta_entrypoint", file_path="file_a.py")
+    # File D: strong lexical match, but genuinely unrelated — no edge from A.
+    _add_component(ledger, repository="repo-a", name="zeta_unrelated_strong_match", file_path="file_d.py")
+    _add_component(ledger, repository="repo-b", name="unrelated", file_path="x/y.py")
+
+    dependency_targets = {"file_b.py": {"file_a.py"}}  # file_d.py deliberately absent
+    selected = _select_dependency_expansion_files(ledger, "repo-a", dependency_targets)
+    assert "file_d.py" not in selected
+    assert selected == ["file_b.py"]
+
+
+def test_higher_scoring_dependency_target_beats_a_lower_scoring_one() -> None:
+    """Requirement 5: within the dependency-expansion pool itself, a
+    target reached from a more relevant fetched source still outranks one
+    reached from a less relevant fetched source."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0), ("repo-c", 4.0)])
+    _set_ticket_terms(ledger, ["zeta", "eta"])
+    # file_strong_source.py matches both terms; file_weak_source.py matches one.
+    _add_component(ledger, repository="repo-a", name="zeta_eta_strong", file_path="strong_source.py")
+    _add_component(ledger, repository="repo-a", name="zeta_only_weak", file_path="weak_source.py")
+    _add_component(ledger, repository="repo-b", name="zeta_eta_other", file_path="x/o1.py")
+    _add_component(ledger, repository="repo-c", name="zeta_other", file_path="x/o2.py")
+
+    dependency_targets = {
+        "reached_from_strong.py": {"strong_source.py"},
+        "reached_from_weak.py": {"weak_source.py"},
+    }
+    selected = _select_dependency_expansion_files(ledger, "repo-a", dependency_targets, limit=1)
+    assert selected == ["reached_from_strong.py"]
+
+
+def test_dependency_expansion_never_returns_a_file_outside_its_own_input() -> None:
+    """Requirement 6: no unbounded BFS — the function is pure and only
+    ever considers files that are literal keys of the `dependency_targets`
+    mapping the caller (one bounded `get_neighborhood` hop, in
+    `investigators.GitHubInvestigator._run_dependency_expansion`) already
+    computed. It can never expand beyond what it was given."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["zeta"])
+    _add_component(ledger, repository="repo-a", name="zeta_entrypoint", file_path="file_a.py")
+    _add_component(ledger, repository="repo-b", name="unrelated", file_path="x/y.py")
+
+    dependency_targets = {"file_b.py": {"file_a.py"}, "file_c.py": {"file_a.py"}}
+    selected = _select_dependency_expansion_files(ledger, "repo-a", dependency_targets, limit=10)
+    assert set(selected) <= set(dependency_targets.keys())
+
+
+def test_dependency_expansion_propagates_nothing_from_an_unscored_source() -> None:
+    """A source file with no score of its own (RFC-0011 discipline) must
+    propagate nothing — the same 'no confident unsupported selection'
+    guarantee RFC-0020 already enforces for config references."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["zeta"])
+    _add_component(ledger, repository="repo-a", name="totally_unrelated", file_path="file_a.py")
+    _add_component(ledger, repository="repo-b", name="also_unrelated", file_path="x/y.py")
+
+    dependency_targets = {"file_b.py": {"file_a.py"}}
+    selected = _select_dependency_expansion_files(ledger, "repo-a", dependency_targets)
+    assert selected == []
+
+
+def test_initial_selection_width_is_unaffected_by_dependency_expansion() -> None:
+    """Requirement 7: `_select_relevant_source_files`'s own bounded
+    behavior (`MAX_SOURCE_FILES_PER_CANDIDATE`) is completely unchanged —
+    dependency expansion is a separate, additional, later stage with its
+    own separate budget, never a wider version of the same selection."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["zeta"])
+    for i in range(5):
+        _add_component(ledger, repository="repo-a", name=f"zeta_match_{i}", file_path=f"file_{i}.py")
+    _add_component(ledger, repository="repo-b", name="unrelated", file_path="x/y.py")
+
+    selected = _select_relevant_source_files(ledger, "repo-a")
+    assert len(selected) == MAX_SOURCE_FILES_PER_CANDIDATE
+
+
+def _score_candidate_source_files_for_test(ledger, repository) -> dict:
+    from app.context_pipeline.reasoning.capabilities import _score_candidate_source_files
+
+    scored, _referenced_by = _score_candidate_source_files(ledger, repository)
+    return scored
+
+
+# ---------------------------------------------------------------------------
+# 16. RFC-0023 — dependency target relevance scoring. Fully generic
+#     vocabulary ("alpha"/"validation"/"failure", "File A/B/C/D/E") exactly
+#     matching the requested benchmark shape; nothing here names any real
+#     ticket, repository, or company.
+# ---------------------------------------------------------------------------
+
+
+def _target_component(name: str, file_path: str, is_test: bool | None = None) -> dict:
+    return {"name": name, "type": "Function", "file_path": file_path, "is_test": is_test}
+
+
+def _rfc_0023_fixture():
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["alpha", "validation", "failure"])
+    _add_component(ledger, repository="repo-a", name="alpha_entrypoint", file_path="file_a.py")
+    _add_component(ledger, repository="repo-b", name="unrelated", file_path="x/y.py")
+    dependency_targets = {
+        "file_b.py": {"file_a.py"},
+        "file_c.py": {"file_a.py"},
+        "file_d.py": {"file_a.py"},
+    }
+    target_components = {
+        "file_b.py": [_target_component("validate_alpha", "file_b.py")],
+        "file_c.py": [_target_component("write_data", "file_c.py")],
+        "file_d.py": [_target_component("log_status", "file_d.py")],
+    }
+    return ledger, dependency_targets, target_components
+
+
+def test_zero_relevance_dependency_targets_remain_eligible() -> None:
+    """Assertion 1: a structurally connected target with zero lexical
+    relevance of its own (File C, File D) must still be selectable — the
+    RFC-0022 guarantee is unchanged by RFC-0023's own-relevance scoring."""
+    ledger, dependency_targets, target_components = _rfc_0023_fixture()
+    selected = _select_dependency_expansion_files(
+        ledger, "repo-a", dependency_targets, target_components, limit=3
+    )
+    assert set(selected) == {"file_b.py", "file_c.py", "file_d.py"}
+
+
+def test_dependency_target_with_own_relevance_wins_over_unrelated_siblings() -> None:
+    """Assertion 2 — the exact live PROT-5764 failure, reproduced
+    generically: three dependency targets of the same fetched source file
+    all inherit the identical capped score; only File B (validate_alpha,
+    genuinely matching ticket vocabulary) must win, not whichever
+    unrelated file happens to sort first alphabetically."""
+    ledger, dependency_targets, target_components = _rfc_0023_fixture()
+    selected = _select_dependency_expansion_files(
+        ledger, "repo-a", dependency_targets, target_components, limit=1
+    )
+    assert selected == ["file_b.py"], f"the target with genuine own relevance must win: got {selected}"
+
+
+def test_structural_relationship_still_required_for_dependency_expansion() -> None:
+    """Assertion 3: File E has a strong lexical match to the ticket but no
+    real CALLS/IMPORTS edge from the fetched File A — own relevance alone,
+    without a structural edge, must never make it eligible."""
+    ledger, dependency_targets, target_components = _rfc_0023_fixture()
+    # File E would match every ticket term, but is deliberately never
+    # listed in `dependency_targets` or `target_components` below — no
+    # structural edge from A reaches it, so it must never be considered.
+    selected = _select_dependency_expansion_files(
+        ledger, "repo-a", dependency_targets, target_components, limit=10
+    )
+    assert "file_e.py" not in selected
+    assert set(selected) <= set(dependency_targets.keys())
+
+
+def test_alphabetical_fallback_when_own_relevance_ties() -> None:
+    """Assertion 5 (also requirement 3 of the implementation task): two
+    dependency targets with equally-irrelevant own names — both
+    contributing nothing beyond the shared inherited floor — still
+    resolve via alphabetical order. The fix only changes ranking when a
+    target's own relevance genuinely differs; it never removes the
+    existing fallback."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["alpha", "validation", "failure"])
+    _add_component(ledger, repository="repo-a", name="alpha_entrypoint", file_path="file_a.py")
+    _add_component(ledger, repository="repo-b", name="unrelated", file_path="x/y.py")
+
+    dependency_targets = {"zzz_file.py": {"file_a.py"}, "aaa_file.py": {"file_a.py"}}
+    target_components = {
+        "zzz_file.py": [_target_component("write_data", "zzz_file.py")],
+        "aaa_file.py": [_target_component("log_status", "aaa_file.py")],
+    }
+    selected = _select_dependency_expansion_files(
+        ledger, "repo-a", dependency_targets, target_components, limit=1
+    )
+    assert selected == ["aaa_file.py"]
+
+
+def test_zero_own_relevance_scores_zero_not_the_sources_own_score() -> None:
+    """RFC-0023 Option B's contract, superseding Option A's retired
+    'never below the inherited floor' rule: a target with zero own
+    relevance (File C, File D) now scores exactly 0, not the fetched
+    source file's own score. Structural connectivity from 'file_a.py'
+    is what makes File B/C/D *eligible* at all (RFC-0022's guarantee,
+    still intact — all three are still selectable); it is deliberately
+    no longer a floor under their *ranking* — that's what lets File B's
+    genuine own relevance win outright instead of tying with siblings
+    that merely share the same structural edge (the live PROT-5764
+    failure Option A reproduced: `schema_validator.py` tied with
+    `base_table_loader.py`/`bronze_writer.py` at the inherited floor and
+    lost the alphabetical tiebreak)."""
+    ledger, dependency_targets, target_components = _rfc_0023_fixture()
+    selected = _select_dependency_expansion_files(
+        ledger, "repo-a", dependency_targets, target_components, limit=3
+    )
+    assert set(selected) == {"file_b.py", "file_c.py", "file_d.py"}, (
+        "zero-relevance targets are still eligible — RFC-0022's guarantee is unchanged"
+    )
+    assert selected[0] == "file_b.py", (
+        "but ranking is by own relevance alone now: the one target with genuine "
+        "relevance sorts first instead of tying with the zero-relevance siblings"
+    )
+
+
+def test_initial_source_file_selection_is_unaffected_by_rfc_0023() -> None:
+    """Requirement 4: RFC-0021's initial selection (`_select_relevant_
+    source_files`) is untouched by this change — a structural tie there
+    must still be decided by structural-reference provenance, not by
+    dependency-target own-relevance (a different function entirely)."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["delta"])
+    _add_component(ledger, repository="repo-a", name="aaa_lexical_only_delta", file_path="aaa_lexical_only.py")
+    _add_component(ledger, repository="repo-a", name="config_naming_delta", file_path="config.yml")
+    _add_component(ledger, repository="repo-b", name="unrelated_stuff", file_path="x/y.py")
+    _add_component(ledger, repository="repo-a", name="no_match_here", file_path="zzz_referenced.py")
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("file_path") == "zzz_referenced.py":
+            fact.value["referenced_by_config_file_paths"] = ["config.yml"]
+
+    selected = _select_relevant_source_files(ledger, "repo-a", limit=1)
+    assert selected == ["zzz_referenced.py"], "RFC-0021's own tie-break must remain exactly as before"
+
+
+# ---------------------------------------------------------------------------
+# 17. RFC-0023 Option B — structural inheritance is an eligibility signal
+#     only; `own_relevance` alone decides ranking among eligible dependency
+#     targets. Fully generic vocabulary ("widget"/"dispatch"/"retry",
+#     "entry.py"/File A/B/C/D) — nothing here names any real ticket,
+#     repository, or company.
+# ---------------------------------------------------------------------------
+
+
+def _option_b_fixture():
+    """A fetched source file ('entry.py') whose own score is deliberately
+    *higher* than any single dependency target's own relevance can reach
+    on its own — the exact shape that broke Option A's `max(inherited,
+    own_relevance)` on the live PROT-5764 benchmark (a well-matched
+    entrypoint's own score routinely exceeds what one dependency target's
+    own name/path can independently earn). Two sibling repositories give
+    `_term_specificity_weights` a real corpus to compute against, so
+    "widget" — shared by every scoped repository — is correctly judged
+    maximally generic (weight 0), the same way "schema"/"pipeline" were
+    on the real graph, while "dispatch" (unique to repo-a) is judged
+    maximally specific.
+    """
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0), ("repo-c", 3.0)])
+    _set_ticket_terms(ledger, ["widget", "dispatch", "retry"])
+    _add_component(
+        ledger, repository="repo-a", name="widget_dispatch_entrypoint", file_path="entry.py"
+    )
+    _add_component(ledger, repository="repo-b", name="widget_gateway", file_path="x/gateway.py")
+    _add_component(ledger, repository="repo-b", name="retry_policy", file_path="x/retry.py")
+    _add_component(ledger, repository="repo-c", name="widget_registry", file_path="y/registry.py")
+
+    dependency_targets = {
+        "file_a.py": {"entry.py"},  # relevant — matches "retry"
+        "file_b.py": {"entry.py"},  # merely structurally connected — no match
+        "file_c.py": {"entry.py"},  # merely structurally connected — no match
+    }
+    target_components = {
+        "file_a.py": [_target_component("retry_handler", "file_a.py")],
+        "file_b.py": [_target_component("log_writer", "file_b.py")],
+        "file_c.py": [_target_component("noop_helper", "file_c.py")],
+    }
+    return ledger, dependency_targets, target_components
+
+
+def test_generic_relevant_dependency_outranks_merely_structural_siblings() -> None:
+    """The generic A/B/C reproduction of the live PROT-5764 failure: the
+    fetched source's own score is higher than File A's own relevance —
+    under the superseded `max(inherited, own_relevance)` design this
+    would have let the inherited floor swamp File A entirely and tie it
+    with the two unrelated siblings (exactly what happened to
+    `schema_validator.py` on the real benchmark). Under eligibility-only
+    inheritance, File A's own relevance is judged on its own terms and
+    wins outright."""
+    ledger, dependency_targets, target_components = _option_b_fixture()
+
+    scored = _score_candidate_source_files_for_test(ledger, "repo-a")
+    assert scored["entry.py"] > 0, "fixture precondition: the source must itself be relevant"
+
+    selected = _select_dependency_expansion_files(
+        ledger, "repo-a", dependency_targets, target_components, limit=1
+    )
+    assert selected == ["file_a.py"], f"the genuinely relevant dependency must win: got {selected}"
+
+
+def test_generic_zero_relevance_structural_dependencies_remain_eligible() -> None:
+    """File B and File C have no lexical relevance of their own, but the
+    real CALLS/IMPORTS edge from 'entry.py' still makes them eligible —
+    with a large enough limit, all three are returned."""
+    ledger, dependency_targets, target_components = _option_b_fixture()
+    selected = _select_dependency_expansion_files(
+        ledger, "repo-a", dependency_targets, target_components, limit=3
+    )
+    assert set(selected) == {"file_a.py", "file_b.py", "file_c.py"}
+
+
+def test_generic_unrelated_lexical_match_without_structural_edge_is_not_eligible() -> None:
+    """File D would match every ticket term, but no real structural edge
+    from 'entry.py' reaches it — own relevance alone, without structural
+    connectivity, must never make it eligible."""
+    ledger, dependency_targets, target_components = _option_b_fixture()
+    # File D is deliberately absent from both dependency_targets and
+    # target_components below — no structural edge reaches it.
+    selected = _select_dependency_expansion_files(
+        ledger, "repo-a", dependency_targets, target_components, limit=10
+    )
+    assert "file_d.py" not in selected
+    assert set(selected) <= set(dependency_targets.keys())
+
+
+def test_generic_zero_score_ties_retain_alphabetical_ordering() -> None:
+    """When every eligible target has equally-zero own relevance, ranking
+    falls back to alphabetical order — unchanged from RFC-0022."""
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, ["widget", "dispatch", "retry"])
+    _add_component(
+        ledger, repository="repo-a", name="widget_dispatch_entrypoint", file_path="entry.py"
+    )
+    _add_component(ledger, repository="repo-b", name="unrelated", file_path="x/y.py")
+
+    dependency_targets = {"zzz_file.py": {"entry.py"}, "aaa_file.py": {"entry.py"}}
+    target_components = {
+        "zzz_file.py": [_target_component("log_writer", "zzz_file.py")],
+        "aaa_file.py": [_target_component("noop_helper", "aaa_file.py")],
+    }
+    selected = _select_dependency_expansion_files(
+        ledger, "repo-a", dependency_targets, target_components, limit=1
+    )
+    assert selected == ["aaa_file.py"]
+
+
+# ---------------------------------------------------------------------------
+# 18. RFC-0024 — directness tie-break (CALLS beats IMPORTS-only) and fan-in
+#     structural specificity (a widely-shared, generic dependency is
+#     discounted, floored so a genuinely strong lexical match can never be
+#     erased). Fully generic vocabulary ("gizmo"/"dispatch"/"retry"/
+#     "audit") — nothing here names any real ticket, repository, or
+#     company; the audit's own three example terms (gizmo/retry/audit) are
+#     used verbatim.
+# ---------------------------------------------------------------------------
+
+
+def _rfc_0024_fixture():
+    """Four repositories give `_term_specificity_weights` a real spread to
+    compute against: "gizmo" (shared by all 3 siblings, weight 0 — the
+    structural equivalent of a stopword), "dispatch" (unique to repo-a,
+    weight 1.0), "retry" (shared by 1 of 3 siblings, weight 0.5), "audit"
+    (shared by 2 of 3 siblings, weight ~0.2075 — a genuinely *weak* but
+    real signal, below `_MODERATE_TERM_WEIGHT`, unlike "retry")."""
+    ledger = _ranked_ledger(
+        [("repo-a", 5.0), ("repo-b", 4.0), ("repo-c", 3.0), ("repo-d", 2.0)]
+    )
+    _set_ticket_terms(ledger, ["gizmo", "dispatch", "retry", "audit"])
+    _add_component(
+        ledger, repository="repo-a", name="gizmo_dispatch_entrypoint", file_path="entry.py"
+    )
+    _add_component(ledger, repository="repo-b", name="gizmo_gateway", file_path="x/gateway.py")
+    _add_component(ledger, repository="repo-c", name="gizmo_registry", file_path="y/registry.py")
+    _add_component(ledger, repository="repo-d", name="gizmo_worker", file_path="z/worker.py")
+    _add_component(ledger, repository="repo-b", name="retry_policy", file_path="x/retry.py")
+    _add_component(ledger, repository="repo-c", name="audit_trail", file_path="y/audit.py")
+    _add_component(ledger, repository="repo-d", name="audit_log", file_path="z/audit.py")
+    return ledger
+
+
+def test_direct_calls_wins_tie_over_imports_only_when_lexical_relevance_equal() -> None:
+    """Property 1: two targets with identical own relevance and identical
+    fan-in — one reached by a real `CALLS` edge, the other only by
+    `IMPORTS` — must resolve in favor of the `CALLS` target. Directness is
+    a tie-break, not a score component: it only ever decides between two
+    otherwise-equal candidates."""
+    ledger = _rfc_0024_fixture()
+    dependency_targets = {"file_calls.py": {"entry.py"}, "file_imports.py": {"entry.py"}}
+    target_components = {
+        "file_calls.py": [_target_component("retry_handler", "file_calls.py")],
+        "file_imports.py": [_target_component("retry_handler", "file_imports.py")],
+    }
+    selected = _select_dependency_expansion_files(
+        ledger,
+        "repo-a",
+        dependency_targets,
+        target_components,
+        direct_targets={"file_calls.py"},
+        fan_in={"file_calls.py": 1, "file_imports.py": 1},
+        limit=1,
+    )
+    assert selected == ["file_calls.py"]
+
+
+def test_high_fan_in_discounts_generic_utility_relevance() -> None:
+    """Property 2: two targets with identical raw own relevance (both
+    match only "retry") — one referenced by a single file repo-wide, the
+    other by 20 — must rank the low-fan-in target first. This is the
+    generic reproduction of the live PROT-5764 failure: a logging
+    helper's coincidental term match outscoring `schema_validator.py`
+    purely because it happened to be lexically luckier, with nothing
+    accounting for it being referenced by 15 files repo-wide."""
+    ledger = _rfc_0024_fixture()
+    dependency_targets = {"contained.py": {"entry.py"}, "shared_utility.py": {"entry.py"}}
+    target_components = {
+        "contained.py": [_target_component("retry_handler", "contained.py")],
+        "shared_utility.py": [_target_component("retry_logger", "shared_utility.py")],
+    }
+    selected = _select_dependency_expansion_files(
+        ledger,
+        "repo-a",
+        dependency_targets,
+        target_components,
+        fan_in={"contained.py": 1, "shared_utility.py": 20},
+        limit=1,
+    )
+    assert selected == ["contained.py"], "the widely-shared utility must not outrank the contained file"
+
+
+def test_structural_specificity_never_exceeds_one() -> None:
+    """Property 3: the lowest possible fan-in (0, or tied for lowest in
+    the batch) must never push a target's specificity above 1.0 — no
+    fan-in value can *boost* a score past its own lexical relevance, it
+    can only ever discount a more-shared sibling."""
+    assert _structural_specificity(0, 20) == 1.0
+    assert _structural_specificity(0, 0) == 1.0
+    assert _structural_specificity(1, 1) == 1.0
+
+
+def test_low_fan_in_target_scores_exactly_its_own_relevance_not_more() -> None:
+    """Property 3, end-to-end: a target tied for the lowest fan-in in the
+    batch scores exactly `own_relevance` — receiving no artificial bonus
+    for being contained, only ever a possible discount for being shared."""
+    ledger = _rfc_0024_fixture()
+    dependency_targets = {"contained.py": {"entry.py"}, "shared_utility.py": {"entry.py"}}
+    target_components = {
+        "contained.py": [_target_component("retry_handler", "contained.py")],
+        "shared_utility.py": [_target_component("retry_logger", "shared_utility.py")],
+    }
+    # Only one candidate present, isolated from the pair above, to read
+    # `contained.py`'s exact score via the `limit=2` full ranking.
+    selected_with_scores = _select_dependency_expansion_files(
+        ledger,
+        "repo-a",
+        dependency_targets,
+        target_components,
+        fan_in={"contained.py": 0, "shared_utility.py": 20},
+        limit=2,
+    )
+    assert selected_with_scores[0] == "contained.py"
+
+
+def test_strong_lexical_relevance_survives_worst_case_structural_discount() -> None:
+    """Property 4: a target with strong own relevance (matches "dispatch"
+    + "gizmo", own_relevance 1.0) suffers the worst possible structural
+    discount (tied for highest fan-in in the batch, floored at
+    `_MIN_STRUCTURAL_RETENTION`) — a target with weak own relevance
+    (matches only "audit", own_relevance ~0.2075, below
+    `_MODERATE_TERM_WEIGHT`) enjoys the best possible structural signal
+    (lowest fan-in, no discount at all). The strong match must still win:
+    the floor exists so structure can narrow a gap, never invert one."""
+    ledger = _rfc_0024_fixture()
+    dependency_targets = {"strong_but_shared.py": {"entry.py"}, "weak_but_contained.py": {"entry.py"}}
+    target_components = {
+        "strong_but_shared.py": [_target_component("gizmo_dispatch_utility", "strong_but_shared.py")],
+        "weak_but_contained.py": [_target_component("audit_reporter", "weak_but_contained.py")],
+    }
+    selected = _select_dependency_expansion_files(
+        ledger,
+        "repo-a",
+        dependency_targets,
+        target_components,
+        fan_in={"strong_but_shared.py": 20, "weak_but_contained.py": 0},
+        limit=1,
+    )
+    assert selected == ["strong_but_shared.py"], (
+        "a genuinely strong lexical match must survive even the worst possible "
+        "structural discount against the weakest possible lexical match with "
+        "the best possible structural signal"
+    )
+
+
+def test_zero_lexical_relevance_targets_remain_eligible_with_structural_signals_present() -> None:
+    """Property 5: RFC-0022's eligibility guarantee is unaffected by
+    RFC-0024 — a structurally connected target with zero own relevance
+    stays eligible (and selectable, given enough `limit`) even when
+    `direct_targets`/`fan_in` are supplied."""
+    ledger = _rfc_0024_fixture()
+    dependency_targets = {
+        "file_a.py": {"entry.py"},
+        "file_b.py": {"entry.py"},
+        "file_c.py": {"entry.py"},
+    }
+    target_components = {
+        "file_a.py": [_target_component("retry_handler", "file_a.py")],
+        "file_b.py": [_target_component("write_data", "file_b.py")],
+        "file_c.py": [_target_component("log_status", "file_c.py")],
+    }
+    selected = _select_dependency_expansion_files(
+        ledger,
+        "repo-a",
+        dependency_targets,
+        target_components,
+        direct_targets={"file_a.py", "file_b.py"},
+        fan_in={"file_a.py": 1, "file_b.py": 5, "file_c.py": 5},
+        limit=3,
+    )
+    assert set(selected) == {"file_a.py", "file_b.py", "file_c.py"}
+
+
+def test_alphabetical_fallback_still_final_when_structural_signals_tie() -> None:
+    """Property 6: when own relevance, directness, and fan-in are all
+    identical between two targets, alphabetical order is still the final
+    fallback — RFC-0024 adds a tie-break tier, it doesn't remove the
+    existing one."""
+    ledger = _rfc_0024_fixture()
+    dependency_targets = {"zzz_file.py": {"entry.py"}, "aaa_file.py": {"entry.py"}}
+    target_components = {
+        "zzz_file.py": [_target_component("write_data", "zzz_file.py")],
+        "aaa_file.py": [_target_component("log_status", "aaa_file.py")],
+    }
+    selected = _select_dependency_expansion_files(
+        ledger,
+        "repo-a",
+        dependency_targets,
+        target_components,
+        direct_targets={"zzz_file.py", "aaa_file.py"},
+        fan_in={"zzz_file.py": 3, "aaa_file.py": 3},
+        limit=1,
+    )
+    assert selected == ["aaa_file.py"]
+
+
+def test_generic_gizmo_retry_audit_benchmark_combines_all_rfc_0024_signals() -> None:
+    """The audit's own end-to-end benchmark: source `entry.py` structurally
+    reaches three targets that all superficially look similar —
+
+    - Target G (`retry_handler`, reached by `CALLS`, fan-in 1): genuinely
+      relevant and contained — must win outright.
+    - Target R (`retry_config`, reached only by `IMPORTS`, fan-in 1):
+      lexically *identical* to G — must lose despite the tie, purely for
+      lacking a direct call.
+    - Target L (`retry_logger`, reached by `CALLS`, fan-in 20): lexically
+      identical to G and R too, but a widely-shared utility — must be
+      suppressed below both, despite being directly called.
+    """
+    ledger = _rfc_0024_fixture()
+    dependency_targets = {
+        "target_g.py": {"entry.py"},
+        "target_r.py": {"entry.py"},
+        "target_l.py": {"entry.py"},
+    }
+    target_components = {
+        "target_g.py": [_target_component("retry_handler", "target_g.py")],
+        "target_r.py": [_target_component("retry_config", "target_r.py")],
+        "target_l.py": [_target_component("retry_logger", "target_l.py")],
+    }
+    selected = _select_dependency_expansion_files(
+        ledger,
+        "repo-a",
+        dependency_targets,
+        target_components,
+        direct_targets={"target_g.py", "target_l.py"},
+        fan_in={"target_g.py": 1, "target_r.py": 1, "target_l.py": 20},
+        limit=3,
+    )
+    assert selected == ["target_g.py", "target_r.py", "target_l.py"], (
+        f"expected the genuinely relevant, directly-called, contained target first, "
+        f"the lexically-tied import-only target second, and the widely-shared "
+        f"generic utility last: got {selected}"
+    )
+
+
+def test_rfc_0024_signals_are_fully_backward_compatible_when_omitted() -> None:
+    """Callers that predate RFC-0024 (no `direct_targets`/`fan_in`
+    supplied) must see byte-identical behavior to RFC-0023's own-relevance-
+    only ranking — the new parameters are strictly additive."""
+    ledger, dependency_targets, target_components = _rfc_0023_fixture()
+    without_rfc_0024 = _select_dependency_expansion_files(
+        ledger, "repo-a", dependency_targets, target_components, limit=3
+    )
+    with_empty_rfc_0024_signals = _select_dependency_expansion_files(
+        ledger,
+        "repo-a",
+        dependency_targets,
+        target_components,
+        direct_targets=None,
+        fan_in=None,
+        limit=3,
+    )
+    assert without_rfc_0024 == with_empty_rfc_0024_signals

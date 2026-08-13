@@ -49,6 +49,7 @@ async def test_indexes_spring_boot_repository_into_neo4j(
         "python_dependencies": 0,
         "sql_files": 0,
         "sql_table_references": 0,
+        "config_files": 0,
     }
 
     assert await graph_repository.has_graph(repository_id)

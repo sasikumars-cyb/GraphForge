@@ -93,6 +93,10 @@ def _sql_file_node_id(repository_id: str, sql_file_path: str) -> str:
     return f"{repository_id}:sql-file:{sql_file_path}"
 
 
+def _config_file_node_id(repository_id: str, config_file_path: str) -> str:
+    return f"{repository_id}:config-file:{config_file_path}"
+
+
 def _build_python_graph(
     repository_id: str,
     repo_id: str,
@@ -423,6 +427,73 @@ def _build_python_graph(
                 target_id=sql_file_id,
                 type="LOADS_SQL",
             )
+        )
+
+    # --- RFC-0019: config/deployment files (`.yml`/`.yaml`/`.json`) as
+    # Component nodes. The flattened key/value text becomes the node's
+    # `name` — the only property `_match_text` (app.agents.planning.tools,
+    # what every ranking/corroboration function already reads) looks at —
+    # so an operational identifier that lives in configuration rather than
+    # code flows through the *exact same* machinery every other Component
+    # already does (RFC-0015/0017/0018), with zero changes to that
+    # machinery. `["Component", "ConfigFile"]` deliberately mirrors the
+    # `["Component", "Function"/"Module"/"Class"]` secondary-label shape
+    # used everywhere above, NOT the bare `["SqlFile"]`-only shape `.sql`
+    # files use just above — that shape is exactly why `.sql` files never
+    # participate in ranking today, and this evidence needs to. ---
+    config_file_node_id_by_path = {
+        c.location.file_path: _config_file_node_id(repository_id, c.location.file_path)
+        for c in model.config_files
+    }
+    for config_file in model.config_files:
+        node_id = config_file_node_id_by_path[config_file.location.file_path]
+        properties: dict[str, object] = {
+            "name": config_file.flattened_text,
+            "file_path": config_file.location.file_path,
+        }
+        properties.update(
+            _classification_properties(
+                file_path=config_file.location.file_path,
+                name=config_file.flattened_text,
+                labels=["Component", "ConfigFile"],
+                class_name=None,
+                language=model.language,
+            )
+        )
+        nodes.append(
+            GraphNode(id=node_id, labels=["Component", "ConfigFile"], properties=properties)
+        )
+        edges.append(GraphEdge(source_id=repo_id, target_id=node_id, type="CONTAINS"))
+
+    # Bare filename -> module id, only when unambiguous across the whole
+    # repository — the same "ambiguous, so don't guess" shape
+    # `sql_file_id_by_basename` above already applies to `.sql` files,
+    # needed here because a config value referencing a file (e.g.
+    # `${workspace.file_path}/pipeline/main_pipeline.py`) commonly carries
+    # a templated prefix that never matches a real repository-relative
+    # path exactly — only the basename is reliably comparable.
+    module_id_by_basename: dict[str, str | None] = {}
+    for module in model.python_modules:
+        basename = module.location.file_path.rsplit("/", 1)[-1]
+        if basename in module_id_by_basename:
+            module_id_by_basename[basename] = None
+        else:
+            module_id_by_basename[basename] = module_id_by_file_path.get(module.location.file_path)
+
+    def _resolve_referenced_module_id(referenced_text: str) -> str | None:
+        exact = module_id_by_file_path.get(referenced_text)
+        if exact is not None:
+            return exact
+        basename = referenced_text.rstrip("/").rsplit("/", 1)[-1]
+        return module_id_by_basename.get(basename)
+
+    for ref in model.config_path_references:
+        config_node_id = config_file_node_id_by_path.get(ref.config_file)
+        target_module_id = _resolve_referenced_module_id(ref.referenced_text)
+        if config_node_id is None or target_module_id is None:
+            continue
+        edges.append(
+            GraphEdge(source_id=config_node_id, target_id=target_module_id, type="REFERENCES")
         )
 
 

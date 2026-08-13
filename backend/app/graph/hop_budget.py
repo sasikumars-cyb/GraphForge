@@ -131,6 +131,19 @@ class GraphHopBudgetRepository(IGraphRepository):
         self._consume(repository_id, "get_kafka_topic_edges")
         return await self._inner.get_kafka_topic_edges(repository_id)
 
+    async def get_references_edges(self, repository_id: str) -> list[GraphEdge]:
+        # RFC-0020 — free, same reasoning as `has_graph` above: one bounded
+        # query over edges already local to the `get_nodes_by_label` read
+        # `TraverseArchitectureGraphTool` always performs in the same
+        # breath (see app.agents.planning.tools), not an independent
+        # traversal hop of its own. Confirmed live: charging this call
+        # pushed every `scope_architecture` action over context_
+        # discovery's existing `max_graph_hops=7` ceiling and failed all
+        # of them outright — a real regression this exemption fixes
+        # without touching that ceiling or any other RFC's own budget
+        # accounting.
+        return await self._inner.get_references_edges(repository_id)
+
     async def has_graph(self, repository_id: str) -> bool:
         # An indexing-status existence check, not a graph traversal — free
         # regardless of budget, same reasoning `verify_repository` already
@@ -155,6 +168,18 @@ class GraphHopBudgetRepository(IGraphRepository):
         # neighborhood, just the reverse direction.
         self._consume(repository_id, "get_incoming_cross_repository_edge_count")
         return await self._inner.get_incoming_cross_repository_edge_count(repository_id)
+
+    async def get_dependency_fan_in(
+        self, repository_id: str, file_paths: list[str], edge_types: list[str]
+    ) -> dict[str, int]:
+        # RFC-0024 — same budget accounting as `get_incoming_cross_
+        # repository_edge_count` above: one aggregate read against
+        # `repository_id`'s own graph, charged as a single call regardless
+        # of how many `file_paths` it batches (same "one call, whatever
+        # the fan-out" precedent `get_neighborhood` already sets, two
+        # methods up).
+        self._consume(repository_id, "get_dependency_fan_in")
+        return await self._inner.get_dependency_fan_in(repository_id, file_paths, edge_types)
 
     async def get_neighborhood(
         self,

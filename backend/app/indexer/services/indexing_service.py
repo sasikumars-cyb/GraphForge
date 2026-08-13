@@ -27,6 +27,7 @@ from app.graph.interfaces import IGraphRepository
 from app.graph.models import GraphPayload
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
+from app.indexer.extractors.config_file_extractor import extract_config_files
 from app.indexer.extractors.sql_file_extractor import extract_sql_files
 from app.indexer.graph.builder import build_graph
 from app.indexer.graph.cross_repo_linker import relink_account
@@ -101,6 +102,7 @@ def _summarize(model: ArchitectureModel) -> IndexingSummary:
         "python_dependencies": len(model.python_dependencies),
         "sql_files": len(model.sql_files),
         "sql_table_references": len(model.sql_table_references),
+        "config_files": len(model.config_files),
     }
 
 
@@ -237,6 +239,9 @@ async def index_repository(
         # own docstring for why). Must run inside this `with` block too,
         # same as the parse above: the clone doesn't outlive it.
         model.sql_files, model.sql_table_references = extract_sql_files(repo_path)
+        # RFC-0019 — same "unconditional, repo-wide, not owned by any one
+        # `ILanguageParser`" treatment as `.sql` files above.
+        model.config_files, model.config_path_references = extract_config_files(repo_path)
         # Frontier Hypothesis Generator (ADR 0018) Finding 1: README/
         # manifest/config content isn't recoverable from `ArchitectureModel`
         # and the clone won't exist past this block — read it now, while
@@ -400,6 +405,9 @@ async def _index_changed_files(
         # incorrect only if `work_dir` held more than the changed files;
         # it doesn't.
         model.sql_files, model.sql_table_references = extract_sql_files(work_dir)
+        # RFC-0019 — same incremental-scope reasoning as `.sql` files
+        # above: `work_dir` only ever contains `changed_files`.
+        model.config_files, model.config_path_references = extract_config_files(work_dir)
 
     graph = build_graph(repository_id, model, repository_name=repository_name)
     graph_repository = Neo4jGraphRepository(get_driver())

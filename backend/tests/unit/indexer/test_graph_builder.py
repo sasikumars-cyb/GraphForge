@@ -4,6 +4,8 @@ pure/deterministic, no Neo4j involved."""
 from app.indexer.graph.builder import build_graph
 from app.indexer.models.architecture import (
     ArchitectureModel,
+    ConfigFile,
+    ConfigPathReference,
     Controller,
     Endpoint,
     KafkaConsumerUsage,
@@ -932,3 +934,101 @@ def test_same_table_referenced_via_spark_and_sql_file_merges_to_one_node() -> No
     table_nodes = [n for n in graph.nodes if n.labels == ["DataTable"]]
     assert len(table_nodes) == 1
     assert table_nodes[0].id == "repo-1:data-table:catalog.schema.customer"
+
+
+# ---------------------------------------------------------------------------
+# RFC-0019 — config/deployment file (`.yml`/`.yaml`/`.json`) evidence.
+# ---------------------------------------------------------------------------
+
+
+def test_config_file_creates_component_labeled_node() -> None:
+    """The `["Component", "ConfigFile"]` label shape — deliberately NOT the
+    bare `["SqlFile"]`-only shape `.sql` files use — is what lets this
+    node flow through `get_nodes_by_label(repo_id, "Component")`, the
+    exact query every existing ranking/corroboration function already
+    uses, with zero changes to that machinery."""
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        config_files=[
+            ConfigFile(
+                name="deploy",
+                location=SourceLocation(file_path="deploy/resources/job.yml"),
+                flattened_text="opco beta env production",
+            )
+        ],
+    )
+    graph = build_graph("repo-1", model)
+    node_id = "repo-1:config-file:deploy/resources/job.yml"
+    matches = [n for n in graph.nodes if n.id == node_id]
+    assert len(matches) == 1
+    node = matches[0]
+    assert set(node.labels) == {"Component", "ConfigFile"}
+    # The flattened text is the node's `name` — the only property
+    # `_match_text` (app.agents.planning.tools) reads for ranking.
+    assert node.properties["name"] == "opco beta env production"
+    assert node.properties["file_path"] == "deploy/resources/job.yml"
+    assert (
+        "repo-1:repository",
+        node_id,
+        "CONTAINS",
+    ) in {(e.source_id, e.target_id, e.type) for e in graph.edges}
+
+
+def test_config_path_reference_resolves_to_python_module_via_references_edge() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        python_modules=[
+            PythonModule(
+                name="pipeline.main_pipeline",
+                package="pipeline",
+                location=SourceLocation(file_path="pipeline/main_pipeline.py"),
+            )
+        ],
+        config_files=[
+            ConfigFile(
+                name="deploy",
+                location=SourceLocation(file_path="deploy/job.yml"),
+                flattened_text="python_file ${workspace.file_path}/pipeline/main_pipeline.py",
+            )
+        ],
+        config_path_references=[
+            ConfigPathReference(
+                config_file="deploy/job.yml",
+                key="python_file",
+                referenced_text="${workspace.file_path}/pipeline/main_pipeline.py",
+                location=SourceLocation(file_path="deploy/job.yml"),
+            )
+        ],
+    )
+    graph = build_graph("repo-1", model)
+    config_id = "repo-1:config-file:deploy/job.yml"
+    module_id = "repo-1:module:pipeline.main_pipeline"
+    assert (config_id, module_id, "REFERENCES") in {
+        (e.source_id, e.target_id, e.type) for e in graph.edges
+    }
+
+
+def test_unresolvable_config_path_reference_produces_no_edge() -> None:
+    model = ArchitectureModel(
+        language="python",
+        framework=None,
+        config_files=[
+            ConfigFile(
+                name="deploy",
+                location=SourceLocation(file_path="deploy/job.yml"),
+                flattened_text="python_file some/other_module.py",
+            )
+        ],
+        config_path_references=[
+            ConfigPathReference(
+                config_file="deploy/job.yml",
+                key="python_file",
+                referenced_text="some/other_module.py",
+                location=SourceLocation(file_path="deploy/job.yml"),
+            )
+        ],
+    )
+    graph = build_graph("repo-1", model)
+    assert not any(e.type == "REFERENCES" for e in graph.edges)

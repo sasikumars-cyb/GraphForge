@@ -1310,6 +1310,238 @@ def _corroboration_evidence(ledger: Ledger) -> dict[str, list[str]]:
     return evidence
 
 
+# RFC-0020 — how much of a referencing config/deployment file's own
+# lexical relevance a file it structurally references (`REFERENCES` edge
+# — `graph.builder`'s config-file section, RFC-0019: `python_file: .../
+# main_pipeline.py`, `entrypoint: services/main.py`, ...) inherits. `1.0`
+# — full inheritance, never more than the config's own score — mirrors
+# RFC-0012's own precedent for a literal, unambiguous relationship
+# (`_RELATIONSHIP_CONFIDENCE_WEIGHT["structural"] = 1.0`): a config file
+# explicitly naming the source file it runs is exactly that kind of
+# structural fact, not a lexical guess. Deliberately a *boost*, not
+# unconditional selection — a target with no referencing config that ever
+# scored above 0 gets nothing manufactured out of nothing, preserving
+# RFC-0011's "no confident unsupported selection" discipline.
+_REFERENCE_BOOST_FACTOR = 1.0
+
+
+def _score_candidate_source_files(
+    ledger: Ledger, repository: str
+) -> tuple[dict[str, float], dict[str, set[str]]]:
+    """RFC-0014/0015/0017/0020 scoring, factored out of `_select_relevant_
+    source_files` (RFC-0022) so a second caller (`_select_dependency_
+    expansion_files`) can read a file's *true* score — including the
+    RFC-0020 config-reference boost, not just its own bare lexical match —
+    without re-deriving it a second way. Pure extraction: no behavior
+    change to `_select_relevant_source_files` itself. Returns
+    `(scored, referenced_by)`, the same two structures that function's
+    body already built locally.
+    """
+    ticket_terms = _ranking_ticket_terms(ledger)
+    if not ticket_terms:
+        return {}, {}
+    weights = _term_specificity_weights(ledger, ticket_terms, exclude_repository=repository)
+    scored: dict[str, float] = {}
+    referenced_by: dict[str, set[str]] = {}
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("repository") != repository:
+            continue
+        file_path = str(fact.value.get("file_path") or "")
+        if not file_path:
+            continue
+        for config_path in fact.value.get("referenced_by_config_file_paths") or ():
+            referenced_by.setdefault(file_path, set()).add(str(config_path))
+        matched_terms = tokenize(_match_text(fact.value)) & ticket_terms
+        if not matched_terms:
+            continue
+        score = _matched_term_specificity(matched_terms, weights)
+        if _is_test_component(fact.value):
+            score *= _TEST_RELEVANCE_FACTOR
+        scored[file_path] = max(scored.get(file_path, 0.0), score)
+
+    for file_path, config_paths in referenced_by.items():
+        referencing_score = max((scored.get(cp, 0.0) for cp in config_paths), default=0.0)
+        if referencing_score <= 0:
+            continue
+        boosted = referencing_score * _REFERENCE_BOOST_FACTOR
+        scored[file_path] = max(scored.get(file_path, 0.0), boosted)
+
+    return scored, referenced_by
+
+
+# RFC-0022 — how many dependency-derived files (reached via a real `CALLS`/
+# `IMPORTS` edge from a file this run has *actually fetched*) may be
+# selected per expansion. Deliberately a small, separate budget from
+# `MAX_SOURCE_FILES_PER_CANDIDATE` — the initial lexical/config-driven
+# selection is unchanged by this RFC; this is an additional, later stage,
+# not a wider version of the same one. Same conservative sizing precedent
+# as `MAX_SOURCE_FILES_PER_CANDIDATE` itself.
+MAX_DEPENDENCY_EXPANSION_FILES = 2
+
+
+def _select_dependency_expansion_files(
+    ledger: Ledger,
+    repository: str,
+    dependency_targets: dict[str, set[str]],
+    target_components: dict[str, list[dict[str, Any]]] | None = None,
+    *,
+    direct_targets: set[str] | None = None,
+    fan_in: dict[str, int] | None = None,
+    limit: int = MAX_DEPENDENCY_EXPANSION_FILES,
+) -> list[str]:
+    """RFC-0022 — one structural hop beyond files this run has actually
+    fetched. `dependency_targets` maps a not-yet-fetched file path to the
+    set of *already-fetched* file paths that reach it via a real `CALLS`
+    or `IMPORTS` edge (built by the caller — `investigators.GitHubInvestigator
+    ._run_dependency_expansion` — from `get_neighborhood`'s own induced
+    subgraph, the same hop-bounded, hop-budget-wrapped primitive RFC-004's
+    shadow call-chain reconstruction already uses; no new graph query).
+
+    A target is *eligible* only if at least one of the fetched files that
+    structurally reaches it (`source_paths`) itself scored above 0 in
+    `_score_candidate_source_files` — the same "no confident unsupported
+    selection" discipline (RFC-0011) `_select_relevant_source_files`
+    already enforces. A source file that never scored above 0 makes
+    nothing it references eligible.
+
+    RFC-0023 (Option A, superseded) tried folding the source's own score
+    into each target's score as an inherited floor — `max(inherited,
+    own_relevance)`. That failed on the live PROT-5764 benchmark: every
+    `CALLS`/`IMPORTS` edge from the same source inherits the *identical*
+    floor, and a well-matched entrypoint's own score (e.g. 0.5) routinely
+    exceeds what any single dependency target's own name/path can
+    independently earn (e.g. `schema_validator.py` matched only 0.208) —
+    so `max()` silently degrades to "inherited always wins" and every
+    target ties, falling back to alphabetical order exactly like RFC-0022
+    before this existed. Confirmed generically, not just on this ticket's
+    vocabulary — see `test_generic_relevant_dependency_outranks_merely_
+    structural_siblings` below.
+
+    RFC-0023 (Option B) fixes this by separating the two questions the
+    conflated score was answering at once: structural connectivity
+    (`dependency_targets` — did a real edge reach this file from something
+    already relevant?) answers "where should I look?" and decides
+    *eligibility* only; a target's own relevance (`target_components` —
+    the target node's own already-returned `get_neighborhood` properties:
+    `name`/`type`/`file_path`/`is_test`; see `_run_dependency_expansion`)
+    answers "what should I look at first?" and decides *ranking*, via the
+    exact same `_matched_term_specificity`/`tokenize`/`_match_text`
+    machinery every other component in this codebase is already scored
+    by — no new formula, no decay constant, no `CALLS`-vs-`IMPORTS`
+    weighting. A target with zero own relevance is still eligible (scores
+    0, same as every other zero-relevance eligible target) and still
+    ranks below any target with real relevance; among several eligible
+    targets that all have zero relevance, the sort's alphabetical
+    secondary key is the only thing left to decide order — unchanged from
+    RFC-0022.
+
+    RFC-0024 — Option B's own-relevance ranking still can't tell a
+    genuinely relevant, contained file from a widely-shared, generic one
+    that happens to match a term coincidentally (a logging helper's
+    `log_event` matching a ticket's `"event"`, say — a real, observed
+    failure on the live PROT-5764 benchmark). Two structural signals,
+    both already latent in the graph this mechanism already reads, fix
+    this without touching `own_relevance`'s own formula:
+
+    - `direct_targets` — targets reached by a real `CALLS` edge (an
+      actual invocation) rather than only `IMPORTS` (a static reference).
+      Used only as a *tie-break*, one step before alphabetical — it can
+      decide between two otherwise-equal scores, never override a real
+      difference between them.
+    - `fan_in` — how many distinct files, anywhere in the repository,
+      reference each target (`Neo4jGraphRepository.get_dependency_fan_in`).
+      Converted to a `structural_specificity` weight via the exact same
+      IDF shape `_term_specificity_weights` already uses for term
+      frequency — batch-relative to this expansion's own candidates
+      (mirroring that function's own "corpus so far" precedent, not a
+      fleet-wide scan), 1.0 for the least-shared target down toward 0.0
+      for the most-shared. `own_relevance` is discounted by this weight,
+      floored at `_MIN_STRUCTURAL_RETENTION` so a widely-shared file can
+      never be discounted to nothing — the floor exists specifically so a
+      genuinely strong lexical match can't be erased purely because the
+      file it lives in happens to have many callers; it only narrows the
+      gap between a generic match and a contained one, never inverts a
+      real difference in the other direction. Both `direct_targets` and
+      `fan_in` default to empty/`None` (RFC-0022's original behavior)
+      when the caller has neither — no test that predates this RFC needs
+      updating to keep passing.
+    """
+    if not dependency_targets:
+        return []
+    scored, _referenced_by = _score_candidate_source_files(ledger, repository)
+    target_components = target_components or {}
+    direct_targets = direct_targets or set()
+    fan_in = fan_in or {}
+    ticket_terms = _ranking_ticket_terms(ledger)
+    weights = (
+        _term_specificity_weights(ledger, ticket_terms, exclude_repository=repository)
+        if ticket_terms
+        else {}
+    )
+
+    eligible_targets = [
+        target_path
+        for target_path, source_paths in dependency_targets.items()
+        if max((scored.get(sp, 0.0) for sp in source_paths), default=0.0) > 0
+    ]
+    # RFC-0024 — batch-relative, same reasoning as `_term_specificity_
+    # weights`'s own `n <= 1` case: with at most one distinct fan-in value
+    # among this expansion's own candidates there's no basis to call
+    # anything "more shared than the rest", so every target stays at full
+    # specificity (no discount) until there's a real spread to judge by.
+    max_fan_in = max((fan_in.get(t, 0) for t in eligible_targets), default=0)
+
+    propagated: dict[str, float] = {}
+    for target_path in eligible_targets:
+        own_relevance = 0.0
+        if ticket_terms:
+            for component in target_components.get(target_path, ()):
+                matched_terms = tokenize(_match_text(component)) & ticket_terms
+                if not matched_terms:
+                    continue
+                candidate_score = _matched_term_specificity(matched_terms, weights)
+                if _is_test_component(component):
+                    candidate_score *= _TEST_RELEVANCE_FACTOR
+                own_relevance = max(own_relevance, candidate_score)
+
+        structural_specificity = _structural_specificity(fan_in.get(target_path, 0), max_fan_in)
+        retention = max(_MIN_STRUCTURAL_RETENTION, structural_specificity)
+        propagated[target_path] = own_relevance * retention
+
+    ranked = sorted(
+        propagated.items(),
+        key=lambda kv: (-kv[1], 0 if kv[0] in direct_targets else 1, kv[0]),
+    )
+    return [path for path, _score in ranked[:limit]]
+
+
+# RFC-0024 — a widely-shared, generic dependency (a logger, a config
+# loader) still retains at least this fraction of its own lexical
+# relevance no matter how many callers it has, so a genuinely strong
+# ticket-term match can never be discounted into losing against a merely
+# structurally-contained, lexically-weak sibling. 0.5 — the same
+# "halfway, not zero" shape `_TEST_RELEVANCE_FACTOR` already uses one
+# section up for the same reason (a discount, never a disqualification).
+_MIN_STRUCTURAL_RETENTION = 0.5
+
+
+def _structural_specificity(target_fan_in: int, max_fan_in: int) -> float:
+    """RFC-0024 — 1.0 for the least-shared target in this expansion's own
+    candidate set, approaching 0.0 for the most-shared one. The exact IDF
+    shape `_term_specificity_weights` already uses for term frequency
+    (`idf(x) = ln((N+1)/(df+1))`, normalized by `ln(N+1)` so it's always
+    in `[0, 1]` and hits exactly 1.0 when `target_fan_in == 0`), applied
+    to fan-in instead of document frequency. `max_fan_in` here plays
+    exactly the role `_term_specificity_weights`'s own `n` (other scoped
+    repositories observed so far) plays there: "common relative to what
+    this investigation actually found," not a global constant.
+    """
+    if max_fan_in <= 1:
+        return 1.0
+    denom = math.log(max_fan_in + 1) or 1.0
+    return math.log((max_fan_in + 1) / (target_fan_in + 1)) / denom
+
+
 def _select_relevant_source_files(
     ledger: Ledger, repository: str, *, limit: int = MAX_SOURCE_FILES_PER_CANDIDATE
 ) -> list[str]:
@@ -1358,26 +1590,35 @@ def _select_relevant_source_files(
     components) can win a top-`limit` cutoff on vocabulary the test
     merely exercises, crowding out the production file actually worth
     reading.
+
+    RFC-0020 — a second pass applies `_REFERENCE_BOOST_FACTOR`: a file
+    that a relevant config/deployment file structurally references
+    (`referenced_by_config_file_paths`, populated by `TraverseArchitecture
+    GraphTool` from the graph's own `REFERENCES` edges — see
+    `app.agents.planning.tools`) inherits a fraction of that config file's
+    *own* score from the first pass. This lets a real structural
+    relationship pull a target file into the bounded selection set even
+    when the target's own lexical match is weak or absent — without a
+    second scoring system: the boosted value is still just a number in
+    the same `scored` dict, ranked by the same `sorted(...)` call below,
+    and a config file that itself never scored above 0 boosts nothing.
     """
-    ticket_terms = _ranking_ticket_terms(ledger)
-    if not ticket_terms:
+    scored, referenced_by = _score_candidate_source_files(ledger, repository)
+    if not scored and not referenced_by:
         return []
-    weights = _term_specificity_weights(ledger, ticket_terms, exclude_repository=repository)
-    scored: dict[str, float] = {}
-    for fact in ledger.facts_of("component"):
-        if fact.value.get("repository") != repository:
-            continue
-        file_path = str(fact.value.get("file_path") or "")
-        if not file_path:
-            continue
-        matched_terms = tokenize(_match_text(fact.value)) & ticket_terms
-        if not matched_terms:
-            continue
-        score = _matched_term_specificity(matched_terms, weights)
-        if _is_test_component(fact.value):
-            score *= _TEST_RELEVANCE_FACTOR
-        scored[file_path] = max(scored.get(file_path, 0.0), score)
-    ranked = sorted(scored.items(), key=lambda kv: (-kv[1], kv[0]))
+
+    # RFC-0021 — `referenced_by` (built above, purely to compute the
+    # RFC-0020 boost) is also exactly the provenance signal an *exact*
+    # score tie needs: score is still the sole, dominant criterion (a real
+    # difference of any size always wins — this key never fires unless
+    # `-kv[1]` is identical), and file path is still the final fallback
+    # when neither file has structural provenance (or both do) — this is
+    # additive to the existing two-part key, not a replacement of it.
+    # Reuses `referenced_by` as-is: no new fact type, query, or formula.
+    ranked = sorted(
+        scored.items(),
+        key=lambda kv: (-kv[1], 0 if kv[0] in referenced_by else 1, kv[0]),
+    )
     return [path for path, _score in ranked[:limit]]
 
 

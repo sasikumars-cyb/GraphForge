@@ -39,6 +39,7 @@ _ALLOWED_LABELS = frozenset(
         "SqlFile",
         "SourceFile",
         "GenericSymbol",
+        "ConfigFile",
         "TestRailProject",
         "TestSuite",
         "TestSection",
@@ -58,6 +59,10 @@ _ALLOWED_REL_TYPES = frozenset(
         "READS_FROM",
         "WRITES_TO",
         "LOADS_SQL",
+        # RFC-0019 — a config/deployment file's scalar value that resolves,
+        # in-repo only, to another file this repository's own parser
+        # discovered (see `graph.builder`'s config-file section).
+        "REFERENCES",
         # Cross-repository relationships — see
         # app.indexer.graph.cross_repo_linker, the only writer of these.
         # Unlike every other relationship above, both endpoints of these

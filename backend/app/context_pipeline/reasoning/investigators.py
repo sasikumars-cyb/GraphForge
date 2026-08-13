@@ -50,6 +50,7 @@ from app.context_pipeline.reasoning.capabilities import (
     SOURCE_RETRIEVAL_WIDTH,
     TIE_RATIO,
     _corroboration_evidence,
+    _select_dependency_expansion_files,
     _select_relevant_source_files,
     ranked_repository_names,
     repository_role,
@@ -785,11 +786,62 @@ class GitHubInvestigator:
                     priority=rank,
                 )
             )
+
+        # RFC-0022 — dependency-aware expansion: one structural CALLS/
+        # IMPORTS hop beyond source *this run has actually fetched*
+        # (`source_file` facts), never a fresh lexical-ranking pass and
+        # never before something real has been read. Only ever proposed
+        # for a candidate already in this same `eligible` funnel (the
+        # existing `CANDIDATE_FUNNEL_WIDTH`/`SOURCE_RETRIEVAL_WIDTH`
+        # bounds are unchanged) that already has fetched source to expand
+        # from — a repository whose initial fetch action is proposed in
+        # *this same* `propose()` call has no `source_file` fact yet
+        # (recorded only once `run()` for that action completes), so this
+        # naturally never fires in the same cycle as the fetch it expands
+        # from; it becomes eligible only on a later cycle, bounded by the
+        # engine's existing `MAX_CYCLES` the same way every other stage
+        # already is.
+        fetched_repos = {
+            str(f.value.get("repository"))
+            for f in ledger.facts_of("source_file")
+            if f.value.get("repository")
+        }
+        for rank, name in enumerate(eligible):
+            if name not in fetched_repos:
+                continue
+            repo_fact = by_name.get(name)
+            full_name = (repo_fact.value.get("full_name") if repo_fact else None) or name
+            key = f"dependency_expand_source_files:{full_name}"
+            if ledger.attempted(self.name, key):
+                continue
+            actions.append(
+                InvestigationAction(
+                    provider=self.name,
+                    key=key,
+                    intent=f"I already read source from '{name}' — I'll follow its own "
+                    "CALLS/IMPORTS relationships one hop to see if a directly connected "
+                    "file carries more evidence.",
+                    targets="repository",
+                    params={
+                        "full_name": full_name,
+                        "repository": name,
+                        "dependency_expansion": True,
+                    },
+                    cost=2,
+                    priority=rank,
+                )
+            )
         return actions
 
     async def run(
         self, action: InvestigationAction, session: SessionContext, recorder: Recorder
     ) -> InvestigationOutcome:
+        # RFC-0022 — dependency expansion resolves its own file list (a
+        # graph query, so it can't happen in `propose()`) and then
+        # delegates to the exact same fetch/record path below.
+        if action.params.get("dependency_expansion"):
+            return await self._run_dependency_expansion(action, session, recorder)
+
         # RFC-0014 — the escalation branch above proposes a bounded set of
         # actual file paths (`params["file_paths"]`), never a generic
         # `Reference`; every other branch (explicit PR/issue/repository
@@ -933,6 +985,182 @@ class GitHubInvestigator:
             "evidence.",
             yielded=True,
         )
+
+    async def _run_dependency_expansion(
+        self, action: InvestigationAction, session: SessionContext, recorder: Recorder
+    ) -> InvestigationOutcome:
+        """RFC-0022 — one structural `CALLS`/`IMPORTS` hop beyond source
+        this run has *actually fetched*, reusing `get_neighborhood`
+        (already hop-budget-wrapped, already used unchanged for RFC-004's
+        shadow call-chain reconstruction — see `curate_evidence`) instead
+        of a new graph query, and delegating the real fetch to
+        `_run_source_file_fetch` unchanged once the target paths are
+        resolved — only the *selection* upstream of it is new.
+        """
+        from app.graph.neo4j_repository import Neo4jGraphRepository
+        from app.graph.session import get_driver
+
+        full_name = str(action.params["full_name"])
+        repository = str(action.params["repository"])
+
+        fetched_paths = {
+            str(f.value.get("path"))
+            for f in recorder.facts_of("source_file")
+            if f.value.get("repository") == repository and f.value.get("path")
+        }
+        if not fetched_paths:
+            recorder.evidence(
+                "not_found", f"No source has been read from '{repository}' yet to expand from."
+            )
+            return InvestigationOutcome(
+                observation=f"I haven't read any source from '{repository}' yet.", yielded=False
+            )
+
+        node_ids_by_file_path: dict[str, list[str]] = {}
+        file_path_by_node_id: dict[str, str] = {}
+        for fact in recorder.facts_of("component"):
+            if fact.value.get("repository") != repository:
+                continue
+            file_path = str(fact.value.get("file_path") or "")
+            node_id = str(fact.value.get("id") or "")
+            if not file_path or not node_id:
+                continue
+            node_ids_by_file_path.setdefault(file_path, []).append(node_id)
+            file_path_by_node_id[node_id] = file_path
+
+        seed_ids = [nid for path in fetched_paths for nid in node_ids_by_file_path.get(path, [])]
+        if not seed_ids:
+            recorder.evidence(
+                "not_found",
+                f"The source read from '{repository}' has no indexed symbols to expand from.",
+            )
+            return InvestigationOutcome(
+                observation=f"'{repository}''s fetched source has no indexed CALLS/IMPORTS "
+                "to follow.",
+                yielded=False,
+            )
+
+        repository_id = seed_ids[0].split(":", 1)[0]
+        graph_repo = session.graph_repo_override or Neo4jGraphRepository(get_driver())
+        try:
+            payload = await graph_repo.get_neighborhood(
+                repository_id, seed_ids, ["CALLS", "IMPORTS"], 1, direction="outgoing"
+            )
+        except Exception:
+            logger.exception(
+                "context_discovery_dependency_expansion_failed repository=%s", repository
+            )
+            recorder.evidence(
+                "failed",
+                f"Could not traverse CALLS/IMPORTS relationships from '{repository}'.",
+            )
+            return InvestigationOutcome(
+                observation=f"I couldn't follow '{repository}''s dependency relationships.",
+                yielded=False,
+            )
+
+        # RFC-0023 — the induced subgraph `get_neighborhood` returns
+        # already carries each touched node's own `properties` (`name`,
+        # `file_path`, and — via `labels` — its type), the exact shape
+        # every other component in this codebase is already scored by.
+        # Read straight from `payload.nodes` (the query's own result, not
+        # only the ledger's pre-existing `component` facts) so a target
+        # this run hasn't otherwise indexed a fact for still scores
+        # correctly.
+        node_by_id = {node.id: node for node in payload.nodes}
+        for node_id, node in node_by_id.items():
+            fp = str(node.properties.get("file_path") or "")
+            if fp:
+                file_path_by_node_id.setdefault(node_id, fp)
+
+        # Only edges whose *source* is one of the fetched files' own seeds
+        # — direction="outgoing" already guarantees this at the graph
+        # layer, this second check is just being explicit about the
+        # invariant `_select_dependency_expansion_files` relies on: every
+        # target's provenance traces back to something actually fetched.
+        seed_id_set = set(seed_ids)
+        dependency_targets: dict[str, set[str]] = {}
+        target_components: dict[str, list[dict[str, Any]]] = {}
+        # RFC-0024 — which targets are reached by at least one direct
+        # `CALLS` edge (a real invocation) rather than only `IMPORTS` (a
+        # static reference) — see `_select_dependency_expansion_files`'s
+        # directness tie-break.
+        direct_targets: set[str] = set()
+        for edge in payload.edges:
+            if edge.type not in ("CALLS", "IMPORTS") or edge.source_id not in seed_id_set:
+                continue
+            target_path = file_path_by_node_id.get(edge.target_id)
+            source_path = file_path_by_node_id.get(edge.source_id)
+            if not target_path or not source_path or target_path in fetched_paths:
+                continue
+            dependency_targets.setdefault(target_path, set()).add(source_path)
+            if edge.type == "CALLS":
+                direct_targets.add(target_path)
+            target_node = node_by_id.get(edge.target_id)
+            if target_node is not None:
+                target_components.setdefault(target_path, []).append(
+                    {
+                        "name": target_node.properties.get("name", target_node.id),
+                        "type": next(
+                            (label for label in target_node.labels if label != "Component"),
+                            "Component",
+                        ),
+                        "file_path": target_path,
+                        "is_test": target_node.properties.get("is_test"),
+                    }
+                )
+
+        # RFC-0024 — repo-wide fan-in per candidate target, the structural
+        # analogue of the term-frequency count already used for text (see
+        # `Neo4jGraphRepository.get_dependency_fan_in`'s own docstring).
+        # Optional and best-effort: a test double substituted via
+        # `graph_repo_override` that predates this RFC simply won't have
+        # the method, and ranking degrades to exactly RFC-0023's behavior
+        # (no structural discount) rather than failing the whole action —
+        # the same "None means unavailable, degrade silently" spirit
+        # `SessionContext.intelligence`/`progress_sink` already use.
+        fan_in: dict[str, int] = {}
+        get_fan_in = getattr(graph_repo, "get_dependency_fan_in", None)
+        if get_fan_in is not None and dependency_targets:
+            try:
+                fan_in = await get_fan_in(
+                    repository_id, list(dependency_targets.keys()), ["CALLS", "IMPORTS"]
+                )
+            except Exception:
+                logger.exception(
+                    "context_discovery_dependency_fan_in_failed repository=%s", repository
+                )
+                fan_in = {}
+
+        file_paths = _select_dependency_expansion_files(
+            recorder.ledger,
+            repository,
+            dependency_targets,
+            target_components,
+            direct_targets=direct_targets,
+            fan_in=fan_in,
+        )
+        if not file_paths:
+            recorder.evidence(
+                "not_found",
+                f"'{repository}''s fetched source has no CALLS/IMPORTS relationship worth "
+                "following further.",
+            )
+            return InvestigationOutcome(
+                observation=f"'{repository}''s fetched source doesn't lead anywhere new.",
+                yielded=False,
+            )
+
+        fetch_action = InvestigationAction(
+            provider=action.provider,
+            key=action.key,
+            intent=action.intent,
+            targets=action.targets,
+            params={**action.params, "file_paths": file_paths},
+            cost=action.cost,
+            priority=action.priority,
+        )
+        return await self._run_source_file_fetch(fetch_action, session, recorder)
 
 
 class GoogleDriveInvestigator:

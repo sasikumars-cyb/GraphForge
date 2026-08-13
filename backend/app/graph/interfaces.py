@@ -98,6 +98,20 @@ class IGraphRepository(ABC):
         """
         raise NotImplementedError
 
+    async def get_references_edges(self, repository_id: str) -> list[GraphEdge]:
+        """RFC-0020 — every `REFERENCES` edge within `repository_id` (today,
+        always `ConfigFile -> source file` — see `graph.builder`'s
+        config-file section, RFC-0019). A targeted alternative to
+        `get_full_graph`, same shape as `get_kafka_topic_edges` above.
+
+        Concrete, not abstract — same reasoning as `get_incoming_cross_
+        repository_edge_count` (RFC-0016): existing `IGraphRepository`
+        implementations (including test fakes) that never override this
+        keep working unchanged and simply report no references, which
+        degrades to today's behavior rather than forcing a migration.
+        """
+        return []
+
     @abstractmethod
     async def has_graph(self, repository_id: str) -> bool:
         """Whether `repository_id` has ever been successfully indexed."""

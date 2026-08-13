@@ -139,6 +139,16 @@ class Recorder:
         self._iteration = iteration
         self._last_evidence: EvidenceRecord | None = None
 
+    @property
+    def ledger(self) -> Ledger:
+        """RFC-0022 — read-only access to the underlying `Ledger`, for an
+        investigator's `run()` that needs a pure, ledger-based derivation
+        function (e.g. `capabilities.py`'s scoring helpers, which take a
+        `Ledger` directly) rather than re-deriving the same thing from
+        `facts_of` piecemeal. Same read-only spirit as `facts_of` above —
+        writes still only ever happen through `.fact()`/`.evidence()`."""
+        return self._ledger
+
     def evidence(
         self, outcome: Outcome, summary: str, *, action: str | None = None
     ) -> EvidenceRecord:

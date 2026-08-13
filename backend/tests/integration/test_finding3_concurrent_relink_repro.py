@@ -67,9 +67,16 @@ pytestmark = pytest.mark.asyncio
 _RealSession = async_sessionmaker(bind=engine, class_=AsyncSession, expire_on_commit=False)
 
 
-def _repository_payload(repository_id: str, *, feign_target: str | None = None) -> GraphPayload:
+def _repository_payload(
+    repository_id: str,
+    *,
+    feign_target: str | None = None,
+    repository_properties: dict | None = None,
+) -> GraphPayload:
     repo_node_id = f"{repository_id}:repository"
-    nodes = [GraphNode(id=repo_node_id, labels=["Repository"], properties={})]
+    nodes = [
+        GraphNode(id=repo_node_id, labels=["Repository"], properties=repository_properties or {})
+    ]
     edges: list[GraphEdge] = []
     if feign_target is not None:
         feign_id = f"{repository_id}:feign:x.TargetClient"
@@ -183,6 +190,214 @@ async def test_concurrent_indexing_can_permanently_drop_a_cross_repo_edge() -> N
         assert edges, (
             "Finding #3 NOT reproduced: relink_account converged and "
             f"computed the A->B edge despite the interleaving. edges={edges}"
+        )
+    finally:
+        await graph_repository.replace_repository_graph(a_id, GraphPayload())
+        await graph_repository.replace_repository_graph(b_id, GraphPayload())
+
+
+# ---------------------------------------------------------------------------
+# RFC-0024 follow-up — a different, generic defect found while investigating
+# why a real `IMPORTS_REPOSITORY` edge (correctly computed by
+# `cross_repo_linker.compute_edges`) never showed up in Neo4j: `replace_
+# repository_graph`'s `DETACH DELETE` removed the repository's own
+# `Repository` node on every reindex, and Neo4j's `DETACH DELETE` cascades
+# that into deleting every relationship touching it — including any
+# cross-repository edge anchored there. Nothing here is specific to any one
+# repository pair; any two repositories with a real cross-repo relationship
+# are exposed to this the moment either one is reindexed.
+# ---------------------------------------------------------------------------
+
+
+async def _create_user_and_two_repos() -> tuple[uuid.UUID, str, str]:
+    """Same setup shape as the Finding #3 reproducer above, factored out
+    for reuse — one user, two committed repositories, returned as
+    (user_id, repo_a_id, repo_b_id)."""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    setup = _RealSession()
+    user = User(
+        id=uuid.uuid4(),
+        email=f"{uuid.uuid4()}@example.com",
+        full_name="Test User",
+        auth_provider="local",
+    )
+    repo_a = Repository(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        github_repo_id=str(uuid.uuid4().int)[:10],
+        owner="acme",
+        name="repo-a",
+        full_name="acme/repo-a",
+        private=False,
+        default_branch="main",
+        html_url="https://github.com/acme/repo-a",
+    )
+    repo_b = Repository(
+        id=uuid.uuid4(),
+        user_id=user.id,
+        github_repo_id=str(uuid.uuid4().int)[:10],
+        owner="acme",
+        name="repo-b",
+        full_name="acme/repo-b",
+        private=False,
+        default_branch="main",
+        html_url="https://github.com/acme/repo-b",
+    )
+    setup.add(user)
+    await setup.flush()
+    setup.add_all([repo_a, repo_b])
+    await setup.commit()
+    await setup.close()
+    return user.id, str(repo_a.id), str(repo_b.id)
+
+
+async def _relink(graph_repository: Neo4jGraphRepository, user_id: uuid.UUID) -> None:
+    session = _RealSession()
+    try:
+        await relink_account(graph_repository=graph_repository, db=session, user_id=user_id)
+        await session.commit()
+    finally:
+        await session.close()
+
+
+async def test_cross_repo_edge_survives_source_repository_reindex() -> None:
+    """1: A->B, established via a real `relink_account` pass, must still be
+    there after A itself is reindexed (a fresh `replace_repository_graph`
+    call for A, exactly what a normal re-index does)."""
+    graph_repository = Neo4jGraphRepository(get_driver())
+    user_id, a_id, b_id = await _create_user_and_two_repos()
+    try:
+        await graph_repository.replace_repository_graph(
+            a_id, _repository_payload(a_id, feign_target="repo-b")
+        )
+        await graph_repository.replace_repository_graph(b_id, _repository_payload(b_id))
+        await _relink(graph_repository, user_id)
+        assert await graph_repository.get_outgoing_cross_repository_edges(a_id), (
+            "edge must exist right after relink"
+        )
+
+        # A is reindexed again (e.g. a later commit) -- no relink follows.
+        await graph_repository.replace_repository_graph(
+            a_id, _repository_payload(a_id, feign_target="repo-b")
+        )
+
+        edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
+        assert edges, f"A->B edge was lost when A was reindexed: edges={edges}"
+    finally:
+        await graph_repository.replace_repository_graph(a_id, GraphPayload())
+        await graph_repository.replace_repository_graph(b_id, GraphPayload())
+
+
+async def test_cross_repo_edge_survives_target_repository_reindex() -> None:
+    """2: A->B must still be there after B (the *target* of the edge, not
+    its source) is reindexed -- this is the exact shape found live:
+    the edge is anchored on B's own `Repository` node, so B's reindex is
+    the one that actually destroyed it."""
+    graph_repository = Neo4jGraphRepository(get_driver())
+    user_id, a_id, b_id = await _create_user_and_two_repos()
+    try:
+        await graph_repository.replace_repository_graph(
+            a_id, _repository_payload(a_id, feign_target="repo-b")
+        )
+        await graph_repository.replace_repository_graph(b_id, _repository_payload(b_id))
+        await _relink(graph_repository, user_id)
+        assert await graph_repository.get_outgoing_cross_repository_edges(a_id)
+
+        # B is reindexed -- no relink follows.
+        await graph_repository.replace_repository_graph(b_id, _repository_payload(b_id))
+
+        edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
+        assert edges, f"A->B edge was lost when B (the target) was reindexed: edges={edges}"
+    finally:
+        await graph_repository.replace_repository_graph(a_id, GraphPayload())
+        await graph_repository.replace_repository_graph(b_id, GraphPayload())
+
+
+async def test_repository_node_identity_stable_across_reindex() -> None:
+    """3: the `Repository` node is the *same* node (same `id`) before and
+    after a reindex -- merge-updated in place, never deleted and
+    recreated -- and its properties still refresh normally."""
+    graph_repository = Neo4jGraphRepository(get_driver())
+    _user_id, a_id, _b_id = await _create_user_and_two_repos()
+    try:
+        await graph_repository.replace_repository_graph(
+            a_id, _repository_payload(a_id, repository_properties={"language": "python"})
+        )
+        before = await graph_repository.get_nodes_by_label(a_id, "Repository")
+        assert len(before) == 1
+        assert before[0].properties.get("language") == "python"
+
+        await graph_repository.replace_repository_graph(
+            a_id, _repository_payload(a_id, repository_properties={"language": "java"})
+        )
+        after = await graph_repository.get_nodes_by_label(a_id, "Repository")
+        assert len(after) == 1, "reindex must never leave more than one Repository node behind"
+        assert after[0].id == before[0].id, "the Repository node's own id must stay stable"
+        assert after[0].properties.get("language") == "java", (
+            "properties must still refresh via MERGE even though the node itself is preserved"
+        )
+    finally:
+        await graph_repository.replace_repository_graph(a_id, GraphPayload())
+
+
+async def test_incremental_subgraph_replace_preserves_cross_repo_edge() -> None:
+    """4: the incremental (`KAN-32`) reindex path, `replace_repository_
+    files_subgraph`, must preserve a cross-repository edge exactly like
+    the full-reindex path does."""
+    graph_repository = Neo4jGraphRepository(get_driver())
+    user_id, a_id, b_id = await _create_user_and_two_repos()
+    try:
+        await graph_repository.replace_repository_graph(
+            a_id, _repository_payload(a_id, feign_target="repo-b")
+        )
+        await graph_repository.replace_repository_graph(b_id, _repository_payload(b_id))
+        await _relink(graph_repository, user_id)
+        assert await graph_repository.get_outgoing_cross_repository_edges(a_id)
+
+        # An incremental reindex of A, touching one arbitrary changed file
+        # -- no relink follows.
+        await graph_repository.replace_repository_files_subgraph(
+            a_id, ["some/changed_file.py"], _repository_payload(a_id, feign_target="repo-b")
+        )
+
+        edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
+        assert edges, f"A->B edge was lost by an incremental reindex of A: edges={edges}"
+    finally:
+        await graph_repository.replace_repository_graph(a_id, GraphPayload())
+        await graph_repository.replace_repository_graph(b_id, GraphPayload())
+
+
+async def test_relink_then_target_reindex_race_shape_preserves_edge() -> None:
+    """5: the exact race shape found live -- A's relink computes and
+    writes A->B, and *then* B is reindexed, with no third relink ever
+    happening afterward. Before the fix this permanently lost the edge;
+    the fix means B's reindex no longer destroys the `Repository` node
+    the edge is anchored on, so nothing needs to re-heal it."""
+    graph_repository = Neo4jGraphRepository(get_driver())
+    user_id, a_id, b_id = await _create_user_and_two_repos()
+    try:
+        await graph_repository.replace_repository_graph(
+            a_id, _repository_payload(a_id, feign_target="repo-b")
+        )
+        await graph_repository.replace_repository_graph(b_id, _repository_payload(b_id))
+
+        # A's relink runs first, alone -- computes and writes A->B.
+        await _relink(graph_repository, user_id)
+        assert await graph_repository.get_outgoing_cross_repository_edges(a_id), (
+            "edge must exist right after A's relink"
+        )
+
+        # B is reindexed *after* -- the exact live sequence (two
+        # repositories reindexed close together in time). No relink
+        # follows this reindex.
+        await graph_repository.replace_repository_graph(b_id, _repository_payload(b_id))
+
+        edges = await graph_repository.get_outgoing_cross_repository_edges(a_id)
+        assert edges, (
+            f"the relink-then-target-reindex race destroyed the edge with no relink "
+            f"to follow and repair it: edges={edges}"
         )
     finally:
         await graph_repository.replace_repository_graph(a_id, GraphPayload())

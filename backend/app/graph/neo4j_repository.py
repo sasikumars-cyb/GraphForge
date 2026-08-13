@@ -71,11 +71,47 @@ class Neo4jGraphRepository(IGraphRepository):
             )
 
     async def replace_repository_graph(self, repository_id: str, graph: GraphPayload) -> None:
+        """Replaces this repository's own indexed subgraph.
+
+        RFC-0024 follow-up — the `Repository` node itself is deliberately
+        *not* included in the delete when `graph` provides one (every real
+        reindex does — see `graph/builder.py`'s `build_graph`, which always
+        appends it first): `DETACH DELETE` removes every relationship
+        touching a deleted node regardless of type, and a cross-repository
+        edge (`cross_repo_linker.py`) is anchored on exactly this node
+        (`_repository_node_id`). Deleting and recreating it on every
+        reindex silently destroyed any cross-repository edge attached to
+        it, with nothing guaranteed to run afterward to recompute it — a
+        real, reproduced defect (two repositories reindexed close together
+        in time could permanently lose the edge between them), not
+        specific to any one repository pair. Excluding the `Repository`
+        node from the delete and letting `_write_nodes`'s own `MERGE`
+        upsert its properties in place (exactly how every other node
+        already gets refreshed) fixes this without any new locking or
+        cross-repository coordination — the node simply stops being
+        destroyed, so nothing anchored on it needs re-creating.
+
+        An empty `graph` (no `Repository` node in it — see
+        `api.v1.routers.repositories.remove_repository`, which passes
+        `GraphPayload()` specifically to fully clear a *deleted*
+        repository's graph) falls back to deleting everything, including
+        the `Repository` node — the one caller that actually wants this
+        repository gone from Neo4j entirely gets exactly that.
+        """
+        preserve_repository_node = any("Repository" in n.labels for n in graph.nodes)
         async with self._driver.session() as session, await session.begin_transaction() as tx:
-            await tx.run(
-                "MATCH (n {repository_id: $repository_id}) DETACH DELETE n",
-                repository_id=repository_id,
-            )
+            if preserve_repository_node:
+                await tx.run(
+                    "MATCH (n {repository_id: $repository_id}) "
+                    "WHERE NOT n:Repository "
+                    "DETACH DELETE n",
+                    repository_id=repository_id,
+                )
+            else:
+                await tx.run(
+                    "MATCH (n {repository_id: $repository_id}) DETACH DELETE n",
+                    repository_id=repository_id,
+                )
             await self._write_nodes(tx, repository_id, graph.nodes)
             await self._write_edges(tx, graph.edges)
             await tx.commit()
@@ -98,11 +134,19 @@ class Neo4jGraphRepository(IGraphRepository):
         isn't, today, but this keeps the method honest about what it
         actually does rather than asserting on an input shape it doesn't
         need to reject).
+
+        RFC-0024 follow-up — the `Repository` node has no `file_path` of
+        its own, so `n.file_path IN $file_paths` was already never true
+        for it (`NULL IN [...]` is `NULL`, not a match) — this path never
+        actually had `replace_repository_graph`'s defect. The explicit
+        `NOT n:Repository` below makes that invariant a stated guarantee
+        rather than an incidental side effect of a property it happens
+        not to have, so it stays true even if that changes later.
         """
         async with self._driver.session() as session, await session.begin_transaction() as tx:
             await tx.run(
                 "MATCH (n {repository_id: $repository_id}) "
-                "WHERE n.file_path IN $file_paths "
+                "WHERE n.file_path IN $file_paths AND NOT n:Repository "
                 "DETACH DELETE n",
                 repository_id=repository_id,
                 file_paths=file_paths,
@@ -379,6 +423,29 @@ class Neo4jGraphRepository(IGraphRepository):
             for record in records
         ]
 
+    async def get_references_edges(self, repository_id: str) -> list[GraphEdge]:
+        async with self._driver.session() as session:
+            result = await session.run(
+                """
+                MATCH (a {repository_id: $repository_id})
+                      -[r:REFERENCES]->
+                      (b {repository_id: $repository_id})
+                RETURN a, r, b
+                """,
+                repository_id=repository_id,
+            )
+            records = [record async for record in result]
+
+        return [
+            GraphEdge(
+                source_id=record["a"]["id"],
+                target_id=record["b"]["id"],
+                type=record["r"].type,
+                properties=dict(record["r"]),
+            )
+            for record in records
+        ]
+
     async def get_nodes_by_label(self, repository_id: str, label: str) -> list[GraphNode]:
         if label not in _ALLOWED_LABELS:
             raise ValueError(f"Unknown graph label: {label!r}")
@@ -517,6 +584,49 @@ class Neo4jGraphRepository(IGraphRepository):
             )
             record = await result.single()
             return int(record["consumer_count"]) if record else 0
+
+    async def get_dependency_fan_in(
+        self, repository_id: str, file_paths: list[str], edge_types: list[str]
+    ) -> dict[str, int]:
+        """RFC-0024 — how many *distinct files*, anywhere in this
+        repository, hold a `CALLS`/`IMPORTS` edge into each of `file_paths`
+        — the structural analogue of the term-frequency count
+        `_term_specificity_weights` already uses for text (capabilities.py):
+        a file referenced from many places is a shared, cross-cutting
+        utility; a file referenced from few is contained and specific.
+
+        Deliberately counts distinct *files*, not distinct edges or
+        symbols — three functions in the same caller file each calling a
+        logging helper is one relationship, not three, the same way
+        `_term_document_frequencies` counts a term once per repository
+        regardless of how many of that repository's own components
+        contain it. Not restricted to the one-hop neighborhood
+        `get_neighborhood` already returned (a test file three hops away
+        that calls a target directly is real fan-in `get_neighborhood`
+        alone can't see) — this is intentionally a separate, whole-
+        repository read, not a bigger traversal of the same neighborhood.
+
+        Not scoped by `direction` or a seed set — this is a single
+        aggregate read over `repository_id`'s own graph, not a traversal,
+        so there is nothing to bound depth-wise (mirrors
+        `get_incoming_cross_repository_edge_count`'s same shape, one level
+        down from cross-repository to intra-repository edges).
+        """
+        if not file_paths:
+            return {}
+        rel_pattern = "|".join(f"`{validate_rel_type(t)}`" for t in dict.fromkeys(edge_types))
+        async with self._driver.session() as session:
+            result = await session.run(
+                f"""
+                MATCH (a:`{_BASE_LABEL}`)-[r:{rel_pattern}]->(b:`{_BASE_LABEL}`)
+                WHERE b.repository_id = $repository_id AND b.file_path IN $file_paths
+                RETURN b.file_path AS file_path, count(DISTINCT a.file_path) AS fan_in
+                """,
+                repository_id=repository_id,
+                file_paths=file_paths,
+            )
+            records = [record async for record in result]
+        return {record["file_path"]: int(record["fan_in"]) for record in records}
 
     async def get_neighborhood(
         self,
