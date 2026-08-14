@@ -19,6 +19,12 @@ export interface ReportSummary {
   workflow_id: string;
   workflow_title: string;
   title: string;
+  /** The complete request the user actually submitted (the workflow's
+   * `original_prompt`) — what the report is an answer to, and what the
+   * Reports list leads with. `title`/`workflow_title` are short
+   * AI-generated labels for the same thing. Empty when the report's
+   * workflow no longer exists. */
+  request: string;
   status: "pending" | "completed" | "failed";
   error_message: string | null;
   created_at: string;

@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import dataclasses
 import logging
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -156,15 +157,27 @@ def _fallback_html(title: str, model: ReportViewModel) -> str:
     consumer still reading `html_content` directly — never the primary
     rendering path (the frontend renders `view_model`). Deliberately
     plain: one paragraph plus the executive summary, no attempt to
-    reproduce the old prose-report's sections."""
-    summary = model.executive_summary or "No executive summary was generated for this report."
-    question = model.header.question
+    reproduce the old prose-report's sections.
+
+    Leads with the user's own request, not `title` (an AI-generated label
+    for the workflow that answered it) — same hierarchy the real renderer
+    uses, so the fallback identifies a report the same way.
+
+    Every interpolated value is escaped: `question` is verbatim user input
+    and `summary` is LLM output, neither of which may be trusted to be
+    markup-free just because the frontend happens to render this inside a
+    `sandbox=""` iframe."""
+    summary = escape(
+        model.executive_summary or "No executive summary was generated for this report."
+    )
+    question = escape(model.header.question)
+    escaped_title = escape(title)
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
-        f'<title>{title}</title></head><body style="font-family:sans-serif;'
+        f'<title>{escaped_title}</title></head><body style="font-family:sans-serif;'
         'max-width:720px;margin:40px auto;line-height:1.6;color:#1e293b">'
-        f"<h1 style='font-size:20px'>{title}</h1>"
-        f"<p style='color:#64748b;font-size:13px'>{question}</p>"
+        f"<h1 style='font-size:20px'>{question}</h1>"
+        f"<p style='color:#64748b;font-size:13px'>Investigated as {escaped_title}</p>"
         f"<p>{summary}</p>"
         "<p style='color:#94a3b8;font-size:11px'>This is a fallback rendering. "
         "See the Reports page for the full visual report.</p>"

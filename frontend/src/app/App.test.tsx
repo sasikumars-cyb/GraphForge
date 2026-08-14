@@ -15,6 +15,7 @@ import * as analysisApi from "../lib/api/analysis";
 import { ApiError } from "../lib/api/client";
 import type { AIAnalysisResult } from "../types/analysis";
 import type { User } from "../types/auth";
+import type { RepositoryOverviewResponse } from "../lib/api/repositories";
 import type { TrackedRepository } from "../types/github";
 import type { PullRequest } from "../types/pullRequest";
 
@@ -76,6 +77,22 @@ const FAKE_PR: PullRequest = {
 };
 
 const NOT_FOUND = new ApiError(404, "not_found", "not found");
+
+const EMPTY_OVERVIEW: RepositoryOverviewResponse = {
+  items: [],
+  stats: {
+    repositories_monitored: 0,
+    organization_count: 0,
+    open_pull_request_count: 0,
+    awaiting_analysis_count: 0,
+    high_risk_this_week_count: 0,
+    avg_indexing_time_ms: null,
+  },
+  page: 1,
+  page_size: 24,
+  total: 0,
+  has_more: false,
+};
 
 const _FAKE_AI_RESULT: AIAnalysisResult = {
   executive_summary: "No breaking changes.",
@@ -179,12 +196,14 @@ describe("App navigation (authenticated)", () => {
     ["/reports", "Reports"],
     ["/settings", "Settings"],
   ])("renders the %s page at %s", async (path, heading) => {
-    // Both RepositoriesPage (via useDashboardData) and ArchitecturePage
-    // call this eagerly on mount and it wasn't mocked here — with no
-    // tracked repos, an unmocked call fell through to whatever is actually
-    // listening on the configured API base URL. Mocking it keeps this test
-    // hermetic regardless of what else is reachable on that URL.
+    // ArchitecturePage calls this eagerly on mount and it wasn't mocked
+    // here — with no tracked repos, an unmocked call fell through to
+    // whatever is actually listening on the configured API base URL.
+    // Mocking it keeps this test hermetic regardless of what else is
+    // reachable on that URL. RepositoriesPage's own single request needs
+    // the same treatment.
     vi.spyOn(githubApi, "listTrackedRepositories").mockResolvedValue([]);
+    vi.spyOn(repositoriesApi, "getRepositoriesOverview").mockResolvedValue(EMPTY_OVERVIEW);
     renderApp(path);
     expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeInTheDocument();
   });
@@ -210,10 +229,10 @@ describe("App navigation (authenticated)", () => {
     vi.spyOn(repositoriesApi, "getLatestIndexingJob").mockRejectedValue(NOT_FOUND);
     vi.spyOn(repositoriesApi, "removeRepository").mockResolvedValue(undefined);
     // This test navigates to /repositories after removal, which renders
-    // RepositoriesPage's useDashboardData — it calls this per pull request
-    // and it wasn't mocked here, so it fell through to whatever is
-    // actually reachable at the configured API base URL.
-    vi.spyOn(analysisApi, "getDeterministicAnalysis").mockRejectedValue(NOT_FOUND);
+    // RepositoriesPage — its one overview request would otherwise fall
+    // through to whatever is actually reachable at the configured API
+    // base URL.
+    vi.spyOn(repositoriesApi, "getRepositoriesOverview").mockResolvedValue(EMPTY_OVERVIEW);
 
     renderApp("/repositories/repo-1");
     await screen.findByRole("heading", { level: 1, name: "local/order-service" });

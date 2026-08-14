@@ -1,16 +1,20 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
 import { Card } from "../components/Card";
 import { StatCard } from "../components/StatCard";
+import { Pagination } from "../components/Pagination";
 import { Table, type TableColumn } from "../components/Table";
 import { StatusBadge } from "../components/StatusBadge";
 import { useAuth } from "../app/auth-context";
-import { useDashboardData, type DashboardRepositoryRow } from "../hooks/useDashboardData";
+import {
+  formatIndexingDuration,
+  useDebounced,
+  useRepositoriesOverview,
+  type RepositoryOverviewItem,
+} from "../hooks/useRepositoriesOverview";
 import { getLatestIndexingJob, triggerIndexing } from "../lib/api/repositories";
 import { repositoryHealthPresentation } from "../lib/statusPresentation";
 import { formatRelativeTime } from "../lib/formatDate";
-import type { IndexingJob } from "../types/graph";
 import {
   AlertTriangle,
   CheckCircle2,
@@ -19,47 +23,70 @@ import {
   FolderGit2,
   GitPullRequest,
   LayoutDashboard,
+  Search,
 } from "lucide-react";
 
 type IndexingFilter = "all" | "indexed" | "not_indexed" | "failed";
+type HealthFilter = "all" | "critical" | "attention" | "healthy";
+
+const PAGE_SIZE_OPTIONS = [24, 48, 96];
 
 // Bulk indexing polls every selected repo's job status; capped so a hung
 // backend job can't keep this loop (and its setState calls) running forever.
 const BULK_INDEX_POLL_INTERVAL_MS = 1500;
 const BULK_INDEX_POLL_MAX_MS = 5 * 60 * 1000;
 
-function indexingStatusOf(job: IndexingJob | null | undefined): IndexingFilter {
-  if (!job) return "not_indexed";
-  if (job.status === "completed") return "indexed";
-  if (job.status === "failed") return "failed";
-  return "not_indexed";
-}
+const INDEXING_FILTER_LABELS: Record<IndexingFilter, string> = {
+  all: "All",
+  indexed: "Indexed",
+  not_indexed: "Not indexed",
+  failed: "Index failed",
+};
 
+const HEALTH_FILTER_LABELS: Record<HealthFilter, string> = {
+  all: "All",
+  critical: "Critical",
+  attention: "Needs attention",
+  healthy: "Healthy",
+};
+
+/**
+ * Repositories — a paginated, server-filtered list.
+ *
+ * Every figure on this page (health, open-PR counts, indexing status,
+ * headline stats) comes from a single `GET /repositories/overview` request
+ * for the *current page*. It used to be assembled client-side from one PR
+ * list and one indexing job per repository plus one analysis per open PR,
+ * and rendered as one card per repository with no pagination at all — both
+ * the request count and the DOM grew with the size of the account rather
+ * than the size of the screen, which is untenable at a few hundred
+ * repositories and hopeless at a thousand.
+ */
 export function RepositoriesPage() {
   const { token } = useAuth();
-  const queryClient = useQueryClient();
-  const { stats, repositories, isLoading, error } = useDashboardData();
-  // KAN-37 — one cached, deduplicated query per repository's latest
-  // indexing job, keyed identically to `RepositoryDetailPage`'s own poll of
-  // the same endpoint, so navigating between the two never refetches a job
-  // the other page just loaded. `.data` is `undefined` while in flight and
-  // `null` once resolved with no job — the `jobsByRepoId[repo.id] ===
-  // undefined` check below (rendered as "Loading…") depends on that
-  // distinction, so a rejected fetch is caught to `null` (never indexed)
-  // rather than left to throw.
-  const jobQueries = useQueries({
-    queries: repositories.map((repo) => ({
-      queryKey: ["indexing-job", repo.id],
-      queryFn: ({ signal }: { signal: AbortSignal }) =>
-        getLatestIndexingJob(token as string, repo.id, signal).catch(() => null),
-      enabled: token !== null,
-    })),
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE_OPTIONS[0]);
+  const [search, setSearch] = useState("");
+  const [indexingFilter, setIndexingFilter] = useState<IndexingFilter>("all");
+  const [healthFilter, setHealthFilter] = useState<HealthFilter>("all");
+  const debouncedSearch = useDebounced(search);
+
+  const { items, stats, total, isLoading, error, refetch } = useRepositoriesOverview({
+    page,
+    pageSize,
+    q: debouncedSearch,
+    indexing: indexingFilter,
+    health: healthFilter,
   });
-  const jobsByRepoId: Record<string, IndexingJob | null | undefined> = Object.fromEntries(
-    repositories.map((repo, i) => [repo.id, jobQueries[i]?.data]),
-  );
+
+  // Any narrowing of the result set invalidates the current page number —
+  // staying on page 7 of a filter that now has two pages shows an empty
+  // list with rows that do exist just out of reach.
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, indexingFilter, healthFilter, pageSize]);
+
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [filter, setFilter] = useState<IndexingFilter>("all");
   const [bulkProgress, setBulkProgress] = useState<{ current: number; total: number } | null>(null);
   const [bulkResult, setBulkResult] = useState<{ success: number; failed: number } | null>(null);
   // Tracks component lifetime — handleIndexSelected's poll loop below is
@@ -74,10 +101,8 @@ export function RepositoriesPage() {
     };
   }, []);
 
-  const filteredRepositories =
-    filter === "all"
-      ? repositories
-      : repositories.filter((repo) => indexingStatusOf(jobsByRepoId[repo.id]) === filter);
+  const pageIds = useMemo(() => items.map((item) => item.id), [items]);
+  const allOnPageSelected = pageIds.length > 0 && pageIds.every((id) => selectedIds.has(id));
 
   function toggleOne(id: string) {
     setSelectedIds((prev) => {
@@ -88,12 +113,16 @@ export function RepositoriesPage() {
     });
   }
 
-  function toggleAll() {
-    setSelectedIds((prev) =>
-      prev.size === filteredRepositories.length
-        ? new Set()
-        : new Set(filteredRepositories.map((r) => r.id)),
-    );
+  // Selection is per-page but *cumulative* — paging away no longer silently
+  // drops what you'd already picked, which matters now that reaching a
+  // given repository can take several pages.
+  function toggleAllOnPage() {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allOnPageSelected) pageIds.forEach((id) => next.delete(id));
+      else pageIds.forEach((id) => next.add(id));
+      return next;
+    });
   }
 
   async function handleIndexSelected() {
@@ -132,11 +161,6 @@ export function RepositoriesPage() {
           pending.delete(id);
           if (job.status === "completed") success++;
           else failed++;
-          // Writes straight into the same cache entry `jobQueries` reads
-          // above, rather than a separate bit of local state — the row
-          // updates immediately without a redundant refetch of what this
-          // loop just fetched itself.
-          queryClient.setQueryData(["indexing-job", id], job);
         }
       }
       setBulkProgress({ current: ids.length - pending.size, total: ids.length });
@@ -149,19 +173,21 @@ export function RepositoriesPage() {
     setBulkProgress(null);
     setBulkResult({ success, failed });
     setSelectedIds(new Set());
+    // The rows this loop just changed are server-derived — re-read them
+    // rather than patching status client-side and drifting from the same
+    // page's own stats.
+    refetch();
   }
 
-  const columns: TableColumn<DashboardRepositoryRow>[] = [
+  const columns: TableColumn<RepositoryOverviewItem>[] = [
     {
       key: "select",
       header: (
         <input
           type="checkbox"
-          checked={
-            filteredRepositories.length > 0 && selectedIds.size === filteredRepositories.length
-          }
-          onChange={toggleAll}
-          aria-label="Select all repositories"
+          checked={allOnPageSelected}
+          onChange={toggleAllOnPage}
+          aria-label="Select all repositories on this page"
         />
       ),
       render: (repo) => (
@@ -169,7 +195,7 @@ export function RepositoriesPage() {
           type="checkbox"
           checked={selectedIds.has(repo.id)}
           onChange={() => toggleOne(repo.id)}
-          aria-label={`Select ${repo.fullName}`}
+          aria-label={`Select ${repo.full_name}`}
         />
       ),
     },
@@ -178,10 +204,9 @@ export function RepositoriesPage() {
       header: "Repository",
       render: (repo) => (
         <Link to={`/repositories/${repo.id}`} className="hover:underline">
-          {repo.fullName}
+          {repo.full_name}
         </Link>
       ),
-      sortValue: (repo) => repo.fullName.toLowerCase(),
     },
     {
       key: "source",
@@ -192,7 +217,6 @@ export function RepositoriesPage() {
           tone={repo.source === "local" ? "info" : "neutral"}
         />
       ),
-      sortValue: (repo) => repo.source,
     },
     {
       key: "health",
@@ -201,59 +225,29 @@ export function RepositoriesPage() {
         const { label, tone } = repositoryHealthPresentation(repo.health);
         return <StatusBadge label={label} tone={tone} />;
       },
-      sortValue: (repo) => repositoryHealthPresentation(repo.health).label,
     },
     {
       key: "openPrs",
       header: "Open PRs",
-      render: (repo) => repo.openPullRequests,
-      sortValue: (repo) => repo.openPullRequests,
+      render: (repo) => repo.open_pull_requests,
     },
     {
       key: "indexing",
       header: "Indexing status",
-      render: (repo) => {
-        const job = jobsByRepoId[repo.id];
-        if (job === undefined) return <span className="text-xs text-fg-muted">Loading…</span>;
-        if (!job) return <StatusBadge label="Not indexed" tone="neutral" />;
-        if (job.status === "completed") return <StatusBadge label="Indexed" tone="success" />;
-        if (job.status === "failed") return <StatusBadge label="Index failed" tone="danger" />;
-        return <StatusBadge label="Indexing…" tone="info" />;
-      },
-      // Ranked, not alphabetical — "failed" first (needs attention), then
-      // "not indexed"/"indexing" (in progress or pending), "indexed" last
-      // (nothing to do). Loading is a transient client state, not a real
-      // status, so it sorts with "not indexed" rather than getting its own
-      // rank the data will never actually settle on.
-      sortValue: (repo) => {
-        const job = jobsByRepoId[repo.id];
-        const status = indexingStatusOf(job);
-        // `indexingStatusOf` never actually returns "all" (that value only
-        // exists for the page's own filter dropdown) — the fallback is here
-        // purely so this stays exhaustive against IndexingFilter's full type
-        // rather than assuming that stays true forever.
-        const rank: Record<IndexingFilter, number> = {
-          failed: 0,
-          not_indexed: 1,
-          indexed: 2,
-          all: 1,
-        };
-        return rank[status];
-      },
+      render: (repo) => <IndexingBadge repo={repo} />,
     },
     {
       key: "lastIndexed",
       header: "Last indexed",
-      render: (repo) => {
-        const job = jobsByRepoId[repo.id];
-        return job?.finished_at ? formatRelativeTime(job.finished_at) : "—";
-      },
-      sortValue: (repo) => {
-        const job = jobsByRepoId[repo.id];
-        return job?.finished_at ? new Date(job.finished_at).getTime() : null;
-      },
+      render: (repo) => (repo.last_indexed_at ? formatRelativeTime(repo.last_indexed_at) : "—"),
     },
   ];
+
+  // Column sorting was client-side over the full list; with the list now
+  // paginated server-side it could only ever sort the visible page, which
+  // reads as sorting but isn't. The server's own ordering (most urgent
+  // first, then alphabetical) is applied across every page instead, and
+  // the filters above are how you narrow to what you're looking for.
 
   return (
     <div className="flex flex-col gap-6">
@@ -264,31 +258,30 @@ export function RepositoriesPage() {
         </p>
       </div>
 
-      {/* Operational snapshot — moved here from the Dashboard, which now
-          only answers "what am I working on / what's next / what
-          happened", not ambient repository/PR metrics. */}
+      {/* Operational snapshot — account-wide, so it deliberately does not
+          move when the filters below narrow the list. */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           label="Repositories monitored"
-          value={isLoading ? "—" : String(stats.repositoriesMonitored)}
-          hint={`across ${stats.organizationCount} organization${stats.organizationCount === 1 ? "" : "s"}`}
+          value={isLoading ? "—" : stats.repositories_monitored.toLocaleString()}
+          hint={`across ${stats.organization_count} organization${stats.organization_count === 1 ? "" : "s"}`}
           icon={FolderGit2}
         />
         <StatCard
           label="Open pull requests"
-          value={isLoading ? "—" : String(stats.openPullRequestCount)}
-          hint={`${stats.awaitingAnalysisCount} awaiting analysis`}
+          value={isLoading ? "—" : stats.open_pull_request_count.toLocaleString()}
+          hint={`${stats.awaiting_analysis_count} awaiting analysis`}
           icon={GitPullRequest}
         />
         <StatCard
           label="High risk changes"
-          value={isLoading ? "—" : String(stats.highRiskThisWeekCount)}
+          value={isLoading ? "—" : stats.high_risk_this_week_count.toLocaleString()}
           hint="critical or high this week"
           icon={LayoutDashboard}
         />
         <StatCard
           label="Avg. indexing time"
-          value={isLoading ? "—" : stats.avgIndexingTimeLabel}
+          value={isLoading ? "—" : formatIndexingDuration(stats.avg_indexing_time_ms)}
           hint="per repository"
           icon={Clock}
         />
@@ -300,15 +293,68 @@ export function RepositoriesPage() {
         </div>
       )}
 
-      {/* ── Repository intelligence — "why should I care", not "here's
-          a database row". Cards lead; the sortable/filterable/bulk-index
-          table (unchanged below, in its own disclosure) is the
-          operational tool for managing indexing across many repos at
-          once — a different job than "which repositories need my
-          attention right now", so it stays a click away rather than
-          competing for the same space. ──────────────────────────────── */}
-      {!isLoading && repositories.length > 0 && (
-        <RepositoryIntelligenceGrid repositories={repositories} jobsByRepoId={jobsByRepoId} />
+      {/* Search + filters drive both views below — one set of controls, so
+          the card grid and the management table can never disagree about
+          which repositories are under discussion. */}
+      <div className="flex flex-col gap-3">
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-fg-subtle"
+            aria-hidden="true"
+          />
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search repositories by name…"
+            aria-label="Search repositories"
+            className="focus-ring w-full rounded-lg border border-line bg-surface py-2 pl-9 pr-3 text-sm text-fg placeholder:text-fg-subtle"
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+          <FilterChips
+            legend="Indexing"
+            options={["all", "indexed", "not_indexed", "failed"] as const}
+            labels={INDEXING_FILTER_LABELS}
+            value={indexingFilter}
+            onChange={setIndexingFilter}
+          />
+          <FilterChips
+            legend="Health"
+            options={["all", "critical", "attention", "healthy"] as const}
+            labels={HEALTH_FILTER_LABELS}
+            value={healthFilter}
+            onChange={setHealthFilter}
+          />
+        </div>
+      </div>
+
+      {/* ── Repository intelligence — "why should I care", not "here's a
+          database row". One page of cards, never the whole account. ── */}
+      {isLoading && items.length === 0 ? (
+        <p className="py-16 text-center text-sm text-fg-muted">Loading…</p>
+      ) : items.length === 0 ? (
+        <Card>
+          <p className="py-12 text-center text-sm text-fg-muted">
+            {stats.repositories_monitored === 0
+              ? "No repositories tracked yet. Connect GitHub and select repositories in Settings → Integrations."
+              : "No repositories match these filters."}
+          </p>
+        </Card>
+      ) : (
+        <RepositoryIntelligenceGrid repositories={items} />
+      )}
+
+      {total > 0 && (
+        <Pagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          onPageChange={setPage}
+          itemLabel="repositories"
+          pageSizeOptions={PAGE_SIZE_OPTIONS}
+          onPageSizeChange={setPageSize}
+        />
       )}
 
       <details className="group rounded-xl border border-line-muted open:bg-surface/40">
@@ -320,115 +366,136 @@ export function RepositoriesPage() {
           />
         </summary>
         <div className="px-4 pb-4">
-      <Card>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-2">
-            {(["all", "indexed", "not_indexed", "failed"] as const).map((option) => (
-              <button
-                key={option}
-                type="button"
-                onClick={() => setFilter(option)}
-                className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
-                  filter === option
-                    ? "border-info-line bg-info-bg text-info-fg"
-                    : "border-line text-fg-secondary hover:border-line-strong"
-                }`}
-              >
-                {option === "all"
-                  ? "All"
-                  : option === "indexed"
-                    ? "Indexed"
-                    : option === "not_indexed"
-                      ? "Not Indexed"
-                      : "Index Failed"}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex items-center gap-3">
-            {selectedIds.size > 0 && (
-              <>
-                <span className="text-xs text-fg-muted">{selectedIds.size} selected</span>
+          <Card>
+            {/* Shows exactly the page of repositories listed above rather
+                than every repository in the account — expanding this used
+                to render the entire list in one go. */}
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-xs text-fg-muted">
+                Showing the {items.length.toLocaleString()} repositor
+                {items.length === 1 ? "y" : "ies"} on this page. Use the search and filters above to
+                reach others — selections are kept as you page.
+              </p>
+              <div className="flex items-center gap-3">
+                {selectedIds.size > 0 && (
+                  <>
+                    <span className="text-xs text-fg-muted">{selectedIds.size} selected</span>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedIds(new Set())}
+                      className="text-xs text-fg-muted underline hover:text-fg-secondary"
+                    >
+                      Clear selection
+                    </button>
+                  </>
+                )}
                 <button
                   type="button"
-                  onClick={() => setSelectedIds(new Set())}
-                  className="text-xs text-fg-muted underline hover:text-fg-secondary"
+                  onClick={() => void handleIndexSelected()}
+                  disabled={selectedIds.size === 0 || bulkProgress !== null}
+                  className="rounded-md bg-info-solid px-3 py-1.5 text-sm font-medium text-info-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
                 >
-                  Clear selection
+                  {bulkProgress
+                    ? `Indexing ${bulkProgress.current} of ${bulkProgress.total} repositories…`
+                    : "Index Selected"}
                 </button>
-              </>
-            )}
-            <button
-              type="button"
-              onClick={() => void handleIndexSelected()}
-              disabled={selectedIds.size === 0 || bulkProgress !== null}
-              className="rounded-md bg-info-solid px-3 py-1.5 text-sm font-medium text-info-on-solid hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {bulkProgress
-                ? `Indexing ${bulkProgress.current} of ${bulkProgress.total} repositories…`
-                : "Index Selected"}
-            </button>
-          </div>
-        </div>
+              </div>
+            </div>
 
-        {bulkResult && (
-          <div className="mb-4 rounded-md border border-line bg-surface px-3 py-2 text-sm">
-            <span className="text-success-fg">✓ Successfully indexed: {bulkResult.success}</span>
-            {bulkResult.failed > 0 && (
-              <span className="ml-4 text-danger-fg">⚠ Failed: {bulkResult.failed}</span>
+            {bulkResult && (
+              <div className="mb-4 rounded-md border border-line bg-surface px-3 py-2 text-sm">
+                <span className="text-success-fg">
+                  ✓ Successfully indexed: {bulkResult.success}
+                </span>
+                {bulkResult.failed > 0 && (
+                  <span className="ml-4 text-danger-fg">⚠ Failed: {bulkResult.failed}</span>
+                )}
+              </div>
             )}
-          </div>
-        )}
 
-        <Table
-          columns={columns}
-          data={filteredRepositories}
-          getRowKey={(repo) => repo.id}
-          emptyMessage={
-            isLoading
-              ? "Loading…"
-              : repositories.length === 0
-                ? "No repositories tracked yet. Connect GitHub and select repositories in Settings → Integrations."
-                : "No repositories match this filter."
-          }
-        />
-      </Card>
+            <Table
+              columns={columns}
+              data={items}
+              getRowKey={(repo) => repo.id}
+              emptyMessage={isLoading ? "Loading…" : "No repositories match these filters."}
+            />
+
+            {total > 0 && (
+              <div className="mt-4">
+                <Pagination
+                  page={page}
+                  pageSize={pageSize}
+                  total={total}
+                  onPageChange={setPage}
+                  itemLabel="repositories"
+                />
+              </div>
+            )}
+          </Card>
         </div>
       </details>
     </div>
   );
 }
 
+function FilterChips<T extends string>({
+  legend,
+  options,
+  labels,
+  value,
+  onChange,
+}: {
+  legend: string;
+  options: readonly T[];
+  labels: Record<T, string>;
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs font-medium uppercase tracking-wide text-fg-subtle">{legend}</span>
+      {options.map((option) => (
+        <button
+          key={option}
+          type="button"
+          aria-pressed={value === option}
+          onClick={() => onChange(option)}
+          className={`rounded-md border px-3 py-1.5 text-xs font-medium ${
+            value === option
+              ? "border-info-line bg-info-bg text-info-fg"
+              : "border-line text-fg-secondary hover:border-line-strong"
+          }`}
+        >
+          {labels[option]}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function IndexingBadge({ repo }: { repo: RepositoryOverviewItem }) {
+  if (repo.indexing_in_progress) return <StatusBadge label="Indexing…" tone="info" />;
+  if (repo.indexing_status === "indexed") return <StatusBadge label="Indexed" tone="success" />;
+  if (repo.indexing_status === "failed") return <StatusBadge label="Index failed" tone="danger" />;
+  return <StatusBadge label="Not indexed" tone="neutral" />;
+}
+
 /** Health/indexing/activity, in one glance per repository — the "why
  * should I care" read the plain table couldn't give without opening every
- * row. Every field is real: `health` is computed upstream from actual PR
- * risk data (see useDashboardData), `openPullRequests` and `source` are
- * as-tracked, and indexing status/last-indexed come from the same
- * `jobsByRepoId` query the operational table below already fetches — no
- * second request, no invented signal. */
+ * row. Every field is real and server-derived: `health` from actual PR
+ * risk analyses, `open_pull_requests` and `source` as-tracked, indexing
+ * status from the repository's latest indexing job. Ordering (most urgent
+ * first, then alphabetical) is the server's, so it holds across pages
+ * rather than only within the slice that happens to be loaded. */
 function RepositoryIntelligenceGrid({
   repositories,
-  jobsByRepoId,
 }: {
-  repositories: DashboardRepositoryRow[];
-  jobsByRepoId: Record<string, IndexingJob | null | undefined>;
+  repositories: RepositoryOverviewItem[];
 }) {
-  // Attention-worthy first (health critical/attention), then everything
-  // else in the order the API returned it — not re-sorted beyond that, so
-  // this doesn't silently reorder relative to what "Manage & bulk index"
-  // shows below.
-  const ordered = [...repositories].sort((a, b) => {
-    const rank = { critical: 0, attention: 1, healthy: 2 } as const;
-    return rank[a.health] - rank[b.health];
-  });
-
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
-      {ordered.map((repo) => {
+      {repositories.map((repo) => {
         const { label: healthLabel, tone: healthTone } = repositoryHealthPresentation(repo.health);
-        const job = jobsByRepoId[repo.id];
-        const indexed = job?.status === "completed";
-        const indexFailed = job?.status === "failed";
         return (
           <Link
             key={repo.id}
@@ -436,12 +503,12 @@ function RepositoryIntelligenceGrid({
             className="focus-ring flex flex-col gap-3 rounded-xl border border-line-muted bg-surface p-4 transition-colors hover:border-line-strong hover:bg-surface-hover"
           >
             <div className="flex items-start justify-between gap-2">
-              {/* `name` not `fullName`: every card in a single-org
+              {/* `name` not `full_name`: every card in a single-org
                   dataset repeated an identical "org/" prefix, truncating
                   the one part of the name that actually varies — the
                   full name is still one hover/click away on the detail
                   page. */}
-              <p className="min-w-0 truncate text-sm font-semibold text-fg" title={repo.fullName}>
+              <p className="min-w-0 truncate text-sm font-semibold text-fg" title={repo.full_name}>
                 {repo.name}
               </p>
               <StatusBadge label={healthLabel} tone={healthTone} />
@@ -449,7 +516,7 @@ function RepositoryIntelligenceGrid({
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-fg-muted">
               <span className="flex items-center gap-1.5">
                 <GitPullRequest className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                {repo.openPullRequests} open PR{repo.openPullRequests === 1 ? "" : "s"}
+                {repo.open_pull_requests} open PR{repo.open_pull_requests === 1 ? "" : "s"}
               </span>
               <span className="flex items-center gap-1.5">
                 <FolderGit2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -457,17 +524,19 @@ function RepositoryIntelligenceGrid({
               </span>
             </div>
             <div className="mt-auto flex items-center gap-1.5 border-t border-line-muted pt-2.5 text-xs">
-              {indexFailed ? (
+              {repo.indexing_status === "failed" ? (
                 <span className="flex items-center gap-1 font-medium text-danger-fg">
                   <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                   Index failed
                 </span>
-              ) : indexed ? (
+              ) : repo.indexing_status === "indexed" ? (
                 <span className="flex items-center gap-1 text-fg-muted">
                   <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success-fg" aria-hidden="true" />
                   Indexed
-                  {job?.finished_at && ` · ${formatRelativeTime(job.finished_at)}`}
+                  {repo.last_indexed_at && ` · ${formatRelativeTime(repo.last_indexed_at)}`}
                 </span>
+              ) : repo.indexing_in_progress ? (
+                <span className="text-info-fg">Indexing…</span>
               ) : (
                 <span className="text-fg-subtle">Not indexed yet</span>
               )}

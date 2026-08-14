@@ -116,13 +116,22 @@ function ReportRow({ report, onStatusSettled }: { report: ReportSummary; onStatu
     <Card>
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <p className="truncate text-sm font-medium text-fg">{report.title}</p>
-            <StatusBadge label={statusLabel(report.status)} tone={statusTone(report.status)} />
-          </div>
-          <p className="mt-0.5 truncate text-xs text-fg-muted">
-            {report.workflow_title} · {formatRelativeTime(report.created_at)}
+          {/* The request the user made, verbatim — a report answers a
+              question somebody asked, so that question is what identifies
+              it here. The AI-generated short title and the workflow it ran
+              through are provenance, and read as the smaller line below.
+              Clamped rather than truncated to one line: a real request is
+              routinely a short paragraph, and the first line alone is
+              often just "Investigate whether…". */}
+          <p className="line-clamp-3 whitespace-pre-line text-sm font-medium text-fg">
+            {report.request || report.title}
           </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-fg-muted">
+            <StatusBadge label={statusLabel(report.status)} tone={statusTone(report.status)} />
+            <span className="truncate">{report.title}</span>
+            <span aria-hidden="true">·</span>
+            <span>{formatRelativeTime(report.created_at)}</span>
+          </div>
           {report.status === "failed" && report.error_message && (
             <p className="mt-1 text-xs text-danger-fg">{report.error_message}</p>
           )}
@@ -192,7 +201,8 @@ export function ReportsPage() {
       <div>
         <h1 className="text-xl font-semibold text-fg">Reports</h1>
         <p className="mt-1 text-sm text-fg-muted">
-          High-level reports generated automatically when a workflow's blueprint is approved.
+          What GraphForge found for each request you made — generated automatically once the
+          request's blueprint is approved.
         </p>
       </div>
 

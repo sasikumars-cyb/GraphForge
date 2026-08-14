@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { axe } from "jest-axe";
@@ -47,7 +47,7 @@ vi.mock("../components/graph/DependencyGraph", () => ({
   ),
 }));
 
-function renderWithAuth() {
+function renderWithAuth(initialPath = "/architecture") {
   const authValue: AuthContextValue = {
     user: {
       id: "u1",
@@ -74,7 +74,7 @@ function renderWithAuth() {
   return render(
     <QueryClientProvider client={queryClient}>
       <AuthContext.Provider value={authValue}>
-        <MemoryRouter>
+        <MemoryRouter initialEntries={[initialPath]}>
           <ArchitecturePage />
         </MemoryRouter>
       </AuthContext.Provider>
@@ -147,6 +147,24 @@ const NEIGHBORS_GRAPH: Graph = {
   edges: [{ source_id: "n1", target_id: "n3", type: "CALLS", properties: {} }],
 };
 
+// With SUMMARY's two repositories, "acme/notes" (12 nodes) is small enough
+// to appear in *both* the "Largest repositories" card and the "Ungrouped
+// repositories" card — a plain `getByText("acme/notes")` is ambiguous.
+// This scopes to the one that's actually the "select a repository to open
+// its graph" list the drill-down tests below mean to click into.
+function ungroupedRepositoriesCard() {
+  const heading = screen.getByRole("heading", { name: "Ungrouped repositories" });
+  return within(heading.closest("div.rounded-xl") as HTMLElement);
+}
+
+async function clickUngroupedRepository(
+  user: ReturnType<typeof userEvent.setup>,
+  name: string,
+) {
+  await screen.findByRole("heading", { name: "Ungrouped repositories" });
+  await user.click(ungroupedRepositoriesCard().getByText(name));
+}
+
 describe("ArchitecturePage", () => {
   it("displays the Architecture heading", async () => {
     vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
@@ -169,13 +187,55 @@ describe("ArchitecturePage", () => {
     expect(await screen.findByText("Failed to load the architecture summary.")).toBeInTheDocument();
   });
 
+  // A repository's own "View graph" button links to
+  // `/architecture?repository=<id>` (RepositoryDetailPage). This page's
+  // view state is local, so without reading that parameter every such
+  // click silently landed on the org-wide landing view.
+  describe("?repository= deep link", () => {
+    it("opens straight at the named repository's graph", async () => {
+      vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
+      vi.mocked(repositoriesApi.getRepositoryGraph).mockResolvedValue(REPO_GRAPH);
+      vi.mocked(repositoriesApi.getRepositoryGraphTypes).mockResolvedValue({
+        counts: { Service: 1, Endpoint: 1 },
+      });
+
+      renderWithAuth("/architecture?repository=repo-1");
+
+      // The repository's own explorer, not the landing view's list of
+      // every domain.
+      expect(await screen.findByTestId("dependency-graph")).toBeInTheDocument();
+      // Named in both the breadcrumb trail and the explorer's own header.
+      expect(screen.getAllByText("acme/billing-service").length).toBeGreaterThan(0);
+      // The landing view lists every ungrouped repository alongside the
+      // domain cards — none of that should be on screen.
+      expect(screen.queryByText("acme/notes")).not.toBeInTheDocument();
+    });
+
+    it("says so rather than silently showing the landing view for an untracked repository", async () => {
+      vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
+
+      renderWithAuth("/architecture?repository=repo-deleted");
+
+      expect(await screen.findByText(/isn't tracked any more/)).toBeInTheDocument();
+      // Still usable — it falls back to the landing view rather than
+      // rendering nothing.
+      expect(screen.getByRole("button", { name: /Payments/ })).toBeInTheDocument();
+    });
+  });
+
   describe("landing view", () => {
     it("shows org-wide stats", async () => {
       vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
       renderWithAuth();
 
       expect(await screen.findByText("42")).toBeInTheDocument(); // total nodes
-      expect(screen.getByText("2")).toBeInTheDocument(); // total repositories
+      // "2" alone is ambiguous — it's also the rank badge on the second
+      // "Largest repositories" row — so scope to the stat block it's
+      // actually the value of.
+      const reposLabel = screen.getByText("Repositories");
+      expect(
+        within(reposLabel.closest("div") as HTMLElement).getByText("2"),
+      ).toBeInTheDocument();
     });
 
     it("shows a domain card and an ungrouped repository", async () => {
@@ -183,7 +243,8 @@ describe("ArchitecturePage", () => {
       renderWithAuth();
 
       expect(await screen.findByRole("button", { name: /Payments/ })).toBeInTheDocument();
-      expect(await screen.findByText("acme/notes")).toBeInTheDocument();
+      await screen.findByRole("heading", { name: "Ungrouped repositories" });
+      expect(ungroupedRepositoriesCard().getByText("acme/notes")).toBeInTheDocument();
     });
 
     it("renders the Ungrouped bucket in the treemap as inert, not a drill-in target", async () => {
@@ -216,7 +277,7 @@ describe("ArchitecturePage", () => {
       const user = userEvent.setup();
       vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
       renderWithAuth();
-      await screen.findByText("acme/notes");
+      await screen.findByLabelText("Search repositories and domains");
 
       await user.type(screen.getByLabelText("Search repositories and domains"), "billing");
 
@@ -254,7 +315,7 @@ describe("ArchitecturePage", () => {
       vi.mocked(repositoriesApi.getRepositoryGraph).mockResolvedValue(REPO_GRAPH);
       renderWithAuth();
 
-      await user.click(await screen.findByText("acme/notes"));
+      await clickUngroupedRepository(user, "acme/notes");
 
       expect(await screen.findByTestId("dependency-graph")).toHaveTextContent("2 nodes");
       expect(repositoriesApi.getRepositoryGraph).toHaveBeenCalledWith(
@@ -272,7 +333,7 @@ describe("ArchitecturePage", () => {
       vi.mocked(repositoriesApi.getRepositoryGraph).mockResolvedValue(REPO_GRAPH);
       renderWithAuth();
 
-      await user.click(await screen.findByText("acme/notes"));
+      await clickUngroupedRepository(user, "acme/notes");
       const graphEl = await screen.findByTestId("dependency-graph");
       expect(graphEl).toHaveAttribute("data-view-mode", "repository");
 
@@ -293,7 +354,7 @@ describe("ArchitecturePage", () => {
       vi.mocked(repositoriesApi.getRepositoryGraphNodeNeighbors).mockResolvedValue(NEIGHBORS_GRAPH);
       renderWithAuth();
 
-      await user.click(await screen.findByText("acme/notes"));
+      await clickUngroupedRepository(user, "acme/notes");
       await screen.findByTestId("dependency-graph");
       await user.click(screen.getByRole("button", { name: "select billing" }));
 
@@ -324,7 +385,7 @@ describe("ArchitecturePage", () => {
       } as never);
       renderWithAuth();
 
-      await user.click(await screen.findByText("acme/notes"));
+      await clickUngroupedRepository(user, "acme/notes");
       await screen.findByTestId("dependency-graph");
 
       await user.click(screen.getByRole("button", { name: "Assign domain" }));
@@ -350,7 +411,7 @@ describe("ArchitecturePage", () => {
       vi.mocked(repositoriesApi.getRepositoryGraph).mockResolvedValue(REPO_GRAPH);
       renderWithAuth();
 
-      await user.click(await screen.findByText("acme/notes"));
+      await clickUngroupedRepository(user, "acme/notes");
       await screen.findByTestId("dependency-graph");
       await user.click(screen.getByRole("button", { name: "select billing" }));
       expect(await screen.findByRole("heading", { name: "billing" })).toBeInTheDocument();
@@ -367,7 +428,7 @@ describe("ArchitecturePage", () => {
     vi.mocked(architectureApi.getArchitectureSummary).mockResolvedValue(SUMMARY);
 
     const { container } = renderWithAuth();
-    await screen.findByText("acme/notes");
+    await screen.findByRole("heading", { name: "Ungrouped repositories" });
 
     expect(await axe(container)).toHaveNoViolations();
   });

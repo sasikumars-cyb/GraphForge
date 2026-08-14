@@ -32,6 +32,15 @@ class ReportSummary(BaseModel):
     workflow_id: str
     workflow_title: str
     title: str
+    # `Workflow.original_prompt` — the complete, unmodified request the
+    # user actually submitted. A report is the answer to *that*, not a
+    # record of the workflow machinery that produced it, so it's what the
+    # Reports list leads with; `title` (an AI-generated 5-10 word summary
+    # of the same prompt) and `workflow_title` are the short labels.
+    # Empty string only for a report whose workflow row has since been
+    # removed — never null, so the client has no second empty case to
+    # handle beyond "no text".
+    request: str
     status: str
     error_message: str | None
     created_at: str
@@ -57,6 +66,7 @@ def _to_summary(report: WorkflowReport) -> ReportSummary:
         id=str(report.id),
         workflow_id=str(report.workflow_id),
         workflow_title=report.workflow.title if report.workflow else report.title,
+        request=report.workflow.original_prompt if report.workflow else "",
         title=report.title,
         status=report.status,
         error_message=report.error_message,

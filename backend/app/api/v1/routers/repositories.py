@@ -4,11 +4,15 @@ their architecture indexing jobs / discovered graph.
 
 import asyncio
 import uuid
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select
+from pydantic import BaseModel
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.analysis.graph.neo4j_impact_reader import Neo4jImpactGraphReader
 from app.api.v1.dependencies import get_current_user
@@ -21,6 +25,7 @@ from app.graph.session import get_driver
 from app.indexer.workers.index_worker import schedule_indexing_job
 from app.models.indexing_job import IndexingJob
 from app.models.pull_request import PullRequest
+from app.models.pull_request_analysis import PullRequestAnalysis
 from app.models.repository import Repository
 from app.models.user import User
 from app.schemas.github import (
@@ -45,6 +50,159 @@ from app.services.github_service import (
 from app.services.local_repository_service import create_local_repository
 
 router = APIRouter(prefix="/repositories", tags=["repositories"])
+
+
+class RepositoryOverviewItem(BaseModel):
+    id: uuid.UUID
+    name: str
+    full_name: str
+    source: str
+    created_at: datetime
+    # "critical" (an open PR analyzed HIGH) | "attention" (an open PR
+    # analyzed MEDIUM, or not analyzed yet) | "healthy". Same rule the
+    # frontend used to apply itself over per-PR analyses.
+    health: Literal["critical", "attention", "healthy"]
+    open_pull_requests: int
+    # Derived from the latest indexing job: no job -> "not_indexed",
+    # pending/running -> "not_indexed" too (nothing usable indexed yet),
+    # matching the page's own filter vocabulary.
+    indexing_status: Literal["indexed", "not_indexed", "failed"]
+    # True only while a job is actually pending/running — lets the page
+    # distinguish "indexing right now" from "never indexed" without a
+    # second status axis in the filter.
+    indexing_in_progress: bool
+    last_indexed_at: datetime | None
+
+
+class RepositoryOverviewStats(BaseModel):
+    repositories_monitored: int
+    organization_count: int
+    open_pull_request_count: int
+    awaiting_analysis_count: int
+    high_risk_this_week_count: int
+    avg_indexing_time_ms: float | None
+
+
+class RepositoryOverviewResponse(BaseModel):
+    items: list[RepositoryOverviewItem]
+    # Account-wide, never page-scoped — see get_repositories_overview.
+    stats: RepositoryOverviewStats
+    page: int
+    page_size: int
+    total: int
+    has_more: bool
+
+
+@dataclass(frozen=True)
+class _PullRequestRollup:
+    open: int
+    awaiting_analysis: int
+    high_risk: int
+    high_risk_this_week: int
+    medium_risk: int
+
+
+_EMPTY_ROLLUP = _PullRequestRollup(0, 0, 0, 0, 0)
+
+
+async def _open_pull_request_rollups(
+    db: AsyncSession, repo_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, _PullRequestRollup]:
+    """Open-PR counts and risk mix per repository, in one grouped query.
+
+    LEFT JOIN, not INNER: a PR with no analysis row yet is exactly the
+    "awaiting analysis" case, so it has to survive the join.
+    """
+    one_week_ago = datetime.now(UTC) - timedelta(days=7)
+    result = await db.execute(
+        select(
+            PullRequest.repository_id,
+            func.count().label("open"),
+            func.sum(case((PullRequestAnalysis.id.is_(None), 1), else_=0)).label("awaiting"),
+            func.sum(case((PullRequestAnalysis.risk == "HIGH", 1), else_=0)).label("high"),
+            func.sum(
+                case(
+                    (
+                        (PullRequestAnalysis.risk == "HIGH")
+                        & (PullRequest.github_updated_at >= one_week_ago),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("high_recent"),
+            func.sum(case((PullRequestAnalysis.risk == "MEDIUM", 1), else_=0)).label("medium"),
+        )
+        .select_from(PullRequest)
+        .outerjoin(PullRequestAnalysis, PullRequestAnalysis.pull_request_id == PullRequest.id)
+        .where(PullRequest.repository_id.in_(repo_ids), PullRequest.state == "open")
+        .group_by(PullRequest.repository_id)
+    )
+    return {
+        row.repository_id: _PullRequestRollup(
+            open=row.open or 0,
+            awaiting_analysis=row.awaiting or 0,
+            high_risk=row.high or 0,
+            high_risk_this_week=row.high_recent or 0,
+            medium_risk=row.medium or 0,
+        )
+        for row in result
+    }
+
+
+async def _latest_indexing_jobs(
+    db: AsyncSession, repo_ids: list[uuid.UUID]
+) -> dict[uuid.UUID, IndexingJob]:
+    """The newest indexing job per repository, in one windowed query —
+    the batch equivalent of `GET /{repository_id}/index`, which the
+    Repositories page previously called once per repository."""
+    ranked = (
+        select(
+            IndexingJob,
+            func.row_number()
+            .over(
+                partition_by=IndexingJob.repository_id,
+                order_by=IndexingJob.created_at.desc(),
+            )
+            .label("rank"),
+        )
+        .where(IndexingJob.repository_id.in_(repo_ids))
+        .subquery()
+    )
+    job = aliased(IndexingJob, ranked)
+    result = await db.execute(select(job).where(ranked.c.rank == 1))
+    return {j.repository_id: j for j in result.scalars().all()}
+
+
+def _to_overview_item(
+    repo: Repository, rollup: _PullRequestRollup, job: IndexingJob | None
+) -> RepositoryOverviewItem:
+    if job is None:
+        indexing_status: Literal["indexed", "not_indexed", "failed"] = "not_indexed"
+    elif job.status == "completed":
+        indexing_status = "indexed"
+    elif job.status == "failed":
+        indexing_status = "failed"
+    else:
+        indexing_status = "not_indexed"
+
+    return RepositoryOverviewItem(
+        id=repo.id,
+        name=repo.name,
+        full_name=repo.full_name,
+        source=repo.source,
+        created_at=repo.created_at,
+        health=(
+            "critical"
+            if rollup.high_risk > 0
+            else "attention"
+            if rollup.medium_risk > 0 or rollup.awaiting_analysis > 0
+            else "healthy"
+        ),
+        open_pull_requests=rollup.open,
+        indexing_status=indexing_status,
+        indexing_in_progress=job is not None and job.status in ("pending", "running"),
+        last_indexed_at=job.finished_at if job is not None else None,
+    )
 
 
 async def _get_owned_repository(
@@ -97,6 +255,96 @@ async def list_repositories(
     db: AsyncSession = Depends(get_db_session),
 ) -> list[Repository]:
     return await list_tracked_repositories(db, current_user)
+
+
+@router.get("/overview", response_model=RepositoryOverviewResponse)
+async def get_repositories_overview(
+    page: int = Query(1, ge=1),
+    page_size: int = Query(24, ge=1, le=100),
+    q: str | None = Query(None, description="Case-insensitive substring match on full_name."),
+    indexing: Literal["all", "indexed", "not_indexed", "failed"] = Query("all"),
+    health: Literal["all", "critical", "attention", "healthy"] = Query("all"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> RepositoryOverviewResponse:
+    """Everything the Repositories page renders, in one paginated request.
+
+    Replaces the frontend's former fan-out — it fetched every repository,
+    then one PR list *and* one indexing job per repository, then one
+    analysis per open PR, which is O(repositories x PRs) HTTP requests and
+    falls over well before a user's 1000th repository. The same figures come
+    from three grouped queries here, each returning at most one row per
+    repository, so the whole page costs a fixed number of round trips
+    regardless of how much the user tracks.
+
+    `stats` is always computed across *all* of the user's repositories, not
+    just the returned page — it's an account-wide summary, and filtering or
+    paging the list underneath it must not silently change it. That's also
+    why filtering and paging happen in Python over those already-loaded
+    per-repository rows rather than in SQL: the rows are needed in full for
+    the stats either way, and pushing the filters down would mean either
+    running each query twice or duplicating the health rule in SQL. If a
+    single account ever grows past the tens of thousands of repositories
+    where holding one row each is still cheap, this is the trade-off to
+    revisit.
+    """
+    repos_result = await db.execute(
+        select(Repository).where(Repository.user_id == current_user.id).order_by(Repository.name)
+    )
+    repositories = list(repos_result.scalars().all())
+    repo_ids = [repo.id for repo in repositories]
+
+    pr_rows: dict[uuid.UUID, _PullRequestRollup] = {}
+    latest_jobs: dict[uuid.UUID, IndexingJob] = {}
+    if repo_ids:
+        pr_rows = await _open_pull_request_rollups(db, repo_ids)
+        latest_jobs = await _latest_indexing_jobs(db, repo_ids)
+
+    # Account-wide totals, before any filtering/pagination below.
+    durations_ms = [
+        (job.finished_at - job.started_at).total_seconds() * 1000
+        for job in latest_jobs.values()
+        if job.started_at is not None and job.finished_at is not None
+    ]
+    stats = RepositoryOverviewStats(
+        repositories_monitored=len(repositories),
+        organization_count=len({repo.owner for repo in repositories}),
+        open_pull_request_count=sum(r.open for r in pr_rows.values()),
+        awaiting_analysis_count=sum(r.awaiting_analysis for r in pr_rows.values()),
+        high_risk_this_week_count=sum(r.high_risk_this_week for r in pr_rows.values()),
+        avg_indexing_time_ms=(sum(durations_ms) / len(durations_ms)) if durations_ms else None,
+    )
+
+    items = [
+        _to_overview_item(repo, pr_rows.get(repo.id, _EMPTY_ROLLUP), latest_jobs.get(repo.id))
+        for repo in repositories
+    ]
+
+    needle = (q or "").strip().lower()
+    if needle:
+        items = [item for item in items if needle in item.full_name.lower()]
+    if indexing != "all":
+        items = [item for item in items if item.indexing_status == indexing]
+    if health != "all":
+        items = [item for item in items if item.health == health]
+
+    # Attention-worthy first, then alphabetical — the order the page's card
+    # grid wants, applied here so paging through it is stable and page 2
+    # genuinely holds the next-most-urgent repositories rather than
+    # whatever the client happened to receive first.
+    health_rank = {"critical": 0, "attention": 1, "healthy": 2}
+    items.sort(key=lambda item: (health_rank[item.health], item.full_name.lower()))
+
+    total = len(items)
+    start = (page - 1) * page_size
+    return RepositoryOverviewResponse(
+        items=items[start : start + page_size],
+        stats=stats,
+        page=page,
+        page_size=page_size,
+        total=total,
+        has_more=(start + page_size) < total,
+    )
 
 
 @router.get("/cross-repository-links", response_model=list[CrossRepositoryLinkResponse])

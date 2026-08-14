@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useQueryClient, useQuery } from "@tanstack/react-query";
 import { ArchitectureBreadcrumbs } from "../components/architecture/ArchitectureBreadcrumbs";
 import { ArchitectureDomainView } from "../components/architecture/ArchitectureDomainView";
@@ -30,12 +31,59 @@ export function ArchitecturePage() {
   const { token } = useAuth();
   const queryClient = useQueryClient();
   const [view, setView] = useState<ArchitectureView>({ level: "landing" });
+  const [searchParams, setSearchParams] = useSearchParams();
+  // Set when `?repository=` named something that isn't tracked any more —
+  // otherwise arriving here would silently show the landing view, which
+  // looks exactly like the link having done nothing.
+  const [unknownRepository, setUnknownRepository] = useState(false);
 
   const summaryQuery = useQuery({
     queryKey: ["architecture-summary"],
     queryFn: ({ signal }) => getArchitectureSummary(token as string, signal),
     enabled: token !== null,
   });
+
+  // `?repository=<id>` — how a repository's own "View graph" button asks
+  // this page to open straight at that repository (see
+  // RepositoryDetailPage). The view state below is otherwise entirely
+  // local, so without this the parameter was simply ignored and every
+  // such click landed on the org-wide landing view instead.
+  //
+  // Applied once, then stripped from the URL: it's a navigation
+  // instruction rather than a bookmark, and leaving it behind would mean
+  // a URL copied after browsing back to the landing view still jumps a
+  // reader into a repository they weren't looking at.
+  const requestedRepositoryId = searchParams.get("repository");
+  const appliedRepositoryParamRef = useRef(false);
+  useEffect(() => {
+    if (!requestedRepositoryId || appliedRepositoryParamRef.current) return;
+    // Wait for the summary rather than giving up — the repository's name
+    // and domain come from it, and it's usually still in flight when this
+    // page mounts from a fresh navigation.
+    const summary = summaryQuery.data;
+    if (!summary) return;
+
+    appliedRepositoryParamRef.current = true;
+    const repo = summary.repositories.find((r) => r.repository_id === requestedRepositoryId);
+    if (repo) {
+      setView({
+        level: "repository",
+        repositoryId: repo.repository_id,
+        repositoryName: repo.full_name,
+        domain: repo.domain,
+      });
+    } else {
+      setUnknownRepository(true);
+    }
+    setSearchParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        next.delete("repository");
+        return next;
+      },
+      { replace: true },
+    );
+  }, [requestedRepositoryId, summaryQuery.data, setSearchParams]);
 
   async function saveDomain(repositoryId: string, domain: string | null) {
     if (!token) return;
@@ -86,8 +134,21 @@ export function ArchitecturePage() {
         </p>
       </div>
 
+      {unknownRepository && (
+        <div className="rounded-lg border border-warning-line/30 bg-warning-bg px-4 py-3 text-sm text-warning-fg">
+          That repository isn't tracked any more, so its graph can't be opened. Showing every
+          indexed repository instead.
+        </div>
+      )}
+
       {view.level !== "landing" && (
-        <ArchitectureBreadcrumbs view={view} onNavigate={setView} />
+        <ArchitectureBreadcrumbs
+          view={view}
+          onNavigate={(next) => {
+            setUnknownRepository(false);
+            setView(next);
+          }}
+        />
       )}
 
       {summaryQuery.isPending ? (

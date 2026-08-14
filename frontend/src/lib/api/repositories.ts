@@ -20,6 +20,74 @@ export function getLatestIndexingJob(
   return apiFetch<IndexingJob>(`/repositories/${repositoryId}/index`, { token, signal });
 }
 
+export type RepositoryIndexingStatus = "indexed" | "not_indexed" | "failed";
+export type RepositoryHealthFilter = "all" | "critical" | "attention" | "healthy";
+
+export interface RepositoryOverviewItem {
+  id: string;
+  name: string;
+  full_name: string;
+  source: "github" | "local";
+  created_at: string;
+  health: "critical" | "attention" | "healthy";
+  open_pull_requests: number;
+  indexing_status: RepositoryIndexingStatus;
+  indexing_in_progress: boolean;
+  last_indexed_at: string | null;
+}
+
+export interface RepositoryOverviewStats {
+  repositories_monitored: number;
+  organization_count: number;
+  open_pull_request_count: number;
+  awaiting_analysis_count: number;
+  high_risk_this_week_count: number;
+  avg_indexing_time_ms: number | null;
+}
+
+export interface RepositoryOverviewResponse {
+  items: RepositoryOverviewItem[];
+  /** Account-wide, never scoped to the returned page or the active
+   * filters — the backend computes it over every tracked repository. */
+  stats: RepositoryOverviewStats;
+  page: number;
+  page_size: number;
+  total: number;
+  has_more: boolean;
+}
+
+export interface GetRepositoriesOverviewParams {
+  page?: number;
+  pageSize?: number;
+  /** Case-insensitive substring match on full name. */
+  q?: string;
+  indexing?: "all" | RepositoryIndexingStatus;
+  health?: RepositoryHealthFilter;
+}
+
+/** One paginated request backing the whole Repositories page — health,
+ * open-PR counts and indexing status included. Replaces the former
+ * per-repository fan-out (one PR list + one indexing job per repository,
+ * plus one analysis per open PR), which scaled with the size of the
+ * account rather than the size of the page. */
+export function getRepositoriesOverview(
+  token: string,
+  params: GetRepositoriesOverviewParams = {},
+  signal?: AbortSignal,
+): Promise<RepositoryOverviewResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.page !== undefined) searchParams.set("page", String(params.page));
+  if (params.pageSize !== undefined) searchParams.set("page_size", String(params.pageSize));
+  if (params.q) searchParams.set("q", params.q);
+  if (params.indexing && params.indexing !== "all") searchParams.set("indexing", params.indexing);
+  if (params.health && params.health !== "all") searchParams.set("health", params.health);
+  const qs = searchParams.toString();
+  return apiFetch<RepositoryOverviewResponse>(`/repositories/overview${qs ? `?${qs}` : ""}`, {
+    token,
+    signal,
+  });
+}
+
 export interface GetRepositoryGraphParams {
   /** Max nodes to return — omit to use the backend's own default cap. */
   limit?: number;
