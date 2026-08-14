@@ -115,6 +115,14 @@ class EvidenceItem(BaseModel):
     confidence: float
     hop_distance: int | None = None
     reason: str
+    # RFC-0033 — a small, bounded snippet of the component's own fetched
+    # source (never the full file — see `_select_source_excerpt`), so
+    # Planning's LLM can check a claim about behavior against the actual
+    # code instead of inferring it purely from ticket prose. Empty by
+    # default/whenever no source was fetched or no meaningful anchor was
+    # found — never a placeholder, per `_select_source_excerpt`'s own
+    # docstring on why guessing is worse than omitting.
+    source_excerpt: str = ""
 
 
 class EvidencePackage(BaseModel):
@@ -253,12 +261,123 @@ def _is_reuse_shaped(component: dict[str, Any]) -> bool:
     return bool(_REUSE_NAME_RE.search(text))
 
 
+# RFC-0033 — bounded source excerpts for must_modify evidence, so Planning's
+# LLM can check a claim about behavior against real code instead of only
+# inferring it from ticket prose (see the RFC-0032 audit: a field that was
+# explicitly assigned the wrong value got described as "not assigned",
+# because no evidence layer ever showed the LLM the actual line).
+_EXCERPT_CONTEXT_LINES = 2
+_EXCERPT_MAX_CHARS = 300
+_DEF_LINE_RE = re.compile(r"^(\s*)(?:async\s+def|def|class)\s+(\w+)\b")
+
+
+def _symbol_body_bounds(lines: list[str], short_name: str) -> tuple[int, int] | None:
+    """The line range of `short_name`'s own `def`/`class` block: from its
+    definition line up to (not including) the next sibling definition at
+    the same or shallower indentation, or end of file. `None` if no
+    definition line for this name is found at all — signal #1
+    ("component/symbol identity") is only usable when the fetched source
+    actually contains the symbol Context Discovery named, which is not
+    guaranteed (the component index and a later fetch can drift, or the
+    name may not be a def/class at all, e.g. a module-level constant)."""
+    def_idx = next(
+        (
+            i
+            for i, line in enumerate(lines)
+            if (m := _DEF_LINE_RE.match(line)) and m.group(2) == short_name
+        ),
+        None,
+    )
+    if def_idx is None:
+        return None
+    indent = len(_DEF_LINE_RE.match(lines[def_idx]).group(1))  # type: ignore[union-attr]
+    end_idx = len(lines)
+    for i in range(def_idx + 1, len(lines)):
+        m = _DEF_LINE_RE.match(lines[i])
+        if m and len(m.group(1)) <= indent:
+            end_idx = i
+            break
+    return def_idx, end_idx
+
+
+def _best_vocabulary_line(
+    lines: list[str], lo: int, hi: int, ticket_tokens: frozenset[str]
+) -> int | None:
+    """The line index in `lines[lo:hi]` whose own tokens overlap
+    `ticket_tokens` the most (ties go to the earliest line — same
+    insertion-order determinism this module already uses elsewhere).
+    `None` if nothing in the range shares any vocabulary at all — this is
+    signal #3 ("ticket-token overlap"), the same tokenization/token set
+    `curate()` already computes once for relevance scoring, not a new
+    matching mechanism."""
+    best_idx, best_overlap = None, 0
+    for i in range(lo, hi):
+        overlap = len(tokenize(lines[i]) & ticket_tokens)
+        if overlap > best_overlap:
+            best_idx, best_overlap = i, overlap
+    return best_idx
+
+
+def _select_source_excerpt(text: str, name: str, ticket_tokens: frozenset[str]) -> str:
+    """A small, bounded snippet of `text` anchored to whichever of these
+    signals is actually available, in order:
+
+    1. The component's own `def`/`class` block (signal: symbol identity
+       Context Discovery already assigned this evidence item) — scoped
+       to the shortcut `def`/`class` line, but see below.
+    2. "Matched source vocabulary already produced by the existing
+       relevance scorer" does not exist anywhere in this codebase today
+       (`_relevance_score`/RFC-0027's term-specificity machinery both
+       match ticket tokens only against a component's name/path, never
+       against fetched file content) — there is no second signal to
+       reuse here, so this tier is a documented no-op, not a fabricated
+       one.
+    3. Ticket-token overlap, scoped to the symbol's own body when found
+       (1), or the whole file when it wasn't — this is what actually
+       picks the specific line, since anchoring on the `def` line alone
+       would show a function's signature, not its bug, for anything
+       longer than a couple of lines.
+    4. No line anywhere shares ticket vocabulary, and no symbol
+       definition was found either: return "" rather than guess (no
+       first-N-lines fallback — an arbitrary excerpt is worse than none,
+       since it would look authoritative without being relevant).
+
+    Bounded to `_EXCERPT_CONTEXT_LINES` lines of context and
+    `_EXCERPT_MAX_CHARS` total — this is a pointer at the right few
+    lines, never a file dump.
+    """
+    if not text or not name:
+        return ""
+    lines = text.splitlines()
+    short_name = name.rsplit(".", 1)[-1]
+    bounds = _symbol_body_bounds(lines, short_name)
+    search_lo, search_hi = bounds if bounds is not None else (0, len(lines))
+
+    anchor = _best_vocabulary_line(lines, search_lo, search_hi, ticket_tokens)
+    if anchor is None and bounds is not None:
+        # Symbol found, but nothing inside it shares ticket vocabulary —
+        # the def/class line itself is still a meaningful anchor (answers
+        # "which function contains this behavior?"), so use it rather
+        # than falling all the way through to "".
+        anchor = bounds[0]
+    if anchor is None and bounds is None:
+        # No symbol match at all — last resort, search the whole file.
+        anchor = _best_vocabulary_line(lines, 0, len(lines), ticket_tokens)
+    if anchor is None:
+        return ""
+
+    lo = max(0, anchor - _EXCERPT_CONTEXT_LINES)
+    hi = min(len(lines), anchor + _EXCERPT_CONTEXT_LINES + 1)
+    return "\n".join(lines[lo:hi])[:_EXCERPT_MAX_CHARS]
+
+
 def curate(
     *,
     components: list[dict[str, Any]],
     neighborhood_nodes: list[dict[str, Any]],
     enriched_text: str,
     target_repositories: list[str],
+    source_file_texts: dict[tuple[str, str], str] | None = None,
 ) -> EvidencePackage:
     """Produce the curated, tiered, budget-bounded `EvidencePackage`.
 
@@ -281,6 +400,15 @@ def curate(
     `RepositoryCandidate.selected`) — components here get the ownership
     bonus; components elsewhere do not, regardless of how well they
     score otherwise.
+
+    `source_file_texts` — RFC-0033, optional and `None` by default so
+    every existing caller/test keeps today's exact behavior unchanged.
+    Keyed by `(repository, path)` to whatever `source_file` fact text
+    was already fetched (see `investigators.curate_evidence`, the only
+    caller that has ledger access to build this) — `curate()` itself
+    stays pure, this is just one more plain dict of data in, same as
+    `components`/`neighborhood_nodes`. Only consulted for `must_modify`
+    tier items; see `_select_source_excerpt`.
     """
     # Repository-name tokens are stripped from the relevance signal, not
     # just left in: a ticket almost always names its own repository
@@ -337,6 +465,17 @@ def curate(
         hop_distance: int | None,
         tier: Tier,
     ) -> EvidenceItem:
+        source_excerpt = ""
+        # RFC-0033 — must_modify only: this is the tier a root-cause claim
+        # actually gets made about, and keeping it scoped here (rather than
+        # every tier) is what keeps the added prompt text small.
+        if tier == "must_modify" and source_file_texts:
+            key = (str(component.get("repository", "")), str(component.get("file_path", "")))
+            file_text = source_file_texts.get(key, "")
+            if file_text:
+                source_excerpt = _select_source_excerpt(
+                    file_text, str(component.get("name", "")), ticket_tokens
+                )
         return EvidenceItem(
             name=str(component.get("name", "")),
             repository=str(component.get("repository", "")),
@@ -354,6 +493,7 @@ def curate(
             confidence=round(confidence_for(score), 4),
             hop_distance=hop_distance,
             reason=_reason_for(component, score, hop_distance),
+            source_excerpt=source_excerpt,
         )
 
     included_ids: set[str] = set()
@@ -448,11 +588,18 @@ def render_evidence_package_text(package: EvidencePackage) -> str:
         tier_items = package.by_tier(tier)  # type: ignore[arg-type]
         if not tier_items:
             continue
-        lines = [
-            f"- {item.name} ({item.repository}, {item.path or 'no path'}) — {item.reason} "
-            f"[confidence {item.confidence:.0%}]"
-            for item in tier_items
-        ]
+        lines = []
+        for item in tier_items:
+            line = (
+                f"- {item.name} ({item.repository}, {item.path or 'no path'}) — {item.reason} "
+                f"[confidence {item.confidence:.0%}]"
+            )
+            if item.source_excerpt:
+                # RFC-0033 — indented so it visually belongs to this item,
+                # not a new bullet; already bounded by _select_source_excerpt.
+                quoted = "\n".join(f"  | {ln}" for ln in item.source_excerpt.splitlines())
+                line += f"\n{quoted}"
+            lines.append(line)
         parts.append(f"**{_TIER_HEADINGS[tier]}**:\n" + "\n".join(lines))  # type: ignore[index]
 
     if package.excluded_count:

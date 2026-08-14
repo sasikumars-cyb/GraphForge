@@ -95,6 +95,16 @@ _PROMPT_DIR = Path(__file__).parent / "prompts"
 # produce repository-first plans; capping it both saves tokens and keeps
 # the architecture driven by the business brief.
 _MAX_GRAPH_CONTEXT_CHARS = 3_500
+# RFC-0034 — the total budget above is unchanged; this only guarantees how
+# it's split. Enough room for roughly one full must_modify evidence line
+# plus one full RFC-0033 source excerpt (bounded at 300 chars there) even
+# when `engineering_understanding` alone already fills the rest of the
+# budget — see `_combine_understanding_and_evidence`.
+_MIN_EVIDENCE_RESERVE_CHARS = 800
+_SUPPORTING_EVIDENCE_HEADER = (
+    "\n\n---\n\n**Supporting evidence** (for traceability — not the "
+    "primary basis for this plan):\n\n"
+)
 # Caps the stored LLM prompt/response trace (see LLMTrace) — generous enough
 # to hold a real prompt+plan in full, but not an unbounded dump if something
 # upstream misbehaves.
@@ -447,6 +457,43 @@ def _selected_repo_names(result: dict[str, Any], ranked_repo_names: list[str]) -
     return ranked_repo_names[:1]
 
 
+def _combine_understanding_and_evidence(understanding_text: str, evidence_text: str) -> str:
+    """Join the two exactly as before when they already fit the existing
+    `_MAX_GRAPH_CONTEXT_CHARS` budget (requirement: unchanged behavior in
+    the common case) — otherwise truncate `understanding_text` first so a
+    long deterministic-fallback understanding (see RFC-0032/0034: this
+    happens whenever engineering synthesis fails and falls back to a
+    flat evidence-only summary) cannot push the evidence section,
+    including any RFC-0033 source excerpts, out of the budget entirely.
+
+    `evidence_text` is never reordered or re-ranked here — it already
+    lists `must_modify` first (see `render_evidence_package_text`), so
+    truncating it from the tail when it still doesn't fit after
+    `understanding_text` is trimmed already preserves must_modify
+    (and its excerpts) ahead of lower-priority tiers, with no new
+    prioritization logic needed here.
+
+    RFC-0034 — this function does not change `_MAX_GRAPH_CONTEXT_CHARS`
+    itself; it only changes how the same total budget is split between
+    the two sections that share it.
+    """
+    combined = understanding_text + _SUPPORTING_EVIDENCE_HEADER + evidence_text
+    if len(combined) <= _MAX_GRAPH_CONTEXT_CHARS:
+        return combined
+
+    evidence_reserve = min(len(evidence_text), _MIN_EVIDENCE_RESERVE_CHARS)
+    understanding_budget = max(
+        0, _MAX_GRAPH_CONTEXT_CHARS - len(_SUPPORTING_EVIDENCE_HEADER) - evidence_reserve
+    )
+    truncated_understanding = understanding_text[:understanding_budget]
+    header_len = len(_SUPPORTING_EVIDENCE_HEADER)
+    evidence_budget = max(
+        0, _MAX_GRAPH_CONTEXT_CHARS - len(truncated_understanding) - header_len
+    )
+    truncated_evidence = evidence_text[:evidence_budget]
+    return truncated_understanding + _SUPPORTING_EVIDENCE_HEADER + truncated_evidence
+
+
 def _graph_context_text_from(result: dict[str, Any]) -> str:
     """The graph-context text this stage's prompt actually uses.
 
@@ -481,11 +528,7 @@ def _graph_context_text_from(result: dict[str, Any]) -> str:
             understanding_text = ""
         if understanding_text:
             if evidence_text:
-                return (
-                    understanding_text
-                    + "\n\n---\n\n**Supporting evidence** (for traceability — not the "
-                    "primary basis for this plan):\n\n" + evidence_text
-                )
+                return _combine_understanding_and_evidence(understanding_text, evidence_text)
             return understanding_text
 
     return evidence_text

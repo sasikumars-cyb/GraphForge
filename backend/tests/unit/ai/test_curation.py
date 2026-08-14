@@ -490,3 +490,156 @@ class TestRenderEvidencePackageText:
         )
         text = render_evidence_package_text(package)
         assert "scored below the relevance floor" in text
+
+
+# ---------------------------------------------------------------------------
+# RFC-0033 — bounded source excerpts for must_modify evidence.
+#
+# Regression anchor: RFC-0032's audit of PROT-5750 found that a field was
+# explicitly assigned the WRONG value in source, but GraphForge's Planning
+# LLM described it as "not explicitly assigned" — because the fetched
+# source content never reached Planning's prompt at all, only component
+# metadata (name/path/tier/scores). These tests are deliberately
+# domain-agnostic (see `test_no_domain_specific_terms_in_production_code`)
+# — the real ticket used `is_virtual_meter`; these use a synthetic
+# `enabled_flag` field instead.
+# ---------------------------------------------------------------------------
+
+
+def _long_function_source(wrong_value: str = '""') -> str:
+    """A function long enough that anchoring on its own `def` line alone
+    (+/- a couple lines of context) would NOT reach the assignment buried
+    in its body — this is what actually exercises symbol-scoped
+    vocabulary matching (signal #1 narrows the search to this function;
+    signal #3 picks the specific line within it), not just "the first
+    few lines of the function"."""
+    filler = "\n".join(f"    step_{i}()" for i in range(20))
+    return (
+        "def configure_flags(df):\n"
+        f"{filler}\n"
+        f'    result = df.withColumn("enabled_flag", F.lit({wrong_value}))\n'
+        "    return result\n"
+    )
+
+
+class TestRFC0033SourceExcerpt:
+    _REPO = "etl-core"
+    _PATH = "src/etl_core/flags/configure.py"
+
+    def _package_for(self, ticket_text: str, source_text: str | None):
+        components = [_component("c1", "configure_flags", self._REPO, self._PATH)]
+        source_file_texts = (
+            {(self._REPO, self._PATH): source_text} if source_text is not None else None
+        )
+        return curate(
+            components=components,
+            neighborhood_nodes=[_neighbor("c1", 0)],
+            enriched_text=ticket_text,
+            target_repositories=[self._REPO],
+            source_file_texts=source_file_texts,
+        )
+
+    def _must_modify_item(self, package):
+        return next(i for i in package.by_tier("must_modify") if i.name == "configure_flags")
+
+    def test_excerpt_contains_the_actual_wrong_assignment(self):
+        """The mandated RFC-0033 regression: the ticket names the expected
+        value ("true"); the source contains a different, wrong value
+        (`""`). The excerpt must surface the real assignment even though
+        the ticket's expected value never appears anywhere in the source."""
+        ticket_text = f"enabled_flag should be true for all records. Repo: {self._REPO}."
+        source_text = _long_function_source(wrong_value='""')
+
+        package = self._package_for(ticket_text, source_text)
+        item = self._must_modify_item(package)
+
+        assert 'withColumn("enabled_flag", F.lit(""))' in item.source_excerpt
+        # The selector did not need the ticket's expected value ("true")
+        # to be present anywhere in the source to find the real line.
+        assert "true" not in source_text
+
+    def test_no_source_content_produces_no_excerpt(self):
+        ticket_text = f"enabled_flag should be true. Repo: {self._REPO}."
+        package = self._package_for(ticket_text, source_text=None)
+        item = self._must_modify_item(package)
+        assert item.source_excerpt == ""
+
+    def test_bounded_even_for_a_large_function(self):
+        ticket_text = f"enabled_flag should be true. Repo: {self._REPO}."
+        source_text = _long_function_source(wrong_value='""')
+        package = self._package_for(ticket_text, source_text)
+        item = self._must_modify_item(package)
+
+        assert item.source_excerpt
+        assert len(item.source_excerpt) <= 300
+        assert item.source_excerpt.count("\n") <= 4  # at most 5 lines
+
+    def test_existing_metadata_unchanged_with_or_without_source_excerpt(self):
+        ticket_text = f"enabled_flag should be true. Repo: {self._REPO}."
+        without = self._package_for(ticket_text, source_text=None)
+        with_excerpt = self._package_for(ticket_text, _long_function_source())
+
+        a = self._must_modify_item(without)
+        b = self._must_modify_item(with_excerpt)
+        assert a.model_dump(exclude={"source_excerpt"}) == b.model_dump(exclude={"source_excerpt"})
+        assert a.source_excerpt == ""
+        assert b.source_excerpt != ""
+
+    def test_no_vocabulary_match_falls_back_to_the_symbols_own_definition_line(self):
+        """Signal #1 (symbol identity) alone is still a meaningful anchor
+        ("which function contains this behavior?") even when nothing in
+        the ticket overlaps the function body's own vocabulary."""
+        ticket_text = f"totally unrelated wording about something else. Repo: {self._REPO}."
+        package = self._package_for(ticket_text, _long_function_source())
+        item = self._must_modify_item(package)
+        assert "def configure_flags" in item.source_excerpt
+
+    def test_no_symbol_and_no_vocabulary_match_produces_no_excerpt(self):
+        ticket_text = f"totally unrelated wording. Repo: {self._REPO}."
+        source_text = "def some_other_function():\n    return None\n"
+        package = self._package_for(ticket_text, source_text)
+        item = self._must_modify_item(package)
+        assert item.source_excerpt == ""
+
+    def test_only_must_modify_tier_gets_excerpts(self):
+        components = [
+            _component("c1", "configure_flags", self._REPO, self._PATH),
+            _component("c2", "helper_reader", self._REPO, "src/etl_core/flags/helper.py"),
+        ]
+        source_file_texts = {
+            (self._REPO, self._PATH): _long_function_source(),
+            (self._REPO, "src/etl_core/flags/helper.py"): (
+                'def helper_reader():\n    enabled_flag = F.lit("")\n    return enabled_flag\n'
+            ),
+        }
+        package = curate(
+            components=components,
+            neighborhood_nodes=[_neighbor("c1", 0), _neighbor("c2", 2)],
+            enriched_text=f"enabled_flag should be true. Repo: {self._REPO}.",
+            target_repositories=[self._REPO],
+            source_file_texts=source_file_texts,
+        )
+        dep_items = [
+            i for i in package.by_tier("architecture_dependency") if i.name == "helper_reader"
+        ]
+        if dep_items:
+            assert dep_items[0].source_excerpt == ""
+
+    def test_planning_prompt_text_actually_contains_the_excerpt(self):
+        ticket_text = f"enabled_flag should be true. Repo: {self._REPO}."
+        package = self._package_for(ticket_text, _long_function_source())
+        text = render_evidence_package_text(package)
+        assert 'withColumn("enabled_flag", F.lit(""))' in text
+
+    def test_no_domain_specific_terms_in_production_code(self):
+        import inspect
+
+        from app.context_pipeline.reasoning import curation, investigators
+
+        banned = ["is_virtual_meter", "avangrid", " apc ", " gpc ", " mpc ", "prot-5750", "prot_5750"]
+        for module in (curation, investigators):
+            source = inspect.getsource(module).lower()
+            for term in banned:
+                assert term.strip() not in source, (
+                    f"{module.__name__} must stay domain-agnostic, found {term.strip()!r}"
+                )

@@ -76,9 +76,30 @@ async def call_mcp_tool(
 
 
 def _extract_text(result: Any) -> str:
+    """Join every text-bearing content block in `result.content`, in
+    order — the same "some servers only return unstructured content"
+    fallback `call_mcp_tool` documents above.
+
+    RFC-0035: a block carries its text one of two ways depending on MCP
+    content-block type, and both are handled here, not just the first:
+    - `TextContent`: text directly on the block (`block.text`) — this is
+      the original, unchanged behavior.
+    - `EmbeddedResource`: text one level down, on `block.resource.text`
+      (a `TextResourceContents`). A real GitHub-hosted MCP server's
+      `get_file_contents` was observed returning a `TextContent`
+      confirmation message ("successfully downloaded text file...") and
+      the actual file content as a *separate* `EmbeddedResource` block —
+      silently dropped before this fix, since only `block.text` was ever
+      read. `BlobResourceContents` (binary/base64 resources) has no
+      `.text` attribute, so it's a no-op here, not a guess about content
+      type — this stays duck-typed the same way `block.text` already was.
+    """
     parts: list[str] = []
     for block in getattr(result, "content", None) or []:
         text = getattr(block, "text", None)
+        if not text:
+            resource = getattr(block, "resource", None)
+            text = getattr(resource, "text", None)
         if text:
             parts.append(text)
     return "\n".join(parts)

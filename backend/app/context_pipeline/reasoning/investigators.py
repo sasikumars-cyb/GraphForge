@@ -2270,10 +2270,22 @@ async def curate_evidence(state: WorkingContext, session: SessionContext) -> Non
                     iteration=state.metadata.iteration,
                 )
 
+    # RFC-0033 — whatever source content this run already fetched (for
+    # source-selection/dependency-expansion, RFC-0022/0027), keyed for
+    # curate()'s optional excerpt-attachment. Built here, not inside
+    # curate(), because this is the one place with ledger access;
+    # curate() itself stays a pure function of plain data.
+    source_file_texts = {
+        (str(f.value.get("repository", "")), str(f.value.get("path", ""))): f.text
+        for f in state.ledger.facts_of("source_file")
+        if f.text
+    }
+
     package = curate(
         components=components,
         neighborhood_nodes=neighborhood_nodes,
         enriched_text=enriched_text,
         target_repositories=target_repos,
+        source_file_texts=source_file_texts,
     )
     state.derived["evidence_package"] = package.model_dump()
