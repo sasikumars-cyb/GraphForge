@@ -13,25 +13,27 @@ import { SectionHeading } from "./EngineeringUnderstandingPanel";
 import { InvestigationSummary } from "./InvestigationSummary";
 import { AdvancedDetailsSection } from "./AdvancedDetailsSection";
 import { ReasoningOverview } from "./ReasoningOverview";
-import { InvestigationTimeline } from "./InvestigationTimeline";
-import { KnowledgeLedger } from "./KnowledgeLedger";
-import { ReasoningSection } from "./ReasoningSection";
-import { UnknownsAndNext } from "./UnknownsAndNext";
 import { DebugPanel } from "./DebugPanel";
 
-/** `result.confidence` is a real number only once Context Discovery has
- * actually produced a scored result. While a run is still `awaiting_input`
+/** `result.context_completeness` (falling back to the deprecated
+ * `result.confidence` — same value, see `ContextDiscoveryResult`'s own
+ * docstring) is a real number only once Context Discovery has actually
+ * produced a scored result. While a run is still `awaiting_input`
  * (mid-clarification, no completed discovery result yet), `ContextExplorerPanel`
  * is still mounted from the in-flight `AgentStep.result` — see
- * `WorkflowPage`'s `discoveryResult` — so `confidence` can be `undefined`/
- * `null` here. `Math.round(undefined * 100)` silently renders "NaN%", which
- * reads as a real (nonsensical) score rather than "not computed yet." P3
- * fix: format defensively and say so honestly instead. */
-function formatConfidence(confidence: number | null | undefined): string {
-  if (typeof confidence !== "number" || Number.isNaN(confidence)) {
-    return "Confidence not yet available";
+ * `WorkflowPage`'s `discoveryResult` — so it can be `undefined`/`null`
+ * here. `Math.round(undefined * 100)` silently renders "NaN%", which reads
+ * as a real (nonsensical) score rather than "not computed yet." P3 fix:
+ * format defensively and say so honestly instead.
+ *
+ * Named for what the number actually is — evidence/context completeness,
+ * not confidence in an engineering conclusion — not for what it used to be
+ * called. */
+function formatCompleteness(completeness: number | null | undefined): string {
+  if (typeof completeness !== "number" || Number.isNaN(completeness)) {
+    return "context completeness not yet available";
   }
-  return `${Math.round(confidence * 100)}% confidence`;
+  return `${Math.round(completeness * 100)}% context completeness`;
 }
 
 interface ContextExplorerPanelProps {
@@ -216,24 +218,23 @@ export function ContextExplorerPanel({
             </p>
             <p className="mt-1 pl-5 text-[11px] text-warning-fg/80">
               What's below reflects what it found in the time it had, at{" "}
-              {formatConfidence(result.confidence)} and {result.readiness.toLowerCase()} readiness.
-              See Missing Information
-              and Unknowns in Advanced Details for exactly what's still open.
+              {formatCompleteness(result.context_completeness ?? result.confidence)} and{" "}
+              {result.readiness.toLowerCase()} readiness. See &ldquo;Still uncertain&rdquo; below
+              for exactly what&apos;s still open.
             </p>
           </div>
         )}
 
         {understanding && (
           <>
-            {/* Node 2: what it investigated, in order. */}
-            <InvestigationTimeline
-              steps={result.discovery_report?.investigation ?? []}
-              nextInvestigation={understanding.reasoning_summary.next_investigation}
-            />
-
-            {/* Node 3: what it believes, and how sure — not one number. */}
-            <KnowledgeLedger understanding={understanding} />
-
+            {/* The primary screen: what GraphForge found, how sure it is,
+                what's supported, what's still uncertain, and what to do
+                next — everything a reader (technical or not) needs
+                without opening anything. The raw investigation log, the
+                evidence-classification ledger, and the hypothesis/
+                contradiction breakdown are real and valuable but are
+                implementation detail for *this* question, not part of
+                answering it — they live in Advanced Details below. */}
             <InvestigationSummary result={result} understanding={understanding} />
 
             {/* Repository Selector — an adjustment to the narrative above,
@@ -247,21 +248,11 @@ export function ContextExplorerPanel({
 
             <AdvancedDetailsSection
               dto={understanding}
+              result={result}
               bundle={debugBundle}
               isLoading={isLoadingDebug}
               error={debugError}
               onExpand={handleExpandDebug}
-            />
-
-            {/* Node 4/5: why it believes that, and what contradicts it. */}
-            <ReasoningSection summary={understanding.reasoning_summary} />
-
-            {/* Node 6: what's still unknown, and what's next — closes the
-                narrative loop the timeline's dashed "next" row opens. */}
-            <UnknownsAndNext
-              missingInformation={understanding.missing_information}
-              unknowns={understanding.unknowns}
-              nextInvestigation={understanding.reasoning_summary.next_investigation}
             />
 
             <DebugPanel

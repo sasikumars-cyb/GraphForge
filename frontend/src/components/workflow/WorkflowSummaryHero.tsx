@@ -27,7 +27,16 @@ export function WorkflowSummaryHero({
   const evidenceCount = steps.reduce((sum, s) => sum + s.evidence.length, 0);
   const repoSet = new Set<string>();
   steps.forEach((s) => resultRepositories(s.result).forEach((r) => repoSet.add(r)));
-  const scored = steps.filter((s) => s.confidence.score !== null);
+  // Context Discovery's own score is evidence/context *completeness*, not
+  // confidence in an engineering conclusion — averaging it in with the
+  // other stages' genuine confidence scores would blend two different
+  // measurements into one number and then label it plain "Confidence,"
+  // which is exactly the conflation this metric's whole redesign exists to
+  // prevent (see ContextDiscoveryResult.context_completeness). Excluded
+  // here so this stat is a real average of confidence-shaped scores only.
+  const scored = steps.filter(
+    (s) => s.confidence.score !== null && s.agent_id !== "context_discovery",
+  );
   const avgConfidence =
     scored.length > 0
       ? scored.reduce((sum, s) => sum + (s.confidence.score as number), 0) / scored.length

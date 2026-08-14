@@ -1157,7 +1157,13 @@ async def continue_workflow(
                 error_code="context_discovery_blocked",
             )
         if readiness == "PARTIAL" and not body.acknowledge_partial:
-            confidence = (cd_result or {}).get("confidence", 0.0)
+            # `context_completeness` is the accurate name; `confidence` is
+            # the same number under the deprecated legacy key, kept as the
+            # fallback for a result persisted before `context_completeness`
+            # existed (see ContextDiscoveryResult's own docstring on why
+            # both fields are populated with the same value).
+            cd_result = cd_result or {}
+            confidence = cd_result.get("context_completeness", cd_result.get("confidence", 0.0))
             # No "resend with acknowledge_partial=true" here: this message is
             # rendered verbatim to the user, who is looking at a "Continue
             # anyway" button — telling them to resend an HTTP field is
@@ -1165,8 +1171,8 @@ async def continue_workflow(
             # `error_code` plus the documented `acknowledge_partial` field on
             # ContinueWorkflowRequest.
             raise AppError(
-                f"Context Discovery reached {confidence:.0%} confidence, but some optional "
-                "context is missing. " + _gap_explanation(cd_result, "advisory"),
+                f"Context Discovery gathered {confidence:.0%} of the evidence it looks for, "
+                "but some optional context is missing. " + _gap_explanation(cd_result, "advisory"),
                 status_code=409,
                 error_code="context_discovery_partial",
             )

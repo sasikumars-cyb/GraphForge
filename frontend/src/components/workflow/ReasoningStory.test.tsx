@@ -129,7 +129,7 @@ describe("ReasoningOverview", () => {
     expect(
       screen.getByText("The export transform doesn't close out end_datetime on re-ingestion."),
     ).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "86% confidence" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "86% context completeness" })).toBeInTheDocument();
     expect(screen.getByText("READY")).toBeInTheDocument();
   });
 
@@ -139,9 +139,47 @@ describe("ReasoningOverview", () => {
     expect(
       screen.getByText("Why do rate associations duplicate after ingestion?"),
     ).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "86% confidence" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "86% context completeness" })).toBeInTheDocument();
     // No "Currently believes" line without understanding.current_situation.
     expect(screen.queryByText(/Currently believes/)).not.toBeInTheDocument();
+  });
+
+  it("prefers the accurately-named context_completeness field over the deprecated confidence field", () => {
+    // A result from a workflow run after context_completeness was added
+    // carries both, always equal — the gauge must read the new field, not
+    // silently fall back to the old one when both are present.
+    render(
+      <ReasoningOverview
+        result={makeResult({ confidence: 0.5, context_completeness: 0.9 })}
+        understanding={null}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "90% context completeness" })).toBeInTheDocument();
+  });
+
+  it("does not treat a genuine 0% context_completeness as missing", () => {
+    // The whole point of `??` over `||` (and of the backend defaulting to
+    // `None`/`null` rather than `0.0`): a real, computed zero must render
+    // as 0%, not silently fall back to the (unrelated) legacy confidence
+    // value just because 0 is falsy.
+    render(
+      <ReasoningOverview
+        result={makeResult({ confidence: 0.6, context_completeness: 0 })}
+        understanding={null}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "0% context completeness" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "60% context completeness" })).not.toBeInTheDocument();
+  });
+
+  it("falls back to the deprecated confidence field for a result persisted before context_completeness existed", () => {
+    render(
+      <ReasoningOverview
+        result={makeResult({ confidence: 0.72, context_completeness: undefined })}
+        understanding={null}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "72% context completeness" })).toBeInTheDocument();
   });
 
   it("never renders NaN — an invalid confidence reads as 'not yet available'", () => {
@@ -151,15 +189,27 @@ describe("ReasoningOverview", () => {
         understanding={null}
       />,
     );
-    expect(screen.getByRole("img", { name: "Confidence not yet available" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Context completeness not yet available" })).toBeInTheDocument();
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
   });
 
-  it("shows the degraded ribbon, distinctly from a clean run, only when reasoning_summary.degraded is true", () => {
+  it("shows a plain-language read of the confidence number, keyed on readiness", () => {
+    render(
+      <ReasoningOverview
+        result={makeResult({ readiness: "PARTIAL" })}
+        understanding={makeUnderstanding()}
+      />,
+    );
+    expect(
+      screen.getByText(/identified the likely repository and relevant source code/),
+    ).toBeInTheDocument();
+  });
+
+  it("distinguishes 'Context Discovery completed' from 'Engineering Analysis not completed', distinctly from a clean run, only when reasoning_summary.degraded is true", () => {
     const { rerender } = render(
       <ReasoningOverview result={makeResult()} understanding={makeUnderstanding()} />,
     );
-    expect(screen.queryByText(/did not complete this pass/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Engineering Analysis — Not completed")).not.toBeInTheDocument();
 
     rerender(
       <ReasoningOverview
@@ -172,10 +222,14 @@ describe("ReasoningOverview", () => {
         })}
       />,
     );
-    expect(screen.getByText("Reasoning synthesis did not complete this pass.")).toBeInTheDocument();
+    expect(screen.getByText("Context Discovery — Completed")).toBeInTheDocument();
+    expect(screen.getByText("Engineering Analysis — Not completed")).toBeInTheDocument();
+    // Plain language, not the internal "reasoning synthesis degraded to a
+    // deterministic summary" phrasing.
     expect(
-      screen.getByText(/different from an investigation that genuinely found nothing to weigh/),
+      screen.getByText(/couldn.t complete the deeper root-cause analysis for this run/),
     ).toBeInTheDocument();
+    expect(screen.queryByText(/deterministic, evidence-only summary/)).not.toBeInTheDocument();
   });
 });
 

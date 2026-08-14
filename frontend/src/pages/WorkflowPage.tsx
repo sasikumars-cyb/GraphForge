@@ -410,7 +410,13 @@ export function WorkflowPage() {
         </div>
       )}
 
-      <div className="flex flex-col gap-3">
+      {/* `id`/`tabIndex` are the real scroll-and-focus target for Context
+          Explorer's "next step" control (see InvestigationSummary) — that
+          control used to render as inert, CTA-styled text with nowhere to
+          actually go; it now brings this zone into view, since "what's
+          next" always means "the decision below," regardless of which
+          banner happens to be showing. */}
+      <div id="workflow-decision-actions" tabIndex={-1} className="flex flex-col gap-3 outline-none">
         {phase === "awaiting_clarification" && workflow.pending_clarification && (
           <ContextClarificationBanner
             pendingClarification={workflow.pending_clarification}

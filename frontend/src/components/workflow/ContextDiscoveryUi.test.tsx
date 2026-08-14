@@ -526,7 +526,7 @@ describe("ContextExplorerPanel", () => {
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    await userEvent.click(screen.getByText("Advanced Details"));
+    await userEvent.click(screen.getByText("Technical Details"));
 
     // Production Code is open by default; its count is visible without
     // any further interaction. Scoped to the area's own heading (not a
@@ -556,7 +556,7 @@ describe("ContextExplorerPanel", () => {
     // The confidence gauge (ReasoningOverview) carries the percentage as
     // its accessible name rather than combined visible text, since the
     // digits and the "%" are two separately-styled DOM nodes.
-    expect(screen.getByRole("img", { name: "72% confidence" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "72% context completeness" })).toBeInTheDocument();
   });
 
   it("P3 regression: never renders NaN% confidence when no completed result exists yet", async () => {
@@ -571,7 +571,7 @@ describe("ContextExplorerPanel", () => {
       />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    expect(screen.getByRole("img", { name: "Confidence not yet available" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Context completeness not yet available" })).toBeInTheDocument();
     expect(screen.queryByText(/NaN/)).not.toBeInTheDocument();
   });
 
@@ -590,7 +590,7 @@ describe("ContextExplorerPanel", () => {
     expect(workflowsApi.fetchUnderstanding).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps capability readiness and known constraints inside Advanced Details, not the default view", async () => {
+  it("shows a plain-language 'what we know' checklist on the default view, full readiness detail and constraints only in Technical Details", async () => {
     renderWithAuth(
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
@@ -603,17 +603,27 @@ describe("ContextExplorerPanel", () => {
     // "Why GraphForge believes this".
     expect(screen.getByText(/Completed: Code understanding/)).toBeVisible();
 
-    // Capability readiness items, constraints, and documentation status are
-    // in Advanced Details — present in the DOM but not visible until expanded.
+    // "What we know" — the same satisfied/outstanding capability checklist
+    // Technical Details' fuller "Capability Readiness" section shows,
+    // surfaced here in plain language so a reader never has to expand
+    // anything to see what's actually backing the confidence number.
+    // Scoped to the checklist itself since "Code understanding"
+    // legitimately appears a second time inside Technical Details' own,
+    // more detailed rendering of the same underlying reasons.
+    const whatWeKnow = screen.getByText("What we know").closest("div") as HTMLElement;
+    expect(within(whatWeKnow).getByText("Code understanding")).toBeVisible();
+    expect(within(whatWeKnow).getByText("Architecture components discovered")).toBeVisible();
+
+    // Constraints and documentation status are in Technical Details —
+    // present in the DOM but not visible until expanded.
     expect(screen.getByText("Documentation requirements not yet satisfied.")).not.toBeVisible();
     expect(screen.getByText(/Must not exceed 3 retries/)).not.toBeVisible();
 
-    await userEvent.click(screen.getByText("Advanced Details"));
+    await userEvent.click(screen.getByText("Technical Details"));
 
     expect(screen.getByText("Documentation requirements not yet satisfied.")).toBeVisible();
     expect(screen.getByText(/Must not exceed 3 retries/)).toBeVisible();
     expect(screen.getByText(/Must-modify \(1\): RetryHandler/)).toBeInTheDocument();
-    expect(screen.getByText("Code understanding")).toBeInTheDocument();
   });
 
   it("expands Debug on demand and fetches the debug bundle (?debug=true), not before", async () => {
@@ -648,7 +658,7 @@ describe("ContextExplorerPanel", () => {
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    await userEvent.click(screen.getByText("Advanced Details"));
+    await userEvent.click(screen.getByText("Technical Details"));
 
     expect(await screen.findByText("29%")).toBeVisible();
     expect(screen.getByText("Knowledge graph reachable")).toBeVisible();
@@ -662,7 +672,7 @@ describe("ContextExplorerPanel", () => {
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    await userEvent.click(screen.getByText("Advanced Details"));
+    await userEvent.click(screen.getByText("Technical Details"));
 
     expect(await screen.findByText("ghost-service")).toBeVisible();
     expect(screen.getByText("unverified claim")).toBeVisible();
@@ -674,7 +684,7 @@ describe("ContextExplorerPanel", () => {
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
-    await userEvent.click(screen.getByText("Advanced Details"));
+    await userEvent.click(screen.getByText("Technical Details"));
 
     await waitFor(() => {
       expect(workflowsApi.fetchUnderstanding).toHaveBeenLastCalledWith("tok", "w1", true);
@@ -858,6 +868,9 @@ describe("ReasoningSection", () => {
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
+    // ReasoningSection now renders inside Advanced Details (see
+    // AdvancedDetailsSection) rather than always-open in the primary flow.
+    await userEvent.click(screen.getByText("Technical Details"));
     expect(
       screen.getByText(/No competing hypotheses or contradictions were needed/),
     ).toBeInTheDocument();
@@ -895,6 +908,9 @@ describe("ReasoningSection", () => {
       <ContextExplorerPanel workflowId="w1" result={makeResult()} onOverridden={vi.fn()} />,
     );
     await screen.findByText("Add retry backoff for flaky downstream calls");
+    // ReasoningSection now renders inside Advanced Details (see
+    // AdvancedDetailsSection) rather than always-open in the primary flow.
+    await userEvent.click(screen.getByText("Technical Details"));
 
     // Rendered twice by design — once in the "Strongest explanation"
     // summary line, once as the hypothesis card's own description.

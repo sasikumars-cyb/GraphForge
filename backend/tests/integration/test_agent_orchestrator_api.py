@@ -1034,7 +1034,14 @@ async def test_planning_requires_acknowledge_partial_when_context_discovery_is_p
     assert refused.status_code == 409
     body = refused.json()
     assert body["error"]["code"] == "context_discovery_partial"
-    assert "confidence" in body["error"]["message"].lower()
+    # Not "confidence" — this number is evidence/context completeness, not
+    # confidence in an engineering conclusion (see the Context Discovery
+    # confidence-semantics audit). "reached 82% confidence" read as a claim
+    # about the answer's correctness; "gathered 82% of the evidence" says
+    # what the number actually measures.
+    assert "gathered" in body["error"]["message"].lower()
+    assert "% of the evidence" in body["error"]["message"]
+    assert "confidence" not in body["error"]["message"].lower()
 
     # Nothing was queued by the refused attempt.
     detail = (await client.get(f"/api/v1/workflows/{workflow_id}", headers=headers)).json()

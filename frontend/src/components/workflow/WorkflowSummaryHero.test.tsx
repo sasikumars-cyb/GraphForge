@@ -85,6 +85,30 @@ describe("WorkflowSummaryHero", () => {
     expect(screen.getByText("90%")).toBeInTheDocument();
   });
 
+  it("excludes Context Discovery's evidence-completeness score from the averaged Confidence stat", () => {
+    // Context Discovery's own score measures something different (context
+    // completeness, not confidence) — blending it into a bare "Confidence"
+    // average would be exactly the conflation the confidence-semantics
+    // audit exists to prevent. Only the two genuine-confidence steps
+    // should contribute: (0.9 + 1.0) / 2 = 95%, not (0.2 + 0.9 + 1.0) / 3.
+    render(
+      <WorkflowSummaryHero
+        workflow={workflow}
+        steps={[
+          makeStep({
+            step_id: "cd",
+            agent_id: "context_discovery",
+            confidence: { score: 0.2, reasoning: "" },
+          }),
+          makeStep({ step_id: "s2", confidence: { score: 0.9, reasoning: "" } }),
+          makeStep({ step_id: "s3", confidence: { score: 1.0, reasoning: "" } }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("95%")).toBeInTheDocument();
+    expect(screen.queryByText("70%")).not.toBeInTheDocument();
+  });
+
   it("shows a placeholder when no step reported a confidence score", () => {
     render(
       <WorkflowSummaryHero

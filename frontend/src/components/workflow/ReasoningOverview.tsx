@@ -24,26 +24,47 @@ const READINESS_TONE: Record<ContextReadiness, { fg: string; bg: string; label: 
   BLOCKED: { fg: "text-danger-fg", bg: "bg-danger-bg", label: "Blocked" },
 };
 
-/** `confidence` is a real number only once Context Discovery has produced a
- * scored result — during `awaiting_input` it can be `undefined`/`NaN` (see
- * `ContextExplorerPanel.formatConfidence`'s own comment on the same issue).
- * The gauge must degrade the same honest way: an empty ring and a dash,
- * never a fabricated 0% or a NaN-derived arc. */
-function ConfidenceGauge({
-  confidence,
+// A one-sentence plain-language read of the confidence number — the
+// number alone answers "how much," not "how much of what." Keyed on
+// `readiness` only (never ticket content), so it's the same honest
+// sentence for every investigation at a given readiness level.
+const READINESS_EXPLANATION: Record<ContextReadiness, string> = {
+  READY: "GraphForge gathered everything it needed and is confident in what it found.",
+  PARTIAL:
+    "GraphForge identified the likely repository and relevant source code, but some supporting information is still missing.",
+  BLOCKED: "GraphForge could not gather enough information to proceed confidently.",
+};
+
+/** Context Discovery's number is evidence/context *completeness* — how much
+ * of the configured signal set (work item / repository / architecture /
+ * documentation / ...) it found — never confidence in an engineering
+ * conclusion (see `ContextDiscoveryResult.context_completeness`'s own
+ * docstring on the backend for the full distinction). Labeling this gauge
+ * "confidence" is exactly the conflation that read as contradictory next to
+ * a thin-looking Knowledge Ledger; "Context completeness" says what the
+ * number actually is.
+ *
+ * The value itself is a real number only once Context Discovery has
+ * produced a scored result — during `awaiting_input` it can be
+ * `undefined`/`NaN` (see `ContextExplorerPanel.formatCompleteness`'s own
+ * comment on the same issue). The gauge must degrade the same honest way:
+ * an empty ring and a dash, never a fabricated 0% or a NaN-derived arc. */
+function CompletenessGauge({
+  completeness,
   readiness,
 }: {
-  confidence: number | null | undefined;
+  completeness: number | null | undefined;
   readiness: ContextReadiness;
 }) {
-  const valid = typeof confidence === "number" && !Number.isNaN(confidence);
-  const pct = valid ? Math.round(Math.max(0, Math.min(1, confidence)) * 100) : null;
+  const valid = typeof completeness === "number" && !Number.isNaN(completeness);
+  const pct = valid ? Math.round(Math.max(0, Math.min(1, completeness)) * 100) : null;
   const tone = READINESS_TONE[readiness] ?? READINESS_TONE.BLOCKED;
   const radius = 26;
   const circumference = 2 * Math.PI * radius;
   const offset = pct === null ? circumference : circumference - (circumference * pct) / 100;
 
-  const accessibleName = pct === null ? "Confidence not yet available" : `${pct}% confidence`;
+  const accessibleName =
+    pct === null ? "Context completeness not yet available" : `${pct}% context completeness`;
 
   return (
     <div className="flex shrink-0 flex-col items-center gap-1" role="img" aria-label={accessibleName}>
@@ -73,8 +94,11 @@ function ConfidenceGauge({
           {pct === null ? "–" : `${pct}%`}
         </div>
       </div>
-      <span className={`text-[9px] font-bold uppercase tracking-wide ${tone.fg}`} aria-hidden="true">
-        {tone.label}
+      <span
+        className="text-[9px] font-bold uppercase tracking-wide text-fg-subtle"
+        aria-hidden="true"
+      >
+        Context completeness
       </span>
     </div>
   );
@@ -104,7 +128,10 @@ export function ReasoningOverview({ result, understanding }: ReasoningOverviewPr
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-col gap-3 rounded-lg border border-line-muted bg-surface-raised px-3.5 py-3 sm:flex-row sm:items-center">
-        <ConfidenceGauge confidence={result.confidence} readiness={result.readiness} />
+        <CompletenessGauge
+          completeness={result.context_completeness ?? result.confidence}
+          readiness={result.readiness}
+        />
 
         <div className="flex min-w-0 flex-1 flex-col gap-1.5">
           <p className="text-xs leading-snug text-fg-secondary">
@@ -143,21 +170,39 @@ export function ReasoningOverview({ result, understanding }: ReasoningOverviewPr
         </div>
       </div>
 
-      {/* The single most important truthfulness requirement of this whole
-          redesign: a failed synthesis pass must never look like "nothing to
-          weigh." This banner is the one place that distinction is stated
-          plainly, before a reader ever reaches the (thin-looking) Knowledge
-          Ledger or hypothesis cards below. */}
+      {/* A plain-language read of the number above it — a non-technical
+          reader shouldn't have to infer what "83% · Partial" means on
+          their own. */}
+      <p className="text-xs leading-relaxed text-fg-secondary">
+        {READINESS_EXPLANATION[result.readiness] ?? READINESS_EXPLANATION.BLOCKED}
+      </p>
+
+      {/* Distinguishes *what* didn't finish from *whether the
+          investigation itself succeeded* — the single most important
+          truthfulness requirement of this whole page. Fact-gathering
+          (Context Discovery) and root-cause reasoning (Engineering
+          Analysis) are two different steps; when only the second one
+          didn't finish, showing that plainly (not as "reasoning synthesis
+          degraded to a deterministic summary") is what keeps a reader from
+          concluding GraphForge found nothing when it actually found
+          real, useful evidence. */}
       {degraded && (
-        <div className="flex items-start gap-2 rounded-lg border border-warning-line/40 bg-warning-bg px-3 py-2.5">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning-fg" aria-hidden="true" />
-          <p className="text-xs leading-snug font-medium text-warning-fg">
-            Reasoning synthesis did not complete this pass.
-            <span className="mt-0.5 block font-normal text-warning-fg/85">
-              What&apos;s shown below is a deterministic, evidence-only summary — no fresh hypothesis
-              or contradiction comparison ran. This is different from an investigation that
-              genuinely found nothing to weigh.
+        <div className="flex flex-col gap-2 rounded-lg border border-warning-line/40 bg-warning-bg px-3 py-2.5">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-medium">
+            <span className="flex items-center gap-1.5 text-success-fg">
+              <CheckCircle2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              Context Discovery — Completed
             </span>
+            <span className="flex items-center gap-1.5 text-warning-fg">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+              Engineering Analysis — Not completed
+            </span>
+          </div>
+          <p className="text-xs leading-snug text-warning-fg/85">
+            GraphForge finished gathering evidence, but couldn&apos;t complete the deeper
+            root-cause analysis for this run. What&apos;s shown below reflects the evidence it
+            gathered, not a conclusion it reasoned through — different from an investigation
+            that looked and genuinely found nothing.
           </p>
         </div>
       )}

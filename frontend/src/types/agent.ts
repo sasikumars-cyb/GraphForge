@@ -537,10 +537,27 @@ export interface ContextDiscoveryResult {
    * whether there's enough). Backend-computed, never re-derive this from
    * `readiness`/gaps/etc. client-side. See `CompletionStatus`. */
   completion_status: CompletionStatus;
-  /** Necessity-weighted mean of the per-capability scores, excluding
-   * capabilities that don't apply to this request. Entirely evidence-derived —
-   * no LLM self-report contributes to it. */
+  /** DEPRECATED name for `context_completeness` below — same value, kept
+   * for backward compatibility (a result persisted before
+   * `context_completeness` existed has this field but not that one). Not
+   * engineering confidence: necessity-weighted mean of the per-capability
+   * evidence-completeness scores (work item / repository / architecture /
+   * documentation / ...), excluding capabilities that don't apply.
+   * Entirely evidence-derived — no LLM self-report contributes to it.
+   * Prefer `context_completeness` in new code. */
   confidence: number;
+  /** The accurate name for the same number `confidence` holds — added
+   * alongside it, not a recomputation. `null`/`undefined` only for a
+   * result persisted before this field existed (the backend schema
+   * defaults it to `None`, not `0`, specifically so an old row can never
+   * be mistaken for a real, computed 0% — see
+   * `ContextDiscoveryResult.context_completeness`'s own docstring); fall
+   * back to `confidence` in that case with `??` (same value once both are
+   * present — never use `||`, which would also — wrongly — treat a
+   * genuine 0% as missing). This is NOT confidence in the engineering
+   * root cause or proposed change — see Engineering Review's own,
+   * independently-computed `confidence` for that. */
+  context_completeness?: number | null;
   capability_confidence: Record<string, number>;
   clarification_rounds: number;
   blocking_reasons: string[];
@@ -649,7 +666,12 @@ export interface Interpretation {
  * reasoning/projection.build_discovery_report on the backend). */
 export interface DiscoveryReport {
   readiness: ContextReadiness;
+  /** DEPRECATED — see ContextDiscoveryResult.confidence's own comment. */
   confidence: number;
+  /** Same value as `confidence`, honestly named — `null`/`undefined` for a
+   * report predating this field; fall back with `??`, never `||`. See
+   * ContextDiscoveryResult.context_completeness. */
+  context_completeness?: number | null;
   headline: string;
   transcript: TranscriptEntry[];
   confidence_breakdown: CapabilityBreakdown[];

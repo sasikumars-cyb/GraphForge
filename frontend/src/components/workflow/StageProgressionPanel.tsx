@@ -20,6 +20,29 @@ interface CompletedStage {
 
 const DROP_THRESHOLD = 0.05;
 
+// Not every stage's `confidence.score` measures the same thing, and
+// reusing the bare word "Confidence" for five different stages was its
+// own version of the same conflation this metric split exists to fix —
+// a reader has no way to tell "Planning confidence" and "Testing
+// confidence" apart at a glance if both just say "Confidence." Each stage
+// gets its own name for what it actually assessed; metadata only — the
+// scores themselves and the drop detection below are unchanged. Any stage
+// not in this table (e.g. the standalone PR-diff "review" agent, which
+// never runs inside this pipeline) falls back to the generic "Confidence"
+// rather than silently having no label at all.
+const STAGE_METRIC_LABEL: Record<string, string> = {
+  context_discovery: "Context completeness",
+  planning: "Plan confidence",
+  development: "Implementation confidence",
+  testing: "Test confidence",
+  documentation_planning: "Documentation confidence",
+  engineering_review: "Engineering confidence",
+};
+
+function metricLabel(stage: string): string {
+  return STAGE_METRIC_LABEL[stage] ?? "Confidence";
+}
+
 /**
  * Two things about a run's real execution that existed in the data but had
  * no view: how confidence moved stage to stage, and where the time and
@@ -74,10 +97,15 @@ export function StageProgressionPanel({
 
   return (
     <div className="flex flex-col gap-5 rounded-xl border border-line-muted bg-surface p-5">
-      {/* Confidence progression */}
+      {/* Stage metrics — each stage's own score, individually labeled */}
       <div>
-        <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-fg-muted">
-          Confidence by stage
+        <p className="mb-0.5 text-xs font-semibold uppercase tracking-wide text-fg-muted">
+          Stage metrics
+        </p>
+        <p className="mb-3 text-[11px] text-fg-subtle">
+          Each stage measures its own thing, labeled below its score — Context
+          Discovery&apos;s is how much relevant information was gathered, not confidence in an
+          engineering conclusion.
         </p>
         <div className="flex items-stretch gap-1">
           {completed.map((c, i) => {
@@ -85,6 +113,7 @@ export function StageProgressionPanel({
             const prevScore = i > 0 ? completed[i - 1].step.confidence.score : null;
             const dropped =
               score !== null && prevScore !== null && prevScore - score >= DROP_THRESHOLD;
+            const metric = metricLabel(c.stage);
             return (
               <div key={c.stage} className="flex flex-1 items-center gap-1">
                 {i > 0 && (
@@ -95,7 +124,7 @@ export function StageProgressionPanel({
                     {dropped && (
                       <span
                         className="mt-0.5 flex items-center gap-0.5 text-[10px] font-semibold text-danger-fg"
-                        title={`Confidence dropped from ${Math.round((prevScore as number) * 100)}% to ${Math.round((score as number) * 100)}% here — the ${stageLabel(c.stage)} stage likely found something the previous stage didn't account for.`}
+                        title={`Dropped from ${Math.round((prevScore as number) * 100)}% to ${Math.round((score as number) * 100)}% here — the ${stageLabel(c.stage)} stage likely found something the previous stage didn't account for. Note this compares ${metricLabel(completed[i - 1].stage)} to ${metric}, which aren't always the same kind of measurement.`}
                       >
                         <TrendingDown className="h-3 w-3" aria-hidden="true" />
                       </span>
@@ -113,11 +142,15 @@ export function StageProgressionPanel({
                             ? "text-warning-fg"
                             : "text-danger-fg"
                     }`}
+                    title={metric}
                   >
                     {score === null ? "—" : `${Math.round(score * 100)}%`}
                   </span>
                   <span className="truncate text-[10px] text-fg-muted" title={stageLabel(c.stage)}>
                     {stageLabel(c.stage)}
+                  </span>
+                  <span className="truncate text-[9px] text-fg-subtle" title={metric}>
+                    {metric}
                   </span>
                 </div>
               </div>

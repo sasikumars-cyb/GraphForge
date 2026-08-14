@@ -130,6 +130,54 @@ describe("RepositorySelector", () => {
     expect(explicitLabel).not.toHaveTextContent("possible match");
   });
 
+  it("badges the top-ranked suggestion as Recommended, keeping its specific reason intact", () => {
+    renderWithAuth(
+      <RepositorySelector
+        workflowId="wf1"
+        result={makeResult()}
+        humanOverride={null}
+        onOverridden={vi.fn()}
+      />,
+    );
+
+    // streaming-pipeline is first in `suggested` — it gets the badge.
+    const topLabel = screen.getByText("streaming-pipeline").closest("label");
+    expect(topLabel).toHaveTextContent("Recommended");
+    // Its specific, real reason is not overwritten by generic copy — a
+    // structural signal ("shares a Kafka topic") is more informative than
+    // any boilerplate "most relevant" phrase would be.
+    expect(topLabel).toHaveTextContent("Shares Kafka topic 'orders-created' with etl-core.");
+
+    // shared-utils is second — no badge for it.
+    const secondLabel = screen.getByText("shared-utils").closest("label");
+    expect(secondLabel).not.toHaveTextContent("Recommended");
+  });
+
+  it("translates the backend's generic ranking fallback into plain language, only when that's the actual reason", () => {
+    renderWithAuth(
+      <RepositorySelector
+        workflowId="wf1"
+        result={makeResult({
+          repositories: [
+            {
+              name: "only-suggestion",
+              source: "suggested",
+              selected: false,
+              reason: "Ranks closely against this request's terms.",
+            },
+          ],
+        })}
+        humanOverride={null}
+        onOverridden={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByText("Recommended because it appears most relevant to this request."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Ranks closely against/)).not.toBeInTheDocument();
+  });
+
   it("pre-checks explicit repositories and leaves suggested ones unchecked", () => {
     renderWithAuth(
       <RepositorySelector
@@ -224,15 +272,84 @@ describe("RepositorySelector", () => {
     expect(checkbox).toHaveAttribute("aria-checked", "false");
   });
 
-  it("renders nothing when discovery found no repositories at all", () => {
-    const { container } = renderWithAuth(
+  it("offers a manual add, not a dead end, when discovery found no repositories at all", async () => {
+    const user = userEvent.setup();
+    const onOverridden = vi.fn();
+    renderWithAuth(
       <RepositorySelector
         workflowId="wf1"
         result={makeResult({ repositories: [] })}
         humanOverride={null}
+        onOverridden={onOverridden}
+      />,
+    );
+
+    expect(
+      screen.getByText(/didn.t confidently identify a repository/),
+    ).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("Repository name to add"), "ledger-service");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+
+    expect(screen.getByText("ledger-service")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /save selection/i }));
+
+    expect(overrideStageResult).toHaveBeenCalledWith(
+      "tok",
+      "wf1",
+      "context_discovery",
+      expect.objectContaining({
+        override: expect.objectContaining({
+          repositories: [expect.objectContaining({ name: "ledger-service", selected: true })],
+        }),
+      }),
+    );
+    expect(onOverridden).toHaveBeenCalled();
+  });
+
+  it("lets the user name a repository GraphForge's investigation didn't find", async () => {
+    const user = userEvent.setup();
+    renderWithAuth(
+      <RepositorySelector
+        workflowId="wf1"
+        result={makeResult()}
+        humanOverride={null}
         onOverridden={vi.fn()}
       />,
     );
-    expect(container).toBeEmptyDOMElement();
+
+    await user.click(
+      screen.getByRole("button", { name: /Add a repository GraphForge didn.t find/ }),
+    );
+    await user.type(screen.getByLabelText("Repository name to add"), "ledger-service");
+    await user.click(screen.getByRole("button", { name: "Add" }));
+
+    const checkbox = screen
+      .getByText("ledger-service")
+      .closest("label")
+      ?.querySelector('[role="checkbox"]');
+    expect(checkbox).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("explains what unchecking a previously-selected repository means", async () => {
+    const user = userEvent.setup();
+    renderWithAuth(
+      <RepositorySelector
+        workflowId="wf1"
+        result={makeResult()}
+        humanOverride={null}
+        onOverridden={vi.fn()}
+      />,
+    );
+
+    const checkbox = screen
+      .getByText("ingestion-framework")
+      .closest("label")
+      ?.querySelector('[role="checkbox"]');
+    await user.click(checkbox as Element);
+
+    expect(
+      screen.getByText("This repository won't be included in the investigation or planning."),
+    ).toBeInTheDocument();
   });
 });

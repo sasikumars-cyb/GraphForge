@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { EvidencePanel } from "./EvidencePanel";
 import type { Evidence } from "../types/agent";
@@ -40,11 +40,58 @@ describe("EvidencePanel", () => {
     expect(screen.getByText("FAILED: Neo4j connection refused")).toBeInTheDocument();
   });
 
-  it("renders evidence kind labels", () => {
+  it("shows one source-count chip per kind, not one pill per item", () => {
+    // Regression: the collapsed view used to render one identically-labeled
+    // "Tool Call" pill per evidence item (25 of them on a real
+    // investigation, saying nothing) — it must now dedupe by source into a
+    // single counted chip each.
     render(<EvidencePanel evidence={sampleEvidence} />);
-    expect(screen.getByText("Graph Traversal")).toBeInTheDocument();
-    expect(screen.getByText("Tool Call")).toBeInTheDocument();
-    expect(screen.getByText("LLM Reasoning")).toBeInTheDocument();
+    const chips = screen.getByLabelText("Evidence source counts");
+    expect(within(chips).getByText("Graph Traversal")).toBeInTheDocument();
+    expect(within(chips).getByText("Tool Call")).toBeInTheDocument();
+    expect(within(chips).getByText("LLM Reasoning")).toBeInTheDocument();
+  });
+
+  it("shows a real evidence summary, not just a label, in the collapsed view", () => {
+    // The collapsed view used to convey nothing beyond "3 tool calls
+    // happened" — it must now surface what was actually found.
+    render(<EvidencePanel evidence={sampleEvidence} />);
+    expect(screen.getByText("Queried 3 repositories")).toBeInTheDocument();
+  });
+
+  it("counts repeated evidence from the same source into one chip", () => {
+    const repeated: Evidence[] = [
+      { kind: "tool_call", reference: "jira:fetch_work_item:X", summary: "Retrieved issue X." },
+      { kind: "tool_call", reference: "jira:add_comment:X", summary: "Commented on X." },
+      { kind: "tool_call", reference: "github:fetch_source_files:repo", summary: "Read 2 files." },
+    ];
+    render(<EvidencePanel evidence={repeated} />);
+    const chips = screen.getByLabelText("Evidence source counts");
+    expect(within(chips).getByText("Jira")).toBeInTheDocument();
+    expect(within(chips).getByText("· 2")).toBeInTheDocument();
+    expect(within(chips).getByText("GitHub")).toBeInTheDocument();
+  });
+
+  it("explains why a highlighted piece of evidence matters, not just what it is", () => {
+    // "Why should I trust this?" — a source name and a summary alone
+    // don't answer that; the highlight cards need a third line.
+    const evidence: Evidence[] = [
+      { kind: "tool_call", reference: "jira:fetch_work_item:X", summary: "Retrieved issue X." },
+    ];
+    render(<EvidencePanel evidence={evidence} />);
+    const highlights = screen.getByLabelText("Evidence highlights");
+    expect(within(highlights).getByText(/Why it matters:/)).toBeInTheDocument();
+    expect(
+      within(highlights).getByText(/Defines what this investigation is trying to resolve/),
+    ).toBeInTheDocument();
+  });
+
+  it("omits 'why it matters' rather than inventing one when the source isn't recognized", () => {
+    const evidence: Evidence[] = [
+      { kind: "tool_call", reference: "some_future_source:do_thing", summary: "Did a thing." },
+    ];
+    render(<EvidencePanel evidence={evidence} />);
+    expect(screen.queryByText(/Why it matters:/)).not.toBeInTheDocument();
   });
 
   it("has accessible list role", () => {

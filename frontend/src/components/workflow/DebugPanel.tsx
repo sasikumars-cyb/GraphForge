@@ -259,8 +259,8 @@ export function DebugPanel({ bundle, isLoading, error, onExpand }: DebugPanelPro
         Debug
       </summary>
       <p className="mt-1.5 text-xs text-fg-subtle">
-        Implementation internals — raw reasoning, graph traversal, and retrieval data. For
-        capability confidence and evidence, see Advanced Details above.
+        Raw execution data — exactly what happened internally, for debugging. For capability
+        confidence and evidence, see Technical Details above.
       </p>
       <div className="mt-3 flex flex-col gap-4">
         {isLoading && (

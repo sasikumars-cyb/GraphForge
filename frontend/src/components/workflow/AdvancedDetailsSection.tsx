@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import type {
   CapabilityBreakdown,
+  ContextDiscoveryResult,
   DebugBundleDTO,
   EngineeringUnderstandingDTO,
   FindingGroup,
@@ -26,6 +27,9 @@ import {
   RelevantAreas,
   SectionHeading,
 } from "./EngineeringUnderstandingPanel";
+import { InvestigationTimeline } from "./InvestigationTimeline";
+import { KnowledgeLedger } from "./KnowledgeLedger";
+import { ReasoningSection } from "./ReasoningSection";
 
 // ---------------------------------------------------------------------------
 // Level 2 — Advanced Details. The detail behind the first screen
@@ -44,6 +48,20 @@ import {
 // `debug_bundle`, so opening this section for the first time makes the same
 // `?debug=true` request Debug does (no new backend contract, just reusing
 // the existing endpoint's existing parameter).
+//
+// UX review (GraphForge Frontier redesign): `InvestigationTimeline`
+// ("What GraphForge investigated" — the raw, per-cycle tool-call log),
+// `KnowledgeLedger` (the "Strongly supported / Inferred / Contradicted /
+// Unknown" evidence-classification grid) and `ReasoningSection` (the
+// hypothesis/contradiction breakdown) used to render always-open in the
+// primary Context Explorer flow — a non-technical reader hit 25 raw
+// "graph · survey_architecture" log lines, and a 4-bucket grid reading
+// "Strongly supported: 0" sitting directly beside an 83% confidence
+// number, before ever reaching the plain-language verdict. All three are
+// real, valuable engineering detail — just not the first thing "did
+// GraphForge find what I need?" requires. They now render inside this
+// already-collapsed section instead, reusing the exact same components
+// (no logic changes), so opening "Technical Details" is what surfaces them.
 // ---------------------------------------------------------------------------
 
 function CapabilityReadiness({ reasons }: { reasons: PlanningFactorDTO[] }) {
@@ -122,6 +140,18 @@ function KnownConstraints({ items }: { items: string[] }) {
       <SectionHeading icon={ShieldAlert}>Known Constraints</SectionHeading>
       <BulletList items={items} />
     </section>
+  );
+}
+
+/** A small uppercase divider between the five groups this section is
+ * organized into (Evidence / Investigation / Graph & Architecture /
+ * Reasoning) — tells an engineer why they'd open each part instead of
+ * presenting one continuous, unlabeled scroll of sections. */
+function GroupLabel({ children }: { children: string }) {
+  return (
+    <p className="border-t border-line-muted pt-3 text-[10px] font-bold tracking-wider text-fg-subtle uppercase first:border-t-0 first:pt-0">
+      {children}
+    </p>
   );
 }
 
@@ -261,6 +291,10 @@ function EvidenceDetails({ groups }: { groups: FindingGroup[] }) {
 
 interface AdvancedDetailsSectionProps {
   dto: EngineeringUnderstandingDTO;
+  /** Only `discovery_report.investigation` is read from this — the raw,
+   * per-cycle investigation log `InvestigationTimeline` renders. Everything
+   * else this section shows comes from `dto`. */
+  result: ContextDiscoveryResult;
   /** The same `debug_bundle` Debug reads — Capability Signals and Evidence
    * Details are the two fields from it shown here. `null` until fetched. */
   bundle: DebugBundleDTO | null;
@@ -279,6 +313,7 @@ interface AdvancedDetailsSectionProps {
  * internals reserved for Debug. */
 export function AdvancedDetailsSection({
   dto,
+  result,
   bundle,
   isLoading,
   error,
@@ -297,30 +332,17 @@ export function AdvancedDetailsSection({
       }}
     >
       <summary className="cursor-pointer text-xs font-semibold text-fg-secondary hover:text-fg">
-        Advanced Details
+        Technical Details
+        <span className="mt-0.5 block cursor-auto text-[11px] font-normal text-fg-subtle">
+          Source evidence, graph relationships, investigation steps, and reasoning — for engineers
+          verifying or debugging this result.
+        </span>
       </summary>
       <div className="mt-3 flex flex-col gap-4">
-        <RepositoryInfo
-          primary={dto.repository_summary.primary}
-          supporting={dto.repository_summary.supporting}
-          ownership={dto.repository_summary.ownership}
-        />
-        <KnownConstraints items={dto.known_constraints} />
-        <CapabilityReadiness reasons={dto.planning_assessment.reasons} />
-        <RelevantAreas areas={dto.relevant_areas} />
-        <MissingInformation items={dto.missing_information} />
-        <Unknowns items={dto.unknowns} />
+        {/* 1. Evidence — what backs the confidence number, and how much of
+            it there is. */}
+        <GroupLabel>Evidence</GroupLabel>
         <EvidenceSummary items={dto.evidence_summary} />
-        <DocumentationStatus text={dto.documentation_status} />
-        {dto.architecture_summary && (
-          <section className="flex flex-col gap-1">
-            <SectionHeading icon={Waypoints}>Architecture Relationships</SectionHeading>
-            <p className="text-[11px] text-fg-subtle">
-              How the areas above connect to each other — not a restatement of them.
-            </p>
-            <Prose text={dto.architecture_summary} />
-          </section>
-        )}
         {isLoading && (
           <div className="flex items-center gap-2 text-xs text-fg-muted">
             <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
@@ -336,6 +358,54 @@ export function AdvancedDetailsSection({
             <EvidenceDetails groups={bundle.findings as unknown as FindingGroup[]} />
           </>
         )}
+
+        {/* 2. Investigation steps — the raw, per-cycle action log. Real
+            and bounded (see InvestigationTimeline's own docs), but
+            implementation detail: "graph · survey_architecture" isn't
+            what a reader deciding whether to trust the verdict needs
+            first. */}
+        <GroupLabel>Investigation steps</GroupLabel>
+        <InvestigationTimeline
+          steps={result.discovery_report?.investigation ?? []}
+          nextInvestigation={dto.reasoning_summary.next_investigation}
+        />
+        <MissingInformation items={dto.missing_information} />
+        <Unknowns items={dto.unknowns} />
+        <DocumentationStatus text={dto.documentation_status} />
+
+        {/* 3. Graph & architecture — what the investigation is scoped to
+            and how the pieces connect. */}
+        <GroupLabel>Graph &amp; architecture</GroupLabel>
+        <RepositoryInfo
+          primary={dto.repository_summary.primary}
+          supporting={dto.repository_summary.supporting}
+          ownership={dto.repository_summary.ownership}
+        />
+        <RelevantAreas areas={dto.relevant_areas} />
+        {dto.architecture_summary && (
+          <section className="flex flex-col gap-1">
+            <SectionHeading icon={Waypoints}>Architecture Relationships</SectionHeading>
+            <p className="text-[11px] text-fg-subtle">
+              How the areas above connect to each other — not a restatement of them.
+            </p>
+            <Prose text={dto.architecture_summary} />
+          </section>
+        )}
+
+        {/* 4. Reasoning — the capability-readiness detail behind "What we
+            know," the evidence-classification ledger, and the
+            hypothesis/contradiction breakdown. Moved out of the primary
+            flow: "Strongly supported: 0" sitting directly beside an 83%
+            confidence number read as contradictory, when what it actually
+            meant was "no LLM hypothesis synthesis ran this pass" — a
+            distinction this section's own copy already makes correctly,
+            it just needed not to compete with the headline verdict for
+            attention. */}
+        <GroupLabel>Reasoning</GroupLabel>
+        <CapabilityReadiness reasons={dto.planning_assessment.reasons} />
+        <KnownConstraints items={dto.known_constraints} />
+        <KnowledgeLedger understanding={dto} />
+        <ReasoningSection summary={dto.reasoning_summary} />
       </div>
     </details>
   );

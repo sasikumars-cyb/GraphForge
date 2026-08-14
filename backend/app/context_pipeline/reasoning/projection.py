@@ -148,6 +148,7 @@ def build_discovery_report(state: WorkingContext) -> dict[str, Any]:
         "readiness": state.readiness,
         "completion_status": state.completion_status,
         "confidence": state.confidence,
+        "context_completeness": state.confidence,
         "headline": _headline(state),
         "transcript": [e.model_dump() for e in state.transcript.entries],
         "confidence_breakdown": [
@@ -619,6 +620,10 @@ def build_result(state: WorkingContext) -> dict[str, Any]:
         "readiness": state.readiness,
         "completion_status": state.completion_status,
         "confidence": state.confidence,
+        # Same value as `confidence` above, honestly named — see
+        # ContextDiscoveryResult.context_completeness's own docstring.
+        # Additive, not a recomputation.
+        "context_completeness": state.confidence,
         "capability_confidence": {a.capability: a.score for a in state.assessments},
         "clarification_rounds": state.metadata.clarification_rounds,
         "blocking_reasons": [g.summary for g in blocking],

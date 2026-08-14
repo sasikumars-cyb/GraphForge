@@ -158,7 +158,39 @@ class ContextDiscoveryResult(BaseModel):
     # Necessity-weighted mean of the per-capability scores below, excluding
     # capabilities that don't apply to this request. Every input is
     # evidence-derived; no LLM self-report contributes to it.
+    #
+    # DEPRECATED NAME — kept, unchanged, for backward compatibility (the
+    # readiness gate in workflows.py's continue_workflow reads this exact
+    # field, and it's the literal key already persisted in every existing
+    # AgentStep.result row). This number is NOT engineering confidence in
+    # the root cause or proposed change — it never was; it's how much of
+    # the *evidence-completeness* signal set (work item / repository /
+    # architecture / documentation / ...) is satisfied. Read
+    # `context_completeness` below instead for anything new — same value,
+    # honest name. See ADR/audit "Context Discovery confidence semantics"
+    # for the full trace of why this split exists and why Engineering
+    # Review's own confidence (computed independently in
+    # app.agents.engineering_review.agent, never derived from this field)
+    # is the correct thing to call "confidence in the engineering answer."
     confidence: float = 0.0
+    # The accurate name for the same number `confidence` above holds —
+    # added alongside it, not a recomputation, so nothing that already
+    # reads `confidence` (the readiness gate, historical persisted rows)
+    # needs to change. Prefer this field in any new code.
+    #
+    # Default is `None`, not `0.0`: every *current* run populates this
+    # explicitly (see `build_result`), so `None` only ever means "this
+    # dict was persisted before the field existed, and there's no way to
+    # tell that apart from a real, computed 0.0" — a genuine (if unlikely)
+    # score, e.g. a BLOCKED run where nothing at all was satisfied. Had
+    # the default been `0.0`, `ContextDiscoveryResult.model_validate()`
+    # over an old persisted dict would silently manufacture a value
+    # indistinguishable from a real zero, and any reader trusting the
+    # *attribute* rather than the raw dict's key presence would show "0%"
+    # instead of falling back to `confidence`. `None` forces every reader
+    # to make that fallback decision explicitly instead of getting it by
+    # accident.
+    context_completeness: float | None = None
     capability_confidence: dict[str, float] = Field(default_factory=dict)
     clarification_rounds: int = 0
     blocking_reasons: list[str] = Field(default_factory=list)
