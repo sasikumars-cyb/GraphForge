@@ -52,7 +52,7 @@ from app.agents.planning.tools import (
     _match_text,
 )
 from app.agents.text_relevance import tokenize
-from app.context_pipeline.reasoning.ledger import Inference, Ledger
+from app.context_pipeline.reasoning.ledger import EvidenceRecord, Inference, Ledger
 
 Necessity = Literal["required", "recommended", "not_applicable"]
 
@@ -1858,6 +1858,31 @@ LEDGER_RESYNC_HOOKS: tuple[Callable[[Ledger], None], ...] = (
 # ---------------------------------------------------------------------------
 
 
+def _latest_graph_evidence(ledger: Ledger) -> list[EvidenceRecord]:
+    """The most recent evidence record for each distinct graph-provider
+    action, in ledger order.
+
+    `Ledger.evidence` is append-only (RFC-0028): a `get_neighborhood`/
+    `traverse_architecture_graph` call that failed early in a run — most
+    commonly `curate_evidence` hitting its own graph hop budget on a
+    heavily-investigated repository — can be retried later in the *same*
+    run (e.g. `curate_evidence` runs once per `investigate()` call, so a
+    run that paused for a clarification question and then resumed
+    produces two passes over the same action) and succeed the second time.
+    Reachability must reflect the *latest* attempt at each action, not
+    every attempt ever made, or a since-resolved early failure would keep
+    reporting the graph as unreachable for the rest of the run even after
+    a later call proved otherwise. This does not discard the earlier
+    record — `ledger.evidence` still has it for audit — it only changes
+    which record this signal reads.
+    """
+    latest_by_action: dict[str, EvidenceRecord] = {}
+    for record in ledger.evidence:
+        if record.provider == "graph":
+            latest_by_action[record.action] = record
+    return list(latest_by_action.values())
+
+
 def _architecture_signals(ledger: Ledger) -> list[ConfidenceSignal]:
     components = ledger.facts_of("component")
     topics = ledger.facts_of("topic")
@@ -1870,9 +1895,11 @@ def _architecture_signals(ledger: Ledger) -> list[ConfidenceSignal]:
     #
     # Note this deliberately does not key on "some graph evidence succeeded":
     # the repository list is read from Postgres and succeeds even when Neo4j is
-    # down. Failure is what's decisive, so an observed failure anywhere in the
-    # graph provider's work marks it unreachable.
-    graph_evidence = [e for e in ledger.evidence if e.provider == "graph"]
+    # down. Failure is what's decisive, so an observed failure in the *latest*
+    # attempt at any one graph-provider action marks it unreachable — see
+    # `_latest_graph_evidence` for why "latest per action" rather than "any
+    # attempt ever" is the correct history to read.
+    graph_evidence = _latest_graph_evidence(ledger)
     graph_failed = [e for e in graph_evidence if e.outcome == "failed"]
     graph_reached = [] if (not graph_evidence or graph_failed) else graph_evidence
     candidates = ledger.live_inferences("repository_candidate")
@@ -1943,7 +1970,7 @@ def _architecture_remediation(ledger: Ledger) -> list[str]:
     the problem. Telling someone to check infrastructure that just answered
     successfully sends them to debug a healthy system while the real cause —
     an unindexed repository — goes unaddressed."""
-    graph_evidence = [e for e in ledger.evidence if e.provider == "graph"]
+    graph_evidence = _latest_graph_evidence(ledger)
     reachable = bool(graph_evidence) and not any(e.outcome == "failed" for e in graph_evidence)
     if reachable:
         return ["Index the repository"]

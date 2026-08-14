@@ -2151,6 +2151,7 @@ async def curate_evidence(state: WorkingContext, session: SessionContext) -> Non
     """
     from app.context_pipeline.reasoning.curation import EvidencePackage, curate, select_anchor_ids
     from app.context_pipeline.reasoning.runtime_execution import build_call_chains
+    from app.graph.hop_budget import GraphHopBudgetExceeded
     from app.graph.neo4j_repository import Neo4jGraphRepository
     from app.graph.session import get_driver
 
@@ -2225,6 +2226,35 @@ async def curate_evidence(state: WorkingContext, session: SessionContext) -> Non
                         value=chain.model_dump(mode="json"),
                         iteration=state.metadata.iteration,
                     )
+            except GraphHopBudgetExceeded:
+                # RFC-0028 — the agent hit its own manifest ceiling, not an
+                # infrastructure problem. Reuses the same `unavailable`
+                # classification `GraphInvestigator._record_traversal`
+                # already applies to this exact exception (see its "hop
+                # budget" branch) rather than inventing a second taxonomy:
+                # recording this as `failed` would mark the graph
+                # unreachable for the rest of the run and point the
+                # confidence explanation at "check the Neo4j connection" for
+                # something entirely internal and, in practice, often
+                # resolved by a later retry within the same run (e.g. a
+                # fresh pass after a clarification answer gets a fresh
+                # budget) — see `_latest_graph_evidence`'s docstring in
+                # capabilities.py for how that later success supersedes
+                # this record in the final explanation without deleting it.
+                logger.warning(
+                    "context_discovery_curation_neighborhood_budget_exhausted repository=%s",
+                    primary_repository,
+                )
+                state.ledger.add_evidence(
+                    provider="graph",
+                    action="get_neighborhood",
+                    outcome="unavailable",
+                    summary=(
+                        f"Reached this run's graph read budget before the neighborhood "
+                        f"around '{primary_repository}' could be traversed."
+                    ),
+                    iteration=state.metadata.iteration,
+                )
             except Exception:
                 logger.exception(
                     "context_discovery_curation_neighborhood_failed repository=%s",

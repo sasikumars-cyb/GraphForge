@@ -15,6 +15,7 @@ from app.context_pipeline.reasoning.investigation import SessionContext
 from app.context_pipeline.reasoning.investigators import _primary_repository, curate_evidence
 from app.context_pipeline.reasoning.ledger import Ledger
 from app.context_pipeline.reasoning.memory import WorkingContext
+from app.graph.hop_budget import GraphHopBudgetExceeded
 from app.graph.models import GraphEdge, GraphNode, GraphPayload
 
 
@@ -355,6 +356,92 @@ async def test_no_repository_candidate_at_all_skips_graph_call():
 
     graph_repo.get_neighborhood.assert_not_called()
     assert "evidence_package" in state.derived
+
+
+# ---------------------------------------------------------------------------
+# RFC-0028 — hop-budget exhaustion must not be reported as a graph failure.
+#
+# `get_neighborhood` hitting the agent's own manifest ceiling
+# (`GraphHopBudgetExceeded`) is a distinct, expected outcome — the
+# investigation budget intentionally prevented the read — not evidence that
+# Neo4j or the graph query itself failed. `test_
+# graph_read_failure_degrades_gracefully_instead_of_raising` above already
+# covers the "real exception" branch and is unaffected by this change; these
+# two tests cover the new branch and the case that must still work.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_hop_budget_exhaustion_is_recorded_as_unavailable_not_failed():
+    anchor_id = "etl-core:class:ExactDeduplicator"
+    components = [
+        {
+            "id": anchor_id,
+            "name": "ExactDeduplicator",
+            "repository": "etl-core",
+            "file_path": "src/etl_core/dedup/exact_dedup.py",
+        },
+    ]
+    state = _state_with_components(components)
+
+    graph_repo = AsyncMock()
+    graph_repo.get_neighborhood = AsyncMock(
+        side_effect=GraphHopBudgetExceeded(
+            "Agent 'context_discovery' exceeded its graph hop budget for repository "
+            "'etl-core' (max_graph_hops=7) calling 'get_neighborhood'."
+        )
+    )
+
+    # Must not raise.
+    await curate_evidence(state, _session_with_graph_repo(graph_repo))
+
+    assert "evidence_package" in state.derived
+    budget_evidence = [e for e in state.ledger.evidence if e.action == "get_neighborhood"]
+    assert len(budget_evidence) == 1
+    assert budget_evidence[0].outcome == "unavailable"
+    assert budget_evidence[0].outcome != "failed"
+
+
+@pytest.mark.asyncio
+async def test_retry_with_a_fresh_budget_after_exhaustion_succeeds_and_is_recorded():
+    """The real-world shape this exists for: `curate_evidence` runs once per
+    `investigate()` call, so a run that paused for a clarification question
+    and then resumed calls it twice — the first pass can exhaust the
+    repository's hop budget, and the second pass (a fresh
+    `GraphHopBudgetRepository`, per its own "constructed once per agent
+    run" docstring) gets a fresh allowance and can still succeed."""
+    anchor_id = "etl-core:class:ExactDeduplicator"
+    components = [
+        {
+            "id": anchor_id,
+            "name": "ExactDeduplicator",
+            "repository": "etl-core",
+            "file_path": "src/etl_core/dedup/exact_dedup.py",
+        },
+    ]
+
+    # Pass 1: budget exhausted.
+    state = _state_with_components(components)
+    exhausted_graph_repo = AsyncMock()
+    exhausted_graph_repo.get_neighborhood = AsyncMock(
+        side_effect=GraphHopBudgetExceeded("exhausted")
+    )
+    await curate_evidence(state, _session_with_graph_repo(exhausted_graph_repo))
+    assert [e.outcome for e in state.ledger.evidence if e.action == "get_neighborhood"] == [
+        "unavailable"
+    ]
+
+    # Pass 2: same ledger/state, a fresh graph_repo (fresh budget) succeeds.
+    seed_node = GraphNode(id=anchor_id, labels=["Component"], properties={"hop_distance": 0})
+    fresh_graph_repo = AsyncMock()
+    fresh_graph_repo.get_neighborhood = AsyncMock(return_value=GraphPayload(nodes=[seed_node]))
+    await curate_evidence(state, _session_with_graph_repo(fresh_graph_repo))
+
+    neighborhood_evidence = [e for e in state.ledger.evidence if e.action == "get_neighborhood"]
+    # Both passes are preserved in the ledger's append-only history...
+    assert [e.outcome for e in neighborhood_evidence] == ["unavailable", "success"]
+    # ...and the retry did produce real evidence, not just a second failure.
+    assert neighborhood_evidence[-1].outcome == "success"
 
 
 class TestPrimaryRepositoryDeterminism:

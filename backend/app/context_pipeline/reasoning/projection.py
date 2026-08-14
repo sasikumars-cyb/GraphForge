@@ -24,7 +24,10 @@ from pydantic import BaseModel
 
 from app.agents._contract import Evidence
 from app.context_pipeline.providers import wrap_artifact_text
-from app.context_pipeline.reasoning.capabilities import GRAPH_TRAVERSAL_ACTION
+from app.context_pipeline.reasoning.capabilities import (
+    GRAPH_TRAVERSAL_ACTION,
+    _latest_graph_evidence,
+)
 from app.context_pipeline.reasoning.ledger import EvidenceRecord, Ledger
 from app.context_pipeline.reasoning.memory import WorkingContext
 from app.context_pipeline.reasoning.understanding import InvestigationWorkspace
@@ -52,8 +55,15 @@ def render_enriched_text(state: WorkingContext) -> str:
 
 
 def _graph_reachable(ledger: Ledger) -> bool:
-    """Whether the knowledge graph was queried without an observed failure."""
-    graph_evidence = [e for e in ledger.evidence if e.provider == "graph"]
+    """Whether the knowledge graph was queried without an observed failure.
+
+    RFC-0028: reads the *latest* evidence per graph-provider action (see
+    `_latest_graph_evidence`), not every attempt ever made in this run — a
+    since-resolved early failure (e.g. a hop-budget-limited pass before a
+    clarification pause, retried successfully after the answer) must not
+    keep reporting the graph as unreachable for the rest of the run.
+    """
+    graph_evidence = _latest_graph_evidence(ledger)
     return bool(graph_evidence) and not any(e.outcome == "failed" for e in graph_evidence)
 
 

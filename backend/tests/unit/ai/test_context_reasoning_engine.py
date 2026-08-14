@@ -294,6 +294,86 @@ def test_inapplicable_capabilities_are_excluded_from_overall_confidence() -> Non
 
 
 # ---------------------------------------------------------------------------
+# RFC-0028 — the architecture "graph queried without errors" signal must
+# read the *latest* evidence per graph-provider action, not every attempt
+# ever recorded, so a since-resolved early failure (most commonly a
+# hop-budget-limited `curate_evidence` pass, retried successfully later in
+# the same run) stops permanently marking the graph unreachable once a
+# later call proves it isn't. `Ledger.evidence` stays append-only —
+# nothing here deletes the earlier record, only which one the signal reads.
+# ---------------------------------------------------------------------------
+
+
+def _architecture_signal(ledger: Ledger, label: str) -> ConfidenceSignal:
+    architecture = next(a for a in assess(ledger) if a.capability == "architecture")
+    return next(s for s in architecture.signals if s.label == label)
+
+
+def test_a_later_success_supersedes_an_earlier_failure_for_the_same_action() -> None:
+    ledger = Ledger()
+    ledger.add_evidence(
+        provider="graph",
+        action="get_neighborhood",
+        outcome="failed",
+        summary="Could not traverse the architecture graph around 'etl-core'.",
+    )
+    ledger.add_evidence(
+        provider="graph",
+        action="get_neighborhood",
+        outcome="success",
+        summary="Traversed 2 hops from 1 component(s) — found 3 connected component(s).",
+    )
+
+    reached = _architecture_signal(ledger, "Knowledge graph queried without errors")
+    architecture = next(a for a in assess(ledger) if a.capability == "architecture")
+
+    assert reached.satisfied is True
+    assert reached.evidence_ids, "a satisfied signal must cite the evidence that satisfied it"
+    # The rendered explanation is what a human/UI actually reads — it must
+    # not still say the graph query failed once the retry succeeded.
+    assert "a graph query failed" not in architecture.explanation()
+
+
+def test_historical_evidence_is_not_deleted_by_the_latest_wins_aggregation() -> None:
+    ledger = Ledger()
+    ledger.add_evidence(
+        provider="graph", action="get_neighborhood", outcome="failed", summary="first attempt"
+    )
+    ledger.add_evidence(
+        provider="graph", action="get_neighborhood", outcome="success", summary="retry"
+    )
+
+    # The aggregation change lives entirely in what the confidence signal
+    # reads — the ledger itself, the actual audit trail, keeps both.
+    outcomes = [e.outcome for e in ledger.evidence if e.action == "get_neighborhood"]
+    assert outcomes == ["failed", "success"]
+
+
+def test_an_unrelated_actions_failure_still_surfaces_even_if_another_action_recovered() -> None:
+    """Proves the fix is scoped to "latest per action", not "any success
+    anywhere clears every failure" — a real, unretried failure in a
+    different graph action must still mark the graph unreachable."""
+    ledger = Ledger()
+    ledger.add_evidence(
+        provider="graph", action="get_neighborhood", outcome="failed", summary="first attempt"
+    )
+    ledger.add_evidence(
+        provider="graph", action="get_neighborhood", outcome="success", summary="retry"
+    )
+    ledger.add_evidence(
+        provider="graph",
+        action=capabilities.GRAPH_TRAVERSAL_ACTION,
+        outcome="failed",
+        summary="a genuinely different, never-retried graph action failed",
+    )
+
+    reached = _architecture_signal(ledger, "Knowledge graph queried without errors")
+
+    assert reached.satisfied is False
+    assert reached.detail == "a graph query failed"
+
+
+# ---------------------------------------------------------------------------
 # runtime_execution (RFC-004 Capability 1, Commit 5 — shadow mode)
 # ---------------------------------------------------------------------------
 
