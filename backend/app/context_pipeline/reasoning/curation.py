@@ -23,6 +23,7 @@ the number that actually mattered.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -306,15 +307,32 @@ def _best_vocabulary_line(
     """The line index in `lines[lo:hi]` whose own tokens overlap
     `ticket_tokens` the most (ties go to the earliest line — same
     insertion-order determinism this module already uses elsewhere).
-    `None` if nothing in the range shares any vocabulary at all — this is
-    signal #3 ("ticket-token overlap"), the same tokenization/token set
-    `curate()` already computes once for relevance scoring, not a new
-    matching mechanism."""
-    best_idx, best_overlap = None, 0
+    `None` if nothing in the range shares any vocabulary at all.
+
+    RFC-0037 — a matched token is weighted by how *few* lines in this same
+    range contain it, rather than every match counting 1. Ordinary TF-IDF,
+    with the file as the corpus and its lines as the documents: a token
+    spread across the whole file cannot localize anything within it, so it
+    should not decide which line is shown. Without this, a line repeating
+    the file's own pervasive vocabulary (the subject the file is *about*)
+    outranks the one line where the specific behavior actually happens.
+    Deliberately not cross-repository IDF — that measures which repository
+    to pick, which is the wrong question once a file is already open.
+    """
+    line_frequency: dict[str, int] = {}
     for i in range(lo, hi):
-        overlap = len(tokenize(lines[i]) & ticket_tokens)
-        if overlap > best_overlap:
-            best_idx, best_overlap = i, overlap
+        for token in tokenize(lines[i]):
+            line_frequency[token] = line_frequency.get(token, 0) + 1
+    span = max(1, hi - lo)
+
+    best_idx, best_score = None, 0.0
+    for i in range(lo, hi):
+        matched = tokenize(lines[i]) & ticket_tokens
+        score = sum(
+            math.log(span / (line_frequency.get(token, 0) + 1) + 1) for token in matched
+        )
+        if score > best_score:
+            best_idx, best_score = i, score
     return best_idx
 
 
@@ -351,7 +369,16 @@ def _select_source_excerpt(text: str, name: str, ticket_tokens: frozenset[str]) 
     lines = text.splitlines()
     short_name = name.rsplit(".", 1)[-1]
     bounds = _symbol_body_bounds(lines, short_name)
-    search_lo, search_hi = bounds if bounds is not None else (0, len(lines))
+    # RFC-0037 — the symbol's own `def`/`class` line is excluded from the
+    # candidate anchors (hence `+ 1`), not because of what it is
+    # syntactically but because of what it carries: the EvidenceItem this
+    # excerpt is attached to already prints the component's name and path
+    # directly above it, so re-showing the signature spends the whole
+    # budget restating something the reader was just told. It remains the
+    # explicit last-resort fallback below when the body matches nothing.
+    search_lo, search_hi = (
+        (bounds[0] + 1, bounds[1]) if bounds is not None else (0, len(lines))
+    )
 
     anchor = _best_vocabulary_line(lines, search_lo, search_hi, ticket_tokens)
     if anchor is None and bounds is not None:
@@ -378,6 +405,7 @@ def curate(
     enriched_text: str,
     target_repositories: list[str],
     source_file_texts: dict[tuple[str, str], str] | None = None,
+    ticket_identifier_terms: frozenset[str] | None = None,
 ) -> EvidencePackage:
     """Produce the curated, tiered, budget-bounded `EvidencePackage`.
 
@@ -409,6 +437,16 @@ def curate(
     stays pure, this is just one more plain dict of data in, same as
     `components`/`neighborhood_nodes`. Only consulted for `must_modify`
     tier items; see `_select_source_excerpt`.
+
+    `ticket_identifier_terms` — RFC-0037, optional and `None` by default
+    so existing callers keep today's behavior. The request's *significant*
+    vocabulary (`extract_key_terms`, already re-tokenized — see
+    `capabilities._ranking_ticket_terms`), used **only** to anchor source
+    excerpts. `ticket_tokens` below is every word of the request's prose,
+    which is right for scoring a component's name/path and wrong for
+    picking a line of code: the request is prose and a comment is prose,
+    so the generic English they share ("filter", "out", "case") swamps the
+    identifiers that actually locate the behavior. Scoring is untouched.
     """
     # Repository-name tokens are stripped from the relevance signal, not
     # just left in: a ticket almost always names its own repository
@@ -473,8 +511,16 @@ def curate(
             key = (str(component.get("repository", "")), str(component.get("file_path", "")))
             file_text = source_file_texts.get(key, "")
             if file_text:
+                # RFC-0037 — anchor on the request's significant vocabulary
+                # when the caller supplied it, falling back to the prose
+                # tokens for callers that predate this parameter.
+                anchor_terms = (
+                    ticket_identifier_terms
+                    if ticket_identifier_terms is not None
+                    else ticket_tokens
+                )
                 source_excerpt = _select_source_excerpt(
-                    file_text, str(component.get("name", "")), ticket_tokens
+                    file_text, str(component.get("name", "")), anchor_terms
                 )
         return EvidenceItem(
             name=str(component.get("name", "")),

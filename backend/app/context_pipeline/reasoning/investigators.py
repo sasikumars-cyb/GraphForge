@@ -50,6 +50,7 @@ from app.context_pipeline.reasoning.capabilities import (
     SOURCE_RETRIEVAL_WIDTH,
     TIE_RATIO,
     _corroboration_evidence,
+    _ranking_ticket_terms,
     _select_dependency_expansion_files,
     _select_relevant_source_files,
     ranked_repository_names,
@@ -2287,5 +2288,9 @@ async def curate_evidence(state: WorkingContext, session: SessionContext) -> Non
         enriched_text=enriched_text,
         target_repositories=target_repos,
         source_file_texts=source_file_texts,
+        # RFC-0037 — the same significant-vocabulary set source *selection*
+        # already ranks files by, reused to anchor the excerpt *within* the
+        # file it chose, so both stages agree on what this request is about.
+        ticket_identifier_terms=_ranking_ticket_terms(state.ledger),
     )
     state.derived["evidence_package"] = package.model_dump()

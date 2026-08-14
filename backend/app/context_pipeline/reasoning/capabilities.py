@@ -39,6 +39,7 @@ rather than scored 1.0 by default. Absent knowledge is absent, not perfect.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -1159,6 +1160,85 @@ def _ranking_ticket_terms(ledger: Ledger) -> frozenset[str]:
     return frozenset(result)
 
 
+# RFC-0036 — camelCase boundary, then any non-alphanumeric run, is the
+# identifier boundary. Deliberately NOT `tokenize()`: that applies a
+# 3-character floor and plural stemming, which are right for fuzzy
+# vocabulary overlap and wrong for *identity* — the floor alone would
+# reduce "user_id" to ("user",) and make it compare equal to a file
+# actually named `user.py`.
+_IDENTIFIER_CAMEL_RE = re.compile(r"([a-z0-9])([A-Z])")
+_IDENTIFIER_BOUNDARY_RE = re.compile(r"[^a-z0-9]+")
+
+# An identifier must have at least this many parts to be treated as a
+# compound. A single common word (`utils`, `config`, `readings`) collides
+# across unrelated files constantly, so matching one whole is weak
+# evidence; the strength of this signal comes entirely from how unlikely
+# an exact *multi-part* identifier coincidence is.
+_MIN_COMPOUND_IDENTIFIER_PARTS = 2
+
+
+def _identifier_parts(text: str) -> tuple[str, ...]:
+    """`text` split into its ordered identifier parts, lowercased.
+
+    Order is preserved (unlike `tokenize()`'s set) because identity, not
+    overlap, is what this comparison is for: `parse_userids` and
+    `user_id` share parts under a set comparison but are not the same
+    identifier.
+    """
+    spaced = _IDENTIFIER_CAMEL_RE.sub(r"\1_\2", text)
+    return tuple(p for p in _IDENTIFIER_BOUNDARY_RE.split(spaced.lower()) if p)
+
+
+def _ranking_ticket_compounds(ledger: Ledger) -> set[tuple[str, ...]]:
+    """The compound identifiers the request itself named, as ordered part
+    tuples — read from the *raw* `ticket_terms` already recorded on the
+    `repository_ranking` fact, before `_ranking_ticket_terms` atomizes
+    them for vocabulary overlap.
+
+    `extract_key_terms`'s own regex already preserves underscores inside
+    a match ("interval_usage", "order_history"), so this needs no new
+    extraction, fact, or query — only a second, different reading of a
+    value the ledger already holds.
+    """
+    ranking_facts = ledger.facts_of("repository_ranking")
+    if not ranking_facts:
+        return set()
+    compounds: set[tuple[str, ...]] = set()
+    for raw in ranking_facts[-1].value.get("ticket_terms") or []:
+        parts = _identifier_parts(str(raw))
+        if len(parts) >= _MIN_COMPOUND_IDENTIFIER_PARTS:
+            compounds.add(parts)
+    return compounds
+
+
+def _exact_identifier_match_paths(ledger: Ledger, repository: str) -> set[str]:
+    """The file paths whose own identity — their file-name stem, or the
+    final segment of an indexed symbol's name — is *exactly* one of the
+    compound identifiers the request named.
+
+    Whole-identifier equality only, never containment: `user_id` does not
+    match `parse_userids.py`, and `test_data` does not match
+    `latestdataset.py`, because their part tuples differ. That is the
+    entire safety property this signal rests on — a substring or
+    squashed-string test would match both.
+    """
+    compounds = _ranking_ticket_compounds(ledger)
+    if not compounds:
+        return set()
+    matched: set[str] = set()
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("repository") != repository:
+            continue
+        file_path = str(fact.value.get("file_path") or "")
+        if not file_path:
+            continue
+        stem = file_path.rsplit("/", 1)[-1].rsplit(".", 1)[0]
+        symbol = str(fact.value.get("name") or "").rsplit(".", 1)[-1]
+        if _identifier_parts(stem) in compounds or _identifier_parts(symbol) in compounds:
+            matched.add(file_path)
+    return matched
+
+
 def _relationship_degree(ledger: Ledger) -> dict[str, int]:
     """Target repository name -> its fan-in — how many *distinct*
     repositories have a real cross-repository relationship edge into it —
@@ -1716,9 +1796,23 @@ def _select_relevant_source_files(
     # difference of any size still wins outright (this key only matters
     # once `-kv[1]` is already tied); the RFC-0021 structural-reference key
     # still gets the final say whenever `signal` is *also* tied.
+    # RFC-0036 — a file whose own identity *is* a compound identifier the
+    # request named ranks above the lexical score entirely, rather than
+    # competing with it. The scores below are IDF-weighted against *other
+    # repositories*, which is the right prior for choosing a repository
+    # and the wrong one for choosing a file inside one already chosen: a
+    # transform every sibling repository also has is penalized as
+    # "common" precisely when the request names it directly. Whole-
+    # identifier equality is narrow enough to carry that authority — on
+    # the live corpus this fires for 1 file in 85 — and everything below
+    # is untouched, so files without an exact match keep today's exact
+    # relative order (RFC-0015/0017 score, then RFC-0027 signal, then
+    # RFC-0021 provenance, then path).
+    exact_identifier = _exact_identifier_match_paths(ledger, repository)
     ranked = sorted(
         scored.items(),
         key=lambda kv: (
+            0 if kv[0] in exact_identifier else 1,
             -kv[1],
             -signal.get(kv[0], 0.0),
             0 if kv[0] in referenced_by else 1,

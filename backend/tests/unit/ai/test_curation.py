@@ -643,3 +643,162 @@ class TestRFC0033SourceExcerpt:
                 assert term.strip() not in source, (
                     f"{module.__name__} must stay domain-agnostic, found {term.strip()!r}"
                 )
+
+
+# ---------------------------------------------------------------------------
+# RFC-0037 — excerpt anchoring: which line in a retrieved file carries the
+# strongest behavioural evidence for the request.
+#
+# Three components, each fixing a failure mode proven on real inputs:
+#   1. anchor on the request's *significant* vocabulary, not its full prose
+#      (otherwise a comment sharing generic English wins);
+#   2. weight a matched token by how few lines of this file contain it
+#      (otherwise the file's own pervasive subject vocabulary wins);
+#   3. never anchor on the component's own definition line (the EvidenceItem
+#      already prints its name and path directly above the excerpt).
+# Fixtures below are deliberately domain-neutral.
+# ---------------------------------------------------------------------------
+
+
+def _excerpt(source: str, symbol: str, terms: set[str]) -> str:
+    from app.context_pipeline.reasoning.curation import _select_source_excerpt
+
+    return _select_source_excerpt(source, symbol, frozenset(terms))
+
+
+def test_rfc0037_generic_comment_does_not_beat_the_executable_line():
+    """Acceptance 1 — a comment dense in generic request words must lose to
+    the statement that actually performs the behaviour."""
+    source = (
+        "def build_report(rows):\n"
+        "    # Skip and remove invalid or empty entries when the export is created\n"
+        "    cleaned = [r for r in rows if r]\n"
+        "    total = compute_ledger_balance(cleaned)\n"
+        "    return total\n"
+    )
+    got = _excerpt(source, "build_report", {"ledger", "balance", "export", "report"})
+    assert "compute_ledger_balance" in got
+
+
+def test_rfc0037_signature_does_not_beat_a_deeper_behavioural_line():
+    """Acceptance 2 (and the explicitly required regression): the component's
+    own signature matches the request by construction — that is *why* the file
+    was selected — so it must never win merely for restating the subject."""
+    source = (
+        "def sync_account_status(accounts):\n"
+        "    prepared = normalise(accounts)\n"
+        "    for account in prepared:\n"
+        "        account.status = derive_status(account)\n"
+        '        flagged = [a for a in prepared if a.status == "dormant"]\n'
+        "    return flagged\n"
+    )
+    got = _excerpt(source, "sync_account_status", {"account", "status", "dormant", "sync"})
+    assert "dormant" in got
+    assert "def sync_account_status" not in got
+
+
+def test_rfc0037_rare_term_in_one_statement_ranks_strongly():
+    """Acceptance 3."""
+    source = (
+        "def handle(payload):\n"
+        '    data = payload.get("data")\n'
+        "    result = apply_quantile_clamp(data)\n"
+        "    return result\n"
+    )
+    got = _excerpt(source, "handle", {"quantile", "clamp", "payload", "data"})
+    assert "apply_quantile_clamp" in got
+
+
+def test_rfc0037_repeated_generic_term_discriminates_less_than_a_rare_one():
+    """Acceptance 4 — `value` appears on most lines and so cannot localize
+    anything; the single distinctive call must win."""
+    source = (
+        "def run(items):\n"
+        "    value = items[0]\n"
+        "    value = normalise(value)\n"
+        "    value = clamp(value)\n"
+        "    audit = emit_reconciliation_marker(value)\n"
+        "    return audit\n"
+    )
+    got = _excerpt(source, "run", {"value", "reconciliation", "marker"})
+    assert "emit_reconciliation_marker" in got
+
+
+def test_rfc0037_no_matching_terms_returns_empty_without_raising():
+    """Acceptance 5 — nothing matches and there is no symbol to fall back to."""
+    source = "def alpha():\n    return 1\n"
+    assert _excerpt(source, "not_present_anywhere", {"unrelated", "vocabulary"}) == ""
+
+
+def test_rfc0037_large_file_output_stays_bounded():
+    """Acceptance 6."""
+    from app.context_pipeline.reasoning.curation import _EXCERPT_MAX_CHARS
+
+    filler = "\n".join(f"    step_{i}()" for i in range(400))
+    source = f"def wide(df):\n{filler}\n    out = emit_reconciliation_marker(df)\n    return out\n"
+    got = _excerpt(source, "wide", {"reconciliation", "marker"})
+    assert "emit_reconciliation_marker" in got
+    assert len(got) <= _EXCERPT_MAX_CHARS
+    assert got.count("\n") <= 4
+
+
+def test_rfc0037_other_evidence_metadata_is_unchanged():
+    """Acceptance 7 — only `source_excerpt` may differ."""
+    components = [
+        {
+            "id": "c1",
+            "name": "configure_flags",
+            "repository": "etl-core",
+            "file_path": "src/etl_core/flags/configure.py",
+            "is_test": False,
+        },
+    ]
+    source = (
+        "def configure_flags(df):\n"
+        '    result = df.withColumn("enabled_flag", F.lit(""))\n'
+        "    return result\n"
+    )
+    common = dict(
+        components=components,
+        neighborhood_nodes=[{"id": "c1", "hop_distance": 0}],
+        enriched_text="enabled_flag should be true. Repo: etl-core.",
+        target_repositories=["etl-core"],
+        source_file_texts={("etl-core", "src/etl_core/flags/configure.py"): source},
+    )
+    base = curate(**common)
+    tuned = curate(**common, ticket_identifier_terms=frozenset({"enabled", "flag"}))
+    a = base.by_tier("must_modify")[0].model_dump(exclude={"source_excerpt"})
+    b = tuned.by_tier("must_modify")[0].model_dump(exclude={"source_excerpt"})
+    assert a == b
+
+
+def test_rfc0037_mechanism_split_across_lines_anchors_on_one_of_them():
+    """Acceptance 8 — a cause split over two separated lines: the excerpt is
+    bounded, so it anchors on one of them rather than dumping the span. This
+    documents the limitation as intended behaviour, not an accident."""
+    from app.context_pipeline.reasoning.curation import _EXCERPT_MAX_CHARS
+
+    middle = "\n".join(f"    noop_{i}()" for i in range(12))
+    source = (
+        "def process(frame):\n"
+        "    frame = coerce_settlement_window(frame)\n"
+        f"{middle}\n"
+        '    kept = frame.filter(frame.window == "settlement")\n'
+        "    return kept\n"
+    )
+    got = _excerpt(source, "process", {"settlement", "window", "coerce"})
+    assert "settlement" in got
+    assert len(got) <= _EXCERPT_MAX_CHARS
+
+
+def test_rfc0037_tie_resolution_is_deterministic_and_earliest_wins():
+    """Acceptance 9 — two lines of identical weight resolve stably."""
+    source = (
+        "def alpha(df):\n"
+        "    first = tag_reconciliation(df)\n"
+        "    second = tag_reconciliation(df)\n"
+        "    return second\n"
+    )
+    got = _excerpt(source, "alpha", {"reconciliation"})
+    assert got == _excerpt(source, "alpha", {"reconciliation"})
+    assert "first = tag_reconciliation(df)" in got

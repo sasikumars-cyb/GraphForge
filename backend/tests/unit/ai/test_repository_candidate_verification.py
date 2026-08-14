@@ -2997,3 +2997,177 @@ def test_alphabetical_fallback_when_score_signal_and_provenance_all_tie() -> Non
 
     selected = _select_relevant_source_files(ledger, "repo-a", limit=1)
     assert selected == ["aaa_file.py"]
+
+
+# ---------------------------------------------------------------------------
+# 21. RFC-0036 — exact compound-identifier match outranks the lexical score.
+#
+# The IDF weights below are computed against *other repositories*, which is
+# the right prior for choosing a repository and the wrong one for choosing a
+# file inside one already chosen: a file every sibling repository also has is
+# scored "common" precisely when the request names it directly. These tests
+# use a corpus shaped so a distractor saturates to 1.0 on two rare words
+# while the file the request actually names scores near zero.
+# ---------------------------------------------------------------------------
+
+
+def _compound_corpus_ledger(ticket_terms: list[str]):
+    """~20 sibling repositories in which `order`/`history` are ubiquitous
+    (so nearly worthless as discriminators) while `staging`/`seed` are rare
+    (so each clears `_MODERATE_TERM_WEIGHT` and together saturate the
+    two-moderate-term bonus at 1.0)."""
+    names = [("repo-a", 20.0)] + [(f"sibling-{i}", 19.0 - i) for i in range(19)]
+    ledger = _ranked_ledger(names)
+    _set_ticket_terms(ledger, ticket_terms)
+    for i in range(19):
+        _add_component(
+            ledger, repository=f"sibling-{i}", name="order_history", file_path="order_history.py"
+        )
+    # Rare: present in exactly one other repository.
+    _add_component(ledger, repository="sibling-0", name="staging_seed", file_path="staging_seed.py")
+    return ledger
+
+
+def _add_rfc0036_candidates(ledger) -> None:
+    _add_component(
+        ledger, repository="repo-a", name="order_history", file_path="src/order_history.py"
+    )
+    _add_component(
+        ledger, repository="repo-a", name="staging_seed", file_path="src/staging_seed.py"
+    )
+
+
+def test_exact_compound_identifier_beats_a_distractor_that_saturates_the_score() -> None:
+    """The RFC-0036 benchmark: the distractor reaches the score ceiling on
+    two rare words; the file the request actually names by identifier scores
+    near zero. Identity must win."""
+    ledger = _compound_corpus_ledger(["order_history", "staging", "seed"])
+    _add_rfc0036_candidates(ledger)
+
+    scored = _score_candidate_source_files_for_test(ledger, "repo-a")
+    assert scored["src/staging_seed.py"] > scored["src/order_history.py"], (
+        "fixture must reproduce the defect: the distractor should out-score the named file"
+    )
+
+    assert _select_relevant_source_files(ledger, "repo-a", limit=1) == ["src/order_history.py"]
+
+
+def test_no_compound_identifier_in_the_request_leaves_ordering_unchanged() -> None:
+    """Only single-part terms — nothing is a compound, so the new tier never
+    fires and the existing score ordering stands."""
+    ledger = _compound_corpus_ledger(["staging", "seed"])
+    _add_rfc0036_candidates(ledger)
+
+    assert _select_relevant_source_files(ledger, "repo-a", limit=1) == ["src/staging_seed.py"]
+
+
+def test_compound_present_but_no_candidate_matches_leaves_ordering_unchanged() -> None:
+    """A compound the request names that nothing in the repository is
+    actually called must not perturb anything."""
+    ledger = _compound_corpus_ledger(["unrelated_thing", "staging", "seed"])
+    _add_rfc0036_candidates(ledger)
+
+    assert _select_relevant_source_files(ledger, "repo-a", limit=1) == ["src/staging_seed.py"]
+
+
+def test_compound_does_not_match_a_glued_word_containing_it() -> None:
+    """`test_data` must not match `latestdataset.py` — a squashed-substring
+    test would match it ("la-TESTDATA-set"); whole-identifier equality
+    must not."""
+    from app.context_pipeline.reasoning.capabilities import _exact_identifier_match_paths
+
+    ledger = _compound_corpus_ledger(["test_data", "staging", "seed"])
+    _add_component(
+        ledger, repository="repo-a", name="latestdataset", file_path="src/latestdataset.py"
+    )
+
+    assert _exact_identifier_match_paths(ledger, "repo-a") == set()
+
+
+def test_compound_does_not_match_a_differently_pluralized_identifier() -> None:
+    """`user_id` must not match `parse_userids.py`. Note `tokenize()` would
+    drop "id" entirely on its 3-character floor, which is exactly why this
+    comparison uses ordered identifier parts instead."""
+    from app.context_pipeline.reasoning.capabilities import _exact_identifier_match_paths
+
+    ledger = _compound_corpus_ledger(["user_id", "staging", "seed"])
+    _add_component(
+        ledger, repository="repo-a", name="parse_userids", file_path="src/parse_userids.py"
+    )
+
+    assert _exact_identifier_match_paths(ledger, "repo-a") == set()
+
+
+def test_two_exact_matches_fall_through_to_the_existing_ordering() -> None:
+    """When identity cannot separate two files, every pre-existing tie-break
+    (score, then RFC-0027 signal, then RFC-0021 provenance, then path) must
+    still decide — the new tier is additive, not a replacement."""
+    ledger = _compound_corpus_ledger(["order_history", "staging", "seed"])
+    _add_component(
+        ledger, repository="repo-a", name="order_history", file_path="zzz/order_history.py"
+    )
+    _add_component(
+        ledger, repository="repo-a", name="order_history", file_path="aaa/order_history.py"
+    )
+
+    selected = _select_relevant_source_files(ledger, "repo-a", limit=2)
+    assert set(selected) == {"aaa/order_history.py", "zzz/order_history.py"}
+    # Identical scores/signal/provenance -> the existing alphabetical
+    # fallback still has the final say.
+    assert selected[0] == "aaa/order_history.py"
+
+
+def test_exact_identifier_matching_is_selective_not_a_broad_promotion() -> None:
+    """Safety: the tier must fire for the named identifier only, not sweep
+    in unrelated files that merely share a word with it."""
+    from app.context_pipeline.reasoning.capabilities import _exact_identifier_match_paths
+
+    ledger = _compound_corpus_ledger(["order_history", "staging", "seed"])
+    _add_component(
+        ledger, repository="repo-a", name="order_history", file_path="src/order_history.py"
+    )
+    for name in (
+        "order_service",
+        "history_writer",
+        "order_history_archiver",
+        "reorder",
+        "history",
+        "orders",
+    ):
+        _add_component(ledger, repository="repo-a", name=name, file_path=f"src/{name}.py")
+
+    assert _exact_identifier_match_paths(ledger, "repo-a") == {"src/order_history.py"}
+
+
+def test_scoring_itself_is_untouched_by_the_new_tier() -> None:
+    """RFC-0036 changes ordering only. Two independent proofs: the scorer
+    does not reference the new signal at all, and for one fixed ledger the
+    scores it returns still rank the distractor above the named file (i.e.
+    the numbers are unchanged) even though selection now inverts that."""
+    import inspect
+
+    from app.context_pipeline.reasoning.capabilities import _score_candidate_source_files
+
+    source = inspect.getsource(_score_candidate_source_files)
+    assert "_exact_identifier_match_paths" not in source
+    assert "exact_identifier" not in source
+
+    ledger = _compound_corpus_ledger(["order_history", "staging", "seed"])
+    _add_rfc0036_candidates(ledger)
+    scored = _score_candidate_source_files_for_test(ledger, "repo-a")
+
+    assert scored["src/staging_seed.py"] == 1.0
+    assert scored["src/staging_seed.py"] > scored["src/order_history.py"]
+    assert _select_relevant_source_files(ledger, "repo-a", limit=1) == ["src/order_history.py"]
+
+
+def test_dependency_expansion_does_not_consult_the_new_tier() -> None:
+    """RFC-0022/0023/0024 selection must be unaffected — the new signal is
+    scoped to `_select_relevant_source_files` alone."""
+    import inspect
+
+    from app.context_pipeline.reasoning.capabilities import _select_dependency_expansion_files
+
+    source = inspect.getsource(_select_dependency_expansion_files)
+    assert "_exact_identifier_match_paths" not in source
+    assert "exact_identifier" not in source
