@@ -2099,3 +2099,206 @@ def test_confluence_investigator_retries_after_an_unavailable_connection() -> No
     actions = ConfluenceInvestigator().propose(state)
     assert len(actions) == 1
     assert actions[0].key == "fetch_documentation:NPT-30"
+
+
+# ---------------------------------------------------------------------------
+# RFC-0025 — ticket-term lifecycle: `repository_ranking`'s `ticket_terms`
+# must not permanently reflect only the short initial goal once a richer
+# work-item description has been fetched. Fully generic vocabulary
+# ("alpha"/"beta"/"ui") — nothing here names any real ticket, repository,
+# or company.
+# ---------------------------------------------------------------------------
+
+
+class _RankingInvestigator:
+    """Stands in for `GraphInvestigator`'s ranking behavior only: records
+    `repository`/`component` facts and a `repository_ranking` fact whose
+    `ticket_terms` come from `_ticket_terms(state)` — exactly the same
+    function, and the same "computed once, from whatever text exists right
+    now" shape, `GraphInvestigator.propose()` itself uses."""
+
+    def __init__(self, repositories: list[str], components: list[tuple[str, str]]) -> None:
+        self.name = "graph"
+        self._repositories = repositories
+        self._components = components
+        self._done = False
+
+    def propose(self, state: WorkingContext) -> list[InvestigationAction]:
+        if self._done:
+            return []
+        from app.context_pipeline.reasoning.investigators import _ticket_terms
+
+        return [
+            InvestigationAction(
+                provider=self.name,
+                key="rank",
+                intent="ranking",
+                targets="repository",
+                params={"ticket_terms": _ticket_terms(state)},
+                cost=1,
+            )
+        ]
+
+    async def run(
+        self, action: InvestigationAction, session: SessionContext, recorder: Recorder
+    ) -> InvestigationOutcome:
+        self._done = True
+        evidence = recorder.evidence("success", "ranked.")
+        for name in self._repositories:
+            recorder.fact("repository", name, value={"name": name}, evidence=evidence)
+        for comp, repo in self._components:
+            recorder.fact(
+                "component", comp, value={"name": comp, "repository": repo}, evidence=evidence
+            )
+        scored = [[1.0, name] for name in self._repositories]
+        recorder.fact(
+            "repository_ranking",
+            "ranking",
+            value={"scored": scored, "ticket_terms": action.params["ticket_terms"]},
+            evidence=evidence,
+        )
+        return InvestigationOutcome(observation="ranked.", yielded=True)
+
+
+class _WorkItemInvestigator:
+    """Stands in for a Jira-style investigator: records one `work_item`
+    fact with real prose `text` once, on its first (and only) run."""
+
+    def __init__(self, text: str) -> None:
+        self.name = "jira"
+        self._text = text
+        self._done = False
+
+    def propose(self, state: WorkingContext) -> list[InvestigationAction]:
+        if self._done:
+            return []
+        return [
+            InvestigationAction(
+                provider=self.name, key="fetch_work_item", intent="fetch", targets="work_item", cost=1
+            )
+        ]
+
+    async def run(
+        self, action: InvestigationAction, session: SessionContext, recorder: Recorder
+    ) -> InvestigationOutcome:
+        self._done = True
+        evidence = recorder.evidence("success", "fetched.")
+        recorder.fact("work_item", "TICKET-1", value={}, text=self._text, evidence=evidence)
+        return InvestigationOutcome(observation="fetched.", yielded=True)
+
+
+async def _run_two_stage_investigation(
+    *, repositories: list[str], components: list[tuple[str, str]], goal: str, description: str
+) -> WorkingContext:
+    """Runs `discover()` with exactly the two fakes above — ranking first
+    (using only `goal`, since the work item hasn't been fetched yet, the
+    real shape `survey_architecture` always runs in), work-item fetch
+    second. Both investigators go silent after their one action, so the
+    loop ends there regardless of what else `unmet()` would still want."""
+    ranking = _RankingInvestigator(repositories, components)
+    work_item = _WorkItemInvestigator(description)
+    return await discover(
+        request=goal,
+        session=_session(),
+        investigators=[ranking, work_item],
+    )
+
+
+async def test_final_ticket_terms_include_vocabulary_from_the_full_description_not_only_the_goal() -> (
+    None
+):
+    """Test 1: the goal alone would never produce "ui"/"alpha" — only the
+    fuller description does. The final, persisted `ticket_terms` must
+    include both, not remain limited to what the short goal alone yields."""
+    state = await _run_two_stage_investigation(
+        repositories=["repo-a", "repo-b"],
+        components=[],
+        goal="pipeline failed with schema validation failure",
+        description="The affected tenant is alpha and the UI workflow is failing.",
+    )
+    ranking_facts = state.ledger.facts_of("repository_ranking")
+    assert len(ranking_facts) == 1
+    final_terms = set(ranking_facts[0].value["ticket_terms"])
+    assert "ui" in final_terms
+    assert "alpha" in final_terms
+
+
+async def test_repository_ranking_discriminates_using_description_vocabulary() -> None:
+    """Test 2: repo A's own component mentions "alpha" (from the
+    *description*, absent from the goal); repo B's mentions "beta". Once
+    `ticket_terms` correctly includes "alpha", `_corroboration_evidence`
+    must be able to discriminate A from B using it — proving the
+    description's vocabulary actually reaches repository-identification,
+    not just source-file selection within an already-chosen repository."""
+    from app.context_pipeline.reasoning.capabilities import _ranking_ticket_terms
+
+    state = await _run_two_stage_investigation(
+        repositories=["repo-a", "repo-b"],
+        components=[("alpha_handler", "repo-a"), ("beta_handler", "repo-b")],
+        goal="pipeline failed with schema validation failure",
+        description="The affected tenant is alpha.",
+    )
+    ticket_terms = _ranking_ticket_terms(state.ledger)
+    assert "alpha" in ticket_terms
+    assert "beta" not in ticket_terms, "the description never mentions beta"
+
+
+async def test_ranking_state_is_refreshed_not_permanently_stale() -> None:
+    """Test 3: right after the ranking-only cycle, `ticket_terms` reflects
+    only the short goal (this is expected and correct at that point in
+    time — the work item hasn't been fetched yet). Once the full
+    description has been fetched, the *same* fact must no longer be
+    limited to the goal-only vocabulary."""
+    from app.context_pipeline.reasoning.investigators import _ticket_terms
+
+    state = WorkingContext()
+    state.metadata.goal = "pipeline failed with schema validation failure"
+    state.derived["original_request"] = state.metadata.goal
+    state.derived["enriched_text"] = state.metadata.goal
+
+    goal_only_terms = set(_ticket_terms(state))
+    assert "ui" not in goal_only_terms, "fixture precondition: the goal alone must not mention ui"
+
+    final_state = await _run_two_stage_investigation(
+        repositories=["repo-a", "repo-b"],
+        components=[],
+        goal=state.metadata.goal,
+        description="The UI workflow is failing.",
+    )
+    ranking_facts = final_state.ledger.facts_of("repository_ranking")
+    refreshed_terms = set(ranking_facts[0].value["ticket_terms"])
+    assert refreshed_terms != goal_only_terms
+    assert "ui" in refreshed_terms
+
+
+async def test_recomputing_ticket_terms_does_not_arbitrarily_reorder_when_nothing_discriminates() -> (
+    None
+):
+    """Test 4 (negative case): the description adds prose but no term that
+    distinguishes repo A from repo B — refreshing `ticket_terms` must not
+    change which repository the ranking favors when there was nothing to
+    discriminate on in the first place."""
+    state = await _run_two_stage_investigation(
+        repositories=["repo-a", "repo-b"],
+        components=[],
+        goal="pipeline failed with schema validation failure",
+        description="Please investigate this as soon as possible, thank you.",
+    )
+    ranking_facts = state.ledger.facts_of("repository_ranking")
+    scored = ranking_facts[0].value["scored"]
+    assert scored[0][0] == scored[1][0], "an undiscriminating description must not break the tie"
+
+
+async def test_ticket_term_refresh_never_creates_a_second_ranking_fact() -> None:
+    """Test 5: refreshing `ticket_terms` must mutate the existing
+    `repository_ranking` fact in place, never append a new one — a second,
+    possibly-contradictory ranking fact would leave downstream readers
+    (`capabilities._ranking_ticket_terms`, which reads only the *latest*
+    one) exposed to whichever one happened to be recorded last."""
+    state = await _run_two_stage_investigation(
+        repositories=["repo-a", "repo-b"],
+        components=[],
+        goal="pipeline failed with schema validation failure",
+        description="The affected tenant is alpha and the UI workflow is failing.",
+    )
+    assert len(state.ledger.facts_of("repository_ranking")) == 1

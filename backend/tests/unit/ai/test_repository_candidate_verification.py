@@ -31,6 +31,7 @@ from app.context_pipeline.reasoning.capabilities import (
     _corroborated_ranking_candidates,
     _corroboration_evidence,
     _matched_term_specificity,
+    _ranking_ticket_terms,
     _relationship_degree,
     _repository_signals,
     _select_dependency_expansion_files,
@@ -2227,7 +2228,7 @@ def test_initial_selection_width_is_unaffected_by_dependency_expansion() -> None
 def _score_candidate_source_files_for_test(ledger, repository) -> dict:
     from app.context_pipeline.reasoning.capabilities import _score_candidate_source_files
 
-    scored, _referenced_by = _score_candidate_source_files(ledger, repository)
+    scored, _referenced_by, _signal = _score_candidate_source_files(ledger, repository)
     return scored
 
 
@@ -2733,3 +2734,266 @@ def test_rfc_0024_signals_are_fully_backward_compatible_when_omitted() -> None:
         limit=3,
     )
     assert without_rfc_0024 == with_empty_rfc_0024_signals
+
+
+# ---------------------------------------------------------------------------
+# 19. RFC-0026 — `_ranking_ticket_terms` must not silently drop a term
+#     `extract_key_terms` already decided was significant, purely because
+#     it's short. Fully generic vocabulary ("api"/"alpha"/"beta") — the
+#     acronym used is deliberately not "ui" anywhere in this section, to
+#     prove this is a generic identifier-preservation fix, not a UI-
+#     specific patch.
+# ---------------------------------------------------------------------------
+
+
+def test_acronym_shaped_term_survives_ranking_tokenization() -> None:
+    """Test 1: a real, uppercase acronym in the original text ("UI") must
+    still be present after both `extract_key_terms` (first stage) and
+    `_ranking_ticket_terms` (second stage) — the second stage must not
+    undo what the first correctly preserved."""
+    from app.agents.planning.classifier import extract_key_terms
+
+    text = "The UI workflow failed for tenant alpha."
+    extracted = extract_key_terms(text)
+    assert "ui" in extracted, "fixture precondition: extract_key_terms must itself keep ui"
+
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, list(extracted))
+    assert "ui" in _ranking_ticket_terms(ledger)
+
+
+def test_ordinary_multi_word_terms_are_still_split_and_stemmed() -> None:
+    """Test 2: the fix must not break ordinary tokenization — compound/
+    plural terms extracted from "schema validation failure"-shaped text
+    still come out exactly as before (split, lowercased, plural-stemmed)."""
+    from app.agents.planning.classifier import extract_key_terms
+
+    text = "schema validation failure events"
+    extracted = extract_key_terms(text)
+
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, list(extracted))
+    terms = _ranking_ticket_terms(ledger)
+    assert {"schema", "validation", "failure"} <= terms
+    assert "event" in terms, "plural stemming must still apply to ordinary words"
+
+
+def test_generic_acronym_other_than_ui_also_survives() -> None:
+    """Test 3: this must generalize to any acronym-shaped identifier the
+    existing tokenizer rules already recognize, not just "ui" — "QA" is
+    used here specifically (like "ui", exactly 2 characters, so it
+    exercises the same below-`_MIN_TOKEN_LENGTH` edge case, not just a
+    3+ character word that was never actually at risk), deliberately
+    different from the live PROT-5764 vocabulary, to prove there is no
+    UI-specific special case anywhere in the fix."""
+    from app.agents.planning.classifier import extract_key_terms
+
+    text = "The affected deployment uses the QA workflow."
+    extracted = extract_key_terms(text)
+    assert "qa" in extracted, "fixture precondition: extract_key_terms must itself keep qa"
+
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, list(extracted))
+    assert "qa" in _ranking_ticket_terms(ledger)
+
+
+def test_ranking_actually_receives_the_preserved_term() -> None:
+    """Test 4: the preserved term must reach real corroboration/source-
+    selection scoring, not just survive as a set member in isolation.
+    Repo A's own component mentions "alpha" (present only in the
+    description, not the goal); repo B's mentions "beta"."""
+    from app.agents.planning.classifier import extract_key_terms
+
+    goal = "pipeline failure"
+    description = "The affected tenant is ALPHA."
+    extracted = extract_key_terms(f"{goal} {description}")
+    assert "alpha" in extracted
+
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, list(extracted))
+    _add_component(ledger, repository="repo-a", name="alpha_handler", file_path="a.py")
+    _add_component(ledger, repository="repo-b", name="beta_handler", file_path="b.py")
+
+    scored_a = _score_candidate_source_files_for_test(ledger, "repo-a")
+    scored_b = _score_candidate_source_files_for_test(ledger, "repo-b")
+    assert scored_a.get("a.py", 0.0) > 0.0, "repo A must receive discriminating evidence from alpha"
+    assert scored_a.get("a.py", 0.0) > scored_b.get("b.py", 0.0), (
+        "repo A (which genuinely has alpha) must outscore repo B (which doesn't)"
+    )
+
+
+def test_prot_5764_shaped_but_domain_neutral_identifier_reaches_ranking() -> None:
+    """Test 5: the PROT-5764 shape (a short acronym present only in the
+    ticket *description*, absent from the *goal*, naming a config value
+    only one of two near-identical repositories has) reproduced with
+    fully generic vocabulary — "qa"/"mode" (2 characters, the same edge
+    case "ui" hits), no Avangrid/Databricks/UI/TnT anywhere."""
+    from app.agents.planning.classifier import extract_key_terms
+
+    goal = "pipeline failure"
+    description = "The affected deployment uses the QA workflow."
+    assert "qa" not in extract_key_terms(goal), "fixture precondition: the goal alone lacks qa"
+    extracted = extract_key_terms(f"{goal} {description}")
+    assert "qa" in extracted
+
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, list(extracted))
+    # The acronym segment is upper-cased within the identifier,
+    # deliberately mirroring the real live shape (a Databricks job name
+    # like "AVANGRID_EM_UI_UDW"): a short acronym only reliably tokenizes
+    # out of a component's own name when *something* about its casing in
+    # the source marks it as one -- an all-lowercase "qa" fragment inside
+    # an ordinary identifier is indistinguishable from a truncated word.
+    _add_component(ledger, repository="repo-a", name="QA_mode_config", file_path="a.py")
+    _add_component(ledger, repository="repo-b", name="batch_mode_config", file_path="b.py")
+
+    scored_a = _score_candidate_source_files_for_test(ledger, "repo-a")
+    scored_b = _score_candidate_source_files_for_test(ledger, "repo-b")
+    assert scored_a.get("a.py", 0.0) > scored_b.get("b.py", 0.0)
+
+
+def test_rfc_0025_ticket_term_lifecycle_still_works_with_the_rfc_0026_fix() -> None:
+    """Critical regression: RFC-0025's lifecycle refresh (a short goal's
+    ticket_terms replaced by the fuller work-item text's once available)
+    must still work end to end now that RFC-0026 changes how those terms
+    get tokenized on the way into ranking."""
+    from app.agents.planning.classifier import extract_key_terms
+
+    short_goal = "pipeline failure"
+    full_text = "pipeline failure. The affected tenant is ALPHA and uses the QA workflow."
+
+    ledger = _ranked_ledger([("repo-a", 5.0), ("repo-b", 4.0)])
+    _set_ticket_terms(ledger, list(extract_key_terms(short_goal)))
+    goal_only_terms = _ranking_ticket_terms(ledger)
+    assert "qa" not in goal_only_terms and "alpha" not in goal_only_terms
+
+    # RFC-0025's own refresh: the same fact, updated in place once the
+    # fuller text is available.
+    ledger.facts_of("repository_ranking")[-1].value["ticket_terms"] = list(
+        extract_key_terms(full_text)
+    )
+    refreshed_terms = _ranking_ticket_terms(ledger)
+    assert "qa" in refreshed_terms
+    assert "alpha" in refreshed_terms
+    assert len(ledger.facts_of("repository_ranking")) == 1, "still exactly one fact, never duplicated"
+
+
+# ---------------------------------------------------------------------------
+# 20. RFC-0027 — a pre-clamp matched-term-signal tie-break, inserted between
+#     the existing `[0,1]` score and RFC-0021's structural-reference
+#     provenance key. Fully generic vocabulary ("widget"/"gizmo"/"sprocket"/
+#     "cog") — nothing here names any real ticket, repository, or company.
+# ---------------------------------------------------------------------------
+
+
+def _saturating_corpus_ledger(ticket_terms: list[str]):
+    """~20 unrelated sibling repositories, each with one distinct component
+    sharing no vocabulary with any ticket term used in this section — so
+    every one of `ticket_terms` independently reaches the specificity
+    ceiling (weight 1.0), reproducing the real live scale effect (a large,
+    diverse "other repositories" corpus) without needing a real graph."""
+    names = [("repo-a", 20.0)] + [(f"sibling-{i}", 19.0 - i) for i in range(19)]
+    ledger = _ranked_ledger(names)
+    _set_ticket_terms(ledger, ticket_terms)
+    for i in range(19):
+        _add_component(
+            ledger, repository=f"sibling-{i}", name=f"unrelated_thing_{i}", file_path=f"s{i}.py"
+        )
+    return ledger
+
+
+def test_stronger_pre_clamp_signal_wins_when_clamped_scores_tie() -> None:
+    """The required benchmark: File A matches exactly one maximally-
+    specific term and has structural-reference provenance; File B matches
+    three independently maximally-specific terms and has none. Both reach
+    the same clamped score of 1.0 — the fix must prefer File B, whose
+    pre-clamp signal is genuinely stronger, over File A's structural
+    provenance alone. This is the exact live PROT-5764 failure shape,
+    reproduced with vocabulary that names nothing real."""
+    from app.context_pipeline.reasoning.capabilities import _score_candidate_source_files
+
+    ledger = _saturating_corpus_ledger(["widget", "gizmo", "sprocket"])
+    _add_component(ledger, repository="repo-a", name="widget_handler", file_path="file_a.py")
+    _add_component(ledger, repository="repo-a", name="widget_config_ref", file_path="config.yml")
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("file_path") == "file_a.py":
+            fact.value["referenced_by_config_file_paths"] = ["config.yml"]
+    _add_component(
+        ledger,
+        repository="repo-a",
+        name="widget_gizmo_sprocket_processor",
+        file_path="file_b.py",
+    )
+
+    scored, referenced_by, signal = _score_candidate_source_files(ledger, "repo-a")
+    assert scored["file_a.py"] == scored["file_b.py"] == 1.0, (
+        "fixture precondition: both files must reach the identical clamped ceiling"
+    )
+    assert signal["file_b.py"] > signal["file_a.py"], (
+        "fixture precondition: File B's pre-clamp signal must genuinely exceed File A's"
+    )
+    assert "file_a.py" in referenced_by, "fixture precondition: File A has structural provenance"
+
+    selected = _select_relevant_source_files(ledger, "repo-a", limit=1)
+    assert selected == ["file_b.py"], (
+        f"the genuinely stronger pre-clamp signal must win the tie: got {selected}"
+    )
+
+
+def test_a_real_score_difference_still_dominates_the_signal_tie_break() -> None:
+    """Property 1: score is still the sole, dominant criterion — a file
+    with a clearly higher clamped score wins even when the *lower*-scoring
+    file happens to have the larger pre-clamp signal."""
+    ledger = _saturating_corpus_ledger(["widget", "gizmo", "sprocket", "cog"])
+    # High score, modest signal (one maximally-specific term).
+    _add_component(ledger, repository="repo-a", name="widget_handler", file_path="strong.py")
+    # Lower score (a single moderately-specific-but-not-maximal term),
+    # deliberately given a name that would also rack up a large raw
+    # signal if it were allowed to compete on that alone — it must not
+    # win, because its clamped score never actually ties strong.py's.
+    _add_component(ledger, repository="sibling-0", name="cog", file_path="s0.py")
+    _add_component(ledger, repository="sibling-1", name="cog", file_path="s1.py")
+    _add_component(ledger, repository="repo-a", name="cog_only_weak_match", file_path="weak.py")
+
+    from app.context_pipeline.reasoning.capabilities import _score_candidate_source_files
+
+    scored, _referenced_by, signal = _score_candidate_source_files(ledger, "repo-a")
+    assert scored["strong.py"] > scored["weak.py"], "fixture precondition: scores must differ"
+
+    selected = _select_relevant_source_files(ledger, "repo-a", limit=1)
+    assert selected == ["strong.py"], "a genuine score difference must never be overridden"
+
+
+def test_structural_provenance_still_decides_when_signal_also_ties() -> None:
+    """Property 2: when both score *and* pre-clamp signal are identical
+    between two candidates, RFC-0021's structural-reference provenance
+    still makes the final call — unchanged from before this RFC."""
+    ledger = _saturating_corpus_ledger(["widget"])
+    _add_component(ledger, repository="repo-a", name="widget_one", file_path="referenced.py")
+    _add_component(ledger, repository="repo-a", name="widget_two", file_path="unreferenced.py")
+    _add_component(ledger, repository="repo-a", name="widget_config", file_path="config.yml")
+    for fact in ledger.facts_of("component"):
+        if fact.value.get("file_path") == "referenced.py":
+            fact.value["referenced_by_config_file_paths"] = ["config.yml"]
+
+    from app.context_pipeline.reasoning.capabilities import _score_candidate_source_files
+
+    scored, referenced_by, signal = _score_candidate_source_files(ledger, "repo-a")
+    assert scored["referenced.py"] == scored["unreferenced.py"]
+    assert signal["referenced.py"] == signal["unreferenced.py"]
+    assert "referenced.py" in referenced_by and "unreferenced.py" not in referenced_by
+
+    selected = _select_relevant_source_files(ledger, "repo-a", limit=1)
+    assert selected == ["referenced.py"]
+
+
+def test_alphabetical_fallback_when_score_signal_and_provenance_all_tie() -> None:
+    """Property 3: when score, pre-clamp signal, and structural provenance
+    are all equal, alphabetical file-path order remains the final,
+    unchanged fallback."""
+    ledger = _saturating_corpus_ledger(["widget"])
+    _add_component(ledger, repository="repo-a", name="widget_one", file_path="zzz_file.py")
+    _add_component(ledger, repository="repo-a", name="widget_two", file_path="aaa_file.py")
+
+    selected = _select_relevant_source_files(ledger, "repo-a", limit=1)
+    assert selected == ["aaa_file.py"]

@@ -651,6 +651,7 @@ async def investigate(
     """Run reasoning cycles until requirements are met or no investigator has
     anything left to offer. Mutates and returns `state` — this is working
     memory being updated in place, not a pure transform producing a report."""
+    from app.context_pipeline.reasoning.investigators import _ticket_terms
     from app.context_pipeline.reasoning.projection import render_enriched_text
 
     pool = investigators if investigators is not None else default_investigators()
@@ -772,6 +773,26 @@ async def investigate(
 
             state.derived.update(outcome.derived)
             state.derived["enriched_text"] = render_enriched_text(state)
+
+            # RFC-0025 — `ticket_terms` was first computed for the most
+            # recent `repository_ranking` fact by `survey_architecture`'s
+            # own `propose()` (see `_ticket_terms`'s docstring), which can
+            # only ever run once (gated on no `repository` fact existing
+            # yet) and therefore necessarily runs *before* the work item's
+            # full description has been fetched — `enriched_text` just
+            # above is exactly what closes that gap the moment it has.
+            # Refreshed in place on the *existing* fact, not a new one:
+            # `capabilities._ranking_ticket_terms` already always reads
+            # only the latest `repository_ranking` fact, so every
+            # downstream consumer (repository ranking's own corroboration,
+            # source-file selection, dependency-expansion ranking) sees
+            # the fuller vocabulary from here on with no change to any of
+            # them. Cheap and idempotent — recomputing identical text is a
+            # no-op — so this runs every cycle rather than tracking
+            # whether the text actually changed since the last one.
+            ranking_facts = state.ledger.facts_of("repository_ranking")
+            if ranking_facts:
+                ranking_facts[-1].value["ticket_terms"] = _ticket_terms(state)
 
             new_evidence = [e.evidence_id for e in state.ledger.evidence[before:]]
 

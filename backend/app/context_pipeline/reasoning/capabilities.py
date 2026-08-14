@@ -796,6 +796,34 @@ def _matched_term_specificity(matched_terms: set[str], weights: dict[str, float]
     return max(strongest, discrete_multi_term_score, continuous_cooccurrence_score)
 
 
+def _matched_term_signal(matched_terms: set[str], weights: dict[str, float]) -> float:
+    """RFC-0027 — the plain sum of the same `_MAX_COMBINATION_TERMS`
+    strongest matched weights `_matched_term_specificity` above already
+    computes, *without* that function's own `[0,1]` clamp (noisy-OR /
+    discrete-bonus / `max`).
+
+    Exists purely as a tie-break input, never as a replacement score: at a
+    large enough "other scoped repositories" corpus, several genuinely
+    different candidates can independently reach `_matched_term_
+    specificity`'s ceiling of `1.0` (each matches at least one term that
+    happens to appear in zero of the others) — a real, observed live
+    effect, not a hypothetical. Once clamped, "matched one maximally-rare
+    term" and "matched three independently maximally-rare terms" are
+    indistinguishable, even though the second is genuinely stronger
+    evidence. This value stays uncapped specifically so it keeps ordering
+    those two cases correctly — deliberately *not* another normalized
+    `[0,1]` score, which would just relocate the same saturation problem
+    one level down.
+
+    Reuses `_MAX_COMBINATION_TERMS` (not every matched term) for the same
+    reason `_matched_term_specificity` bounds itself there: piling on
+    arbitrarily many generic (near-zero-weight) matches must not out-signal
+    a handful of genuinely rare ones.
+    """
+    term_weights = sorted((weights.get(t, 0.0) for t in matched_terms), reverse=True)
+    return sum(term_weights[:_MAX_COMBINATION_TERMS])
+
+
 # Below this, matched vocabulary is evidence of a shared scaffold/domain
 # at best, not a specific behavioral connection to this ticket — the same
 # "must clear a bar to count as corroboration" shape RFC-0012 already
@@ -1089,12 +1117,46 @@ def _ranking_ticket_terms(ledger: Ledger) -> frozenset[str]:
     corroboration needs the discriminating half only, or it would just be
     re-deriving the same lexical signal a second time under a different
     name.
+
+    RFC-0026 — every caller of this function matches against `tokenize()`'d
+    component/file text (`tokenize(_match_text(...)) & ticket_terms`), so a
+    compound identifier `extract_key_terms` kept as one string (its own
+    regex allows underscores inside a match — "event_owner", "rate_
+    attribute") genuinely needs re-tokenizing here to split into the same
+    atomic tokens component text is compared in ("event"/"owner"), or it
+    would never overlap anything. That's real, necessary work — not
+    something a plain `set(terms)` could replace without breaking multi-
+    word overlap and losing `tokenize()`'s own plural-stemming for ordinary
+    words.
+
+    What re-tokenizing *the whole joined blob at once* got wrong: a term
+    `extract_key_terms` already kept *despite* being shorter than
+    `tokenize()`'s own length floor — because its own acronym-shape check
+    saw the term's *original*, uncased text before lowering it ("UI") —
+    arrives here already lowercased, with that case signal gone for good.
+    Tokenizing it again can only ever re-apply the same length floor to
+    text that no longer carries what the floor's own exemption needs to
+    fire, so it silently vanished. Tokenizing each term *individually*
+    fixes this the smallest way that doesn't touch `tokenize()` itself: a
+    term whose own tokenization comes back non-empty behaves exactly as
+    before (split, stemmed, lowercased); a term that fully disappears
+    reuses the term verbatim instead of losing it — `extract_key_terms`
+    already decided it was significant, so the only ledger-only-visible
+    choice this function should ever make from that point on is *how* to
+    represent that term, never whether to keep it.
     """
     ranking_facts = ledger.facts_of("repository_ranking")
     if not ranking_facts:
         return frozenset()
     terms = ranking_facts[-1].value.get("ticket_terms") or []
-    return tokenize(" ".join(str(t) for t in terms))
+    result: set[str] = set()
+    for raw in terms:
+        term = str(raw)
+        if not term:
+            continue
+        split = tokenize(term)
+        result |= split if split else {term.lower()}
+    return frozenset(result)
 
 
 def _relationship_degree(ledger: Ledger) -> dict[str, int]:
@@ -1327,21 +1389,31 @@ _REFERENCE_BOOST_FACTOR = 1.0
 
 def _score_candidate_source_files(
     ledger: Ledger, repository: str
-) -> tuple[dict[str, float], dict[str, set[str]]]:
+) -> tuple[dict[str, float], dict[str, set[str]], dict[str, float]]:
     """RFC-0014/0015/0017/0020 scoring, factored out of `_select_relevant_
     source_files` (RFC-0022) so a second caller (`_select_dependency_
     expansion_files`) can read a file's *true* score — including the
     RFC-0020 config-reference boost, not just its own bare lexical match —
     without re-deriving it a second way. Pure extraction: no behavior
-    change to `_select_relevant_source_files` itself. Returns
-    `(scored, referenced_by)`, the same two structures that function's
-    body already built locally.
+    change to `_select_relevant_source_files` itself. Returns `(scored,
+    referenced_by, signal)`.
+
+    RFC-0027 — `signal` is each file's own `_matched_term_signal` (the
+    same matched terms as `scored`, before `_matched_term_specificity`'s
+    `[0,1]` clamp) — a tie-break input for `_select_relevant_source_
+    files`, never touched by the `_REFERENCE_BOOST_FACTOR` pass below:
+    inheriting relevance from a referencing config file is exactly what
+    the *existing*, separate structural-reference tie-break already
+    rewards, and folding it into `signal` too would blur the two apart
+    instead of keeping them as the two distinct tie-break tiers they're
+    meant to be.
     """
     ticket_terms = _ranking_ticket_terms(ledger)
     if not ticket_terms:
-        return {}, {}
+        return {}, {}, {}
     weights = _term_specificity_weights(ledger, ticket_terms, exclude_repository=repository)
     scored: dict[str, float] = {}
+    signal: dict[str, float] = {}
     referenced_by: dict[str, set[str]] = {}
     for fact in ledger.facts_of("component"):
         if fact.value.get("repository") != repository:
@@ -1355,18 +1427,36 @@ def _score_candidate_source_files(
         if not matched_terms:
             continue
         score = _matched_term_specificity(matched_terms, weights)
+        term_signal = _matched_term_signal(matched_terms, weights)
         if _is_test_component(fact.value):
             score *= _TEST_RELEVANCE_FACTOR
+            term_signal *= _TEST_RELEVANCE_FACTOR
         scored[file_path] = max(scored.get(file_path, 0.0), score)
+        signal[file_path] = max(signal.get(file_path, 0.0), term_signal)
 
     for file_path, config_paths in referenced_by.items():
         referencing_score = max((scored.get(cp, 0.0) for cp in config_paths), default=0.0)
         if referencing_score <= 0:
             continue
-        boosted = referencing_score * _REFERENCE_BOOST_FACTOR
-        scored[file_path] = max(scored.get(file_path, 0.0), boosted)
+        boosted_score = referencing_score * _REFERENCE_BOOST_FACTOR
+        if boosted_score > scored.get(file_path, 0.0):
+            scored[file_path] = boosted_score
+            # RFC-0027 — carry the *same* boost into `signal`, from the
+            # same referencing config(s), exactly when the boost is what
+            # actually raised this file's score. Inconsistent otherwise: a
+            # file whose clamped score is entirely inherited via structural
+            # reference (own signal 0, matched nothing itself) would
+            # wrongly lose the *new* pre-clamp tie-break to a merely
+            # lexically-self-matching sibling — inverting the existing
+            # RFC-0021 precedent that a real structural relationship
+            # outweighs incidental lexical overlap, not the other way
+            # round.
+            signal[file_path] = (
+                max((signal.get(cp, 0.0) for cp in config_paths), default=0.0)
+                * _REFERENCE_BOOST_FACTOR
+            )
 
-    return scored, referenced_by
+    return scored, referenced_by, signal
 
 
 # RFC-0022 — how many dependency-derived files (reached via a real `CALLS`/
@@ -1468,7 +1558,7 @@ def _select_dependency_expansion_files(
     """
     if not dependency_targets:
         return []
-    scored, _referenced_by = _score_candidate_source_files(ledger, repository)
+    scored, _referenced_by, _signal = _score_candidate_source_files(ledger, repository)
     target_components = target_components or {}
     direct_targets = direct_targets or set()
     fan_in = fan_in or {}
@@ -1603,7 +1693,7 @@ def _select_relevant_source_files(
     the same `scored` dict, ranked by the same `sorted(...)` call below,
     and a config file that itself never scored above 0 boosts nothing.
     """
-    scored, referenced_by = _score_candidate_source_files(ledger, repository)
+    scored, referenced_by, signal = _score_candidate_source_files(ledger, repository)
     if not scored and not referenced_by:
         return []
 
@@ -1615,9 +1705,25 @@ def _select_relevant_source_files(
     # when neither file has structural provenance (or both do) — this is
     # additive to the existing two-part key, not a replacement of it.
     # Reuses `referenced_by` as-is: no new fact type, query, or formula.
+    #
+    # RFC-0027 — `signal` (also from `_score_candidate_source_files`, the
+    # same matched terms' pre-clamp strength) is inserted *before*
+    # `referenced_by`: at a large enough "other repositories" corpus,
+    # several genuinely different files can independently reach `scored`'s
+    # ceiling of `1.0` at once, and once clamped the score alone can no
+    # longer tell "matched one maximally-rare term" apart from "matched
+    # three" — exactly the live PROT-5764 failure this fixes. A real score
+    # difference of any size still wins outright (this key only matters
+    # once `-kv[1]` is already tied); the RFC-0021 structural-reference key
+    # still gets the final say whenever `signal` is *also* tied.
     ranked = sorted(
         scored.items(),
-        key=lambda kv: (-kv[1], 0 if kv[0] in referenced_by else 1, kv[0]),
+        key=lambda kv: (
+            -kv[1],
+            -signal.get(kv[0], 0.0),
+            0 if kv[0] in referenced_by else 1,
+            kv[0],
+        ),
     )
     return [path for path, _score in ranked[:limit]]
 

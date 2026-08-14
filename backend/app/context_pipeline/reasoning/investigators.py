@@ -102,7 +102,21 @@ def _ticket_terms(state: WorkingContext) -> list[str]:
     candidates. Recorded onto the `repository_ranking` fact so later,
     fact-only reasoning (`capabilities._corroborated_ranking_candidates`)
     can check whether fetched source content actually mentions something
-    specific to this request, not just its architecture shape."""
+    specific to this request, not just its architecture shape.
+
+    RFC-0025 — called from two places, deliberately. `GraphInvestigator
+    .propose()` calls it once, embedded in `survey_architecture`'s own
+    params, the first time repository ranking ever runs — which is
+    necessarily *before* a linked work item's full description has been
+    fetched (that action's own precondition is "no `repository` fact
+    exists yet", and it can only ever fire once). `engine.investigate()`'s
+    main loop calls it again, every cycle, purely to refresh the ticket
+    terms already recorded on the ranking fact — never to redo the
+    ranking itself — once `enriched_text` (this function's own text
+    source) has grown to include that description. Both call sites go
+    through this exact function so "what counts as the ticket's specific
+    vocabulary" is defined in exactly one place regardless of when it's
+    asked."""
     text = state.derived.get("enriched_text") or state.metadata.goal
     return list(analyse(text).ticket_terms)
 
