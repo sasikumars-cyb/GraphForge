@@ -3,14 +3,19 @@ import type { KnowledgeSectionVM } from "../../lib/api/reports";
 import { Card } from "../Card";
 import { EmptyState } from "../EmptyState";
 
-/** [ What We Know / Don't Know ] — placed before Hypotheses (ADR 0024 §3):
- * a reader needs "what's known" as a frame before "what's being debated"
- * makes sense. Two columns, same card, so the contrast between known and
- * unknown reads at a glance rather than requiring a scroll between them. */
+/** [ Coverage & knowledge gaps ] — how much ground the investigation
+ * covered, and what it never established.
+ *
+ * The left column is deliberately *not* titled "Known": it is a per-kind
+ * count of everything the investigation recorded (verified or not), which
+ * is a different claim from "this is proven". What is proven is listed,
+ * individually, by `ConfirmedFindingsCard` above. Titling both "known"
+ * made the document look like it carried the same section twice while
+ * actually stating two different things. */
 export function KnowledgeSplitPanel({ knowledge }: { knowledge: KnowledgeSectionVM }) {
   if (knowledge.availability.status === "unavailable") {
     return (
-      <Card title="What we know / don't know">
+      <Card title="Coverage &amp; knowledge gaps">
         <EmptyState
           title="Nothing recorded yet"
           description={
@@ -22,12 +27,12 @@ export function KnowledgeSplitPanel({ knowledge }: { knowledge: KnowledgeSection
   }
 
   return (
-    <Card title="What we know / don't know">
+    <Card title="Coverage &amp; knowledge gaps">
       <div className="grid grid-cols-1 gap-5 sm:grid-cols-2">
         <div>
           <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-success-fg">
             <CircleCheck className="h-3.5 w-3.5" aria-hidden="true" />
-            Known
+            Recorded — how much ground was covered
           </p>
           <ul className="flex flex-col gap-1.5">
             {knowledge.known.map((line, i) => (
@@ -43,7 +48,7 @@ export function KnowledgeSplitPanel({ knowledge }: { knowledge: KnowledgeSection
         <div>
           <p className="mb-2 flex items-center gap-1.5 text-xs font-semibold text-fg-subtle">
             <HelpCircle className="h-3.5 w-3.5" aria-hidden="true" />
-            Unknown
+            Still unknown
           </p>
           <ul className="flex flex-col gap-1.5">
             {knowledge.unknown.map((line, i) => (

@@ -106,21 +106,56 @@ def _summary_prompt_facts(model: ReportViewModel) -> str:
     built `ReportViewModel` field. Deliberately excludes prose evidence
     text and the full timeline (the summary doesn't need per-step detail,
     and keeping this short keeps the one LLM call cheap)."""
+    outcome = model.review_outcome
     lines = [f"Question under investigation: {model.header.question}"]
     if model.header.repository:
         lines.append(f"Repository: {model.header.repository}")
-    lines.append(f"Readiness: {model.header.readiness.value}")
-    if model.confidence.current is not None:
-        lines.append(f"Current confidence: {round(model.confidence.current * 100)}%")
+
+    lines.append(f"Engineering Review outcome: {outcome.outcome_label}")
+    lines.append(f"Outcome meaning: {outcome.outcome_statement}")
+    for reason in outcome.reasons:
+        lines.append(f"Outcome reason: {reason}")
+    lines.append(f"Recommended next step: {outcome.recommendation}")
+
+    # The two confidence numbers are always labelled, and always by what
+    # they measure — the summary must never present a hypothesis's own
+    # confidence as the investigation's confidence (or vice versa).
+    breakdown = model.confidence.breakdown
+    lines.append(
+        f"{breakdown.overall_label}: "
+        + (f"{round(breakdown.overall * 100)}%" if breakdown.overall is not None else "not scored")
+        + " (confidence that the issue is understood and ready for implementation)"
+    )
+    lines.append(
+        f"{breakdown.top_hypothesis_label}: "
+        + (
+            f"{round(breakdown.top_hypothesis_confidence * 100)}%"
+            if breakdown.top_hypothesis_confidence is not None
+            else "not scored"
+        )
+        + " (confidence in one specific unproven hypothesis, NOT in the investigation)"
+    )
+    if breakdown.divergence_note:
+        lines.append(f"Confidence note: {breakdown.divergence_note}")
     lines.append(f"Confidence trend: {model.confidence.summary_sentence}")
+
+    if model.findings.items:
+        total = len(model.findings.items) + model.findings.truncated_count
+        lines.append(f"Confirmed findings (verified, not hypotheses): {total}")
+        for finding in model.findings.items[:3]:
+            lines.append(f"Confirmed: {finding.statement}")
+    else:
+        lines.append("Confirmed findings: none — nothing was independently verified.")
 
     state = model.hypotheses.synthesis_state
     lines.append(f"Reasoning synthesis state: {state.value}")
     if state.value == "completed" and model.hypotheses.items:
         top = model.hypotheses.items[0]
         lines.append(
-            f"Strongest hypothesis ({round(top.entry.confidence * 100)}% confidence, "
-            f"{top.entry.status.value}): {top.entry.statement}"
+            f"Strongest hypothesis — UNCONFIRMED unless verified "
+            f"({round(top.entry.confidence * 100)}% hypothesis confidence, "
+            f"{top.entry.status.value}, verification: "
+            f"{top.verification_status or 'not_checked'}): {top.entry.statement}"
         )
     elif state.value == "completed_empty":
         lines.append("The investigation converged without competing hypotheses.")
@@ -131,18 +166,18 @@ def _summary_prompt_facts(model: ReportViewModel) -> str:
     elif state.value == "not_run":
         lines.append("Reasoning synthesis was not recorded for this investigation.")
 
-    if model.contradictions.items:
-        c = model.contradictions.items[0]
+    for c in model.contradictions.items:
         lines.append(
-            f"Contradiction found ({'resolved' if c.resolved else 'unresolved'}): {c.statement}"
+            f"Contradiction ({'resolved' if c.entry.resolved else 'UNRESOLVED — blocking'}): "
+            f"{c.entry.statement}"
         )
 
-    if model.knowledge.unknown:
-        lines.append(f"{len(model.knowledge.unknown)} open knowledge gap(s) remain.")
-
-    if model.next_actions.questions:
-        lines.append(f"{len(model.next_actions.questions)} open/blocking item(s) for what's next.")
-
+    # One source of truth for these counts (the view model's own open-item
+    # list) — the summary can no longer disagree with the What's-next
+    # section about how many items are blocking.
+    lines.append(
+        f"Open items: {outcome.blocking_count} blocking, {outcome.advisory_count} advisory."
+    )
     return "\n".join(lines)
 
 
@@ -152,35 +187,140 @@ def _render_prompt(facts: str) -> str:
     )
 
 
+def _section(heading: str, body: str) -> str:
+    return f"<h2 style='font-size:15px;margin-top:28px'>{escape(heading)}</h2>{body}"
+
+
+def _para(text: str) -> str:
+    return f"<p>{escape(text)}</p>"
+
+
+def _bullets(items: list[str], empty: str) -> str:
+    if not items:
+        return f"<p style='color:#64748b'>{escape(empty)}</p>"
+    rows = "".join(f"<li>{escape(item)}</li>" for item in items)
+    return f"<ul>{rows}</ul>"
+
+
 def _fallback_html(title: str, model: ReportViewModel) -> str:
-    """A minimal, code-generated (never LLM-authored) HTML fallback for any
-    consumer still reading `html_content` directly — never the primary
-    rendering path (the frontend renders `view_model`). Deliberately
-    plain: one paragraph plus the executive summary, no attempt to
-    reproduce the old prose-report's sections.
+    """The code-generated (never LLM-authored) document rendering, for any
+    consumer reading `html_content` rather than the view model — the
+    frontend's `ReportView` remains the primary path.
 
-    Leads with the user's own request, not `title` (an AI-generated label
-    for the workflow that answered it) — same hierarchy the real renderer
-    uses, so the fallback identifies a report the same way.
+    Section order is the post-Engineering-Review document structure, the
+    same one `ReportView.tsx` renders: problem statement, investigation
+    summary, confirmed findings, candidate explanations, evidence,
+    contradictions/gaps, review outcome, next steps, confidence &
+    readiness, then provenance last. The execution timeline deliberately
+    does not appear here at all — it is audit detail, and it used to
+    dominate a document whose job is to communicate a decision.
 
-    Every interpolated value is escaped: `question` is verbatim user input
-    and `summary` is LLM output, neither of which may be trusted to be
-    markup-free just because the frontend happens to render this inside a
-    `sandbox=""` iframe."""
-    summary = escape(
-        model.executive_summary or "No executive summary was generated for this report."
+    Every value is a direct read of an already-decided `ReportViewModel`
+    field; nothing is computed here. Everything interpolated is escaped:
+    `question` is verbatim user input and `executive_summary` is LLM
+    output, neither trustworthy as markup even inside a `sandbox=""`
+    iframe."""
+    h = model.header
+    outcome = model.review_outcome
+    breakdown = model.confidence.breakdown
+
+    confidence_lines: list[str] = []
+    if breakdown.top_hypothesis_confidence is not None:
+        confidence_lines.append(
+            f"{breakdown.top_hypothesis_label}: "
+            f"{round(breakdown.top_hypothesis_confidence * 100)}% — confidence in one "
+            "specific candidate explanation, which is not the same as the issue being "
+            "understood."
+        )
+    if breakdown.overall is not None:
+        confidence_lines.append(f"{breakdown.overall_label}: {breakdown.overall_basis}")
+    if breakdown.divergence_note:
+        confidence_lines.append(breakdown.divergence_note)
+    confidence_lines.append(
+        f"Open items: {outcome.blocking_count} blocking, {outcome.advisory_count} advisory."
     )
-    question = escape(model.header.question)
-    escaped_title = escape(title)
+
+    hypothesis_lines = [
+        f"{round(item.entry.confidence * 100)}% confidence — {item.entry.statement} "
+        f"[{item.entry.status.value}; verification: {item.verification_status or 'not_checked'}]"
+        for item in model.hypotheses.items
+    ]
+    contradiction_lines: list[str] = []
+    for c in model.contradictions.items:
+        contradiction_lines.append(
+            f"{'UNRESOLVED' if not c.entry.resolved else 'Resolved'}: {c.entry.statement}"
+        )
+        contradiction_lines.append(f"    Supporting: {'; '.join(c.entry.evidence_for) or 'none'}")
+        contradiction_lines.append(
+            f"    Conflicting: {'; '.join(c.entry.evidence_against) or 'none'}"
+        )
+        contradiction_lines.append(f"    Impact: {c.impact}")
+        contradiction_lines.append(f"    Required resolution: {c.required_resolution}")
+    contradiction_lines.extend(f"Knowledge gap: {gap}" for gap in model.knowledge.unknown)
+
+    next_step_lines = [outcome.recommendation] + [
+        f"{'Blocking' if q.is_blocking else 'Advisory'} — {q.text}"
+        for q in model.next_actions.questions
+    ]
+
+    provenance_lines = [f"{c.kind}: {c.count}" for c in model.evidence.categories] + [
+        f"Engineering Review reported readiness '{h.reported_readiness.value}'; "
+        f"this document renders '{h.readiness.value}'."
+    ]
+    if model.timeline.steps:
+        provenance_lines.append(
+            f"{len(model.timeline.steps) + model.timeline.truncated_count} investigation "
+            "steps were recorded — see the Reports page for the full execution timeline."
+        )
+
+    body = (
+        _section("1. Problem statement", f"<p>{escape(h.question)}</p>")
+        + _section(
+            "2. Investigation summary",
+            _para(model.executive_summary or "No executive summary was generated for this report."),
+        )
+        + _section(
+            "3. Confirmed findings",
+            _bullets(
+                [f.statement for f in model.findings.items],
+                model.findings.availability.reason
+                or "Nothing was independently verified in this investigation.",
+            ),
+        )
+        + _section(
+            "4. Potential root cause / hypotheses (unconfirmed)",
+            _bullets(hypothesis_lines, "No hypotheses were recorded."),
+        )
+        + _section(
+            "5. Evidence",
+            _bullets(
+                [f"{c.kind}: {c.count}" for c in model.evidence.categories],
+                "No evidence trail was recorded.",
+            ),
+        )
+        + _section(
+            "6. Contradictions / knowledge gaps",
+            _bullets(contradiction_lines, "No contradictions or open knowledge gaps."),
+        )
+        + _section(
+            "7. Engineering Review outcome",
+            _para(f"Engineering Review Outcome: {outcome.outcome_label}")
+            + _para(outcome.outcome_statement)
+            + "<p><strong>Reason:</strong></p>"
+            + _bullets(outcome.reasons, "No reasons were recorded."),
+        )
+        + _section("8. Recommended next steps", _bullets(next_step_lines, "None."))
+        + _section("9. Confidence & readiness", _bullets(confidence_lines, "Not scored."))
+        + _section("10. Evidence / provenance", _bullets(provenance_lines, "None recorded."))
+    )
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
-        f'<title>{escaped_title}</title></head><body style="font-family:sans-serif;'
-        'max-width:720px;margin:40px auto;line-height:1.6;color:#1e293b">'
-        f"<h1 style='font-size:20px'>{question}</h1>"
-        f"<p style='color:#64748b;font-size:13px'>Investigated as {escaped_title}</p>"
-        f"<p>{summary}</p>"
-        "<p style='color:#94a3b8;font-size:11px'>This is a fallback rendering. "
-        "See the Reports page for the full visual report.</p>"
+        f'<title>{escape(title)}</title></head><body style="font-family:sans-serif;'
+        'max-width:760px;margin:40px auto;line-height:1.6;color:#1e293b">'
+        f"<h1 style='font-size:20px'>{escape(title)}</h1>"
+        f"<p style='color:#64748b;font-size:13px'>Engineering Review Outcome: "
+        f"{escape(outcome.outcome_label)}</p>"
+        f"{body}"
         "</body></html>"
     )
 

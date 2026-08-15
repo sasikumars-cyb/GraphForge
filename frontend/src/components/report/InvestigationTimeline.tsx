@@ -7,8 +7,20 @@ import { EmptyState } from "../EmptyState";
  * vertical stepper (ADR 0024 §10), never the raw evidence/graph dump. The
  * backend already caps this at 8 steps server-side (ADR §12's scale rule)
  * — a long investigation never ships more DOM nodes than that; the
- * remainder is reported as a count only, not fetched or rendered. */
-export function InvestigationTimeline({ timeline }: { timeline: TimelineSectionVM }) {
+ * remainder is reported as a count only, not fetched or rendered.
+ *
+ * Rendered collapsed, last, as audit/provenance detail. The execution
+ * trail is what makes a conclusion traceable, but it is not the decision
+ * — a post-review document that leads with 25 workflow steps buries the
+ * one thing a reader came for. `defaultOpen` lets a surface that really is
+ * about execution (rather than about the decision) opt back in. */
+export function InvestigationTimeline({
+  timeline,
+  defaultOpen = false,
+}: {
+  timeline: TimelineSectionVM;
+  defaultOpen?: boolean;
+}) {
   if (timeline.availability.status === "unavailable") {
     return (
       <Card title="Investigation timeline">
@@ -22,12 +34,20 @@ export function InvestigationTimeline({ timeline }: { timeline: TimelineSectionV
     );
   }
 
+  const total = timeline.steps.length + timeline.truncated_count;
+
   return (
     <Card
       title="Investigation timeline"
-      description={`${timeline.steps.length + timeline.truncated_count} step${timeline.steps.length + timeline.truncated_count === 1 ? "" : "s"}`}
+      description={`${total} step${total === 1 ? "" : "s"} — audit detail, not part of the decision`}
     >
-      <ol className="flex flex-col">
+      <details open={defaultOpen} className="group">
+        <summary className="cursor-pointer list-none text-xs font-medium text-fg-muted hover:text-fg-secondary">
+          <span className="group-open:hidden">Show how the investigation ran ({total} steps)</span>
+          <span className="hidden group-open:inline">Hide execution detail</span>
+        </summary>
+        <div className="mt-3">
+          <ol className="flex flex-col">
         {timeline.steps.map((step, i) => (
           <li key={i} className="relative flex gap-3 pb-4 last:pb-0">
             {i < timeline.steps.length - 1 && (
@@ -68,13 +88,15 @@ export function InvestigationTimeline({ timeline }: { timeline: TimelineSectionV
             </div>
           </li>
         ))}
-      </ol>
-      {timeline.truncated_count > 0 && (
-        <p className="ml-9 mt-1 text-xs text-fg-subtle">
-          + {timeline.truncated_count} more step{timeline.truncated_count === 1 ? "" : "s"}{" "}
-          (lower-signal retrievals, kept out of this view for scale)
-        </p>
-      )}
+          </ol>
+          {timeline.truncated_count > 0 && (
+            <p className="ml-9 mt-1 text-xs text-fg-subtle">
+              + {timeline.truncated_count} more step{timeline.truncated_count === 1 ? "" : "s"}{" "}
+              (lower-signal retrievals, kept out of this view for scale)
+            </p>
+          )}
+        </div>
+      </details>
     </Card>
   );
 }

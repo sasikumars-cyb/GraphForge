@@ -76,13 +76,19 @@ function HypothesisCard({ item }: { item: HypothesisVM }) {
   );
 }
 
-/** [ Hypotheses ] — competing explanations, strongest first (the backend
- * already sorts by confidence descending — position itself answers "why
- * does it believe the strongest hypothesis"). ADR 0024 §8. */
+/** [ Potential root cause / hypotheses ] — competing explanations,
+ * strongest first (the backend already sorts by confidence descending —
+ * position itself answers "why does it believe the strongest
+ * hypothesis"). ADR 0024 §8.
+ *
+ * The title says "potential" and the subheading says "unconfirmed" on
+ * purpose: nothing in this section is established. What *is* established
+ * is rendered above, by `ConfirmedFindingsCard`, and a hypothesis only
+ * moves there by being verified — never by having high confidence. */
 export function HypothesesSection({ hypotheses }: { hypotheses: HypothesesSectionVM }) {
   if (hypotheses.synthesis_state !== "completed" || hypotheses.items.length === 0) {
     return (
-      <Card title="Hypotheses">
+      <Card title="Potential root cause / hypotheses">
         <SynthesisStateNotice state={hypotheses.synthesis_state} />
       </Card>
     );
@@ -90,9 +96,14 @@ export function HypothesesSection({ hypotheses }: { hypotheses: HypothesesSectio
 
   return (
     <Card
-      title="Hypotheses"
-      description={`${hypotheses.items.length + hypotheses.truncated_count} considered, strongest first`}
+      title="Potential root cause / hypotheses"
+      description={`${hypotheses.items.length + hypotheses.truncated_count} considered, strongest first — none of these is a confirmed root cause`}
     >
+      <p className="mb-3 text-xs leading-relaxed text-fg-muted">
+        These are candidate explanations, not conclusions. The percentage on each card is
+        confidence in that one hypothesis — not confidence that the issue is understood; see
+        Confidence &amp; readiness for that.
+      </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {hypotheses.items.map((item, i) => (
           <HypothesisCard key={i} item={item} />

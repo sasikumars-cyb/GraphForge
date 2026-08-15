@@ -8,6 +8,7 @@ import { useAuth } from "../app/auth-context";
 import {
   listReports,
   getReport,
+  isCurrentViewModel,
   type ReportSummary,
   type ReportViewModel,
 } from "../lib/api/reports";
@@ -80,7 +81,11 @@ function ReportContent({ reportId }: { reportId: string }) {
       </div>
     );
   }
-  if (viewModel !== null) {
+  // A view model from before the post–Engineering Review sections existed
+  // is treated exactly like no view model at all: it renders through the
+  // legacy HTML fallback rather than crashing the new renderer on a
+  // section it was never written with.
+  if (isCurrentViewModel(viewModel)) {
     return (
       <div className="max-h-[80vh] overflow-y-auto bg-canvas p-4">
         <ReportView model={viewModel} />

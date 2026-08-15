@@ -236,8 +236,36 @@ class RiskEntry:
     source_stage: str
 
 
+class OpenItemKind(StrEnum):
+    """Where an open item came from — so the same item can be counted once,
+    in one list, and still be explained by section. Introduced with the
+    "one source of truth for blocking/advisory" rule (see
+    `view_model.build_open_items`): every section that mentions an open or
+    blocking item reads that one list, never its own re-derivation."""
+
+    BLOCKING_ISSUE = "blocking_issue"  # Engineering Review's own blocking_issues[]
+    UNRESOLVED_CONTRADICTION = "unresolved_contradiction"
+    KNOWLEDGE_GAP = "knowledge_gap"
+
+
 @dataclass(frozen=True)
 class OpenQuestionEntry:
     text: str
     source_stage: str
     is_blocking: bool
+    kind: OpenItemKind = OpenItemKind.KNOWLEDGE_GAP
+
+
+@dataclass(frozen=True)
+class ConfirmedFinding:
+    """Something the investigation actually established — never a
+    hypothesis. Only two sources qualify (see `view_model._build_findings`):
+    a Context Discovery fact whose own `verified` flag is True, and a
+    Knowledge Ledger row whose `verification_status` is VERIFIED. A
+    supported-but-unverified hypothesis is NOT a confirmed finding, however
+    high its confidence — that separation is the whole point of this type."""
+
+    statement: str
+    source_stage: str
+    source_field: str
+    evidence_summary: str | None = None

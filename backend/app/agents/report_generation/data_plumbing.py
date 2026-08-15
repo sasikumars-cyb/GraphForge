@@ -38,11 +38,13 @@ from app.agents.report_generation.contracts import (
     Availability,
     ConfidenceJourney,
     ConfidenceStagePoint,
+    ConfirmedFinding,
     ContradictionEntry,
     EvidenceCategoryCount,
     FileRole,
     HypothesisEntry,
     LedgerRow,
+    OpenItemKind,
     OpenQuestionEntry,
     Readiness,
     RiskEntry,
@@ -62,6 +64,14 @@ from app.agents.report_generation.contracts import (
 # constant, since Phase 1's stage list is a data-plumbing concern, not an
 # artifact of how the (soon to be replaced) monolithic LLM report prompt
 # happens to be built.
+# The largest a fact *kind* can be and still be read as a set of findings
+# rather than a coverage sweep — see `map_confirmed_facts` for the real
+# report that produced this number (63 repositories and 12,130 components,
+# every one "verified"). Deliberately small: a kind the investigation
+# genuinely narrowed to a handful of items is a finding list; anything
+# broader is inventory, and is reported as a count elsewhere.
+_MAX_FINDING_GROUP_SIZE = 10
+
 STAGE_ORDER: tuple[str, ...] = (
     "context_discovery",
     "planning",
@@ -828,13 +838,22 @@ def map_open_questions(
     `gaps[].status == "refuted"` is deliberately excluded here — a
     refuted gap is a resolved (if negative) answer, not an open question;
     conflating the two would misrepresent it as still-unresolved.
+
+    This function covers only the two *stage-result* sources above. The
+    third real source of an open item — an unresolved contradiction — is
+    reasoning output, not a stage field, and is merged in one level up by
+    `view_model.build_open_items`, which is the single list every section
+    counts from.
     """
     entries: list[OpenQuestionEntry] = []
     if engineering_review_bundle is not None:
         for text in engineering_review_bundle.result.get("blocking_issues") or []:
             entries.append(
                 OpenQuestionEntry(
-                    text=str(text), source_stage="engineering_review", is_blocking=True
+                    text=str(text),
+                    source_stage="engineering_review",
+                    is_blocking=True,
+                    kind=OpenItemKind.BLOCKING_ISSUE,
                 )
             )
     if context_discovery_bundle is not None:
@@ -846,6 +865,80 @@ def map_open_questions(
                         text=str(gap.get("summary") or gap.get("gap_id") or ""),
                         source_stage="context_discovery",
                         is_blocking=gap.get("severity") == "blocking",
+                        kind=OpenItemKind.KNOWLEDGE_GAP,
                     )
                 )
     return entries
+
+
+def map_confirmed_facts(
+    context_discovery_bundle: StageStepData | None,
+) -> list[ConfirmedFinding]:
+    """Source: `context_discovery.result["discovery_report"]["findings"][]
+    ["items"][]` where the item's own `verified` flag is True (set by the
+    reasoning ledger's `Fact.verified` — a real per-fact signal, see
+    app.context_pipeline.reasoning.projection._findings). Only verified
+    facts are returned: an unverified fact is context, not a confirmed
+    finding, and is never upgraded here by counting, confidence, or the
+    presence of a hypothesis that happens to mention it.
+
+    `statement` is the fact's own `subject` string, copied verbatim;
+    `evidence_summary` is the evidence record that established it (already
+    attached by the same projection), also verbatim. Nothing is
+    paraphrased — this module never re-words a source.
+
+    A whole fact *kind* is skipped when it holds more than
+    `_MAX_FINDING_GROUP_SIZE` facts. Found by rendering a real report: a
+    single investigation's ledger legitimately carries 63 `repository` and
+    12,130 `component` facts — the retrieval's coverage, every one of them
+    "verified", none of them a finding about the problem. Listing those
+    turned Confirmed Findings into the retrieval log this document format
+    exists to get away from, and buried the two facts that mattered under
+    118 that didn't. Coverage at that scale is already reported, correctly,
+    as a per-kind count in the Coverage panel (`view_model._build_
+    knowledge`); this section lists only kinds the investigation actually
+    narrowed to a specific, readable set. The rule is a property of the
+    data's shape, never of any particular kind name — a run that genuinely
+    narrows to three repositories lists those three."""
+    if context_discovery_bundle is None:
+        return []
+    report = context_discovery_bundle.result.get("discovery_report") or {}
+    findings: list[ConfirmedFinding] = []
+    # Several facts of one kind routinely share a subject — six
+    # `repository_relationship` facts all name the same target repository,
+    # for instance (seen in a real report: the same line five times over,
+    # pushing the findings that mattered past the display cap). The same
+    # statement repeated is not additional knowledge, so the first
+    # occurrence is kept and later identical ones are dropped. Only exact
+    # statement equality dedupes — never a fuzzy or partial text match.
+    seen: set[str] = set()
+    for group in report.get("findings") or []:
+        kind = str(group.get("kind") or "finding")
+        # `total` is the fact ledger's own true count for this kind, not
+        # `len(items)` — the upstream projection already caps the listed
+        # items at 50 per kind (`_MAX_REPORTED_FACTS_PER_KIND`), so reading
+        # the list length here would make a 12,000-fact sweep look like 50
+        # hand-picked findings. Always compare against `total`.
+        total = int(group.get("total") or len(group.get("items") or []))
+        if total > _MAX_FINDING_GROUP_SIZE:
+            continue
+        for i, item in enumerate(group.get("items") or []):
+            if not item.get("verified"):
+                continue
+            subject = str(item.get("subject") or "").strip()
+            if not subject:
+                continue
+            statement = f"{kind.replace('_', ' ')}: {subject}"
+            if statement in seen:
+                continue
+            seen.add(statement)
+            evidence = item.get("evidence") or {}
+            findings.append(
+                ConfirmedFinding(
+                    statement=statement,
+                    source_stage="context_discovery",
+                    source_field=f"discovery_report.findings[{kind}].items[{i}]",
+                    evidence_summary=str(evidence.get("summary") or "") or None,
+                )
+            )
+    return findings
