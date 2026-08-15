@@ -117,6 +117,37 @@ class Settings(BaseSettings):
     local_repos_root: str | None = Field(default=None)
 
     # --- AI Provider ---
+    # Data-governance policy gate (H-1). Every prompt GraphForge sends
+    # carries private engineering metadata — repository names, file paths,
+    # symbol names, dependency edges — from repositories that are usually
+    # private. `False` (the default) means only providers classified
+    # `ProviderHosting.IN_ACCOUNT` in the registry may serve a request:
+    # the operator's own AWS account, Azure tenant, GCP project, or a local
+    # model. Sending that metadata to a third-party SaaS API is then an
+    # explicit, auditable administrator decision rather than whatever the
+    # provider table happens to hold.
+    #
+    # Default-deny is deliberate. The audit found the only enabled provider
+    # was an external one, configured with no policy gate and no visibility,
+    # receiving metadata from 67 private repositories. A control that
+    # defaults to permissive would not have prevented that.
+    #
+    # Enforced in `app.ai.config.resolver.resolve` — the one function every
+    # provider decision passes through — so no caller, request parameter or
+    # stored profile can route around it.
+    allow_external_ai_providers: bool = Field(default=False)
+
+    # Endpoint hostnames the operator has approved as their own
+    # infrastructure, for providers addressed by URL rather than by
+    # credential chain (`ProviderHosting.CUSTOMER_ENDPOINT` — Azure OpenAI,
+    # Vertex AI, Ollama). A provider key is never enough: "Azure OpenAI"
+    # names a resource in *somebody's* tenant, and an Ollama base_url can be
+    # repointed at a public host. Endpoints on a private network (loopback,
+    # RFC1918, internal names) are trusted without being listed; anything
+    # else must appear here or it fails closed.
+    #
+    # Example: APPROVED_AI_ENDPOINTS=["acme-prod.openai.azure.com"]
+    approved_ai_endpoints: list[str] = Field(default_factory=list)
     ai_provider: str = Field(default="openai")
     openai_api_key: str | None = Field(default=None)
     openai_model: str = Field(default="gpt-4o")

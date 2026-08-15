@@ -129,8 +129,16 @@ class TestBedrockRegistry:
     def test_bedrock_has_expected_capabilities(self):
         spec = require_provider_spec("bedrock")
         assert Capability.STRUCTURED_OUTPUT in spec.capabilities
-        assert Capability.STREAMING in spec.capabilities
         assert Capability.REASONING in spec.capabilities
+
+    def test_bedrock_does_not_claim_streaming_it_cannot_do(self):
+        """`_send_completion` calls the blocking `converse()`, not
+        `converse_stream()`, and `ILLMProvider` has no streaming method at
+        all — so declaring STREAMING advertised a capability nothing could
+        deliver. Re-add it here and in the registry when the streaming path
+        lands (P1.5), together with the adapter method."""
+        assert Capability.STREAMING not in require_provider_spec("bedrock").capabilities
+        assert not hasattr(BedrockProvider, "stream")
 
     def test_bedrock_has_models(self):
         spec = require_provider_spec("bedrock")
