@@ -471,14 +471,26 @@ def build_impact_facts(
     return dataclasses.replace(facts, severity=_severity(facts.downstream_total))
 
 
-async def display_names(db: AsyncSession, blast_radius: BlastRadius) -> dict[str, str]:
+async def display_names(
+    db: AsyncSession, blast_radius: BlastRadius, user_id: uuid.UUID
+) -> dict[str, str]:
     """Node id -> human-readable name, for every node the blast radius
     touched. Prefers the subgraph's own `properties.name` (set at index
     time — see `app.indexer.graph.builder.build_graph`'s Repository node);
     falls back to a `Repository` row lookup for a bare `<uuid>:repository`
     id whose graph node predates that property, so a raw id never reaches
     the answer's affected-systems list when a real name is one query
-    away."""
+    away.
+
+    M-3: the fallback lookup is scoped to `user_id`, the caller's own id
+    — not because the graph traversal is expected to ever hand this
+    function a foreign repository id (cross-repo edges are created scoped
+    per-user, so it shouldn't), but because this function has no way of
+    knowing that invariant holds elsewhere. Without its own filter, a
+    future bug upstream that let a foreign id reach here would have this
+    function silently resolve and disclose that repository's name with no
+    error. Scoping here means that invariant is enforced twice, not
+    once."""
     names = {
         n.id: str(n.properties["name"])
         for n in blast_radius.subgraph.nodes
@@ -493,7 +505,12 @@ async def display_names(db: AsyncSession, blast_radius: BlastRadius) -> dict[str
         if match:
             unresolved_repo_ids.append(uuid.UUID(match.group(1)))
     if unresolved_repo_ids:
-        result = await db.execute(select(Repository).where(Repository.id.in_(unresolved_repo_ids)))
+        result = await db.execute(
+            select(Repository).where(
+                Repository.id.in_(unresolved_repo_ids),
+                Repository.user_id == user_id,
+            )
+        )
         for repo in result.scalars():
             names[f"{repo.id}:repository"] = repo.full_name
 
@@ -516,7 +533,7 @@ async def ground_impact(db: AsyncSession, question: str, repository: Repository)
         EntityReference(repository_id=str(repository.id), node_id=f"{repository.id}:repository"),
         max_hops=_MAX_HOPS,
     )
-    names = await display_names(db, blast_radius)
+    names = await display_names(db, blast_radius, repository.user_id)
 
     # One canonical result; every field below is a read of it. Nothing in
     # this function recomputes an impact number from the raw blast radius.

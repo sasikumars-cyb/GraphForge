@@ -367,3 +367,145 @@ class TestRequestLimits:
             json={"question": "what depends on anything"},
         )
         assert response.status_code == 200, "one user's budget must not consume another's"
+
+
+class TestAskCrossUserIsolation:
+    """The audit found 17 cross-user isolation suites elsewhere and none
+    for `/ask` itself (`test_conversations_api.py` gained one for the
+    conversational endpoint; this is the mirror for the single-shot one).
+    Real HTTP path, real auth, no mocking of the boundary under test."""
+
+    async def test_another_user_cannot_reach_a_repository_through_ask(
+        self, db_client: AsyncClient
+    ) -> None:
+        """User A tracks and indexes a repository with a real graph; User
+        B, who has never selected any repository, asks about it by exact
+        name. The response must not resolve, answer, or otherwise surface
+        anything about User A's repository."""
+        token_a = await _register_and_get_token(db_client, USER_A)
+        headers_a = {"Authorization": f"Bearer {token_a}"}
+        repo_id = await _select_ingestion(db_client, headers_a)
+
+        graph_repository = Neo4jGraphRepository(get_driver())
+        await graph_repository.replace_repository_graph(
+            repo_id,
+            GraphPayload(
+                nodes=[
+                    GraphNode(id=f"{repo_id}:repository", labels=["GraphNode", "Repository"]),
+                    GraphNode(id=f"{repo_id}:transform", labels=["GraphNode", "Service"]),
+                ],
+                edges=[
+                    GraphEdge(
+                        source_id=f"{repo_id}:repository",
+                        target_id=f"{repo_id}:transform",
+                        type="CALLS",
+                    )
+                ],
+            ),
+        )
+
+        token_b = await _register_and_get_token(
+            db_client,
+            {
+                "email": "intruder@example.com",
+                "password": "correct-horse-battery-staple",
+                "full_name": "Intruder",
+            },
+        )
+        response = await db_client.post(
+            "/api/v1/ask",
+            headers={"Authorization": f"Bearer {token_b}"},
+            json={
+                "question": "What will be affected if we change the customer ingestion pipeline?"
+            },
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] != "answered"
+        assert body["resolved_repository_id"] is None
+        assert body["impact"] is None
+        assert body["candidates"] == []
+
+    async def test_an_exact_name_match_for_another_users_repository_does_not_resolve(
+        self, db_client: AsyncClient
+    ) -> None:
+        """C-1's exact-name fast path is the one rule most likely to
+        accidentally ignore tenant scoping if `_resolve_repository`'s own
+        DB query ever regressed — naming User A's repository exactly must
+        still fail to resolve for User B."""
+        token_a = await _register_and_get_token(db_client, USER_A)
+        await _select_ingestion(db_client, {"Authorization": f"Bearer {token_a}"})
+
+        token_b = await _register_and_get_token(
+            db_client,
+            {
+                "email": "intruder2@example.com",
+                "password": "correct-horse-battery-staple",
+                "full_name": "Intruder Two",
+            },
+        )
+        response = await db_client.post(
+            "/api/v1/ask",
+            headers={"Authorization": f"Bearer {token_b}"},
+            json={"question": "What breaks if I change customer-ingestion?"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] != "answered"
+        assert body["resolved_repository_id"] is None
+        assert body["resolved_repository_name"] is None
+
+    async def test_the_response_never_contains_the_other_users_repository_details(
+        self, db_client: AsyncClient
+    ) -> None:
+        """Whole-body check, not just the structured fields above: no
+        trace of User A's repository name, full name, or id anywhere in
+        what User B receives — covers `answer`/`why`/`evidence`/`candidates`
+        prose as well as the structured fields."""
+        token_a = await _register_and_get_token(db_client, USER_A)
+        headers_a = {"Authorization": f"Bearer {token_a}"}
+        repo_id = await _select_ingestion(db_client, headers_a)
+
+        graph_repository = Neo4jGraphRepository(get_driver())
+        await graph_repository.replace_repository_graph(
+            repo_id,
+            GraphPayload(
+                nodes=[
+                    GraphNode(id=f"{repo_id}:repository", labels=["GraphNode", "Repository"]),
+                    GraphNode(id=f"{repo_id}:transform", labels=["GraphNode", "Service"]),
+                ],
+                edges=[
+                    GraphEdge(
+                        source_id=f"{repo_id}:repository",
+                        target_id=f"{repo_id}:transform",
+                        type="CALLS",
+                    )
+                ],
+            ),
+        )
+
+        token_b = await _register_and_get_token(
+            db_client,
+            {
+                "email": "intruder3@example.com",
+                "password": "correct-horse-battery-staple",
+                "full_name": "Intruder Three",
+            },
+        )
+        response = await db_client.post(
+            "/api/v1/ask",
+            headers={"Authorization": f"Bearer {token_b}"},
+            json={"question": "What breaks if I change customer-ingestion?"},
+        )
+
+        assert response.status_code == 200
+        body_text = response.text
+        # Checks `full_name` ("ada/customer-ingestion") and the raw id, not
+        # the bare repo `name` ("customer-ingestion") — User B's own
+        # question text legitimately contains that substring (it's echoed
+        # back via `AskResponse.question`), so asserting its absence would
+        # be a false positive, not a leak check.
+        assert str(REPO_INGESTION["full_name"]) not in body_text
+        assert repo_id not in body_text
