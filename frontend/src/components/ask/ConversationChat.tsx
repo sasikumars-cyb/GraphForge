@@ -47,6 +47,9 @@ function toDisplayAnswer(message: ConversationMessage): DisplayAnswer {
         }
       : undefined,
     actions: (payload?.actions ?? []).map((a) => ({ label: a.label, href: a.href })),
+    needsClarification: payload?.needs_clarification,
+    candidates: payload?.candidates,
+    truncated: payload?.impact?.truncated,
     degraded: payload?.degraded,
   };
 }
@@ -99,9 +102,8 @@ export function ConversationChat({
     scrollAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [conversation]);
 
-  async function handleSubmit(e: FormEvent) {
-    e.preventDefault();
-    const trimmed = input.trim();
+  async function submit(text: string) {
+    const trimmed = text.trim();
     if (!trimmed || !token || pending) return;
 
     setInput("");
@@ -121,6 +123,18 @@ export function ConversationChat({
     } finally {
       setPending(false);
     }
+  }
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+    await submit(input);
+  }
+
+  /** The user picked a repository from a clarification turn. Sending the
+   * name as the next message is all that's needed — it resolves by exact
+   * name match on the backend, through the same path as typing it. */
+  function selectCandidate(repositoryName: string) {
+    void submit(`What breaks if I change ${repositoryName}?`);
   }
 
   function askExample(example: string) {
@@ -265,7 +279,10 @@ export function ConversationChat({
                 <div key={message.id} className="flex items-start gap-2.5">
                   <Logomark className="mt-0.5 h-6 w-6 shrink-0" />
                   <div className="min-w-0 flex-1">
-                    <AskAnswer data={toDisplayAnswer(message)} />
+                    <AskAnswer
+                      data={toDisplayAnswer(message)}
+                      onSelectCandidate={selectCandidate}
+                    />
                   </div>
                 </div>
               ),

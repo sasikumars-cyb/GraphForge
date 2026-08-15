@@ -1,4 +1,9 @@
-import type { AskAction, AskEvidenceItem, AskImpact } from "./ask";
+import type {
+  AskAction,
+  AskEvidenceItem,
+  AskImpact,
+  AskRepositoryCandidate,
+} from "./ask";
 import type { ProvenanceKind } from "../components/intelligence/ProvenanceTag";
 
 export type ConversationMode = "general" | "migration" | "refinement";
@@ -107,6 +112,11 @@ export interface ConversationTurnPayload {
   impact: AskImpact | null;
   actions: AskAction[];
   entities: ConversationEntityRef[];
+  /** This turn could not confidently identify which system the question
+   * is about, so it asks instead of answering. Carries no evidence and no
+   * impact by construction — see `_clarification_turn` on the backend. */
+  needs_clarification: boolean;
+  candidates: AskRepositoryCandidate[];
   migration: MigrationScope | null;
   refinement: RefinementPlan | null;
   degraded: boolean;

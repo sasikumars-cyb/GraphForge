@@ -65,6 +65,36 @@ Grounding vs. reasoning, each turn
 If the LLM call itself fails (misconfigured provider, malformed
 response), the turn falls back to the deterministic facts alone
 (`degraded=True`) — never to a fabricated conversational answer.
+
+What a turn sends to the model (data classification)
+-----------------------------------------------------
+Verified against the real payload, not inferred from intent. `_synthesize_
+general` serializes exactly four keys, and this is everything they can
+contain:
+
+  SENT
+  - repository names            e.g. "Uplight-Inc/bcs-data-service"
+  - file paths                  e.g. "migrations/db-install/insert-data.sql"
+                                (as graph node names inside `why`/key paths)
+  - symbol / component names    e.g. "src.main.health"
+  - graph relationship types    e.g. "DEPENDS_ON", "READS_FROM"
+  - graph counts and severity   e.g. "81 relationship(s)", "medium"
+  - the user's own question and the recent conversation history
+  - entity reference letters and impact levels already assigned
+
+  NOT SENT — because it is never retrieved on this path in the first
+  place, NOT because anything strips it:
+  - source-code bodies          (no code retrieval exists here)
+  - Jira issue content          (not queried in general mode)
+  - Confluence page content     (not queried in general mode)
+  - credentials / API keys      (never in scope of a prompt)
+  - user identity               (user_id scopes the DB reads; it is not
+                                 placed in the prompt)
+
+That distinction matters: if code/Jira/Confluence retrieval is ever added
+to this path, the classification above changes and the provider policy
+(`Settings.allow_external_ai_providers`) becomes materially more
+important, not less. Anyone adding retrieval here must update this list.
 """
 
 from __future__ import annotations
@@ -514,9 +544,7 @@ def _refinement_evidence(
     facts = new_graph_facts or {}
     if facts.get("jira_key"):
         evidence.append(
-            AskEvidenceItem(
-                source="Jira", label=f"Fetched {facts['jira_key']}", provenance="fact"
-            )
+            AskEvidenceItem(source="Jira", label=f"Fetched {facts['jira_key']}", provenance="fact")
         )
     engineering_context = facts.get("engineering_context")
     if engineering_context:
@@ -545,10 +573,7 @@ def _refinement_why(plan: RefinementPlan) -> str:
     if plan.requirement_summary:
         return plan.requirement_summary
     if plan.readiness:
-        return (
-            f"Readiness: {plan.readiness.level.replace('_', ' ')} "
-            f"({plan.readiness.score}%)."
-        )
+        return f"Readiness: {plan.readiness.level.replace('_', ' ')} " f"({plan.readiness.score}%)."
     return ""
 
 
@@ -668,9 +693,7 @@ class ConversationService:
         query = select(Conversation).where(Conversation.user_id == user_id)
         if mode is not None:
             query = query.where(Conversation.mode == mode)
-        result = await self._db.execute(
-            query.order_by(Conversation.updated_at.desc()).limit(limit)
-        )
+        result = await self._db.execute(query.order_by(Conversation.updated_at.desc()).limit(limit))
         return list(result.scalars().all())
 
     async def start(
@@ -776,6 +799,30 @@ class ConversationService:
         grounded: AskResponse | None = None
         if not prior or _should_reground(state, message_text):
             candidate = await ground(self._db, user_id, message_text)
+            # C-1: an ambiguous repository is answered by asking, not by
+            # reasoning. The turn returns here WITHOUT an LLM call — a
+            # model handed no facts and an unresolved subject can only
+            # produce something that reads like an answer, and the cost of
+            # that call buys nothing.
+            #
+            # Unconditional on `state.resolved_repository_id`: this branch
+            # is reached only when a FRESH grounding attempt was just made
+            # for THIS turn's own message (the `if not prior or
+            # _should_reground(...)` guard above), so `candidate` describes
+            # what this turn's subject resolved to, never a stale one. A
+            # prior turn having already resolved a *different* repository
+            # must not let this turn's own unresolved subject borrow that
+            # stale context and reach the LLM — regression-audit finding:
+            # turn 1 "what breaks if I change bcs-data-service?" resolves,
+            # turn 2 "what breaks if I change the payment service?" comes
+            # back ambiguous and used to fall through to `_synthesize_
+            # general` with the turn-1 repository still sitting in
+            # `investigation_state`, relying on the system prompt's own
+            # "never invent a subject" instruction rather than a
+            # deterministic block. See test_a_later_ambiguous_message_
+            # does_not_borrow_an_earlier_resolved_repository.
+            if candidate.status == "needs_clarification":
+                return self._clarification_turn(candidate)
             if candidate.status == "answered" and (
                 not prior or candidate.resolved_repository_id != state.resolved_repository_id
             ):
@@ -789,6 +836,44 @@ class ConversationService:
             grounded=grounded,
             history=prior[-_HISTORY_TURNS:],
             message_text=message_text,
+        )
+
+    def _clarification_turn(self, grounded: AskResponse) -> tuple[str, ConversationTurnPayload]:
+        """An ambiguous subject, answered honestly and without an LLM call.
+
+        Carries no evidence and no impact by construction (F): the turn is
+        not grounded in anything, so rendering "Dependency Graph /
+        Derived / GitHub / Source data" badges beside it would assert a
+        provenance that does not exist. `candidates` gives the user a
+        one-click way to resolve it instead of a dead end."""
+        names = [c.name for c in grounded.candidates]
+        if names:
+            listed = ", ".join(names[:-1]) + f" or {names[-1]}" if len(names) > 1 else names[0]
+            answer = (
+                "I couldn't confidently tell which system you mean — did you mean "
+                f"{listed}? Name the repository and I'll trace it."
+            )
+        else:
+            answer = (
+                "I couldn't match that to any repository I have indexed. Name the "
+                "repository and I'll trace its dependencies and impact."
+            )
+        return answer, ConversationTurnPayload(
+            intent=grounded.intent,
+            resolved_repository_id=None,
+            resolved_repository_name=None,
+            why=(
+                "Repository resolution was not confident enough to ground an answer "
+                f"({grounded.resolution_reason or 'no confident match'}), so no graph "
+                "query was run and no impact was computed."
+            ),
+            evidence=[],
+            impact=None,
+            actions=[],
+            entities=[],
+            needs_clarification=True,
+            candidates=list(grounded.candidates),
+            degraded=False,
         )
 
     async def _synthesize_general(
@@ -840,12 +925,12 @@ class ConversationService:
 
         payload = ConversationTurnPayload(
             intent=grounded.intent if grounded else "reasoning",
-            resolved_repository_id=grounded.resolved_repository_id
-            if grounded
-            else state.resolved_repository_id,
-            resolved_repository_name=grounded.resolved_repository_name
-            if grounded
-            else state.resolved_repository_name,
+            resolved_repository_id=(
+                grounded.resolved_repository_id if grounded else state.resolved_repository_id
+            ),
+            resolved_repository_name=(
+                grounded.resolved_repository_name if grounded else state.resolved_repository_name
+            ),
             why=why,
             evidence=evidence,
             impact=impact,
@@ -905,14 +990,14 @@ class ConversationService:
         if parsed:
             source, target = parsed
             current_source = (state.migration or {}).get("source_technology", "")
-            is_new_topic = not state.migration or source.strip().lower() != str(
-                current_source
-            ).strip().lower()
+            is_new_topic = (
+                not state.migration or source.strip().lower() != str(current_source).strip().lower()
+            )
             if is_new_topic:
                 migration_scope = await ground_migration(self._db, user_id, source, target)
                 if migration_scope is None:
                     return (
-                        f'I couldn\'t find anything in your indexed repositories that '
+                        f"I couldn't find anything in your indexed repositories that "
                         f'references "{source}" — nothing to ground a migration scope on yet. '
                         "Double-check the name, or point me at a specific repository or service.",
                         ConversationTurnPayload(intent="migration_empty", degraded=False),
@@ -986,8 +1071,7 @@ class ConversationService:
             impact = AskImpact(
                 severity=severity,
                 summary=(
-                    f"{len(direct)} direct, {len(indirect)} indirect "
-                    "repositories affected."
+                    f"{len(direct)} direct, {len(indirect)} indirect " "repositories affected."
                 ),
                 affected_repositories=[*direct, *indirect],
             )
@@ -1057,8 +1141,7 @@ class ConversationService:
                 impact=AskImpact(
                     severity=severity,
                     summary=(
-                        f"{len(direct)} direct, {len(indirect)} indirect "
-                        "repositories affected."
+                        f"{len(direct)} direct, {len(indirect)} indirect " "repositories affected."
                     ),
                     affected_repositories=[*direct, *indirect],
                 ),

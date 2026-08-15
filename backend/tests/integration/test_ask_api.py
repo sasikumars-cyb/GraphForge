@@ -11,6 +11,8 @@ from httpx import AsyncClient
 from app.graph.models import GraphEdge, GraphNode, GraphPayload
 from app.graph.neo4j_repository import Neo4jGraphRepository
 from app.graph.session import get_driver
+from app.schemas.ask import MAX_QUESTION_LENGTH
+from app.services.ask_grounding import ASK_GROUNDING_RATE_LIMIT
 
 pytestmark = pytest.mark.asyncio
 
@@ -132,12 +134,236 @@ class TestAsk:
         token = await _register_and_get_token(db_client, USER_A)
         headers = {"Authorization": f"Bearer {token}"}
 
-        response = await db_client.post(
-            "/api/v1/ask", headers=headers, json={"question": "   "}
-        )
+        response = await db_client.post("/api/v1/ask", headers=headers, json={"question": "   "})
 
         assert response.status_code == 422
 
     async def test_requires_authentication(self, db_client: AsyncClient) -> None:
         response = await db_client.post("/api/v1/ask", json={"question": "anything"})
         assert response.status_code == 401
+
+
+class TestTruncatedImpactIsHonestlyPresented:
+    """M-2 — integration-level regression: this exercises `ground_impact`'s
+    own `answer`/`summary` construction against a real blast radius, not
+    just `build_impact_facts()` in isolation. The audit found the
+    always-visible answer stating a bare, capped count ("12 downstream
+    repositories may be affected") with no indication it was a sample —
+    the caveat only lived in `why`, which the UI renders behind a
+    collapsed "Why" disclosure."""
+
+    async def test_a_blast_radius_larger_than_the_cap_says_more_than_not_an_exact_count(
+        self, db_client: AsyncClient
+    ) -> None:
+        from app.services.ask_grounding import _MAX_AFFECTED_PER_KIND
+
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_ingestion(db_client, headers)
+
+        # More downstream repositories than the reporting cap — a real
+        # blast radius the structured lists must bound but the visible
+        # text must not silently understate.
+        true_downstream_count = _MAX_AFFECTED_PER_KIND + 3
+        graph_repository = Neo4jGraphRepository(get_driver())
+        await graph_repository.replace_repository_graph(
+            repo_id,
+            GraphPayload(
+                nodes=[
+                    GraphNode(id=f"{repo_id}:repository", labels=["GraphNode", "Repository"]),
+                    *[
+                        GraphNode(id=f"other-{i}:repository", labels=["GraphNode", "Repository"])
+                        for i in range(true_downstream_count)
+                    ],
+                ],
+                edges=[
+                    GraphEdge(
+                        source_id=f"{repo_id}:repository",
+                        target_id=f"other-{i}:repository",
+                        type="DEPENDS_ON_REPOSITORY",
+                    )
+                    for i in range(true_downstream_count)
+                ],
+            ),
+        )
+
+        response = await db_client.post(
+            "/api/v1/ask",
+            headers=headers,
+            json={"question": "What breaks if I change customer-ingestion?"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["impact"]["truncated"] is True
+        assert len(body["impact"]["affected_repositories"]) == _MAX_AFFECTED_PER_KIND
+        # The always-visible fields — never a bare, understated exact
+        # count once the true total exceeds the cap.
+        assert f"more than {_MAX_AFFECTED_PER_KIND}" in body["answer"]
+        assert f"more than {_MAX_AFFECTED_PER_KIND}" in body["impact"]["summary"]
+        assert str(true_downstream_count) not in body["answer"]
+
+    async def test_a_blast_radius_within_the_cap_states_the_exact_count(
+        self, db_client: AsyncClient
+    ) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        repo_id = await _select_ingestion(db_client, headers)
+
+        graph_repository = Neo4jGraphRepository(get_driver())
+        await graph_repository.replace_repository_graph(
+            repo_id,
+            GraphPayload(
+                nodes=[
+                    GraphNode(id=f"{repo_id}:repository", labels=["GraphNode", "Repository"]),
+                    GraphNode(id="other-0:repository", labels=["GraphNode", "Repository"]),
+                ],
+                edges=[
+                    GraphEdge(
+                        source_id=f"{repo_id}:repository",
+                        target_id="other-0:repository",
+                        type="DEPENDS_ON_REPOSITORY",
+                    )
+                ],
+            ),
+        )
+
+        response = await db_client.post(
+            "/api/v1/ask",
+            headers=headers,
+            json={"question": "What breaks if I change customer-ingestion?"},
+        )
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["impact"]["truncated"] is False
+        assert "more than" not in body["answer"]
+        assert "1 downstream repository may be affected" in body["answer"]
+
+
+class TestRequestLimits:
+    """H-2 — the two OWASP-LLM10 controls the audit found missing: a
+    server-side length cap and a per-user rate limit. Both must reject
+    before any graph query or LLM call happens."""
+
+    async def test_a_question_at_the_limit_is_accepted(self, db_client: AsyncClient) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        question = "a" * MAX_QUESTION_LENGTH
+        response = await db_client.post(
+            "/api/v1/ask",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"question": question},
+        )
+        assert response.status_code == 200
+
+    async def test_a_question_one_character_over_the_limit_is_rejected(
+        self, db_client: AsyncClient
+    ) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        response = await db_client.post(
+            "/api/v1/ask",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"question": "a" * (MAX_QUESTION_LENGTH + 1)},
+        )
+        assert response.status_code == 422
+
+    async def test_a_very_large_question_is_rejected(self, db_client: AsyncClient) -> None:
+        """The audit sent 400 KB and got a 201 plus a 33-second provider
+        call."""
+        token = await _register_and_get_token(db_client, USER_A)
+        response = await db_client.post(
+            "/api/v1/ask",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"question": "a" * 400_000},
+        )
+        assert response.status_code == 422
+
+    async def test_conversation_endpoints_enforce_the_same_cap(
+        self, db_client: AsyncClient
+    ) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        response = await db_client.post(
+            "/api/v1/conversations",
+            headers={"Authorization": f"Bearer {token}"},
+            json={"question": "a" * 400_000},
+        )
+        assert response.status_code == 422
+
+    async def test_exceeding_the_rate_limit_returns_429(self, db_client: AsyncClient) -> None:
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+        codes = [
+            (
+                await db_client.post(
+                    "/api/v1/ask", headers=headers, json={"question": "what depends on anything"}
+                )
+            ).status_code
+            for _ in range(ASK_GROUNDING_RATE_LIMIT + 2)
+        ]
+        assert 429 in codes, "no request was rate limited"
+        assert codes[0] == 200, "the first request must still succeed"
+
+    async def test_ask_and_conversations_share_one_budget_not_two(
+        self, db_client: AsyncClient
+    ) -> None:
+        """H-2 regression: `/ask` and `POST /conversations` used to be
+        counted under independent keys (`ask:{user}` / `conversation_turn:
+        {user}`), so a caller alternating between the two endpoints got
+        ~2x the intended per-user throughput — each single limiter's own
+        30/60s number was enforced, but the aggregate across the surface
+        wasn't. Alternating strictly must exhaust the SAME budget as
+        hitting either endpoint alone."""
+        token = await _register_and_get_token(db_client, USER_A)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        codes: list[int] = []
+        for i in range(ASK_GROUNDING_RATE_LIMIT + 2):
+            if i % 2 == 0:
+                response = await db_client.post(
+                    "/api/v1/ask",
+                    headers=headers,
+                    json={"question": "what depends on anything"},
+                )
+            else:
+                response = await db_client.post(
+                    "/api/v1/conversations",
+                    headers=headers,
+                    json={"question": "what depends on anything else"},
+                )
+            codes.append(response.status_code)
+
+        assert 429 in codes, (
+            "alternating endpoints must still hit the shared budget within "
+            f"{ASK_GROUNDING_RATE_LIMIT + 2} combined requests"
+        )
+        # The budget is exhausted at the SAME total request count as
+        # hitting one endpoint alone would exhaust it — proves the second
+        # endpoint provided no additional, independent quota.
+        first_429 = codes.index(429)
+        assert first_429 == ASK_GROUNDING_RATE_LIMIT, (
+            f"expected the {ASK_GROUNDING_RATE_LIMIT + 1}th combined request to be the "
+            f"first 429 (shared budget), got it at position {first_429 + 1}"
+        )
+
+    async def test_the_rate_limit_is_per_user(self, db_client: AsyncClient) -> None:
+        token_a = await _register_and_get_token(db_client, USER_A)
+        headers_a = {"Authorization": f"Bearer {token_a}"}
+        for _ in range(ASK_GROUNDING_RATE_LIMIT + 2):
+            await db_client.post(
+                "/api/v1/ask", headers=headers_a, json={"question": "what depends on anything"}
+            )
+
+        token_b = await _register_and_get_token(
+            db_client,
+            {
+                "email": "second-asker@example.com",
+                "password": "correct-horse-battery-staple",
+                "full_name": "Second",
+            },
+        )
+        response = await db_client.post(
+            "/api/v1/ask",
+            headers={"Authorization": f"Bearer {token_b}"},
+            json={"question": "what depends on anything"},
+        )
+        assert response.status_code == 200, "one user's budget must not consume another's"

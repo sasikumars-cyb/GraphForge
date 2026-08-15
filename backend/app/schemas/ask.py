@@ -29,8 +29,19 @@ from pydantic import BaseModel, Field
 ProvenanceKind = Literal["fact", "derived", "ai_insight", "human_decision", "recommendation"]
 
 
+# H-2 — a server-side ceiling on anything that reaches a paid model. The
+# browser textarea is not a control: `POST /ask` and `POST /conversations`
+# accepted a 400 KB question and forwarded every byte of it to the
+# provider. 4,000 characters is roughly 1,000 tokens — comfortably longer
+# than any real engineering question, short enough that a scripted caller
+# cannot turn one request into a large bill. Enforced by pydantic, so the
+# request is rejected during validation, before any handler, any graph
+# query and any LLM call.
+MAX_QUESTION_LENGTH = 4_000
+
+
 class AskRequest(BaseModel):
-    question: str
+    question: str = Field(max_length=MAX_QUESTION_LENGTH)
 
 
 class AskAction(BaseModel):
@@ -70,6 +81,22 @@ class AskImpact(BaseModel):
     affected_apis: list[str] = Field(default_factory=list)
     affected_databases: list[str] = Field(default_factory=list)
     affected_queues: list[str] = Field(default_factory=list)
+    # True when the blast radius was larger than the reporting limit and
+    # the lists above are a bounded sample (see `ask_grounding.
+    # build_impact_facts`). A consumer must never present a truncated
+    # result as an exhaustive impact analysis.
+    truncated: bool = False
+
+
+class AskRepositoryCandidate(BaseModel):
+    """One repository GraphForge considered but could not confidently
+    choose between. Shown to the user so an ambiguous question becomes a
+    one-click clarification instead of a dead end."""
+
+    name: str
+    full_name: str
+    repository_id: str
+    score: float
 
 
 class AskResponse(BaseModel):
@@ -80,9 +107,25 @@ class AskResponse(BaseModel):
     # is expected to fall back to the existing free-text investigation
     # flow (`POST /agent-runs` with goal="discover_context") rather than
     # this endpoint re-implementing that orchestration.
-    status: Literal["answered", "route_to_investigation"]
+    # "needs_clarification" — the question was understood (see `intent`)
+    # but GraphForge could not confidently identify WHICH system it means.
+    # `candidates` carries what it did find so the caller can ask. No
+    # answer, no evidence and no impact are produced in this state: a
+    # guess presented with evidence badges is worse than a question.
+    status: Literal["answered", "needs_clarification", "route_to_investigation"]
     question: str
+    # The classification of the question itself, always preserved (M-1).
+    # An impact question whose repository could not be resolved is still
+    # an impact question — reporting it as "general" lost the one signal
+    # that explains why no answer came back, and corrupted any analytics
+    # counting how often each intent succeeds.
     intent: Literal["impact", "dependency", "general"]
+    # Why resolution ended where it did — "strong_match",
+    # "exact_name_match", "candidates_too_close",
+    # "only_generic_terms_matched", "below_minimum_confidence", ... See
+    # `ask_grounding.RepositoryResolution`.
+    resolution_reason: str = ""
+    candidates: list[AskRepositoryCandidate] = Field(default_factory=list)
     resolved_repository_id: str | None = None
     resolved_repository_name: str | None = None
     answer: str = ""
