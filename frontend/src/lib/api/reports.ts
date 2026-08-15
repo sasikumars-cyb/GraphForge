@@ -292,3 +292,14 @@ export function getReport(
 ): Promise<ReportDetail> {
   return apiFetch<ReportDetail>(`/reports/${encodeURIComponent(reportId)}`, { token, signal });
 }
+
+/** Deletes the generated report only — the workflow behind it, its stage
+ * runs, and their evidence trails all survive, and the same workflow can
+ * be reported on again. (Deleting the investigation itself is
+ * `deleteWorkflow`, a different and much larger action.) */
+export function deleteReport(token: string, reportId: string): Promise<void> {
+  return apiFetch<void>(`/reports/${encodeURIComponent(reportId)}`, {
+    token,
+    method: "DELETE",
+  });
+}

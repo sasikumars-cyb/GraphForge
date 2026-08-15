@@ -149,3 +149,90 @@ async def test_ownerless_report_appears_in_any_authenticated_users_list(
 async def test_unauthenticated_requests_are_401(db_client: AsyncClient) -> None:
     resp = await db_client.get("/api/v1/reports")
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# DELETE /reports/{id} — same ownership rule as GET, plus the guarantee
+# that deleting a report never takes its workflow with it.
+# ---------------------------------------------------------------------------
+
+
+async def test_delete_report_404s_for_another_users_report(
+    db_client: AsyncClient,
+    db_session: AsyncSession,
+    user_b_headers: dict[str, str],
+    owned_report: WorkflowReport,
+) -> None:
+    resp = await db_client.delete(f"/api/v1/reports/{owned_report.id}", headers=user_b_headers)
+    assert resp.status_code == 404
+    # And it really is still there — a 404 that deleted the row anyway
+    # would be the worst possible outcome.
+    assert await db_session.get(WorkflowReport, owned_report.id) is not None
+
+
+async def test_delete_report_succeeds_for_the_owner(
+    db_client: AsyncClient,
+    db_session: AsyncSession,
+    user_a_headers: dict[str, str],
+    owned_report: WorkflowReport,
+) -> None:
+    resp = await db_client.delete(f"/api/v1/reports/{owned_report.id}", headers=user_a_headers)
+    assert resp.status_code == 204
+
+    db_session.expire_all()
+    assert await db_session.get(WorkflowReport, owned_report.id) is None
+
+
+async def test_deleting_a_report_keeps_the_workflow_that_produced_it(
+    db_client: AsyncClient,
+    db_session: AsyncSession,
+    user_a_headers: dict[str, str],
+    owned_report: WorkflowReport,
+) -> None:
+    """The whole difference from DELETE /workflows/{id}: a report is a
+    generated document, and discarding it must never destroy the
+    investigation it was generated from."""
+    workflow_id = owned_report.workflow_id
+
+    resp = await db_client.delete(f"/api/v1/reports/{owned_report.id}", headers=user_a_headers)
+    assert resp.status_code == 204
+
+    db_session.expire_all()
+    assert await db_session.get(Workflow, workflow_id) is not None
+
+
+async def test_deleted_report_disappears_from_the_list(
+    db_client: AsyncClient, user_a_headers: dict[str, str], owned_report: WorkflowReport
+) -> None:
+    before = await db_client.get("/api/v1/reports", headers=user_a_headers)
+    assert str(owned_report.id) in {item["id"] for item in before.json()}
+
+    await db_client.delete(f"/api/v1/reports/{owned_report.id}", headers=user_a_headers)
+
+    after = await db_client.get("/api/v1/reports", headers=user_a_headers)
+    assert str(owned_report.id) not in {item["id"] for item in after.json()}
+
+
+async def test_deleting_a_report_twice_404s_rather_than_erroring(
+    db_client: AsyncClient, user_a_headers: dict[str, str], owned_report: WorkflowReport
+) -> None:
+    first = await db_client.delete(f"/api/v1/reports/{owned_report.id}", headers=user_a_headers)
+    assert first.status_code == 204
+    second = await db_client.delete(f"/api/v1/reports/{owned_report.id}", headers=user_a_headers)
+    assert second.status_code == 404
+
+
+async def test_delete_with_a_malformed_id_404s_like_any_other_miss(
+    db_client: AsyncClient, user_a_headers: dict[str, str]
+) -> None:
+    """A malformed id, a missing report and someone else's report all
+    answer identically — see `_load_owned_report`."""
+    resp = await db_client.delete("/api/v1/reports/not-a-uuid", headers=user_a_headers)
+    assert resp.status_code == 404
+
+
+async def test_unauthenticated_delete_is_401(
+    db_client: AsyncClient, owned_report: WorkflowReport
+) -> None:
+    resp = await db_client.delete(f"/api/v1/reports/{owned_report.id}")
+    assert resp.status_code == 401

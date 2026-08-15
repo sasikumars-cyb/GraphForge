@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { FileBarChart, Loader2, ChevronDown, ChevronUp } from "lucide-react";
+import { FileBarChart, Loader2, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
 import { Card } from "../components/Card";
+import { ConfirmDialog } from "../components/ConfirmDialog";
 import { StatusBadge, type StatusTone } from "../components/StatusBadge";
 import { ReportView } from "../components/report/ReportView";
 import { formatRelativeTime } from "../lib/formatDate";
@@ -8,6 +9,7 @@ import { useAuth } from "../app/auth-context";
 import {
   listReports,
   getReport,
+  deleteReport,
   isCurrentViewModel,
   type ReportSummary,
   type ReportViewModel,
@@ -102,9 +104,36 @@ function ReportContent({ reportId }: { reportId: string }) {
   );
 }
 
-function ReportRow({ report, onStatusSettled }: { report: ReportSummary; onStatusSettled: () => void }) {
+function ReportRow({
+  report,
+  onStatusSettled,
+  onDeleted,
+}: {
+  report: ReportSummary;
+  onStatusSettled: () => void;
+  onDeleted: () => void;
+}) {
+  const { token } = useAuth();
   const [expanded, setExpanded] = useState(false);
+  const [confirming, setConfirming] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const canView = report.status === "completed";
+
+  async function handleDelete() {
+    if (!token) return;
+    setIsDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteReport(token, report.id);
+      setConfirming(false);
+      onDeleted();
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : "Couldn't delete this report.");
+    } finally {
+      setIsDeleting(false);
+    }
+  }
   // A pending report that just turned completed/failed while collapsed
   // should re-poll the parent list rather than sit stale — the parent's
   // own poll loop already does this, this ref just avoids re-triggering
@@ -140,22 +169,56 @@ function ReportRow({ report, onStatusSettled }: { report: ReportSummary; onStatu
           {report.status === "failed" && report.error_message && (
             <p className="mt-1 text-xs text-danger-fg">{report.error_message}</p>
           )}
+          {deleteError && <p className="mt-1 text-xs text-danger-fg">{deleteError}</p>}
         </div>
-        {canView && (
+        <div className="flex shrink-0 items-center gap-1.5">
+          {canView && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="flex items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
+            >
+              {expanded ? "Hide" : "View report"}
+              {expanded ? (
+                <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
+              ) : (
+                <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+              )}
+            </button>
+          )}
+          {/* Offered for every status, not just `completed` — a failed or
+              stuck-pending report is exactly the one a user most wants to
+              clear out, and it has no "View report" affordance to sit
+              beside. */}
           <button
             type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="flex shrink-0 items-center gap-1 rounded-md border border-line px-2.5 py-1 text-xs font-medium text-fg-secondary hover:bg-surface-raised"
+            onClick={() => setConfirming(true)}
+            disabled={isDeleting}
+            aria-label={`Delete report: ${report.title}`}
+            title="Delete report"
+            className="focus-ring rounded-md p-1 text-fg-muted transition-colors hover:text-danger-fg disabled:cursor-not-allowed disabled:opacity-30"
           >
-            {expanded ? "Hide" : "View report"}
-            {expanded ? (
-              <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
-            ) : (
-              <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
-            )}
+            <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
-        )}
+        </div>
       </div>
+      <ConfirmDialog
+        open={confirming}
+        title="Delete this report?"
+        body={
+          // The reassurance is the point: this page sits next to workflow
+          // deletion, and a user has no way to know from the button alone
+          // that they are discarding a document rather than the
+          // investigation that produced it.
+          "This removes the generated report only. The investigation behind it — its stages, " +
+          "evidence and run history — is kept, and it can be reported on again. This can't be undone."
+        }
+        consequences={[report.title, `Generated ${formatRelativeTime(report.created_at)}`]}
+        confirmLabel="Delete report"
+        isSubmitting={isDeleting}
+        onConfirm={() => void handleDelete()}
+        onCancel={() => setConfirming(false)}
+      />
       {expanded && canView && (
         <div className="mt-3 overflow-hidden rounded-lg border border-line">
           <ReportContent reportId={report.id} />
@@ -242,7 +305,12 @@ export function ReportsPage() {
       {reports && reports.length > 0 && (
         <div className="flex flex-col gap-3">
           {reports.map((report) => (
-            <ReportRow key={report.id} report={report} onStatusSettled={() => void load()} />
+            <ReportRow
+              key={report.id}
+              report={report}
+              onStatusSettled={() => void load()}
+              onDeleted={() => void load()}
+            />
           ))}
         </div>
       )}
