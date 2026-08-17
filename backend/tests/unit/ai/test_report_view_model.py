@@ -55,32 +55,39 @@ def _bundles(**overrides: SimpleNamespace | None) -> dict[str, SimpleNamespace |
     return base
 
 
+def _header(workflow, bundles):
+    """`_build_header` is handed the already-derived readiness pair by
+    `build_report_view_model` (so the badge can never disagree with the
+    outcome section) — these header tests only care about question/
+    repository, so they pass the same value `map_readiness` would."""
+    reported = dp.map_readiness(bundles.get("engineering_review"))
+    return vm._build_header(workflow, bundles, reported, reported)
+
+
 class TestBuildHeader:
     def test_uses_context_discovery_original_request_when_present(self):
         cd = _bundle({"original_request": "the real question"})
-        header = vm._build_header(
-            _workflow(original_prompt="fallback"), _bundles(context_discovery=cd)
-        )
+        header = _header(_workflow(original_prompt="fallback"), _bundles(context_discovery=cd))
         assert header.question == "the real question"
 
     def test_falls_back_to_workflow_original_prompt(self):
-        header = vm._build_header(_workflow(original_prompt="fallback text"), _bundles())
+        header = _header(_workflow(original_prompt="fallback text"), _bundles())
         assert header.question == "fallback text"
 
     def test_repository_from_selected_entry(self):
         cd = _bundle(
             {"repositories": [{"name": "a", "selected": False}, {"name": "b", "selected": True}]}
         )
-        header = vm._build_header(_workflow(), _bundles(context_discovery=cd))
+        header = _header(_workflow(), _bundles(context_discovery=cd))
         assert header.repository == "b"
 
     def test_repository_falls_back_to_ranked_names(self):
         cd = _bundle({"ranked_repository_names": ["legacy-repo"]})
-        header = vm._build_header(_workflow(), _bundles(context_discovery=cd))
+        header = _header(_workflow(), _bundles(context_discovery=cd))
         assert header.repository == "legacy-repo"
 
     def test_no_repository_signal_is_none(self):
-        header = vm._build_header(_workflow(), _bundles())
+        header = _header(_workflow(), _bundles())
         assert header.repository is None
 
 
@@ -362,7 +369,7 @@ class TestBuildContradictions:
         section = vm._build_contradictions(_bundles(context_discovery=cd))
         assert section.synthesis_state == SynthesisRunState.COMPLETED
         assert len(section.items) == 1
-        assert section.items[0].statement == "conflict"
+        assert section.items[0].entry.statement == "conflict"
 
 
 class TestBuildEvidence:
@@ -437,3 +444,418 @@ class TestToJsonDict:
         # "EnumName.MEMBER" repr or a raise.
         assert decoded["header"]["readiness"] == "unknown"
         assert decoded["hypotheses"]["synthesis_state"] == "not_run"
+
+
+# ---------------------------------------------------------------------------
+# The post–Engineering Review document contract: confirmed vs hypothetical,
+# hypothesis vs overall confidence, contradictions, blocking vs advisory,
+# and the review outcome itself. Every test below builds a whole
+# `ReportViewModel` through the real public entry point — these are
+# properties of the generated document, not of one private helper.
+# ---------------------------------------------------------------------------
+
+
+def _cd_bundle(
+    *,
+    hypotheses: list[dict] | None = None,
+    contradictions: list[dict] | None = None,
+    gaps: list[dict] | None = None,
+    findings: list[dict] | None = None,
+    confidence_score: float | None = None,
+    synthesis_state: str = "completed",
+) -> SimpleNamespace:
+    return _bundle(
+        {
+            "original_request": "Why are KWH rows exported?",
+            "reasoning_summary": {
+                "synthesis_state": synthesis_state,
+                "hypotheses": hypotheses or [],
+                "contradictions": contradictions or [],
+            },
+            "discovery_report": {"gaps": gaps or [], "findings": findings or []},
+        },
+        confidence_score=confidence_score,
+    )
+
+
+def _er_bundle(readiness: str, blocking: list[str] | None = None) -> SimpleNamespace:
+    return _bundle(
+        {"readiness_status": readiness, "blocking_issues": blocking or []},
+        confidence_score=0.45,
+    )
+
+
+def _hyp(description: str, confidence: float, status: str = "supported") -> dict:
+    return {
+        "description": description,
+        "status": status,
+        "confidence": confidence,
+        "supporting_evidence": ["some prose"],
+        "contradicting_evidence": [],
+    }
+
+
+class TestConfirmedVersusHypothetical:
+    def test_a_high_confidence_unverified_hypothesis_is_never_a_confirmed_finding(self):
+        """The core separation: 95% confidence buys a hypothesis nothing.
+        Only verification moves a claim into Confirmed findings."""
+        cd = _cd_bundle(hypotheses=[_hyp("the filtering logic lives in x.py", 0.95)])
+        model = vm.build_report_view_model(_workflow(), _bundles(context_discovery=cd))
+
+        assert model.hypotheses.items[0].entry.confidence == 0.95
+        assert model.findings.items == []
+        assert model.findings.availability.status == Availability.DEGRADED
+        statements = [f.statement for f in model.findings.items]
+        assert "the filtering logic lives in x.py" not in statements
+
+    def test_verified_facts_become_confirmed_findings_unverified_ones_do_not(self):
+        cd = _cd_bundle(
+            findings=[
+                {
+                    "kind": "repository",
+                    "total": 2,
+                    "items": [
+                        {
+                            "subject": "soco_ingest",
+                            "verified": True,
+                            "evidence": {"summary": "indexed in the graph"},
+                        },
+                        {"subject": "unverified-repo", "verified": False, "evidence": None},
+                    ],
+                }
+            ]
+        )
+        model = vm.build_report_view_model(_workflow(), _bundles(context_discovery=cd))
+
+        statements = [f.statement for f in model.findings.items]
+        assert statements == ["repository: soco_ingest"]
+        assert model.findings.items[0].evidence_summary == "indexed in the graph"
+        assert model.findings.availability.status == Availability.AVAILABLE
+
+    def test_verified_ledger_rows_are_confirmed_findings(self):
+        planning = _bundle(
+            {"repository_usage": [{"name": "soco_ingest", "verified": True, "files_affected": []}]}
+        )
+        model = vm.build_report_view_model(_workflow(), _bundles(planning=planning))
+        assert any("soco_ingest" in f.statement for f in model.findings.items)
+        assert all(f.source_stage == "planning" for f in model.findings.items)
+
+
+class TestHypothesisConfidenceVersusOverallConfidence:
+    def test_the_two_numbers_are_labelled_separately_and_the_gap_is_explained(self):
+        cd = _cd_bundle(hypotheses=[_hyp("filtering logic located in x.py", 0.95)])
+        er = _er_bundle("needs_revision")
+        model = vm.build_report_view_model(
+            _workflow(), _bundles(context_discovery=cd, engineering_review=er)
+        )
+        b = model.confidence.breakdown
+
+        assert b.top_hypothesis_confidence == 0.95
+        assert b.overall == 0.45
+        assert b.top_hypothesis_label == "Root-cause candidate confidence"
+        assert b.overall_label == "Overall resolution confidence"
+        assert b.divergence_note is not None
+        assert "95%" in b.divergence_note and "45%" in b.divergence_note
+        assert "different things" in b.divergence_note
+        assert "ready for implementation" in b.divergence_note
+
+    def test_no_divergence_note_when_the_two_numbers_agree(self):
+        cd = _cd_bundle(hypotheses=[_hyp("h", 0.5)])
+        er = _bundle({"readiness_status": "ready"}, confidence_score=0.55)
+        model = vm.build_report_view_model(
+            _workflow(), _bundles(context_discovery=cd, engineering_review=er)
+        )
+        assert model.confidence.breakdown.divergence_note is None
+
+    def test_overall_basis_states_what_overall_confidence_measures(self):
+        er = _er_bundle("needs_revision")
+        model = vm.build_report_view_model(_workflow(), _bundles(engineering_review=er))
+        assert "45%" in model.confidence.breakdown.overall_basis
+        assert "understood well enough to implement" in model.confidence.breakdown.overall_basis
+
+
+class TestContradictoryEvidence:
+    def _model(self):
+        cd = _cd_bundle(
+            hypotheses=[_hyp("h", 0.95)],
+            contradictions=[
+                {
+                    "description": "Jira says KWH is exported; the raw file has no plain kWh UOM",
+                    "evidence_for": ["steps to reproduce list KWH"],
+                    "evidence_against": ["raw readings contain only kWh F+R and kWh F"],
+                    "resolved": False,
+                    "resolution_note": "",
+                }
+            ],
+        )
+        return vm.build_report_view_model(_workflow(), _bundles(context_discovery=cd))
+
+    def test_an_unresolved_contradiction_carries_impact_and_required_resolution(self):
+        c = self._model().contradictions.items[0]
+        assert c.is_blocking is True
+        assert "Blocks the outcome" in c.impact
+        assert "1 supporting item" in c.required_resolution
+        assert "1 conflicting item" in c.required_resolution
+
+    def test_an_unresolved_contradiction_becomes_a_blocking_open_item(self):
+        model = self._model()
+        promoted = [
+            q
+            for q in model.next_actions.questions
+            if q.kind == vm.OpenItemKind.UNRESOLVED_CONTRADICTION
+        ]
+        assert len(promoted) == 1
+        assert promoted[0].is_blocking is True
+        assert model.next_actions.blocking_count == 1
+
+    def test_an_unresolved_contradiction_appears_in_the_outcome_reasons(self):
+        reasons = " ".join(self._model().review_outcome.reasons)
+        assert "Unresolved contradiction" in reasons
+
+    def test_a_resolved_contradiction_is_not_blocking_and_adds_no_open_item(self):
+        cd = _cd_bundle(
+            contradictions=[
+                {
+                    "description": "two sources disagreed",
+                    "evidence_for": ["a"],
+                    "evidence_against": ["b"],
+                    "resolved": True,
+                    "resolution_note": "Source A was confirmed later.",
+                }
+            ]
+        )
+        model = vm.build_report_view_model(_workflow(), _bundles(context_discovery=cd))
+        assert model.contradictions.items[0].is_blocking is False
+        assert "Source A was confirmed later." in model.contradictions.items[0].impact
+        assert model.next_actions.questions == []
+        assert model.next_actions.blocking_count == 0
+
+
+class TestBlockingVersusAdvisoryIsOneSourceOfTruth:
+    def test_every_section_reports_the_same_counts(self):
+        """The regression this whole change exists for: one section said
+        'one open/blocking item remains' while another said '0 blocking,
+        1 advisory'. All counts now come from one list."""
+        cd = _cd_bundle(
+            gaps=[
+                {
+                    "gap_id": "g1",
+                    "summary": "where is the UOM introduced?",
+                    "status": "open",
+                    "severity": "advisory",
+                },
+            ],
+            contradictions=[
+                {
+                    "description": "Jira contradicts the raw input",
+                    "evidence_for": ["a"],
+                    "evidence_against": ["b"],
+                    "resolved": False,
+                    "resolution_note": "",
+                }
+            ],
+        )
+        er = _er_bundle("needs_revision")
+        model = vm.build_report_view_model(
+            _workflow(), _bundles(context_discovery=cd, engineering_review=er)
+        )
+
+        assert model.next_actions.blocking_count == 1  # the contradiction
+        assert model.next_actions.advisory_count == 1  # the open gap
+        assert model.review_outcome.blocking_count == model.next_actions.blocking_count
+        assert model.review_outcome.advisory_count == model.next_actions.advisory_count
+        assert len(model.next_actions.questions) == 2
+        assert sum(1 for q in model.next_actions.questions if q.is_blocking) == 1
+
+    def test_engineering_review_blocking_issues_are_blocking(self):
+        er = _er_bundle("needs_revision", blocking=["upstream creation not investigated"])
+        model = vm.build_report_view_model(_workflow(), _bundles(engineering_review=er))
+        assert model.next_actions.blocking_count == 1
+        assert model.next_actions.questions[0].kind == vm.OpenItemKind.BLOCKING_ISSUE
+
+    def test_a_ready_verdict_with_a_blocking_item_is_downgraded_not_shown_as_contradictory(self):
+        er = _er_bundle("ready", blocking=["a real blocker slipped through"])
+        model = vm.build_report_view_model(_workflow(), _bundles(engineering_review=er))
+        assert model.header.reported_readiness == vm.Readiness.READY
+        assert model.header.readiness == vm.Readiness.NEEDS_REVISION
+        assert model.review_outcome.readiness == model.header.readiness
+        assert "reported 'ready'" in " ".join(model.review_outcome.reasons)
+
+
+class TestEngineeringReviewOutcome:
+    def test_needs_revision_states_the_outcome_reasons_and_a_do_not_implement_recommendation(self):
+        cd = _cd_bundle(
+            hypotheses=[
+                _hyp("filtering logic is in interval_usage.py", 0.95),
+                _hyp("records are created upstream in ingest_raw_data.py", 0.6),
+            ],
+            gaps=[
+                {
+                    "gap_id": "g1",
+                    "summary": "origin of KWH rows",
+                    "status": "open",
+                    "severity": "advisory",
+                }
+            ],
+            contradictions=[
+                {
+                    "description": "Jira says KWH exported; raw input has no plain kWh",
+                    "evidence_for": ["a"],
+                    "evidence_against": ["b"],
+                    "resolved": False,
+                    "resolution_note": "",
+                }
+            ],
+        )
+        er = _er_bundle("needs_revision")
+        outcome = vm.build_report_view_model(
+            _workflow(), _bundles(context_discovery=cd, engineering_review=er)
+        ).review_outcome
+
+        assert outcome.outcome_label == "Needs Revision"
+        assert "did not approve implementation" in outcome.outcome_statement
+        reasons = " ".join(outcome.reasons)
+        assert "not confirmed" in reasons
+        assert "2 competing explanations" in reasons
+        assert "Unresolved contradiction" in reasons
+        assert "1 knowledge gap" in reasons
+
+        # Requirement 6: the document must not imply "go modify a file"
+        # while a competing hypothesis says the cause is somewhere else.
+        assert outcome.recommendation.startswith("Do not implement the proposed change yet.")
+        assert "competing explanations" in outcome.recommendation
+        assert "Reconcile the unresolved contradiction" in outcome.recommendation
+        assert "re-run engineering review" in outcome.recommendation.lower()
+
+    def test_ready_and_clean_is_an_approval_with_a_proceed_recommendation(self):
+        cd = _cd_bundle(
+            hypotheses=[_hyp("h", 0.9)],
+            findings=[
+                {
+                    "kind": "component",
+                    "total": 1,
+                    "items": [{"subject": "exporter", "verified": True, "evidence": None}],
+                }
+            ],
+        )
+        er = _bundle({"readiness_status": "ready", "blocking_issues": []}, confidence_score=0.9)
+        model = vm.build_report_view_model(
+            _workflow(), _bundles(context_discovery=cd, engineering_review=er)
+        )
+        outcome = model.review_outcome
+
+        assert outcome.readiness == vm.Readiness.READY
+        assert outcome.outcome_label == "Approved"
+        assert outcome.recommendation.startswith("Proceed with implementation as reviewed.")
+        assert outcome.blocking_count == 0
+        assert "1 finding was confirmed" in " ".join(outcome.reasons)
+
+    def test_ready_with_advisory_items_says_track_them_without_blocking(self):
+        cd = _cd_bundle(
+            gaps=[
+                {"gap_id": "g", "summary": "nice to know", "status": "open", "severity": "advisory"}
+            ]
+        )
+        er = _bundle({"readiness_status": "ready"}, confidence_score=0.8)
+        outcome = vm.build_report_view_model(
+            _workflow(), _bundles(context_discovery=cd, engineering_review=er)
+        ).review_outcome
+        assert outcome.readiness == vm.Readiness.READY
+        assert outcome.blocking_count == 0
+        assert outcome.advisory_count == 1
+        assert "Track 1 advisory item" in outcome.recommendation
+
+    def test_review_never_ran_is_not_reviewed_never_an_approval(self):
+        model = vm.build_report_view_model(_workflow(), _bundles())
+        outcome = model.review_outcome
+        assert outcome.readiness == vm.Readiness.UNKNOWN
+        assert outcome.outcome_label == "Not Reviewed"
+        assert outcome.availability.status == Availability.UNAVAILABLE
+        assert "Run Engineering Review" in outcome.recommendation
+        assert "no readiness verdict" in " ".join(outcome.reasons)
+
+    def test_not_ready_is_never_upgraded(self):
+        er = _bundle({"readiness_status": "not_ready"}, confidence_score=0.2)
+        model = vm.build_report_view_model(_workflow(), _bundles(engineering_review=er))
+        assert model.header.readiness == vm.Readiness.NOT_READY
+        assert model.review_outcome.outcome_label == "Not Ready"
+        assert model.review_outcome.recommendation.startswith("Do not implement")
+
+
+class TestGenericAcrossDifferentInvestigations:
+    def test_no_output_text_is_tied_to_any_specific_ticket_repository_or_file(self):
+        """Same builder, two unrelated investigations — the derived prose
+        must differ only where the underlying data differs."""
+        a = vm.build_report_view_model(
+            _workflow(title="A"),
+            _bundles(
+                context_discovery=_cd_bundle(hypotheses=[_hyp("cache eviction is too eager", 0.8)]),
+                engineering_review=_er_bundle("needs_revision"),
+            ),
+        )
+        b = vm.build_report_view_model(
+            _workflow(title="B"),
+            _bundles(
+                context_discovery=_cd_bundle(
+                    hypotheses=[_hyp("the CSV parser drops a column", 0.7)]
+                ),
+                engineering_review=_er_bundle("needs_revision"),
+            ),
+        )
+        for model in (a, b):
+            assert model.review_outcome.outcome_label == "Needs Revision"
+            assert model.review_outcome.recommendation.startswith("Do not implement")
+        # The only ticket-specific string anywhere is the hypothesis text
+        # the source data itself carried.
+        assert "cache eviction" in a.hypotheses.items[0].entry.statement
+        assert "cache eviction" not in " ".join(b.review_outcome.reasons)
+
+    def test_empty_workflow_still_produces_a_complete_document(self):
+        model = vm.build_report_view_model(_workflow(), _bundles())
+        assert model.review_outcome.reasons  # never empty
+        assert model.review_outcome.recommendation
+        assert model.findings.items == []
+        assert model.next_actions.blocking_count == 0
+        assert model.confidence.breakdown.overall is None
+        assert "has not been quantified" in model.confidence.breakdown.overall_basis
+
+
+class TestConfidenceBasisCitesAConcernNotAPositive:
+    def test_a_low_overall_score_is_explained_by_what_is_holding_it_back(self):
+        """Regression from reviewing a real generated document: the basis
+        used to append the first reason, which is the *confirmed findings*
+        line — so a 45% score read as "45% … 2 findings were confirmed",
+        a non-sequitur."""
+        cd = _cd_bundle(
+            hypotheses=[_hyp("h", 0.95)],
+            findings=[
+                {
+                    "kind": "repository",
+                    "total": 1,
+                    "items": [{"subject": "repo-a", "verified": True, "evidence": None}],
+                }
+            ],
+        )
+        er = _er_bundle("needs_revision")
+        model = vm.build_report_view_model(
+            _workflow(), _bundles(context_discovery=cd, engineering_review=er)
+        )
+        basis = model.confidence.breakdown.overall_basis
+
+        assert "was confirmed by verified evidence" not in basis
+        assert "not confirmed" in basis
+        # The positive finding is still stated — as an outcome reason,
+        # where it belongs.
+        assert "1 finding was confirmed by verified evidence" in model.review_outcome.reasons[0]
+
+    def test_a_single_knowledge_gap_reads_as_singular(self):
+        cd = _cd_bundle(
+            gaps=[{"gap_id": "g", "summary": "one gap", "status": "open", "severity": "advisory"}]
+        )
+        er = _er_bundle("needs_revision")
+        reasons = " ".join(
+            vm.build_report_view_model(
+                _workflow(), _bundles(context_discovery=cd, engineering_review=er)
+            ).review_outcome.reasons
+        )
+        assert "1 knowledge gap remains open" in reasons

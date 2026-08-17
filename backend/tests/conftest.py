@@ -104,6 +104,22 @@ _TEST_DATABASE_URL = _test_database_url()
 # the imports further down — an import-sorter/E402 autofix that hoists those
 # imports back above this line would silently reintroduce the same bug.
 os.environ["DATABASE_URL"] = _TEST_DATABASE_URL
+
+# The external-AI-provider policy gate (see `Settings.allow_external_ai_
+# providers` and `app.ai.config.resolver.enforce_provider_policy`) defaults
+# to deny, so a deployment that has configured nothing cannot ship private
+# engineering metadata to a third-party API. The test suite is such a
+# deployment, and most of its provider-resolution tests were written against
+# external providers (openai/gemini/groq/deepseek) long before the policy
+# existed. Opting in here — explicitly, in one place, exactly as a real
+# operator would — keeps those tests testing what they were written to test
+# instead of all asserting the same new denial.
+#
+# The policy itself is verified against its REAL default by
+# tests/unit/ai/test_provider_policy.py, which builds `Settings` directly
+# rather than inheriting this opt-in.
+os.environ.setdefault("ALLOW_EXTERNAL_AI_PROVIDERS", "true")
+
 asyncio.run(_ensure_database_exists(_TEST_DATABASE_URL))
 _run_migrations(_TEST_DATABASE_URL)
 

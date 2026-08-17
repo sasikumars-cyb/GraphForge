@@ -266,11 +266,16 @@ class StageAwareLLMProvider(ILLMProvider):
         )
         self.last_resolved = served_by
         self.last_retry_count = attempts[0] if attempts else 0
+        # `hosting` makes the data-governance decision auditable per request:
+        # which provider served this prompt, and whether that provider is
+        # in-account or a third party. Provider identity and model only —
+        # never the api_key, never the prompt.
         logger.info(
-            "llm_completed stage=%s provider=%s model=%s source=%s profile=%s",
+            "llm_completed stage=%s provider=%s model=%s hosting=%s source=%s profile=%s",
             self._stage or "-",
             served_by.key,
             served_by.model,
+            served_by.spec.hosting.value,
             served_by.source,
             served_by.profile_slug or "-",
         )

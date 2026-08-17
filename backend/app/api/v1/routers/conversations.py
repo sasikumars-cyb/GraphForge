@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.dependencies import get_current_user
 from app.core.exceptions import AppError
+from app.core.rate_limit import check_rate_limit
 from app.database.session import get_db_session
 from app.models.conversation import Conversation, ConversationMessage
 from app.models.user import User
@@ -22,9 +23,31 @@ from app.schemas.conversation import (
     PostMessageRequest,
     StartConversationRequest,
 )
+from app.services.ask_grounding import (
+    ASK_GROUNDING_RATE_LIMIT,
+    ASK_GROUNDING_RATE_WINDOW_SECONDS,
+    ask_grounding_rate_limit_key,
+)
 from app.services.conversation_service import ConversationService
 
 router = APIRouter(prefix="/conversations", tags=["conversations"])
+
+# H-2 — every turn here is a real, billed LLM call, and both conversation-
+# writing endpoints (start a new one, post a message to an existing one)
+# reach the same deterministic `ground()` grounding as `POST /ask` before
+# any LLM call happens. All three share ONE budget —
+# `app.services.ask_grounding.ASK_GROUNDING_RATE_LIMIT` — so a caller
+# cannot get a second, independent quota by alternating between `/ask` and
+# `/conversations`, and cannot double it by alternating `start` vs
+# `post_message` within `/conversations` either.
+
+
+def _check_turn_rate_limit(user: User) -> None:
+    check_rate_limit(
+        ask_grounding_rate_limit_key(user.id),
+        max_requests=ASK_GROUNDING_RATE_LIMIT,
+        window_seconds=ASK_GROUNDING_RATE_WINDOW_SECONDS,
+    )
 
 
 def _summary(conversation: Conversation) -> ConversationSummary:
@@ -72,10 +95,10 @@ async def start_conversation(
             "Question must not be empty.", status_code=422, error_code="validation_error"
         )
 
+    _check_turn_rate_limit(current_user)
+
     service = ConversationService(db)
-    conversation, _assistant_message = await service.start(
-        current_user, question, mode=body.mode
-    )
+    conversation, _assistant_message = await service.start(current_user, question, mode=body.mode)
     _conversation, messages = await service.get_conversation(conversation.id, current_user.id)
     return _conversation_response(conversation, messages)
 
@@ -114,9 +137,9 @@ async def post_message(
 ) -> ConversationResponse:
     text = body.message.strip()
     if not text:
-        raise AppError(
-            "Message must not be empty.", status_code=422, error_code="validation_error"
-        )
+        raise AppError("Message must not be empty.", status_code=422, error_code="validation_error")
+
+    _check_turn_rate_limit(current_user)
 
     service = ConversationService(db)
     await service.post_message(conversation_id, current_user.id, text)

@@ -1,5 +1,24 @@
 # AGENT_FRAMEWORK.md — GraphForge
 
+> **Superseded by the normative Reasoning Engine contract for the
+> execution-flow/loop concepts below.** The `Plan → Select Tool → Execute →
+> Observe → Decide` loop this document names as "preserved unchanged" is
+> the historical predecessor this repository's canonical
+> [`REASONING_ENGINE_ARCHITECTURE.md`](REASONING_ENGINE_ARCHITECTURE.md)
+> now generalizes into the Control Plane / Reasoning Plane split, the
+> ActionProposal model, and the one-shared-loop design — read that
+> document, not this section, for the target reasoning architecture. This
+> document's Agent Manifest/contract table below remains a reasonable
+> description of the Role-level packaging around that loop and is not
+> itself superseded.
+>
+> Separately, the "Tools" row in that table describes agent-scoped tools in
+> the pre-contract sense. **Tool** and **Capability** are now distinct,
+> normatively-defined terms — see
+> [`CAPABILITIES_CONTROL_PLANE_ARCHITECTURE.md`](CAPABILITIES_CONTROL_PLANE_ARCHITECTURE.md)
+> §1 and its §0.1 terminology-collision table before treating anything
+> below as a Capability definition.
+
 Generalizes the existing Change Investigation Agent (`app/ai/agent/investigation_agent.py`,
 `planner.py`, `tools.py`, `models.py`) into a reusable base every future agent extends. The
 existing agent's `Plan → Select Tool → Execute → Observe → Decide` loop is preserved unchanged as

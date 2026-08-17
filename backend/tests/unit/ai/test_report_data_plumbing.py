@@ -16,6 +16,7 @@ from app.agents.report_generation import data_plumbing as dp
 from app.agents.report_generation.contracts import (
     Availability,
     FileRole,
+    OpenItemKind,
     Readiness,
     RiskSeverity,
     SynthesisRunState,
@@ -972,3 +973,205 @@ class TestFetchAllStageBundles:
         assert len(counts) == 2
         total = sum(c.count for c in counts)
         assert total == 1700
+
+
+class TestMapConfirmedFacts:
+    """Only a fact the ledger itself marked `verified` becomes a confirmed
+    finding — see `dp.map_confirmed_facts`. Nothing is promoted by count,
+    confidence, or association."""
+
+    def _cd(self, findings: list[dict]) -> SimpleNamespace:
+        return SimpleNamespace(
+            result={"discovery_report": {"findings": findings}},
+            evidence=[],
+            confidence_score=None,
+        )
+
+    def test_no_bundle_returns_nothing(self):
+        assert dp.map_confirmed_facts(None) == []
+
+    def test_only_verified_items_are_returned(self):
+        bundle = self._cd(
+            [
+                {
+                    "kind": "repository",
+                    "total": 2,
+                    "items": [
+                        {"subject": "repo-a", "verified": True, "evidence": {"summary": "found"}},
+                        {"subject": "repo-b", "verified": False, "evidence": {"summary": "found"}},
+                    ],
+                }
+            ]
+        )
+        findings = dp.map_confirmed_facts(bundle)
+        assert [f.statement for f in findings] == ["repository: repo-a"]
+        assert findings[0].evidence_summary == "found"
+        assert findings[0].source_field == "discovery_report.findings[repository].items[0]"
+
+    def test_a_verified_item_with_no_subject_is_skipped_never_rendered_blank(self):
+        bundle = self._cd(
+            [{"kind": "component", "total": 1, "items": [{"subject": "", "verified": True}]}]
+        )
+        assert dp.map_confirmed_facts(bundle) == []
+
+    def test_missing_evidence_record_leaves_summary_none_never_invented(self):
+        bundle = self._cd(
+            [{"kind": "file", "total": 1, "items": [{"subject": "x.py", "verified": True}]}]
+        )
+        assert dp.map_confirmed_facts(bundle)[0].evidence_summary is None
+
+
+class TestOpenQuestionKinds:
+    def test_each_source_is_tagged_with_its_own_kind(self):
+        er = SimpleNamespace(
+            result={"blocking_issues": ["cannot approve without upstream check"]},
+            evidence=[],
+            confidence_score=None,
+        )
+        cd = SimpleNamespace(
+            result={
+                "discovery_report": {
+                    "gaps": [{"gap_id": "g1", "summary": "unknown origin", "status": "open"}]
+                }
+            },
+            evidence=[],
+            confidence_score=None,
+        )
+        entries = dp.map_open_questions(cd, er)
+        assert [e.kind for e in entries] == [
+            OpenItemKind.BLOCKING_ISSUE,
+            OpenItemKind.KNOWLEDGE_GAP,
+        ]
+        assert entries[0].is_blocking is True
+        assert entries[1].is_blocking is False
+
+
+class TestConfirmedFactsExcludeCoverageSweeps:
+    """Regression from rendering a real report: a single investigation's
+    ledger carried 63 `repository` and 12,130 `component` facts, all
+    verified. Listing them made Confirmed Findings a retrieval log."""
+
+    def _cd(self, findings: list[dict]) -> SimpleNamespace:
+        return SimpleNamespace(
+            result={"discovery_report": {"findings": findings}},
+            evidence=[],
+            confidence_score=None,
+        )
+
+    def test_a_large_fact_kind_is_excluded_entirely(self):
+        bundle = self._cd(
+            [
+                {
+                    "kind": "component",
+                    "total": 12130,
+                    # The upstream projection caps the listed items at 50,
+                    # so the honest size signal is `total`, never len().
+                    "items": [
+                        {"subject": f"component-{i}", "verified": True, "evidence": None}
+                        for i in range(50)
+                    ],
+                },
+                {
+                    "kind": "source_file",
+                    "total": 2,
+                    "items": [
+                        {"subject": "a.py", "verified": True, "evidence": None},
+                        {"subject": "b.py", "verified": True, "evidence": None},
+                    ],
+                },
+            ]
+        )
+        statements = [f.statement for f in dp.map_confirmed_facts(bundle)]
+        assert statements == ["source file: a.py", "source file: b.py"]
+
+    def test_the_cap_reads_total_not_the_truncated_item_list(self):
+        """A kind whose listed items were capped at 50 must still be
+        recognised as a sweep from its own `total`."""
+        bundle = self._cd(
+            [
+                {
+                    "kind": "repository",
+                    "total": 63,
+                    "items": [
+                        {"subject": f"repo-{i}", "verified": True, "evidence": None}
+                        for i in range(50)
+                    ],
+                }
+            ]
+        )
+        assert dp.map_confirmed_facts(bundle) == []
+
+    def test_a_kind_at_the_boundary_is_kept(self):
+        bundle = self._cd(
+            [
+                {
+                    "kind": "repository",
+                    "total": dp._MAX_FINDING_GROUP_SIZE,
+                    "items": [
+                        {"subject": f"repo-{i}", "verified": True, "evidence": None}
+                        for i in range(dp._MAX_FINDING_GROUP_SIZE)
+                    ],
+                }
+            ]
+        )
+        assert len(dp.map_confirmed_facts(bundle)) == dp._MAX_FINDING_GROUP_SIZE
+
+    def test_a_narrowed_investigation_still_lists_its_repositories(self):
+        """The rule keys off the data's shape, never a kind name — a run
+        that genuinely narrows to three repositories lists those three."""
+        bundle = self._cd(
+            [
+                {
+                    "kind": "repository",
+                    "total": 3,
+                    "items": [
+                        {"subject": "repo-a", "verified": True, "evidence": None},
+                        {"subject": "repo-b", "verified": True, "evidence": None},
+                        {"subject": "repo-c", "verified": False, "evidence": None},
+                    ],
+                }
+            ]
+        )
+        assert [f.statement for f in dp.map_confirmed_facts(bundle)] == [
+            "repository: repo-a",
+            "repository: repo-b",
+        ]
+
+    def test_repeated_identical_statements_are_listed_once(self):
+        """Real-report regression: six `repository_relationship` facts all
+        named the same target repository, so the section rendered the same
+        line five times and pushed the source-file finding past the cap."""
+        bundle = self._cd(
+            [
+                {
+                    "kind": "repository_relationship",
+                    "total": 6,
+                    "items": [
+                        {"subject": "shared-jobs", "verified": True, "evidence": None}
+                        for _ in range(6)
+                    ],
+                },
+                {
+                    "kind": "source_file",
+                    "total": 1,
+                    "items": [{"subject": "exporter.py", "verified": True, "evidence": None}],
+                },
+            ]
+        )
+        statements = [f.statement for f in dp.map_confirmed_facts(bundle)]
+        assert statements == ["repository relationship: shared-jobs", "source file: exporter.py"]
+
+    def test_distinct_subjects_of_the_same_kind_are_all_kept(self):
+        bundle = self._cd(
+            [
+                {
+                    "kind": "source_file",
+                    "total": 2,
+                    "items": [
+                        {"subject": "a.py", "verified": True, "evidence": None},
+                        {"subject": "b.py", "verified": True, "evidence": None},
+                    ],
+                }
+            ]
+        )
+        assert len(dp.map_confirmed_facts(bundle)) == 2

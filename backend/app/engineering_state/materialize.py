@@ -1,0 +1,400 @@
+"""Deterministic event -> materialized-state folding.
+
+`docs/graphforge/ENGINEERING_STATE_ARCHITECTURE.md` §9: "The materialized
+Engineering State at any historical point in time MUST be exactly
+reconstructable by folding the event log up to that point (State replay,
+§9, unconditional)." §16/inv. 20: "Nothing outside the durable event log
+may be treated as authoritative."
+
+`fold()` is the whole implementation of that guarantee for Phase 1: a
+pure function from an ordered sequence of `EngineeringEvent` rows to a
+`MaterializedEngineeringState`. It performs no I/O, reads no clock,
+consults no LLM, and reads no mutable legacy status field — its only
+input is the event list itself, so the same *ordered* event history
+always folds to the same state (verified directly by
+`tests/unit/engineering_state/test_materialize.py`, which requires no
+database).
+
+**Precise claim, corrected by the Phase 1 Final Correctness Audit — read
+carefully, this is not a restatement of the obvious:** `fold()` derives
+the canonical processing order from each event's `sequence_number`,
+never from the order the caller happened to iterate its input list in.
+That is the *entire* content of the "order independence" this module
+used to (incorrectly) claim. It does **not** mean, and MUST NOT be
+described as meaning, that an arbitrary permutation of a task's actual
+causal history — i.e. different `sequence_number` assignments — produces
+the same state. `sequence_number` is semantic (ENGINEERING_STATE_
+ARCHITECTURE.md §8's "single, total, append-determined order"), and
+swapping it for two causally-related events changes the result: a
+`GoalUpdated` folded before its `GoalCreated` finds no goal to update and
+is silently absorbed into nothing, which is exactly why causal validity
+is now enforced upstream, at `EngineeringEventRepository.append()`
+(`CausalOrderViolationError`) — before a malformed order can become
+durable — rather than here, after the fact. `fold()` itself performs no
+causal validation and trusts that the history it's given is already
+valid, precisely because the repository is now the sole entry point that
+can make it so.
+
+This is deliberately *not* a persisted "current state" table. ES §16
+requires the active materialized projection to be scoped to
+currently-open items and re-derived, not cached-and-drifted — Phase 1's
+correct minimum is to make that re-derivation cheap and correct, not to
+build a second store that could itself go stale relative to the log.
+"""
+
+from __future__ import annotations
+
+import uuid
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any
+
+from app.engineering_state.events import (
+    AUTHORIZATION_CONSUMED,
+    AUTHORIZATION_CONSUMING,
+    AUTHORIZATION_DENIED,
+    AUTHORIZATION_GRANTED,
+    AUTHORIZATION_INVALIDATED,
+    BELIEF_RECORDED,
+    DECISION_MADE,
+    EVIDENCE_RECORDED,
+    GOAL_CREATED,
+    GOAL_UPDATED,
+    OBSERVATION_RECORDED,
+    PLAN_CREATED,
+    PLAN_STEP_CREATED,
+)
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from app.models.engineering_event import EngineeringEvent
+
+
+@dataclass(frozen=True)
+class GoalRecord:
+    event_id: uuid.UUID
+    description: str
+    postconditions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class PlanRecord:
+    event_id: uuid.UUID
+    goal_event_id: uuid.UUID
+    scope: Any
+
+
+@dataclass(frozen=True)
+class PlanStepRecord:
+    event_id: uuid.UUID
+    plan_event_id: uuid.UUID
+    description: str
+
+
+@dataclass(frozen=True)
+class DecisionRecord:
+    event_id: uuid.UUID
+    selected_option: Any
+    alternatives_considered: tuple[Any, ...]
+    decision_maker: str
+
+
+@dataclass(frozen=True)
+class EvidenceRecord:
+    event_id: uuid.UUID
+    reference: str
+    summary: str
+    origin_class: str
+    source_trust: Any
+    capability: str
+
+
+@dataclass(frozen=True)
+class BeliefRecord:
+    event_id: uuid.UUID
+    proposition: str
+    confidence: float
+    uncertainty: float
+    evidence_sufficiency: str
+    qualitative_status: str
+    derivation_method: str
+    evidence_ids: tuple[Any, ...]
+
+
+@dataclass(frozen=True)
+class ObservationRecord:
+    event_id: uuid.UUID
+    raw_result: Any
+    capability: str
+
+
+@dataclass(frozen=True)
+class AuthorizationGrantRecord:
+    """Phase 3: the reconstructed current state of one Authorization
+    Grant, folded from its `AuthorizationGranted` event plus whichever of
+    `AuthorizationConsuming`/`AuthorizationConsumed`/
+    `AuthorizationInvalidated` followed it (Cap §7.1 — the Control Plane
+    is the sole author, Engineering State the sole durable home; this is
+    that durable home's read side). `grant_event_id` is the
+    `AuthorizationGranted` event's own id — the same identifier every
+    later event in this Grant's lifecycle references via
+    `causation_event_id`, per `app.control_plane.control_plane`'s own
+    convention of never using a separately-generated id for this
+    purpose."""
+
+    grant_event_id: uuid.UUID
+    action_id: uuid.UUID
+    capability_id: str
+    capability_version: int
+    policy_version_id: str
+    scope: str
+    safety_validity_result: Any
+    novelty: str
+    issued_at: str
+    ttl_seconds: int
+    human_approval_id: Any
+    state: str  # "granted" | "consuming" | "consumed" | "invalidated"
+
+
+@dataclass(frozen=True)
+class AuthorizationDenialRecord:
+    """A denial has no Grant to attach to — it durably records that one
+    was never issued, and why (Cap §7.1: "Denials MUST be recorded.").
+    """
+
+    event_id: uuid.UUID
+    denial_stage: str
+    reason: str
+    action_id: Any
+    capability_id: Any
+
+
+@dataclass(frozen=True)
+class MaterializedEngineeringState:
+    """The fold's output — everything a Phase 1 reader can know about one
+    task, derived from its event history alone."""
+
+    task_id: uuid.UUID
+    goal: GoalRecord | None = None
+    plans: tuple[PlanRecord, ...] = field(default_factory=tuple)
+    plan_steps: tuple[PlanStepRecord, ...] = field(default_factory=tuple)
+    decisions: tuple[DecisionRecord, ...] = field(default_factory=tuple)
+    evidence: tuple[EvidenceRecord, ...] = field(default_factory=tuple)
+    beliefs: tuple[BeliefRecord, ...] = field(default_factory=tuple)
+    observations: tuple[ObservationRecord, ...] = field(default_factory=tuple)
+    authorization_grants: tuple[AuthorizationGrantRecord, ...] = field(default_factory=tuple)
+    authorization_denials: tuple[AuthorizationDenialRecord, ...] = field(default_factory=tuple)
+    event_count: int = 0
+
+
+class MixedTaskEventsError(ValueError):
+    """Raised if `fold()` is handed events from more than one task —
+    every event belongs to exactly one task's stream (ES §8); folding
+    across tasks would silently produce a meaningless composite state."""
+
+
+def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
+    """Reconstruct the current Engineering State for one task from its
+    complete event history.
+
+    Robust to the *caller's* list order, never to the events' own causal
+    order: `events` is sorted by `sequence_number` before folding, so
+    handing this function the same events in a different Python list
+    order (e.g. `fold(list(events))` vs. `fold(list(reversed(events)))`)
+    produces identical output, because both calls process the identical
+    `sequence_number` order internally — proven directly by
+    `tests/unit/engineering_state/test_materialize.py::
+    test_fold_derives_canonical_order_from_sequence_number_not_list_order`.
+    This is NOT a claim that reordering the events' actual
+    `sequence_number` values — i.e. a different causal history — would
+    produce the same result; see this module's own top docstring for why
+    that claim would be wrong, and for where causal validity is actually
+    enforced (append time, not here).
+    """
+    if not events:
+        raise ValueError("fold() requires at least one event (task_id is unknown otherwise).")
+
+    task_ids = {e.task_id for e in events}
+    if len(task_ids) > 1:
+        raise MixedTaskEventsError(
+            f"fold() received events from {len(task_ids)} different tasks: {task_ids}. "
+            "Fetch one task's events (e.g. via "
+            "EngineeringEventRepository.list_for_task) before folding."
+        )
+    task_id = task_ids.pop()
+
+    ordered = sorted(events, key=lambda e: e.sequence_number)
+
+    goal: GoalRecord | None = None
+    plans: list[PlanRecord] = []
+    plan_steps: list[PlanStepRecord] = []
+    decisions: list[DecisionRecord] = []
+    evidence: list[EvidenceRecord] = []
+    beliefs: list[BeliefRecord] = []
+    observations: list[ObservationRecord] = []
+    # Keyed by the AuthorizationGranted event's own id — the same id
+    # Consuming/Consumed/Invalidated causally reference — so a later
+    # lifecycle event REPLACES the record here rather than appending a
+    # second one; `authorization_grants` in the final result reflects
+    # only current state, one entry per Grant, matching this module's
+    # "reconstructable current state," not a raw event dump.
+    grants_by_event_id: dict[uuid.UUID, AuthorizationGrantRecord] = {}
+    denials: list[AuthorizationDenialRecord] = []
+
+    for event in ordered:
+        payload = event.payload
+        if event.event_type == GOAL_CREATED:
+            goal = GoalRecord(
+                event_id=event.id,
+                description=payload["description"],
+                postconditions=tuple(payload["postconditions"]),
+            )
+        elif event.event_type == GOAL_UPDATED:
+            # Overlay only the fields this update actually carries, onto
+            # whatever the goal currently is — a partial update, never a
+            # replacement of fields it didn't mention. If no GoalCreated
+            # preceded this (a malformed history), there is nothing to
+            # overlay onto; leave `goal` as None rather than fabricate one.
+            if goal is not None:
+                goal = GoalRecord(
+                    event_id=event.id,
+                    description=payload.get("description", goal.description),
+                    postconditions=tuple(payload.get("postconditions", goal.postconditions)),
+                )
+        elif event.event_type == PLAN_CREATED:
+            plans.append(
+                PlanRecord(
+                    event_id=event.id,
+                    goal_event_id=payload["goal_event_id"],
+                    scope=payload["scope"],
+                )
+            )
+        elif event.event_type == PLAN_STEP_CREATED:
+            plan_steps.append(
+                PlanStepRecord(
+                    event_id=event.id,
+                    plan_event_id=payload["plan_event_id"],
+                    description=payload["description"],
+                )
+            )
+        elif event.event_type == DECISION_MADE:
+            decisions.append(
+                DecisionRecord(
+                    event_id=event.id,
+                    selected_option=payload["selected_option"],
+                    alternatives_considered=tuple(payload["alternatives_considered"]),
+                    decision_maker=payload["decision_maker"],
+                )
+            )
+        elif event.event_type == EVIDENCE_RECORDED:
+            evidence.append(
+                EvidenceRecord(
+                    event_id=event.id,
+                    reference=payload["reference"],
+                    summary=payload["summary"],
+                    origin_class=payload["origin_class"],
+                    source_trust=payload["source_trust"],
+                    capability=payload["capability"],
+                )
+            )
+        elif event.event_type == BELIEF_RECORDED:
+            beliefs.append(
+                BeliefRecord(
+                    event_id=event.id,
+                    proposition=payload["proposition"],
+                    confidence=payload["confidence"],
+                    uncertainty=payload["uncertainty"],
+                    evidence_sufficiency=payload["evidence_sufficiency"],
+                    qualitative_status=payload["qualitative_status"],
+                    derivation_method=payload["derivation_method"],
+                    evidence_ids=tuple(payload["evidence_ids"]),
+                )
+            )
+        elif event.event_type == OBSERVATION_RECORDED:
+            observations.append(
+                ObservationRecord(
+                    event_id=event.id,
+                    raw_result=payload["raw_result"],
+                    capability=payload["capability"],
+                )
+            )
+        elif event.event_type == AUTHORIZATION_GRANTED:
+            grants_by_event_id[event.id] = AuthorizationGrantRecord(
+                grant_event_id=event.id,
+                action_id=uuid.UUID(payload["action_id"]),
+                capability_id=payload["capability_id"],
+                capability_version=payload["capability_version"],
+                policy_version_id=payload["policy_version_id"],
+                scope=payload["scope"],
+                safety_validity_result=payload["safety_validity_result"],
+                novelty=payload["novelty"],
+                issued_at=payload["issued_at"],
+                ttl_seconds=payload["ttl_seconds"],
+                human_approval_id=payload.get("human_approval_id"),
+                state="granted",
+            )
+        elif event.event_type == AUTHORIZATION_CONSUMING:
+            grant_event_id = uuid.UUID(payload["grant_event_id"])
+            existing = grants_by_event_id.get(grant_event_id)
+            if existing is not None:
+                grants_by_event_id[grant_event_id] = _with_state(existing, "consuming")
+        elif event.event_type == AUTHORIZATION_CONSUMED:
+            grant_event_id = uuid.UUID(payload["grant_event_id"])
+            existing = grants_by_event_id.get(grant_event_id)
+            if existing is not None:
+                grants_by_event_id[grant_event_id] = _with_state(existing, "consumed")
+        elif event.event_type == AUTHORIZATION_INVALIDATED:
+            grant_event_id = uuid.UUID(payload["grant_event_id"])
+            existing = grants_by_event_id.get(grant_event_id)
+            if existing is not None:
+                grants_by_event_id[grant_event_id] = _with_state(existing, "invalidated")
+        elif event.event_type == AUTHORIZATION_DENIED:
+            denials.append(
+                AuthorizationDenialRecord(
+                    event_id=event.id,
+                    denial_stage=payload["denial_stage"],
+                    reason=payload["reason"],
+                    action_id=payload.get("action_id"),
+                    capability_id=payload.get("capability_id"),
+                )
+            )
+        # No `else` — an unrecognized event_type here would mean the DB
+        # CHECK constraint and events.validate_payload() both already let
+        # something through that this module doesn't know; that is a
+        # defect to surface loudly elsewhere (repository/model tests),
+        # not to paper over with a silent skip here.
+
+    return MaterializedEngineeringState(
+        task_id=task_id,
+        goal=goal,
+        plans=tuple(plans),
+        plan_steps=tuple(plan_steps),
+        decisions=tuple(decisions),
+        evidence=tuple(evidence),
+        beliefs=tuple(beliefs),
+        observations=tuple(observations),
+        authorization_grants=tuple(grants_by_event_id.values()),
+        authorization_denials=tuple(denials),
+        event_count=len(ordered),
+    )
+
+
+def _with_state(record: AuthorizationGrantRecord, state: str) -> AuthorizationGrantRecord:
+    """Cap §2: no single mutable field represents the state ladder — this
+    returns a NEW frozen record rather than mutating `record`, so every
+    intermediate state, if a caller kept a reference to it, remains
+    exactly what it was when observed."""
+    return AuthorizationGrantRecord(
+        grant_event_id=record.grant_event_id,
+        action_id=record.action_id,
+        capability_id=record.capability_id,
+        capability_version=record.capability_version,
+        policy_version_id=record.policy_version_id,
+        scope=record.scope,
+        safety_validity_result=record.safety_validity_result,
+        novelty=record.novelty,
+        issued_at=record.issued_at,
+        ttl_seconds=record.ttl_seconds,
+        human_approval_id=record.human_approval_id,
+        state=state,
+    )

@@ -74,6 +74,15 @@ export interface DisplayAnswer {
   workItems?: DisplayWorkItem[];
   readiness?: DisplayReadiness;
   actions: DisplayAction[];
+  /** C-1 — the subject could not be confidently resolved, so this turn
+   * asks instead of answering. `candidates` are the repositories it did
+   * find; picking one is how the user resolves the ambiguity. No evidence
+   * and no impact accompany this state, by construction on the backend. */
+  needsClarification?: boolean;
+  candidates?: { name: string; full_name: string; repository_id: string }[];
+  /** True when the blast radius exceeded the reporting limit — the impact
+   * shown is a bounded sample, never an exhaustive analysis. */
+  truncated?: boolean;
   /** True when synthesis itself failed and this turn fell back to plain
    * deterministic facts (or a bare apology) — suppresses the "AI Insight"
    * framing a turn that never actually reasoned shouldn't claim. */
@@ -161,7 +170,16 @@ function EntityRow({ entity }: { entity: DisplayEntity }) {
  * a one-line evidence strip, and action buttons. `why` and the full
  * impact breakdown stay behind a "Details" disclosure so the default
  * read is the short conversational answer, not a report. */
-export function AskAnswer({ data }: { data: DisplayAnswer }) {
+export function AskAnswer({
+  data,
+  onSelectCandidate,
+}: {
+  data: DisplayAnswer;
+  /** Called with a candidate repository's name when the user picks one
+   * from a clarification turn — the caller submits it as the next
+   * message, which resolves exactly (see `_exact_named` on the backend). */
+  onSelectCandidate?: (repositoryName: string) => void;
+}) {
   const [detailsOpen, setDetailsOpen] = useState(false);
   const hasDetails = Boolean(data.why) || (data.impact && data.impact.affected.length > 0);
 
@@ -228,12 +246,34 @@ export function AskAnswer({ data }: { data: DisplayAnswer }) {
           {data.impact && (
             <ProvenanceTag
               kind="derived"
-              label="Blast radius calculated from dependency relationships"
+              label={
+                data.truncated
+                  ? "Partial blast radius — larger than the reporting limit, not exhaustive"
+                  : "Blast radius calculated from dependency relationships"
+              }
             />
           )}
           {!data.degraded && data.entities && data.entities.length > 0 && (
             <ProvenanceTag kind="ai_insight" label="Impact ranking is GraphForge's reasoning, not a direct measurement" />
           )}
+        </div>
+      )}
+
+      {data.needsClarification && data.candidates && data.candidates.length > 0 && (
+        <div className="flex flex-col gap-1.5">
+          <span className="text-xs font-medium text-fg-muted">Did you mean</span>
+          <div className="flex flex-wrap gap-1.5">
+            {data.candidates.map((candidate) => (
+              <button
+                key={candidate.repository_id}
+                type="button"
+                onClick={() => onSelectCandidate?.(candidate.name)}
+                className="focus-ring rounded-full border border-line px-3 py-1 text-xs font-medium text-fg-secondary transition-colors hover:bg-surface-raised hover:text-fg"
+              >
+                {candidate.name}
+              </button>
+            ))}
+          </div>
         </div>
       )}
 

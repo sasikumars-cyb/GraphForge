@@ -43,6 +43,17 @@ _DIRECTION_TO_NEO4J: dict[str, Literal["outgoing", "incoming"]] = {
 }
 
 
+def _repository_uuid_of(node_id: str) -> str:
+    """The repository UUID a graph node id belongs to. Every node written
+    by `app.indexer.graph.builder` is namespaced `<repository_uuid>:<kind>
+    [:<rest>]`, so the leading segment is the owning repository. Returns
+    the whole string unchanged when there's no separator — a malformed or
+    differently-shaped id then simply never equal-matches a real UUID,
+    which is the safe direction to fail (it stays in the impacted set
+    rather than being silently dropped)."""
+    return node_id.split(":", 1)[0]
+
+
 async def compute_blast_radius(
     db: AsyncSession,
     graph_repository: IGraphRepository,
@@ -78,6 +89,23 @@ async def compute_blast_radius(
     for edge in neighborhood.payload.edges:
         if edge.type == "DEPENDS_ON_REPOSITORY":
             impacted_repositories.add(edge.target_id)
+
+    # The seed is never its own downstream impact. A traversal centred on
+    # a repository necessarily walks back into that repository's own
+    # Repository node, so without this every blast radius reported at
+    # least one "impacted repository" — itself — which made a repository
+    # with zero real dependents indistinguishable from one with a real
+    # one, and made `_severity`'s "low" band (total == 0) unreachable.
+    #
+    # Compared on the repository UUID rather than the node id so a
+    # Repository node addressed by any id shape still resolves to the same
+    # repository; `all_involved_repository_ids` below re-adds the seed
+    # explicitly, so relationship lookup is unaffected by this exclusion.
+    impacted_repositories = {
+        node_id
+        for node_id in impacted_repositories
+        if _repository_uuid_of(node_id) != entity.repository_id
+    }
 
     all_involved_repository_ids: set[uuid.UUID] = {uuid.UUID(entity.repository_id)}
     for repo_node_id in impacted_repositories:

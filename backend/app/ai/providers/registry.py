@@ -34,11 +34,59 @@ from app.core.exceptions import AppError
 class Capability(StrEnum):
     """What a provider/model can do. Reported to the UI; never hardcoded there."""
 
+    # Declare a capability only once an adapter actually implements it.
+    # STREAMING was declared by all ten providers while `ILLMProvider` had
+    # no streaming method at all and every adapter used a blocking call
+    # (Bedrock's `converse()`, not `converse_stream()`) — a claim nothing
+    # could deliver and nothing consumed. Re-add it per provider when the
+    # streaming path lands (P1.5), together with the adapter method.
     STREAMING = "streaming"
     STRUCTURED_OUTPUT = "structured_output"
     VISION = "vision"
     TOOL_CALLING = "tool_calling"
     REASONING = "reasoning"
+
+
+class ProviderHosting(StrEnum):
+    """How a provider is *addressed*, which determines what must be verified
+    before its deployment can be trusted with private engineering metadata.
+
+    This is deliberately NOT a trust verdict. A provider's name never makes
+    it in-account: "Azure OpenAI" is an Azure resource in *somebody's*
+    tenant, and "Ollama" is whatever host its base URL points at. The
+    verdict comes from combining this with the resolved deployment
+    configuration and the operator's approval policy — see
+    `app.ai.config.resolver.classify_deployment`.
+
+    EXTERNAL             A third-party SaaS API. No configuration can make
+                         it in-account; the vendor processes the prompt
+                         under its own terms. (OpenAI, Gemini, Groq,
+                         DeepSeek, Anthropic direct, OpenRouter, Cerebras.)
+
+    CUSTOMER_ACCOUNT     Served inside the operator's own cloud account and
+                         addressed *solely* by their credential chain —
+                         there is no caller-supplied endpoint to point
+                         elsewhere. Bedrock is this: `_build_bedrock` passes
+                         only model/temperature/max_tokens/region, never a
+                         base_url, so the AWS account is by construction
+                         whichever account the operator's own credentials
+                         belong to. Trust follows from the credential chain.
+
+    CUSTOMER_ENDPOINT    *Can* be the operator's own deployment, but only
+                         the resolved endpoint proves it. Azure OpenAI,
+                         Vertex AI and Ollama all fall here: each is
+                         addressed by a URL that configuration can change,
+                         so an unverified endpoint must fail closed rather
+                         than inherit the provider's reputation.
+
+    The axis is the deployment shape, not vendor quality — Anthropic's
+    models are CUSTOMER_ACCOUNT through Bedrock and EXTERNAL through
+    api.anthropic.com, and both entries exist in this registry.
+    """
+
+    EXTERNAL = "external"
+    CUSTOMER_ACCOUNT = "customer_account"
+    CUSTOMER_ENDPOINT = "customer_endpoint"
 
 
 class UnsupportedProviderError(AppError):
@@ -96,6 +144,12 @@ class ProviderSpec:
     key: str
     label: str
     build: Callable[[ProviderBuildConfig], ILLMProvider]
+    # Data-governance classification — see `ProviderHosting`. Defaults to
+    # EXTERNAL deliberately: a newly added provider is assumed to send data
+    # off-premises until someone states otherwise, so forgetting to set this
+    # fails closed (the provider needs explicit opt-in) rather than silently
+    # inheriting in-account trust it may not deserve.
+    hosting: ProviderHosting = ProviderHosting.EXTERNAL
     capabilities: frozenset[Capability] = frozenset()
     models: tuple[ModelSpec, ...] = ()
     requires_api_key: bool = True
@@ -201,7 +255,7 @@ _SPECS: tuple[ProviderSpec, ...] = (
         key="openai",
         label="OpenAI",
         build=_build_openai,
-        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION, Capability.REASONING},
+        capabilities=_TEXT_CAPS | {Capability.VISION, Capability.REASONING},
         models=(
             ModelSpec("gpt-5.5", "GPT-5.5", 400_000),
             ModelSpec("gpt-5", "GPT-5", 400_000),
@@ -215,7 +269,7 @@ _SPECS: tuple[ProviderSpec, ...] = (
         key="gemini",
         label="Google Gemini",
         build=_build_gemini,
-        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION, Capability.REASONING},
+        capabilities=_TEXT_CAPS | {Capability.VISION, Capability.REASONING},
         models=(
             ModelSpec("gemini-3.6-flash", "Gemini 3.6 Flash", 1_000_000),
             ModelSpec("gemini-2.0-flash", "Gemini 2.0 Flash", 1_000_000),
@@ -225,9 +279,10 @@ _SPECS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         key="bedrock",
+        hosting=ProviderHosting.CUSTOMER_ACCOUNT,
         label="Amazon Bedrock",
         build=_build_bedrock,
-        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION, Capability.REASONING},
+        capabilities=_TEXT_CAPS | {Capability.VISION, Capability.REASONING},
         models=(
             ModelSpec("us.anthropic.claude-opus-4-8", "Claude Opus 4.8", 200_000),
             ModelSpec("us.anthropic.claude-sonnet-5", "Claude Sonnet 5", 200_000),
@@ -251,7 +306,7 @@ _SPECS: tuple[ProviderSpec, ...] = (
         key="groq",
         label="Groq",
         build=_openai_compatible("groq", "https://api.groq.com/openai/v1/chat/completions"),
-        capabilities=_TEXT_CAPS | {Capability.STREAMING},
+        capabilities=_TEXT_CAPS,
         models=(
             ModelSpec("llama-3.3-70b-versatile", "Llama 3.3 70B", 128_000),
             ModelSpec("llama-3.1-8b-instant", "Llama 3.1 8B Instant", 128_000),
@@ -263,7 +318,7 @@ _SPECS: tuple[ProviderSpec, ...] = (
         key="cerebras",
         label="Cerebras",
         build=_openai_compatible("cerebras", "https://api.cerebras.ai/v1/chat/completions"),
-        capabilities=_TEXT_CAPS | {Capability.STREAMING},
+        capabilities=_TEXT_CAPS,
         models=(
             ModelSpec("llama-3.3-70b", "Llama 3.3 70B", 128_000),
             ModelSpec("llama3.1-8b", "Llama 3.1 8B", 128_000),
@@ -275,7 +330,7 @@ _SPECS: tuple[ProviderSpec, ...] = (
         key="deepseek",
         label="DeepSeek",
         build=_openai_compatible("deepseek", "https://api.deepseek.com/v1/chat/completions"),
-        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.REASONING},
+        capabilities=_TEXT_CAPS | {Capability.REASONING},
         models=(
             ModelSpec(
                 "deepseek-v4-flash",
@@ -304,7 +359,7 @@ _SPECS: tuple[ProviderSpec, ...] = (
         key="openrouter",
         label="OpenRouter",
         build=_openai_compatible("openrouter", "https://openrouter.ai/api/v1/chat/completions"),
-        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION},
+        capabilities=_TEXT_CAPS | {Capability.VISION},
         models=(
             ModelSpec("anthropic/claude-sonnet-4.5", "Claude Sonnet 4.5", 200_000),
             ModelSpec("openai/gpt-5", "GPT-5 (via OpenRouter)", 400_000),
@@ -316,6 +371,7 @@ _SPECS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         key="ollama",
+        hosting=ProviderHosting.CUSTOMER_ENDPOINT,
         label="Ollama (local)",
         build=_openai_compatible("ollama", "http://localhost:11434/v1/chat/completions"),
         capabilities=_TEXT_CAPS,
@@ -332,7 +388,7 @@ _SPECS: tuple[ProviderSpec, ...] = (
         key="anthropic",
         label="Claude (Anthropic)",
         build=_unimplemented("Claude/Anthropic"),
-        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION, Capability.REASONING},
+        capabilities=_TEXT_CAPS | {Capability.VISION, Capability.REASONING},
         models=(
             ModelSpec("claude-sonnet-4-5", "Claude Sonnet 4.5", 200_000),
             ModelSpec("claude-opus-4-1", "Claude Opus 4.1", 200_000),
@@ -343,9 +399,10 @@ _SPECS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         key="azure_openai",
+        hosting=ProviderHosting.CUSTOMER_ENDPOINT,
         label="Azure OpenAI",
         build=_unimplemented("Azure OpenAI"),
-        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION},
+        capabilities=_TEXT_CAPS | {Capability.VISION},
         models=(ModelSpec("gpt-4o", "GPT-4o (Azure deployment)", 128_000),),
         implemented=False,
         notes=(
@@ -356,9 +413,10 @@ _SPECS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         key="vertex_ai",
+        hosting=ProviderHosting.CUSTOMER_ENDPOINT,
         label="Google Vertex AI",
         build=_unimplemented("Vertex AI"),
-        capabilities=_TEXT_CAPS | {Capability.STREAMING, Capability.VISION, Capability.REASONING},
+        capabilities=_TEXT_CAPS | {Capability.VISION, Capability.REASONING},
         models=(
             ModelSpec("gemini-3.6-pro", "Gemini 3.6 Pro (Vertex)", 2_000_000),
             ModelSpec("gemini-2.0-flash", "Gemini 2.0 Flash (Vertex)", 1_000_000),

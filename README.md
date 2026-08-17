@@ -111,6 +111,9 @@ Canonical, current documentation lives under `docs/graphforge/`:
 |---|---|
 | [`PRODUCT_VISION.md`](docs/graphforge/PRODUCT_VISION.md) | Why GraphForge exists, guiding principles |
 | [`ARCHITECTURE.md`](docs/graphforge/ARCHITECTURE.md) | System architecture, Agent Orchestrator, Conversational AI Workspace |
+| [`ENGINEERING_STATE_ARCHITECTURE.md`](docs/graphforge/ENGINEERING_STATE_ARCHITECTURE.md) | **Normative.** The canonical Engineering State contract — Evidence/Belief/Hypothesis/Plan/Decision model, event sourcing, human authority, multi-agent state. Read before any Engineering-State-related architectural decision. |
+| [`REASONING_ENGINE_ARCHITECTURE.md`](docs/graphforge/REASONING_ENGINE_ARCHITECTURE.md) | **Normative.** The canonical Reasoning Engine contract — Control Plane/Reasoning Plane split, ActionProposal, Capability composition, autonomy. Read before any Reasoning-Engine-related architectural decision. |
+| [`CAPABILITIES_CONTROL_PLANE_ARCHITECTURE.md`](docs/graphforge/CAPABILITIES_CONTROL_PLANE_ARCHITECTURE.md) | **Normative.** The canonical Capability & Control Plane contract — Capability vs. Tool, the validation/authorization pipeline, per-Action Authorization Grants, and the proposal→verified state ladder. Read before any Capability-, authorization-, or Control-Plane-related architectural decision. |
 | [`API_CONTRACTS.md`](docs/graphforge/API_CONTRACTS.md) | API surface, as-built vs. design-spec status per section |
 | [`AGENT_FRAMEWORK.md`](docs/graphforge/AGENT_FRAMEWORK.md) | Agent contract, extensibility, evaluation metrics |
 | [`UI_GUIDELINES.md`](docs/graphforge/UI_GUIDELINES.md) | Design conventions (see its own currency notice) |

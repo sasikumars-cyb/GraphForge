@@ -173,6 +173,18 @@ the Orchestrator adds an *inter-agent* layer on top.
 
 ## Shared Memory
 
+> **Superseded by the normative Engineering State contract for anything
+> beyond this section's own "today" description.** What this section calls
+> `RunContext`/Shared Memory is one narrow piece of a much larger target
+> architecture — Evidence, Belief, Hypothesis, Plan, Decision, event
+> sourcing, human authority, multi-agent state — now specified in full,
+> normatively, in
+> [`ENGINEERING_STATE_ARCHITECTURE.md`](ENGINEERING_STATE_ARCHITECTURE.md).
+> Where the two disagree, that document wins. This section is left as-is
+> below as the historical "today"/evolution framing for the narrow
+> scratch-space concept it describes; it is not the place to look for the
+> target state model.
+
 **Today**: no run-level memory; each agent invocation is stateless beyond the DB rows it reads/writes
 at the start/end.
 

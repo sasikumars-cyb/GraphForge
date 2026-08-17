@@ -21,16 +21,21 @@ nothing in the UI resolves exactly as it did before this layer existed.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
+from ipaddress import ip_address
+from urllib.parse import urlparse
 
 from app.ai.config.store import ConfigSnapshot, ProviderRecord, current_snapshot
 from app.ai.providers.registry import (
     ProviderBuildConfig,
+    ProviderHosting,
     ProviderSpec,
     get_provider_spec,
     require_provider_spec,
 )
 from app.core.config import Settings, get_settings
+from app.core.exceptions import AppError
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +70,166 @@ _ENV_PROVIDER_OPTIONS: dict[str, dict[str, str]] = {
 _ENV_MODEL_ONLY: dict[str, str] = {
     "bedrock": "bedrock_model",
 }
+
+
+class ExternalProviderNotPermittedError(AppError):
+    """An external provider was selected while the data-governance policy
+    only permits in-account ones.
+
+    A 503 rather than a 403: nothing the *caller* did is forbidden — the
+    deployment is not configured with a provider it is allowed to use, which
+    is an operator problem, and every LLM-calling surface already degrades
+    gracefully on a 5xx AppError (see `ConversationService._synthesize_
+    general`'s degraded turn). Failing this way means an unconfigured
+    deployment loses AI narration and keeps its deterministic answers,
+    instead of silently shipping private metadata to a third party."""
+
+    status_code = 503
+    error_code = "external_ai_provider_not_permitted"
+
+
+_PRIVATE_HOST_SUFFIXES = (".internal", ".local", ".localdomain")
+
+# A single-label host that is ALSO shaped like a legacy numeric IP literal
+# (plain decimal, or 0x-prefixed hex — both accepted by libc's `inet_aton`/
+# the OS resolver, e.g. "0x8080808" -> 8.8.0.8, "2130706433" -> 127.0.0.1)
+# must never fall into the single-label "container name" branch below: it
+# would classify as operator-controlled by shape while actually resolving
+# to whatever address the number encodes, public or not. `ip_address()`
+# rejects these forms outright (it only accepts dotted-quad/colon-hex), so
+# without this guard they fell straight through to the single-label rule.
+_NUMERIC_HOST_RE = re.compile(r"^(0x[0-9a-f]+|\d+)$", re.IGNORECASE)
+
+
+def _endpoint_host(base_url: str | None) -> str | None:
+    """The hostname a resolved endpoint points at, or None if there isn't
+    one to inspect (unset, or unparseable)."""
+    if not base_url:
+        return None
+    try:
+        host = urlparse(base_url).hostname
+    except ValueError:
+        return None
+    return host.lower() if host else None
+
+
+def _is_operator_controlled_host(host: str | None) -> bool:
+    """Whether `host` is verifiably inside infrastructure the operator runs:
+    loopback, a private/link-local address, or a name that cannot resolve
+    outside their own network (single-label container/service names, and the
+    conventional private suffixes).
+
+    Conservative on purpose — anything not provably private is treated as
+    public, so an unverifiable host fails closed."""
+    if not host:
+        return False
+    if host in ("localhost", "host.docker.internal"):
+        return True
+    try:
+        address = ip_address(host)
+    except ValueError:
+        pass
+    else:
+        return bool(address.is_loopback or address.is_private or address.is_link_local)
+    if host.endswith(_PRIVATE_HOST_SUFFIXES):
+        return True
+    if _NUMERIC_HOST_RE.match(host):
+        return False
+    # A single-label name ("ollama", "llm-gateway") only resolves on an
+    # internal network — a public endpoint always carries a dotted domain.
+    return "." not in host
+
+
+@dataclass(frozen=True)
+class DeploymentTrust:
+    """The verdict for one fully-resolved provider decision."""
+
+    trusted: bool
+    reason: str
+
+
+def classify_deployment(
+    spec: ProviderSpec, config: ProviderBuildConfig, settings: Settings
+) -> DeploymentTrust:
+    """Decide whether this *deployment* — provider type plus its resolved
+    configuration, judged against the operator's approval policy — may be
+    trusted with private engineering metadata.
+
+    The rule the audit correction demanded: a provider's name never confers
+    trust. What matters is where the data is actually processed.
+
+      EXTERNAL           never trusted. A SaaS API processes the prompt under
+                         its own terms no matter how it is configured.
+      CUSTOMER_ACCOUNT   trusted. Addressed only by the operator's own
+                         credential chain, with no endpoint a caller could
+                         repoint (see `ProviderHosting`), so the processing
+                         account is theirs by construction.
+      CUSTOMER_ENDPOINT  trusted ONLY when the resolved endpoint is provably
+                         operator-controlled (loopback/private address or
+                         internal name) or explicitly approved in
+                         `approved_ai_endpoints`. Anything else — including
+                         an endpoint that merely *looks* like a vendor's
+                         enterprise domain — is undetermined, and undetermined
+                         fails closed.
+
+    That last branch is the correction's whole point: `*.openai.azure.com` is
+    an Azure resource in *somebody's* tenant, and an "Ollama" provider whose
+    base_url was repointed at a public host is not local. Neither can be
+    trusted from the provider key alone.
+    """
+    if spec.hosting is ProviderHosting.EXTERNAL:
+        return DeploymentTrust(False, f"'{spec.key}' is a third-party SaaS API")
+
+    if spec.hosting is ProviderHosting.CUSTOMER_ACCOUNT:
+        return DeploymentTrust(
+            True, f"'{spec.key}' is served in your own cloud account via its credential chain"
+        )
+
+    host = _endpoint_host(config.base_url or spec.default_base_url)
+    if host is None:
+        return DeploymentTrust(
+            False,
+            f"'{spec.key}' has no resolvable endpoint to verify — cannot confirm where "
+            "prompts would be processed",
+        )
+    if _is_operator_controlled_host(host):
+        return DeploymentTrust(True, f"endpoint '{host}' is on your own network")
+    approved = {h.strip().lower() for h in settings.approved_ai_endpoints if h.strip()}
+    if host in approved:
+        return DeploymentTrust(True, f"endpoint '{host}' is explicitly approved")
+    return DeploymentTrust(
+        False,
+        f"endpoint '{host}' is not verifiably operator-controlled and is not in "
+        "APPROVED_AI_ENDPOINTS",
+    )
+
+
+def enforce_provider_policy(
+    spec: ProviderSpec, config: ProviderBuildConfig, settings: Settings
+) -> None:
+    """The policy gate. Raises unless this provider *and its resolved
+    deployment* may serve a request.
+
+    Reads only the spec's declared hosting, the resolved config, and the
+    operator's settings — no provider names appear here, so classifying a
+    new provider is a registry edit, never a change to this function."""
+    verdict = classify_deployment(spec, config, settings)
+    if verdict.trusted:
+        return
+    if settings.allow_external_ai_providers:
+        logger.warning(
+            "ai_external_provider_permitted provider=%s hosting=%s reason=%s",
+            spec.key,
+            spec.hosting.value,
+            verdict.reason,
+        )
+        return
+    raise ExternalProviderNotPermittedError(
+        f"Provider '{spec.key}' cannot be trusted with private engineering metadata: "
+        f"{verdict.reason}. Configure a provider served inside your own infrastructure, "
+        "add its endpoint to APPROVED_AI_ENDPOINTS, or set "
+        "ALLOW_EXTERNAL_AI_PROVIDERS=true to opt in explicitly."
+    )
 
 
 @dataclass(frozen=True)
@@ -287,6 +452,15 @@ def _select_profile(
     return None, ""
 
 
+def _permitted(resolved: ResolvedProvider, settings: Settings) -> ResolvedProvider:
+    """Gate a fully-built decision. Applied at every `resolve()` return so
+    the endpoint the policy inspects is the exact one the provider would be
+    built with — checking `spec` alone (before config resolution) would miss
+    a stored `base_url` that repoints a CUSTOMER_ENDPOINT provider."""
+    enforce_provider_policy(resolved.spec, resolved.config, settings)
+    return resolved
+
+
 def resolve(
     *,
     provider: str | None = None,
@@ -319,38 +493,41 @@ def resolve(
                 or (_env_credentials(spec.key, cfg)[1] or "")
                 or spec.resolve_default_model()
             )
-            return ResolvedProvider(
-                spec=spec,
-                config=ProviderBuildConfig(
-                    api_key=(prov_cfg.api_key if prov_cfg else None) or env_key,
-                    model=resolved_model,
-                    temperature=float(
-                        record.temperature
-                        if record.temperature is not None
-                        else (
-                            prov_cfg.temperature
-                            if prov_cfg and prov_cfg.temperature is not None
+            return _permitted(
+                ResolvedProvider(
+                    spec=spec,
+                    config=ProviderBuildConfig(
+                        api_key=(prov_cfg.api_key if prov_cfg else None) or env_key,
+                        model=resolved_model,
+                        temperature=float(
+                            record.temperature
+                            if record.temperature is not None
                             else (
-                                snapshot.temperature
-                                if snapshot.temperature is not None
-                                else cfg.openai_temperature
+                                prov_cfg.temperature
+                                if prov_cfg and prov_cfg.temperature is not None
+                                else (
+                                    snapshot.temperature
+                                    if snapshot.temperature is not None
+                                    else cfg.openai_temperature
+                                )
                             )
-                        )
+                        ),
+                        max_tokens=int(
+                            record.max_tokens
+                            or (prov_cfg.max_tokens if prov_cfg else None)
+                            or snapshot.max_tokens
+                            or _default_max_tokens(spec.key, cfg)
+                        ),
+                        base_url=(prov_cfg.base_url if prov_cfg else None)
+                        or _env_base_url(spec.key, cfg)
+                        or spec.default_base_url,
+                        provider_options=_resolve_provider_options(spec.key, prov_cfg, cfg),
                     ),
-                    max_tokens=int(
-                        record.max_tokens
-                        or (prov_cfg.max_tokens if prov_cfg else None)
-                        or snapshot.max_tokens
-                        or _default_max_tokens(spec.key, cfg)
-                    ),
-                    base_url=(prov_cfg.base_url if prov_cfg else None)
-                    or _env_base_url(spec.key, cfg)
-                    or spec.default_base_url,
-                    provider_options=_resolve_provider_options(spec.key, prov_cfg, cfg),
+                    source=profile_source,
+                    profile_slug=record.slug,
+                    profile_name=record.name,
                 ),
-                source=profile_source,
-                profile_slug=record.slug,
-                profile_name=record.name,
+                cfg,
             )
         if slug:
             # A stage or default points at a profile that no longer exists.
@@ -387,19 +564,22 @@ def resolve(
         or _default_max_tokens(spec.key, cfg)
     )
 
-    return ResolvedProvider(
-        spec=spec,
-        config=ProviderBuildConfig(
-            api_key=api_key,
-            model=resolved_model,
-            temperature=float(temperature),
-            max_tokens=int(max_tokens),
-            base_url=(provider_record.base_url if provider_record else None)
-            or _env_base_url(spec.key, cfg)
-            or spec.default_base_url,
-            provider_options=_resolve_provider_options(spec.key, provider_record, cfg),
+    return _permitted(
+        ResolvedProvider(
+            spec=spec,
+            config=ProviderBuildConfig(
+                api_key=api_key,
+                model=resolved_model,
+                temperature=float(temperature),
+                max_tokens=int(max_tokens),
+                base_url=(provider_record.base_url if provider_record else None)
+                or _env_base_url(spec.key, cfg)
+                or spec.default_base_url,
+                provider_options=_resolve_provider_options(spec.key, provider_record, cfg),
+            ),
+            source=source,
         ),
-        source=source,
+        cfg,
     )
 
 

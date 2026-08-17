@@ -177,7 +177,7 @@ async def ground_migration(
             EntityReference(repository_id=str(repo_id), node_id=f"{repo_id}:repository"),
             max_hops=_MAX_HOPS,
         )
-        all_names.update(await display_names(db, blast_radius))
+        all_names.update(await display_names(db, blast_radius, user_id))
         fanout_by_repo[repo_id] = len(blast_radius.impacted_repositories)
         for node_id in blast_radius.impacted_repositories:
             impacted_id = _repo_id_from_entity(node_id)

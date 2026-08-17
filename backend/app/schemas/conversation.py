@@ -11,7 +11,13 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from app.schemas.ask import AskAction, AskEvidenceItem, AskImpact
+from app.schemas.ask import (
+    MAX_QUESTION_LENGTH,
+    AskAction,
+    AskEvidenceItem,
+    AskImpact,
+    AskRepositoryCandidate,
+)
 from app.schemas.migration import MigrationScope
 from app.schemas.refinement import RefinementPlan
 
@@ -42,6 +48,13 @@ class ConversationTurnPayload(BaseModel):
     impact: AskImpact | None = None
     actions: list[AskAction] = Field(default_factory=list)
     entities: list[ConversationEntityRef] = Field(default_factory=list)
+    # C-1 — this turn could not confidently identify which system the
+    # question is about, so it asks instead of answering. Carries no
+    # evidence and no impact by construction; `candidates` is what the
+    # user can pick from. The frontend renders a clarification prompt,
+    # never the grounded-answer treatment.
+    needs_clarification: bool = False
+    candidates: list[AskRepositoryCandidate] = Field(default_factory=list)
     # Only set in a "migration" mode conversation, and only once a source
     # technology has actually been grounded — see
     # `app.services.migration_grounding`.
@@ -85,7 +98,9 @@ class ConversationSummary(BaseModel):
 
 
 class StartConversationRequest(BaseModel):
-    question: str
+    # H-2 — same server-side ceiling as `AskRequest.question`; see
+    # `app.schemas.ask.MAX_QUESTION_LENGTH`.
+    question: str = Field(max_length=MAX_QUESTION_LENGTH)
     # "migration" opts a conversation into Migration Assistant's grounding/
     # prompt (see `ConversationService`) — same tables, same state model,
     # just a different lens on the same underlying graph. Defaults to
@@ -94,4 +109,4 @@ class StartConversationRequest(BaseModel):
 
 
 class PostMessageRequest(BaseModel):
-    message: str
+    message: str = Field(max_length=MAX_QUESTION_LENGTH)

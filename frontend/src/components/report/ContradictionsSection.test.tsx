@@ -41,17 +41,22 @@ describe("ContradictionsSection", () => {
     expect(screen.queryByText(/competing hypotheses/i)).not.toBeInTheDocument();
   });
 
-  it("renders an unresolved contradiction with both evidence columns", () => {
+  it("renders an unresolved contradiction with both evidence columns, its impact, and its required resolution", () => {
     render(
       <ContradictionsSection
         contradictions={section({
           items: [
             {
-              statement: "The ticket implies a timeout exists",
-              evidence_for: ["title says timeout-bump"],
-              evidence_against: ["no timeout symbol found"],
-              resolved: false,
-              resolution_note: "",
+              entry: {
+                statement: "The ticket implies a timeout exists",
+                evidence_for: ["title says timeout-bump"],
+                evidence_against: ["no timeout symbol found"],
+                resolved: false,
+                resolution_note: "",
+              },
+              is_blocking: true,
+              impact: "Blocks the outcome: the conclusion cannot be relied on.",
+              required_resolution: "Establish which side is correct.",
             },
           ],
         })}
@@ -60,20 +65,30 @@ describe("ContradictionsSection", () => {
     expect(screen.getByText("The ticket implies a timeout exists")).toBeInTheDocument();
     expect(screen.getByText(/title says timeout-bump/)).toBeInTheDocument();
     expect(screen.getByText(/no timeout symbol found/)).toBeInTheDocument();
-    expect(screen.getByText("Unresolved")).toBeInTheDocument();
+    // An unresolved contradiction is never rendered as merely "unresolved"
+    // — it is a blocking item, the same way `next_actions` counts it.
+    expect(screen.getByText("Unresolved — blocking")).toBeInTheDocument();
+    expect(screen.getByText(/Blocks the outcome/)).toBeInTheDocument();
+    expect(screen.getByText("Establish which side is correct.")).toBeInTheDocument();
+    expect(screen.getByText(/1 unresolved and blocking/)).toBeInTheDocument();
   });
 
-  it("renders a resolved contradiction with its resolution note", () => {
+  it("renders a resolved contradiction with its resolution note and no blocking framing", () => {
     render(
       <ContradictionsSection
         contradictions={section({
           items: [
             {
-              statement: "Two sources disagreed",
-              evidence_for: ["a"],
-              evidence_against: ["b"],
-              resolved: true,
-              resolution_note: "Later evidence confirmed source A.",
+              entry: {
+                statement: "Two sources disagreed",
+                evidence_for: ["a"],
+                evidence_against: ["b"],
+                resolved: true,
+                resolution_note: "Later evidence confirmed source A.",
+              },
+              is_blocking: false,
+              impact: "Resolved — this no longer affects the conclusion.",
+              required_resolution: "None; already settled.",
             },
           ],
         })}
@@ -81,5 +96,6 @@ describe("ContradictionsSection", () => {
     );
     expect(screen.getByText("Resolved")).toBeInTheDocument();
     expect(screen.getByText("Later evidence confirmed source A.")).toBeInTheDocument();
+    expect(screen.getByText(/all resolved/)).toBeInTheDocument();
   });
 });

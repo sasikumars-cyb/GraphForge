@@ -12,6 +12,17 @@ conversation that produced this referred to it informally as "ADR-0001 for
 the Engineering Intelligence Platform" — that label described its conceptual
 role as the platform's founding document, not its number in this repo).
 
+> **Relationship to the normative Engineering State contract.**
+> [`docs/graphforge/ENGINEERING_STATE_ARCHITECTURE.md`](../graphforge/ENGINEERING_STATE_ARCHITECTURE.md)
+> is the canonical, normative specification for Engineering State generally,
+> including general `Belief`/`Hypothesis`/`Evidence` primitives. This ADR's
+> `Hypothesis`/`Evidence` classes are a narrower, already-implemented
+> pipeline scoped specifically to cross-repository knowledge derivation
+> (content-addressed, immutable once generated) — structurally closer to
+> the later contract than RFC-001's model is, but not automatically
+> conformant with it and not a substitute for it. Treat this as a flagged,
+> open item (see the contract's §0), not a resolved equivalence.
+
 ## Context
 
 Today, GraphForge discovers a repository's architecture through a fixed
