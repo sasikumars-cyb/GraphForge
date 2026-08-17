@@ -53,6 +53,8 @@ from app.control_plane.model import (
 )
 from app.control_plane.policy import PolicyStore
 from app.control_plane.safety import evaluate_safety_validity
+from app.control_plane.workspace_lifecycle import WorkspaceLifecycleService
+from app.control_plane.workspace_model import DestructionReason, WorkspaceLease
 from app.engineering_state.events import (
     AUTHORIZATION_CONSUMED,
     AUTHORIZATION_CONSUMING,
@@ -61,6 +63,7 @@ from app.engineering_state.events import (
     AUTHORIZATION_INVALIDATED,
     OBSERVATION_RECORDED,
 )
+from app.engineering_state.materialize import WorkspaceRecord
 from app.repositories.engineering_event_repository import EngineeringEventRepository
 from app.tools.executor import ToolExecutor
 from app.tools.interfaces import ToolInput
@@ -113,6 +116,13 @@ class ControlPlane:
         self._tool_executor = tool_executor
         self._policy = policy_store
         self._events = event_repository
+        # Phase 4, Cap §19: an implementation component owned exclusively
+        # by ControlPlane — never imported or instantiated by anything
+        # Reasoning-Plane-adjacent (structurally enforced by
+        # tests/unit/architecture/test_workspace_authority_boundary.py).
+        self._workspaces = WorkspaceLifecycleService(
+            event_repository=event_repository, policy_store=policy_store
+        )
 
     # ------------------------------------------------------------------
     # Proposal-level: Conformance (Cap §6, first phase)
@@ -701,6 +711,84 @@ class ControlPlane:
             tool_success=tool_result.success,
             observation_event_id=observation_event.id,
         )
+
+    # ------------------------------------------------------------------
+    # Workspace lifecycle (Cap §19) — every method here is the ONLY way
+    # to reach `WorkspaceLifecycleService`; nothing Reasoning-Plane-
+    # adjacent may call the service directly (structurally enforced by
+    # tests/unit/architecture/test_workspace_authority_boundary.py).
+    # ------------------------------------------------------------------
+
+    async def create_workspace(
+        self,
+        *,
+        task_id: uuid.UUID,
+        actor: str,
+        user_id: uuid.UUID,
+        execution_context: dict[str, object],
+        repository_url: str | None,
+        ref: str = "main",
+        access_token: str | None = None,
+        initial_lease_seconds: int,
+        max_lifetime_seconds: int,
+    ) -> tuple[WorkspaceLease, uuid.UUID]:
+        return await self._workspaces.create_workspace(
+            task_id=task_id,
+            actor=actor,
+            user_id=user_id,
+            execution_context=execution_context,
+            repository_url=repository_url,
+            ref=ref,
+            access_token=access_token,
+            initial_lease_seconds=initial_lease_seconds,
+            max_lifetime_seconds=max_lifetime_seconds,
+        )
+
+    async def renew_workspace_lease(
+        self, *, task_id: uuid.UUID, workspace_event_id: uuid.UUID, new_expires_at: datetime
+    ) -> WorkspaceRecord:
+        return await self._workspaces.renew_workspace_lease(
+            task_id=task_id, workspace_event_id=workspace_event_id, new_expires_at=new_expires_at
+        )
+
+    async def enter_diagnostic_hold(
+        self,
+        *,
+        task_id: uuid.UUID,
+        workspace_event_id: uuid.UUID,
+        reason: str,
+        hold_ttl_seconds: int,
+    ) -> WorkspaceRecord:
+        return await self._workspaces.enter_diagnostic_hold(
+            task_id=task_id,
+            workspace_event_id=workspace_event_id,
+            reason=reason,
+            hold_ttl_seconds=hold_ttl_seconds,
+        )
+
+    async def revoke_workspace_write_authorization(
+        self, *, task_id: uuid.UUID, workspace_event_id: uuid.UUID, reason: str
+    ) -> WorkspaceRecord:
+        return await self._workspaces.revoke_write_authorization(
+            task_id=task_id, workspace_event_id=workspace_event_id, reason=reason
+        )
+
+    async def destroy_workspace(
+        self, *, task_id: uuid.UUID, workspace_event_id: uuid.UUID, reason: DestructionReason
+    ) -> WorkspaceRecord:
+        return await self._workspaces.destroy_workspace(
+            task_id=task_id, workspace_event_id=workspace_event_id, reason=reason
+        )
+
+    async def custodial_destroy_workspace(
+        self, *, task_id: uuid.UUID, workspace_event_id: uuid.UUID, actor: str, user_id: uuid.UUID
+    ) -> WorkspaceRecord:
+        return await self._workspaces.custodial_destroy_workspace(
+            task_id=task_id, workspace_event_id=workspace_event_id, actor=actor, user_id=user_id
+        )
+
+    async def run_workspace_sweep(self, *, now: datetime | None = None) -> dict[str, int]:
+        return await self._workspaces.run_sweep(now=now)
 
     async def _record_denial(
         self,

@@ -38,6 +38,56 @@ def redact_token(text: str, access_token: str | None) -> str:
     return text.replace(access_token, "***") if access_token else text
 
 
+async def run_git_clone(
+    html_url: str,
+    ref: str,
+    dest: Path,
+    access_token: str | None = None,
+    timeout_seconds: float = _CLONE_TIMEOUT_SECONDS,
+) -> None:
+    """The actual `git clone` subprocess invocation, timeout handling,
+    and token-safe error reporting — extracted as a shared primitive
+    (Phase 4) so `app.control_plane`'s Workspace physical-creation code
+    calls the SAME security-reviewed mechanics `clone_repository()`
+    already uses, rather than a second, independently-maintained copy
+    that could drift (miss a future redaction fix, get the timeout
+    handling subtly wrong, etc.). `dest` MUST already exist as an empty
+    directory — creating and cleaning it up is the caller's
+    responsibility (this function only ever fills or fails to fill it;
+    it never removes anything, since `clone_repository`'s and a
+    Workspace's cleanup lifecycles differ: one always removes on exit,
+    the other must persist the directory after this call returns).
+    """
+    clone_url = _authenticated_url(html_url, access_token)
+
+    logger.info("Cloning %s (ref=%s) to %s", html_url, ref, dest)
+    process = await asyncio.create_subprocess_exec(
+        "git",
+        "clone",
+        "--depth",
+        "1",
+        "--branch",
+        ref,
+        "--single-branch",
+        clone_url,
+        str(dest),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        _, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout_seconds)
+    except TimeoutError as exc:
+        process.kill()
+        await process.wait()
+        raise RepositoryCloneError(f"git clone of {html_url} timed out") from exc
+
+    if process.returncode != 0:
+        raise RepositoryCloneError(
+            f"git clone of {html_url} failed: "
+            f"{redact_token(stderr.decode(errors='replace'), access_token)}"
+        )
+
+
 @asynccontextmanager
 async def clone_repository(
     html_url: str,
@@ -51,38 +101,8 @@ async def clone_repository(
     Path(settings.indexer_clone_root).mkdir(parents=True, exist_ok=True)
     clone_dir = Path(tempfile.mkdtemp(prefix="repo-", dir=settings.indexer_clone_root))
 
-    clone_url = _authenticated_url(html_url, access_token)
-
     try:
-        logger.info("Cloning %s (ref=%s) to %s", html_url, ref, clone_dir)
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            "clone",
-            "--depth",
-            "1",
-            "--branch",
-            ref,
-            "--single-branch",
-            clone_url,
-            str(clone_dir),
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        try:
-            _, stderr = await asyncio.wait_for(
-                process.communicate(), timeout=_CLONE_TIMEOUT_SECONDS
-            )
-        except TimeoutError as exc:
-            process.kill()
-            await process.wait()
-            raise RepositoryCloneError(f"git clone of {html_url} timed out") from exc
-
-        if process.returncode != 0:
-            raise RepositoryCloneError(
-                f"git clone of {html_url} failed: "
-                f"{redact_token(stderr.decode(errors='replace'), access_token)}"
-            )
-
+        await run_git_clone(html_url, ref, clone_dir, access_token)
         yield clone_dir
     finally:
         shutil.rmtree(clone_dir, ignore_errors=True)

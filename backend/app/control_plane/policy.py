@@ -62,6 +62,36 @@ class PolicyRule:
 
 
 @dataclass(frozen=True, slots=True)
+class PolicyResourceLimit:
+    """Phase 4: the minimal numeric-limit counterpart to `PolicyRule`'s
+    boolean ALLOW/DENY — added because Cap §19 says, in so many words,
+    "Policy MUST cap concurrent Workspaces per Role and per tenant." That
+    sentence's subject is "Policy," the same specifically-defined term
+    §20 governs everywhere else in this module; there is no textual basis
+    for reading it as an app-config concern outside Policy's own
+    authority. `resource` is a closed string for this phase — exactly
+    one named resource (`"concurrent_workspaces_per_role_tenant"`) is
+    limited today. This is deliberately NOT a generic named-resource
+    quota framework: there is one resource, one field, one reduction
+    rule, reusing §20.3's existing most-restrictive-wins algorithm
+    (`PolicyStore.resource_limit()` below) rather than inventing a
+    second one."""
+
+    resource: str
+    limit: int
+    scope_level: PolicyScopeLevel
+    reason: str
+
+    def __post_init__(self) -> None:
+        if not self.resource.strip():
+            raise PolicyError("PolicyResourceLimit.resource must be non-empty.")
+        if self.limit < 0:
+            raise PolicyError("PolicyResourceLimit.limit must be >= 0.")
+        if not self.reason.strip():
+            raise PolicyError("PolicyResourceLimit.reason must be non-empty.")
+
+
+@dataclass(frozen=True, slots=True)
 class PolicyVersion:
     """§20.1: "Every Policy evaluation binds to exactly one Policy Version
     identity." `version_id` is the content hash itself — the version
@@ -73,6 +103,10 @@ class PolicyVersion:
     authoring_authority: str
     effective_at: str  # ISO-8601; caller-supplied, this module has no clock.
     supersedes: str | None
+    # Phase 4: see PolicyResourceLimit's own docstring. Defaults to empty
+    # so every Phase 3 construction site (which predates this field)
+    # keeps working unchanged.
+    resource_limits: tuple[PolicyResourceLimit, ...] = ()
     # See module docstring: real content hash, NOT a cryptographic
     # signature. Hardcoded False so nothing downstream can mistake this
     # for §20.1's actual signed-quorum mechanism, which this phase does
@@ -94,6 +128,15 @@ class PolicyVersion:
                     "reason": r.reason,
                 }
                 for r in self.rules
+            ]
+            + [
+                {
+                    "resource": r.resource,
+                    "limit": r.limit,
+                    "scope_level": r.scope_level.value,
+                    "reason": r.reason,
+                }
+                for r in self.resource_limits
             ]
             + [self.authoring_authority, self.effective_at, self.supersedes],
             sort_keys=True,
@@ -193,6 +236,33 @@ class PolicyStore:
             ),
         )
 
+    def resource_limit(self, resource: str) -> int | None:
+        """Phase 4: §20.3's most-restrictive-wins reduction, applied to a
+        NUMBER instead of a boolean — "narrower scopes may only
+        restrict" becomes "the effective limit is the MINIMUM of every
+        loaded scope level's declared limit for this resource," exactly
+        the numeric analogue of the DENY-wins-over-ALLOW rule `evaluate`
+        already implements above.
+
+        Returns `None` if no loaded scope level declares a limit for
+        `resource` at all — the caller (Control Plane) is responsible
+        for treating `None` as fail-closed-deny (Cap §20.3: "unreadable
+        or unresolvable Policy = deny"), the same way `evaluate()`'s own
+        fail-closed default works; this method does not silently
+        substitute a value of its own.
+        """
+        limits: list[int] = []
+        for level in (PolicyScopeLevel.SYSTEM, PolicyScopeLevel.TENANT, PolicyScopeLevel.TASK):
+            version = self._versions.get(level)
+            if version is None:
+                continue
+            matching = [rl for rl in version.resource_limits if rl.resource == resource]
+            for rl in matching:
+                limits.append(rl.limit)
+        if not limits:
+            return None
+        return min(limits)
+
 
 def seed_system_policy_allowing(
     capability_id: str, authored_by: str, effective_at: str
@@ -217,13 +287,43 @@ def seed_system_policy_allowing(
     )
 
 
+WORKSPACE_CONCURRENCY_RESOURCE = "concurrent_workspaces_per_role_tenant"
+
+
+def seed_system_workspace_cap(limit: int, authored_by: str, effective_at: str) -> PolicyVersion:
+    """The Phase 4 counterpart to `seed_system_policy_allowing`: an
+    explicit system-scope numeric limit for the one resource Phase 4
+    governs. `PolicyStore.load()` replaces the whole `PolicyVersion` at
+    a scope level — it does not merge — so a caller wanting BOTH a
+    capability ALLOW rule and this cap at the SAME scope level must
+    construct one `PolicyVersion` combining both (`rules=(...,)`,
+    `resource_limits=(...,)`) rather than loading this function's result
+    on top of `seed_system_policy_allowing`'s and losing the first."""
+    limit_rule = PolicyResourceLimit(
+        resource=WORKSPACE_CONCURRENCY_RESOURCE,
+        limit=limit,
+        scope_level=PolicyScopeLevel.SYSTEM,
+        reason=f"Phase 4 seed policy: concurrent Workspace cap of {limit} per Role/tenant.",
+    )
+    return PolicyVersion(
+        rules=(),
+        authoring_authority=authored_by,
+        effective_at=effective_at,
+        supersedes=None,
+        resource_limits=(limit_rule,),
+    )
+
+
 __all__ = [
     "PolicyDecision",
     "PolicyError",
+    "PolicyResourceLimit",
     "PolicyRule",
     "PolicyRuleEffect",
     "PolicyScopeLevel",
     "PolicyStore",
     "PolicyVersion",
+    "WORKSPACE_CONCURRENCY_RESOURCE",
     "seed_system_policy_allowing",
+    "seed_system_workspace_cap",
 ]

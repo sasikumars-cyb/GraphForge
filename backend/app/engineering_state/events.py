@@ -57,6 +57,19 @@ AUTHORIZATION_CONSUMED = "AuthorizationConsumed"
 AUTHORIZATION_DENIED = "AuthorizationDenied"
 AUTHORIZATION_INVALIDATED = "AuthorizationInvalidated"
 
+# --- Phase 4: Workspace lifecycle (Cap §19) ---------------------------------
+#
+# Five event types, each independently justified against a distinct durable
+# fact §19 requires (design audit ruled out folding these into fewer types,
+# and ruled out a sixth for credential-incident/custodial/lease-expiry
+# destruction — those are `WorkspaceDestroyed.reason` values, mirroring the
+# `AuthorizationDenied.denial_stage` precedent, not separate event types).
+WORKSPACE_CREATED = "WorkspaceCreated"
+WORKSPACE_LEASE_RENEWED = "WorkspaceLeaseRenewed"
+WORKSPACE_DIAGNOSTIC_HOLD_ENTERED = "WorkspaceDiagnosticHoldEntered"
+WORKSPACE_WRITE_AUTHORIZATION_REVOKED = "WorkspaceWriteAuthorizationRevoked"
+WORKSPACE_DESTROYED = "WorkspaceDestroyed"
+
 EVENT_TYPES: frozenset[str] = frozenset(
     {
         GOAL_CREATED,
@@ -72,6 +85,11 @@ EVENT_TYPES: frozenset[str] = frozenset(
         AUTHORIZATION_CONSUMED,
         AUTHORIZATION_DENIED,
         AUTHORIZATION_INVALIDATED,
+        WORKSPACE_CREATED,
+        WORKSPACE_LEASE_RENEWED,
+        WORKSPACE_DIAGNOSTIC_HOLD_ENTERED,
+        WORKSPACE_WRITE_AUTHORIZATION_REVOKED,
+        WORKSPACE_DESTROYED,
     }
 )
 
@@ -107,6 +125,18 @@ CAUSAL_REQUIREMENTS: dict[str, frozenset[str]] = {
     AUTHORIZATION_CONSUMING: frozenset({AUTHORIZATION_GRANTED}),
     AUTHORIZATION_CONSUMED: frozenset({AUTHORIZATION_CONSUMING}),
     AUTHORIZATION_INVALIDATED: frozenset({AUTHORIZATION_GRANTED}),
+    # Phase 4: every Workspace lifecycle event after creation causally
+    # references WorkspaceCreated directly (not the latest intermediate
+    # event) — a Destroyed event, for instance, can follow a leased,
+    # held, or write-revoked state, so its one stable causal anchor is
+    # always the base WorkspaceCreated, mirroring
+    # AUTHORIZATION_INVALIDATED's identical choice to reference
+    # AUTHORIZATION_GRANTED directly rather than whatever the most
+    # recent intermediate event happened to be.
+    WORKSPACE_LEASE_RENEWED: frozenset({WORKSPACE_CREATED}),
+    WORKSPACE_DIAGNOSTIC_HOLD_ENTERED: frozenset({WORKSPACE_CREATED}),
+    WORKSPACE_WRITE_AUTHORIZATION_REVOKED: frozenset({WORKSPACE_CREATED}),
+    WORKSPACE_DESTROYED: frozenset({WORKSPACE_CREATED}),
 }
 
 # For the event types in CAUSAL_REQUIREMENTS, the payload field that must
@@ -134,6 +164,15 @@ CAUSAL_PAYLOAD_REFERENCE_FIELD: dict[str, str] = {
     AUTHORIZATION_CONSUMING: "grant_event_id",
     AUTHORIZATION_CONSUMED: "consuming_event_id",
     AUTHORIZATION_INVALIDATED: "grant_event_id",
+    # Phase 4: all four reference the base WorkspaceCreated event, via the
+    # same "workspace_event_id" payload field name across all of them —
+    # one consistent name, since (unlike Authorization*'s multi-hop
+    # chain) every Workspace event's causal parent is always the same
+    # single event.
+    WORKSPACE_LEASE_RENEWED: "workspace_event_id",
+    WORKSPACE_DIAGNOSTIC_HOLD_ENTERED: "workspace_event_id",
+    WORKSPACE_WRITE_AUTHORIZATION_REVOKED: "workspace_event_id",
+    WORKSPACE_DESTROYED: "workspace_event_id",
 }
 
 
@@ -344,6 +383,96 @@ def validate_authorization_invalidated(payload: dict[str, Any]) -> None:
     _require(payload, "grant_event_id", "action_id", "reason", event_type=AUTHORIZATION_INVALIDATED)
 
 
+def validate_workspace_created(payload: dict[str, Any]) -> None:
+    # Cap §19: "A Workspace has an identity, a bound Execution Context,
+    # and a bounded, renewable lease." `workspace_id` is the business
+    # identifier (distinct from this event's own database id, exactly as
+    # `AuthorizationGrant.grant_id` is distinct from `granted_event_id`
+    # in Phase 3). `physical_location`/`repository_url` are operational
+    # metadata, never credentials (Phase 4 design: credentials are never
+    # persisted anywhere in Engineering State).
+    _require(
+        payload,
+        "workspace_id",
+        "task_id",
+        "actor",
+        "user_id",
+        "execution_context",
+        "physical_location",
+        "repository_url",
+        "created_at",
+        "max_lifetime_seconds",
+        "initial_expires_at",
+        event_type=WORKSPACE_CREATED,
+    )
+    if not isinstance(payload["max_lifetime_seconds"], int) or payload["max_lifetime_seconds"] <= 0:
+        raise InvalidEventPayloadError(
+            f"{WORKSPACE_CREATED}.max_lifetime_seconds must be a positive int."
+        )
+    if not isinstance(payload["execution_context"], dict):
+        raise InvalidEventPayloadError(f"{WORKSPACE_CREATED}.execution_context must be a dict.")
+
+
+def validate_workspace_lease_renewed(payload: dict[str, Any]) -> None:
+    _require(
+        payload,
+        "workspace_event_id",
+        "new_expires_at",
+        "renewal_count",
+        event_type=WORKSPACE_LEASE_RENEWED,
+    )
+    if not isinstance(payload["renewal_count"], int) or payload["renewal_count"] < 1:
+        raise InvalidEventPayloadError(
+            f"{WORKSPACE_LEASE_RENEWED}.renewal_count must be a positive int."
+        )
+
+
+def validate_workspace_diagnostic_hold_entered(payload: dict[str, Any]) -> None:
+    _require(
+        payload,
+        "workspace_event_id",
+        "reason",
+        "hold_expires_at",
+        event_type=WORKSPACE_DIAGNOSTIC_HOLD_ENTERED,
+    )
+
+
+def validate_workspace_write_authorization_revoked(payload: dict[str, Any]) -> None:
+    _require(
+        payload,
+        "workspace_event_id",
+        "reason",
+        event_type=WORKSPACE_WRITE_AUTHORIZATION_REVOKED,
+    )
+
+
+# Mirrors `AuthorizationDenied.denial_stage`'s existing precedent — one
+# event type, one closed discriminating field — rather than five separate
+# WorkspaceDestroyed-shaped event types. Duplicated here (not imported)
+# for the same layering reason `_DENIAL_STAGES` is duplicated rather than
+# imported from `app.control_plane.model.DenialStage`: this module must
+# not depend on `app.control_plane`.
+_WORKSPACE_DESTRUCTION_REASONS: frozenset[str] = frozenset(
+    {
+        "completed_success",
+        "diagnostic_hold_expired",
+        "lease_expired_reclaimed",
+        "custodial",
+        "credential_incident",
+        "creation_failed",
+    }
+)
+
+
+def validate_workspace_destroyed(payload: dict[str, Any]) -> None:
+    _require(payload, "workspace_event_id", "reason", event_type=WORKSPACE_DESTROYED)
+    if payload["reason"] not in _WORKSPACE_DESTRUCTION_REASONS:
+        raise InvalidEventPayloadError(
+            f"{WORKSPACE_DESTROYED}.reason must be one of "
+            f"{sorted(_WORKSPACE_DESTRUCTION_REASONS)}."
+        )
+
+
 _VALIDATORS: dict[str, Any] = {
     GOAL_CREATED: validate_goal_created,
     GOAL_UPDATED: validate_goal_updated,
@@ -358,6 +487,11 @@ _VALIDATORS: dict[str, Any] = {
     AUTHORIZATION_CONSUMED: validate_authorization_consumed,
     AUTHORIZATION_DENIED: validate_authorization_denied,
     AUTHORIZATION_INVALIDATED: validate_authorization_invalidated,
+    WORKSPACE_CREATED: validate_workspace_created,
+    WORKSPACE_LEASE_RENEWED: validate_workspace_lease_renewed,
+    WORKSPACE_DIAGNOSTIC_HOLD_ENTERED: validate_workspace_diagnostic_hold_entered,
+    WORKSPACE_WRITE_AUTHORIZATION_REVOKED: validate_workspace_write_authorization_revoked,
+    WORKSPACE_DESTROYED: validate_workspace_destroyed,
 }
 
 
@@ -391,6 +525,11 @@ EventType = Literal[
     "AuthorizationConsumed",
     "AuthorizationDenied",
     "AuthorizationInvalidated",
+    "WorkspaceCreated",
+    "WorkspaceLeaseRenewed",
+    "WorkspaceDiagnosticHoldEntered",
+    "WorkspaceWriteAuthorizationRevoked",
+    "WorkspaceDestroyed",
 ]
 
 __all__ = [
@@ -410,6 +549,11 @@ __all__ = [
     "OBSERVATION_RECORDED",
     "PLAN_CREATED",
     "PLAN_STEP_CREATED",
+    "WORKSPACE_CREATED",
+    "WORKSPACE_DESTROYED",
+    "WORKSPACE_DIAGNOSTIC_HOLD_ENTERED",
+    "WORKSPACE_LEASE_RENEWED",
+    "WORKSPACE_WRITE_AUTHORIZATION_REVOKED",
     "EventType",
     "InvalidEventPayloadError",
     "validate_payload",

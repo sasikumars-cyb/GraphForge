@@ -177,6 +177,38 @@ class EngineeringEventRepository:
         )
         return list(result.scalars().all())
 
+    async def list_by_event_types(self, event_types: frozenset[str]) -> list[EngineeringEvent]:
+        """Every event whose `event_type` is one of `event_types`, across
+        ALL tasks — a genuinely new query shape, not `list_for_task`'s
+        single-task scope. Added in Phase 4, deliberately narrow (not a
+        general unscoped-query escape hatch): the one real need is the
+        Workspace concurrency cap (Cap §19, "Policy MUST cap concurrent
+        Workspaces per Role and per tenant"), which requires counting a
+        Role's open Workspaces across potentially many different
+        task_ids — something `list_for_task`'s per-task scope
+        structurally cannot answer.
+
+        Deliberately does NOT filter by owning Role/tenant here — that
+        information lives inside `payload` (a Workspace event's outer
+        `EngineeringEvent.actor` is always `"control_plane"`, the
+        WRITER, never the owning Role; the OWNING Role is a payload
+        field), and this repository stays a thin, typed-column query
+        seam. Owner-scoped filtering is `WorkspaceLifecycleService`'s
+        job, applied in Python to this method's result — the same
+        division of labor `materialize.fold()` already has relative to
+        this repository (repository fetches, a higher layer interprets).
+
+        Order is by `recorded_at` — there is no single cross-task
+        `sequence_number` to order by, since that column is only unique
+        per `task_id`.
+        """
+        result = await self._db.execute(
+            select(EngineeringEvent)
+            .where(EngineeringEvent.event_type.in_(event_types))
+            .order_by(EngineeringEvent.recorded_at)
+        )
+        return list(result.scalars().all())
+
     async def _validate_causal_references(
         self,
         *,

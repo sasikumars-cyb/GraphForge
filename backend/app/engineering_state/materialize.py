@@ -44,8 +44,10 @@ build a second store that could itself go stale relative to the log.
 
 from __future__ import annotations
 
+import dataclasses
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
 from app.engineering_state.events import (
@@ -62,6 +64,11 @@ from app.engineering_state.events import (
     OBSERVATION_RECORDED,
     PLAN_CREATED,
     PLAN_STEP_CREATED,
+    WORKSPACE_CREATED,
+    WORKSPACE_DESTROYED,
+    WORKSPACE_DIAGNOSTIC_HOLD_ENTERED,
+    WORKSPACE_LEASE_RENEWED,
+    WORKSPACE_WRITE_AUTHORIZATION_REVOKED,
 )
 
 if TYPE_CHECKING:
@@ -170,6 +177,40 @@ class AuthorizationDenialRecord:
 
 
 @dataclass(frozen=True)
+class WorkspaceRecord:
+    """Phase 4: the reconstructed current state of one Workspace, folded
+    from its `WorkspaceCreated` event plus whichever of
+    `WorkspaceLeaseRenewed`/`WorkspaceDiagnosticHoldEntered`/
+    `WorkspaceWriteAuthorizationRevoked`/`WorkspaceDestroyed` followed it
+    (Cap §19). `workspace_event_id` is the `WorkspaceCreated` event's own
+    id — the same identifier every later lifecycle event references via
+    `causation_event_id`, mirroring `AuthorizationGrantRecord`'s
+    identical convention.
+
+    Deliberately reports only what was durably recorded — whether the
+    lease is CURRENTLY expired is not decided here (that needs `now`,
+    which this module, like the rest of `fold()`, must never read
+    implicitly); see `is_reclaimable()` below.
+    """
+
+    workspace_event_id: uuid.UUID
+    task_id: uuid.UUID
+    actor: str
+    user_id: uuid.UUID
+    execution_context: Any
+    physical_location: str
+    repository_url: Any
+    created_at: str
+    max_lifetime_seconds: int
+    lease_expires_at: str
+    renewal_count: int
+    state: str  # "leased" | "diagnostic_hold" | "write_authorization_revoked" | "destroyed"
+    diagnostic_hold_expires_at: str | None
+    diagnostic_hold_reason: str | None
+    destruction_reason: str | None
+
+
+@dataclass(frozen=True)
 class MaterializedEngineeringState:
     """The fold's output — everything a Phase 1 reader can know about one
     task, derived from its event history alone."""
@@ -184,6 +225,7 @@ class MaterializedEngineeringState:
     observations: tuple[ObservationRecord, ...] = field(default_factory=tuple)
     authorization_grants: tuple[AuthorizationGrantRecord, ...] = field(default_factory=tuple)
     authorization_denials: tuple[AuthorizationDenialRecord, ...] = field(default_factory=tuple)
+    workspaces: tuple[WorkspaceRecord, ...] = field(default_factory=tuple)
     event_count: int = 0
 
 
@@ -240,6 +282,9 @@ def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
     # "reconstructable current state," not a raw event dump.
     grants_by_event_id: dict[uuid.UUID, AuthorizationGrantRecord] = {}
     denials: list[AuthorizationDenialRecord] = []
+    # Same "keyed by the base event's own id, later events REPLACE the
+    # record" pattern as authorization_grants above.
+    workspaces_by_event_id: dict[uuid.UUID, WorkspaceRecord] = {}
 
     for event in ordered:
         payload = event.payload
@@ -358,6 +403,57 @@ def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
                     capability_id=payload.get("capability_id"),
                 )
             )
+        elif event.event_type == WORKSPACE_CREATED:
+            workspaces_by_event_id[event.id] = WorkspaceRecord(
+                workspace_event_id=event.id,
+                task_id=uuid.UUID(payload["task_id"]),
+                actor=payload["actor"],
+                user_id=uuid.UUID(payload["user_id"]),
+                execution_context=payload["execution_context"],
+                physical_location=payload["physical_location"],
+                repository_url=payload.get("repository_url"),
+                created_at=payload["created_at"],
+                max_lifetime_seconds=payload["max_lifetime_seconds"],
+                lease_expires_at=payload["initial_expires_at"],
+                renewal_count=0,
+                state="leased",
+                diagnostic_hold_expires_at=None,
+                diagnostic_hold_reason=None,
+                destruction_reason=None,
+            )
+        elif event.event_type == WORKSPACE_LEASE_RENEWED:
+            workspace_event_id = uuid.UUID(payload["workspace_event_id"])
+            existing_ws = workspaces_by_event_id.get(workspace_event_id)
+            if existing_ws is not None:
+                workspaces_by_event_id[workspace_event_id] = _with_workspace_fields(
+                    existing_ws,
+                    lease_expires_at=payload["new_expires_at"],
+                    renewal_count=payload["renewal_count"],
+                )
+        elif event.event_type == WORKSPACE_DIAGNOSTIC_HOLD_ENTERED:
+            workspace_event_id = uuid.UUID(payload["workspace_event_id"])
+            existing_ws = workspaces_by_event_id.get(workspace_event_id)
+            if existing_ws is not None:
+                workspaces_by_event_id[workspace_event_id] = _with_workspace_fields(
+                    existing_ws,
+                    state="diagnostic_hold",
+                    diagnostic_hold_reason=payload["reason"],
+                    diagnostic_hold_expires_at=payload["hold_expires_at"],
+                )
+        elif event.event_type == WORKSPACE_WRITE_AUTHORIZATION_REVOKED:
+            workspace_event_id = uuid.UUID(payload["workspace_event_id"])
+            existing_ws = workspaces_by_event_id.get(workspace_event_id)
+            if existing_ws is not None:
+                workspaces_by_event_id[workspace_event_id] = _with_workspace_fields(
+                    existing_ws, state="write_authorization_revoked"
+                )
+        elif event.event_type == WORKSPACE_DESTROYED:
+            workspace_event_id = uuid.UUID(payload["workspace_event_id"])
+            existing_ws = workspaces_by_event_id.get(workspace_event_id)
+            if existing_ws is not None:
+                workspaces_by_event_id[workspace_event_id] = _with_workspace_fields(
+                    existing_ws, state="destroyed", destruction_reason=payload["reason"]
+                )
         # No `else` — an unrecognized event_type here would mean the DB
         # CHECK constraint and events.validate_payload() both already let
         # something through that this module doesn't know; that is a
@@ -375,6 +471,7 @@ def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
         observations=tuple(observations),
         authorization_grants=tuple(grants_by_event_id.values()),
         authorization_denials=tuple(denials),
+        workspaces=tuple(workspaces_by_event_id.values()),
         event_count=len(ordered),
     )
 
@@ -398,3 +495,46 @@ def _with_state(record: AuthorizationGrantRecord, state: str) -> AuthorizationGr
         human_approval_id=record.human_approval_id,
         state=state,
     )
+
+
+def _with_workspace_fields(record: WorkspaceRecord, **overrides: Any) -> WorkspaceRecord:
+    """Same discipline as `_with_state` above — a NEW frozen record, never
+    a mutation, so an earlier observer's reference stays exactly what it
+    was."""
+    return dataclasses.replace(record, **overrides)
+
+
+def is_reclaimable(record: WorkspaceRecord, *, now: datetime) -> bool:
+    """Whether `record`'s lease is CURRENTLY expired and eligible for
+    lease-TTL-expiry reclamation (Cap §19: "Crash -> Reclaimed by
+    lease-TTL expiry via an orphan sweep"). Deliberately NOT part of
+    `fold()` itself — `fold()` stays a pure function of the event list
+    alone, exactly as this module's own top docstring requires ("performs
+    no I/O, reads no clock"); this function takes `now` explicitly,
+    mirroring `AuthorizationGrant.is_expired(now=...)`'s identical
+    precedent from Phase 3.
+
+    Only a `leased` Workspace is reclaimable this way — a Workspace under
+    diagnostic hold is protected by its OWN, separate TTL (§19:
+    "Expiry MUST NOT destroy a Workspace under an active hold"), and a
+    `write_authorization_revoked` or already-`destroyed` Workspace is
+    not "expired," it is something else entirely.
+    """
+    if record.state != "leased":
+        return False
+    lease_expires_at = datetime.fromisoformat(record.lease_expires_at)
+    return now >= lease_expires_at
+
+
+def is_hold_expired(record: WorkspaceRecord, *, now: datetime) -> bool:
+    """Whether `record`'s diagnostic hold has run past its OWN TTL (Cap
+    §19: "Retained under diagnostic hold with bounded TTL, then
+    destroyed") — a distinct check from `is_reclaimable` above (a
+    different trigger, lease-TTL vs. hold-TTL, per the contract's own
+    two separate disposition-table rows), found necessary during the
+    Phase 4 exit self-audit: the orphan sweep must reconcile BOTH
+    expiry mechanisms toward destruction, not only lease expiry."""
+    if record.state != "diagnostic_hold" or record.diagnostic_hold_expires_at is None:
+        return False
+    hold_expires_at = datetime.fromisoformat(record.diagnostic_hold_expires_at)
+    return now >= hold_expires_at
