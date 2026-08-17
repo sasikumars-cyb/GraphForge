@@ -293,7 +293,11 @@ async def test_plan_step_created_before_plan_created_is_rejected(
         await repo.append(
             task_id=task_id,
             event_type=ev.PLAN_STEP_CREATED,
-            payload={"plan_event_id": str(fabricated_plan_id), "description": "run tests"},
+            payload={
+                "plan_event_id": str(fabricated_plan_id),
+                "description": "run tests",
+                "postcondition": "tests exit 0",
+            },
             actor="test",
             causation_event_id=fabricated_plan_id,
         )
@@ -489,7 +493,11 @@ async def test_valid_goal_plan_planstep_decision_chain_still_materializes(
     await repo.append(
         task_id=task_id,
         event_type=ev.PLAN_STEP_CREATED,
-        payload={"plan_event_id": str(plan.id), "description": "run tests"},
+        payload={
+            "plan_event_id": str(plan.id),
+            "description": "run tests",
+            "postcondition": "tests exit 0",
+        },
         actor="t",
         causation_event_id=plan.id,
     )

@@ -214,7 +214,17 @@ def validate_plan_created(payload: dict[str, Any]) -> None:
 
 
 def validate_plan_step_created(payload: dict[str, Any]) -> None:
-    _require(payload, "plan_event_id", "description", event_type=PLAN_STEP_CREATED)
+    # Phase 5, Cap §15.1: Independent Verification resolves the PlanStep
+    # postcondition it evaluates ONLY by reading this field back from the
+    # immutable event log (by `plan_step_event_id` reference) — never by
+    # accepting a postcondition value from a caller (see
+    # `app.control_plane.verification`). Making it required here, at the
+    # single point PlanStepCreated is ever durably appended, is what
+    # makes that reference-only retrieval possible: there is no PlanStep
+    # without a pinned postcondition to pin it to.
+    _require(payload, "plan_event_id", "description", "postcondition", event_type=PLAN_STEP_CREATED)
+    if not isinstance(payload["postcondition"], str) or not payload["postcondition"].strip():
+        raise InvalidEventPayloadError(f"{PLAN_STEP_CREATED}.postcondition must be a non-empty str.")
 
 
 def validate_decision_made(payload: dict[str, Any]) -> None:
@@ -287,16 +297,48 @@ def validate_belief_recorded(payload: dict[str, Any]) -> None:
         raise InvalidEventPayloadError(f"{BELIEF_RECORDED}.evidence_ids must be a list.")
 
 
+_OBSERVATION_OUTCOMES: frozenset[str] = frozenset({"completed", "outcome_unknown"})
+
+# Cap §16.1's five-way vocabulary, minus `blocked` — a Blocked
+# Observation never reaches this event type at all (an authorization
+# failure never reaches Tool dispatch; it is durably recorded as
+# `AuthorizationDenied` instead, see
+# `app.control_plane.observation_classification`'s own module docstring).
+_OBSERVATION_CLASSIFICATIONS: frozenset[str] = frozenset(
+    {"expected", "anomaly", "uncertain_outcome", "contradiction"}
+)
+
+
 def validate_observation_recorded(payload: dict[str, Any]) -> None:
-    # Deliberately does NOT require a `classification` field. Observation
-    # classification is Capabilities contract §16, Control-Plane-owned,
-    # deterministic, fixed-evaluation-order — none of which exists until
-    # Phase 5. A Phase 1 ObservationRecorded event records the raw fact
-    # only; adding an unenforced "classification" field here would let
-    # something other than the future Control Plane silently set it,
-    # which is exactly the violation Cap inv. 18 forbids. See this
-    # module's own docstring on not inventing Phase 2+ shape early.
+    # `raw_result`/`capability` remain the only REQUIRED fields — Phase 1's
+    # original shape, unchanged. `run_coordinator.py`'s existing,
+    # independent producer (Phase 0/1) supplies neither `outcome` nor
+    # `classification` today; requiring either here would break that real,
+    # already-durable producer. Phase 5 adds two OPTIONAL fields instead:
+    #
+    # `outcome` ("completed" | "outcome_unknown") — Cap §8 state-ladder
+    # determinacy, distinct from `success` (Tool-level result, Phase 1/3)
+    # and from `classification` (Engineering interpretation, Cap §16.2)
+    # — never conflated.
+    #
+    # `classification` — Cap §16.2's five-way vocabulary, minus
+    # `blocked` (see `_OBSERVATION_CLASSIFICATIONS` above). Absent/None
+    # means "not yet classified" (e.g. `outcome_unknown` halts evaluation
+    # before classification per Cap §16.2 step 2 — see this repo's Phase
+    # 5 design audit §8, "ActionOutcomeUnknown is NOT uncertain_outcome").
     _require(payload, "raw_result", "capability", event_type=OBSERVATION_RECORDED)
+    outcome = payload.get("outcome")
+    if outcome is not None and outcome not in _OBSERVATION_OUTCOMES:
+        raise InvalidEventPayloadError(
+            f"{OBSERVATION_RECORDED}.outcome must be one of {sorted(_OBSERVATION_OUTCOMES)} "
+            "or absent/None."
+        )
+    classification = payload.get("classification")
+    if classification is not None and classification not in _OBSERVATION_CLASSIFICATIONS:
+        raise InvalidEventPayloadError(
+            f"{OBSERVATION_RECORDED}.classification must be one of "
+            f"{sorted(_OBSERVATION_CLASSIFICATIONS)} or absent/None."
+        )
 
 
 def validate_authorization_granted(payload: dict[str, Any]) -> None:

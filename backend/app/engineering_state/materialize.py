@@ -96,6 +96,11 @@ class PlanStepRecord:
     event_id: uuid.UUID
     plan_event_id: uuid.UUID
     description: str
+    # Cap §15.1: the pinned, approval-time postcondition — the ONLY
+    # value `app.control_plane.verification.VerificationService` ever
+    # evaluates against, resolved by `event_id` reference, never
+    # supplied by a caller (see `events.validate_plan_step_created`).
+    postcondition: str
 
 
 @dataclass(frozen=True)
@@ -133,6 +138,21 @@ class ObservationRecord:
     event_id: uuid.UUID
     raw_result: Any
     capability: str
+    # Phase 5, all optional/backward-compatible — `None` for every event
+    # a pre-Phase-5 producer (e.g. `app.orchestrator.run_coordinator`)
+    # already durably wrote, which supplies neither field.
+    outcome: str | None = None  # "completed" | "outcome_unknown"
+    classification: str | None = None  # Cap §16.2's five-way vocabulary, minus "blocked"
+    # The business actor that performed this Observation's underlying
+    # Action — distinct from `EngineeringEvent.actor` (always the
+    # writer, "control_plane"). Cap §15.2: how a verifier's Observation
+    # is distinguished from a generator's. `None` when the producer
+    # didn't supply one (every pre-Phase-5 producer).
+    actor: str | None = None
+    # The PlanStep this Observation's Action belongs to (`Action.
+    # plan_step_id`, already an existing field — not new). `None` when
+    # absent from the payload.
+    plan_step_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -320,6 +340,7 @@ def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
                     event_id=event.id,
                     plan_event_id=payload["plan_event_id"],
                     description=payload["description"],
+                    postcondition=payload["postcondition"],
                 )
             )
         elif event.event_type == DECISION_MADE:
@@ -356,11 +377,18 @@ def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
                 )
             )
         elif event.event_type == OBSERVATION_RECORDED:
+            plan_step_id_raw = payload.get("plan_step_id")
             observations.append(
                 ObservationRecord(
                     event_id=event.id,
                     raw_result=payload["raw_result"],
                     capability=payload["capability"],
+                    outcome=payload.get("outcome"),
+                    classification=payload.get("classification"),
+                    actor=payload.get("actor"),
+                    plan_step_id=(
+                        uuid.UUID(plan_step_id_raw) if plan_step_id_raw is not None else None
+                    ),
                 )
             )
         elif event.event_type == AUTHORIZATION_GRANTED:
@@ -538,3 +566,30 @@ def is_hold_expired(record: WorkspaceRecord, *, now: datetime) -> bool:
         return False
     hold_expires_at = datetime.fromisoformat(record.diagnostic_hold_expires_at)
     return now >= hold_expires_at
+
+
+def has_unresolved_outcome_unknown(state: MaterializedEngineeringState) -> bool:
+    """Phase 5, Cap §16.2 step 2 / ES §9: whether ANY Observation in this
+    task's history currently carries `outcome="outcome_unknown"` — a
+    prerequisite state that MUST block dependent Actions until
+    reconciled (Cap §18.3: reconciliation is a custodial capability of
+    the owning Role, deliberately out of this phase's scope — see the
+    Phase 5 design audit §12).
+
+    **Named limitation, not a bug:** no mechanism to durably record
+    "this outcome_unknown Observation has now been reconciled" exists
+    anywhere in this codebase yet (no reconciliation Capability, no
+    resolving event type) — so every `outcome_unknown` Observation ever
+    recorded for this task is treated as still-unresolved, permanently,
+    until a future phase adds a real resolution representation. This
+    function must not be read as "checks whether it's CURRENTLY
+    unresolved" in any richer sense than "at least one was ever
+    recorded and nothing in this codebase can mark it otherwise."
+
+    A caller (e.g. before invoking `ControlPlane.check_eligibility`)
+    derives `preconditions_hold=not has_unresolved_outcome_unknown(state)`
+    — this function itself performs no I/O, matching `is_reclaimable`/
+    `is_hold_expired`'s identical "pure function of already-folded
+    state" precedent above.
+    """
+    return any(obs.outcome == "outcome_unknown" for obs in state.observations)

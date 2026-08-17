@@ -56,7 +56,11 @@ def _sample_events(task_id: uuid.UUID) -> list[EngineeringEvent]:
         task_id=task_id, sequence_number=2, event_type=ev.PLAN_CREATED, payload=plan_payload
     )
 
-    step_payload = {"plan_event_id": str(plan.id), "description": "run the test suite"}
+    step_payload = {
+        "plan_event_id": str(plan.id),
+        "description": "run the test suite",
+        "postcondition": "the test suite exits 0",
+    }
     step = _event(
         task_id=task_id,
         sequence_number=3,

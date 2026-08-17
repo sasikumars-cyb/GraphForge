@@ -96,16 +96,62 @@ def test_belief_qualitative_status_is_closed_vocabulary() -> None:
         ev.validate_payload(ev.BELIEF_RECORDED, payload)
 
 
-def test_observation_recorded_has_no_classification_field() -> None:
-    """Deliberate scope boundary: Observation *classification* is
-    Capabilities contract §16, Control-Plane-owned, deterministic, and
-    does not exist until Phase 5. A Phase 1 ObservationRecorded payload
-    is accepted without any classification field — and this test exists
-    specifically to fail loudly if a future edit adds an unenforced
-    'classification' key to the required set, which would let something
-    other than the future Control Plane silently establish it."""
+def test_observation_recorded_classification_remains_optional() -> None:
+    """Phase 5 adds `outcome`/`classification` as OPTIONAL fields (Cap
+    §16), never required — `app.orchestrator.run_coordinator`'s existing,
+    independent producer supplies neither, and must remain valid. This
+    test exists specifically to fail loudly if a future edit moves either
+    field into the required set, which would break that real producer."""
     ev.validate_payload(
         ev.OBSERVATION_RECORDED, {"raw_result": {"exit_code": 0}, "capability": "run_test_suite"}
+    )
+
+
+def test_observation_recorded_outcome_is_closed_vocabulary() -> None:
+    base = {"raw_result": {"exit_code": 0}, "capability": "run_test_suite"}
+    with pytest.raises(ev.InvalidEventPayloadError, match="outcome"):
+        ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "outcome": "made_up"})
+
+    ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "outcome": "completed"})
+    ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "outcome": "outcome_unknown"})
+
+
+def test_observation_recorded_classification_is_closed_vocabulary() -> None:
+    """Cap §16.1's five-way vocabulary, minus `blocked` — a Blocked
+    Observation never reaches this event type (see
+    `app.control_plane.observation_classification`'s module docstring)."""
+    base = {"raw_result": {"exit_code": 0}, "capability": "run_test_suite"}
+    with pytest.raises(ev.InvalidEventPayloadError, match="classification"):
+        ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "classification": "blocked"})
+    with pytest.raises(ev.InvalidEventPayloadError, match="classification"):
+        ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "classification": "made_up"})
+
+    for valid in ("expected", "anomaly", "uncertain_outcome", "contradiction"):
+        ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "classification": valid})
+
+
+def test_plan_step_created_requires_a_postcondition() -> None:
+    """Cap §15.1: Independent Verification resolves the postcondition it
+    evaluates ONLY from the immutable `PlanStepCreated` event — it must
+    exist, or there is nothing to pin."""
+    with pytest.raises(ev.InvalidEventPayloadError, match="postcondition"):
+        ev.validate_payload(
+            ev.PLAN_STEP_CREATED,
+            {"plan_event_id": "x", "description": "run the test suite"},
+        )
+    with pytest.raises(ev.InvalidEventPayloadError, match="postcondition"):
+        ev.validate_payload(
+            ev.PLAN_STEP_CREATED,
+            {"plan_event_id": "x", "description": "run the test suite", "postcondition": "   "},
+        )
+
+    ev.validate_payload(
+        ev.PLAN_STEP_CREATED,
+        {
+            "plan_event_id": "x",
+            "description": "run the test suite",
+            "postcondition": "the test suite exits 0",
+        },
     )
 
 
