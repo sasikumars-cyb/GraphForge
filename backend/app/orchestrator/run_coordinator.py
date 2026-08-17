@@ -175,6 +175,7 @@ class RunCoordinator:
         model: str | None = None,
         extras: dict[str, Any] | None = None,
         on_pre_commit: Callable[[AsyncSession, Run], Awaitable[None]] | None = None,
+        engineering_task_id: uuid.UUID | None = None,
     ) -> Run:
         """Phase 2: run the resolved `agent` against `subject` and persist
         the outcome onto `run` (status queued/failed -> running ->
@@ -195,7 +196,17 @@ class RunCoordinator:
         theoretical (see the flaky test this was found from). A failing
         hook is logged and swallowed, then this method still commits the
         run's own status directly, so a bookkeeping bug can never lose the
-        run's result.
+        run's result. **This tolerance is deliberately NOT extended to
+        `engineering_task_id` below** — see `_apply_agent_output`'s
+        docstring for why an Engineering State write cannot reuse
+        `on_pre_commit`'s swallow-and-continue semantics.
+
+        `engineering_task_id`, when given (Phase 1, Engineering State
+        foundation — opt-in, additive, `None` for every caller that
+        existed before this parameter did, so no existing behavior
+        changes), records this run's outcome as an `ObservationRecorded`
+        Engineering State event, in the SAME transaction as this method's
+        own `run.status` commit — see `_apply_agent_output`.
         """
         step = AgentStep(
             id=uuid.uuid4(),
@@ -338,7 +349,9 @@ class RunCoordinator:
             raise
 
         latency_ms = int((time.monotonic() - start_ms) * 1000)
-        await self._apply_agent_output(step, run, output, latency_ms, on_pre_commit)
+        await self._apply_agent_output(
+            step, run, output, latency_ms, on_pre_commit, engineering_task_id
+        )
 
         logger.info(
             "agent_run_completed run_id=%s agent_id=%s subject_id=%s "
@@ -365,6 +378,7 @@ class RunCoordinator:
         model: str | None = None,
         extras: dict[str, Any] | None = None,
         on_pre_commit: Callable[[AsyncSession, Run], Awaitable[None]] | None = None,
+        engineering_task_id: uuid.UUID | None = None,
     ) -> Run:
         """Re-invoke `agent` against an existing, previously-paused `step`
         (status "awaiting_input") instead of creating a new one — how a
@@ -374,8 +388,9 @@ class RunCoordinator:
         `get_workflow_for_update`'s row lock).
 
         Mirrors `execute_run`'s tail exactly (same `_apply_agent_output`
-        branch, same failure handling) — the only difference is that no new
-        `AgentStep` row is created here.
+        branch, same failure handling, same optional `engineering_task_id`)
+        — the only difference is that no new `AgentStep` row is created
+        here.
         """
         step.status = "running"
         run.status = "running"
@@ -451,7 +466,9 @@ class RunCoordinator:
             raise
 
         latency_ms = int((time.monotonic() - start_ms) * 1000)
-        await self._apply_agent_output(step, run, output, latency_ms, on_pre_commit)
+        await self._apply_agent_output(
+            step, run, output, latency_ms, on_pre_commit, engineering_task_id
+        )
 
         logger.info(
             "agent_run_resumed run_id=%s agent_id=%s subject_id=%s "
@@ -473,11 +490,37 @@ class RunCoordinator:
         output: AgentOutput,
         latency_ms: int,
         on_pre_commit: Callable[[AsyncSession, Run], Awaitable[None]] | None,
+        engineering_task_id: uuid.UUID | None = None,
     ) -> None:
         """Persist `output` onto `step`/`run`, branching on whether the agent
         is pausing for human input (`output.awaiting_input`) or has actually
         finished. Shared by `execute_run` and `resume_step` so both paths
         agree on exactly what "completed" vs "awaiting_input" means.
+
+        Phase 1 (Engineering State foundation): when `engineering_task_id`
+        is given, this run's outcome is ALSO recorded as an
+        `ObservationRecorded` Engineering State event (see
+        `_record_engineering_event`), added to this same session — riding
+        the same `_commit_with_hook`/`_commit_or_fail` transaction as
+        `step`/`run`'s own status change below, so the two either persist
+        together or neither does. There is no window where `run.status`
+        commits as "completed" while the corresponding event silently
+        failed to append.
+
+        This deliberately does NOT reuse `on_pre_commit`'s failure
+        tolerance (log-and-swallow, then still commit `run`'s status as
+        planned) — that tolerance exists because `on_pre_commit`'s own
+        bookkeeping (e.g. advancing a Workflow's `current_stage`) is
+        legacy state a caller can reconcile later if it's briefly wrong.
+        Engineering State is not legacy bookkeeping — it is meant to be
+        authoritative (`ENGINEERING_STATE_ARCHITECTURE.md` inv. 20) — so
+        if the event cannot be durably recorded, this run must not report
+        the success it can no longer back up: an append failure here
+        overwrites whatever `step`/`run` status was about to be set with
+        an explicit failure, using the exact same `_fail_step`/`_fail_run`
+        path a real agent-execution failure already uses, so "run
+        completed" and "Engineering State has no corresponding event" can
+        never both become true.
         """
         now = datetime.now(UTC)
 
@@ -499,7 +542,56 @@ class RunCoordinator:
             run.status = "completed"
             run.completed_at = now
 
+        if engineering_task_id is not None:
+            try:
+                await self._record_engineering_event(engineering_task_id, step, output)
+            except Exception as exc:
+                logger.exception(
+                    "run_coordinator_engineering_event_append_failed run_id=%s "
+                    "engineering_task_id=%s",
+                    str(run.id),
+                    str(engineering_task_id),
+                )
+                await self._fail_step(
+                    step, f"Engineering State event append failed: {exc}", latency_ms
+                )
+                await self._fail_run(run, f"Engineering State event append failed: {exc}")
+
         await self._commit_with_hook(run, on_pre_commit)
+
+    async def _record_engineering_event(
+        self, task_id: uuid.UUID, step: AgentStep, output: AgentOutput
+    ) -> None:
+        """Record a legacy agent's output as a raw `ObservationRecorded`
+        Engineering State event — not `DecisionMade` (a legacy agent's
+        single LLM call has no recorded alternatives-considered, per
+        `ENGINEERING_STATE_ARCHITECTURE.md` §12) and not a classified
+        Observation (Capabilities contract §16 classification is
+        Control-Plane-owned and doesn't exist until Phase 5) — just the
+        raw fact of what this agent invocation produced, honestly scoped
+        to what Phase 1 can actually claim.
+
+        Deliberately only called from the success/awaiting-input path
+        (`_apply_agent_output`), not from `execute_run`/`resume_step`'s
+        earlier preflight/exception branches — recording an event for an
+        agent-execution failure too is a reasonable future extension, not
+        silently out of scope, but is left for the phase that actually
+        needs it rather than added speculatively here.
+
+        Does not commit — participates in whichever commit
+        `_commit_with_hook` performs next, same as `step`/`run`'s own
+        pending changes.
+        """
+        from app.engineering_state.events import OBSERVATION_RECORDED
+        from app.repositories.engineering_event_repository import EngineeringEventRepository
+
+        repo = EngineeringEventRepository(self._db)
+        await repo.append(
+            task_id=task_id,
+            event_type=OBSERVATION_RECORDED,
+            payload={"raw_result": output.result, "capability": f"legacy_agent:{step.agent_id}"},
+            actor=f"legacy:run_coordinator:agent={step.agent_id}",
+        )
 
     async def _commit_with_hook(
         self,

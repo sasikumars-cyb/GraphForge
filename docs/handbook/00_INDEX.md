@@ -16,6 +16,17 @@ it does not upgrade a plan into a claim of working software.
 single most load-bearing section — implemented vs. partially-implemented
 vs. deferred vs. roadmap, with nothing softened.
 
+**Normative, not just descriptive**: unlike everything else in this
+handbook (which is defense/summary material, derivative of the ADRs/RFCs/
+design docs it cites),
+[`docs/graphforge/ENGINEERING_STATE_ARCHITECTURE.md`](../graphforge/ENGINEERING_STATE_ARCHITECTURE.md)
+is the canonical, binding specification for Engineering State — Evidence,
+Belief, Hypothesis, Plan, Decision, event sourcing, human authority,
+multi-agent state. It has two known, explicitly flagged open conflicts with
+already-implemented work (RFC-001's `Belief` model; ADR 0018's Hypothesis/
+Evidence pipeline) — see that document's §0. Nothing in this handbook
+overrides it.
+
 ## Contents
 
 | # | Section | File |
