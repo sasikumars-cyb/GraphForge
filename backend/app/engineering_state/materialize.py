@@ -64,6 +64,7 @@ from app.engineering_state.events import (
     OBSERVATION_RECORDED,
     PLAN_CREATED,
     PLAN_STEP_CREATED,
+    PLAN_STEP_INVALIDATED,
     WORKSPACE_CREATED,
     WORKSPACE_DESTROYED,
     WORKSPACE_DIAGNOSTIC_HOLD_ENTERED,
@@ -89,6 +90,14 @@ class PlanRecord:
     event_id: uuid.UUID
     goal_event_id: uuid.UUID
     scope: Any
+    # Phase 6, ES §11: a durable reference to the specific prior Plan
+    # this one supersedes, when this isn't the first Plan for its Goal.
+    # `None` for a base Plan. Deliberately NOT a causal parent (that
+    # remains `goal_event_id` — a Plan's cause is always its Goal) and
+    # deliberately NOT paired with any mutable "authoritative" flag —
+    # which Plan is currently eligible is a DERIVED fact, computed by
+    # `superseded_plan_event_ids()` below, never stored here.
+    supersedes_plan_event_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -101,6 +110,19 @@ class PlanStepRecord:
     # evaluates against, resolved by `event_id` reference, never
     # supplied by a caller (see `events.validate_plan_step_created`).
     postcondition: str
+    # Phase 6, ES §11: the minimum dependency-edge representation —
+    # other PlanStepCreated event ids this one depends on. Empty tuple
+    # for a PlanStep with no dependencies (the common case). See
+    # `transitively_dependent_plan_steps()` below for the one thing
+    # this field exists to support.
+    depends_on: tuple[uuid.UUID, ...] = ()
+    # Phase 6, ES §10/§11: overlaid by a later PlanStepInvalidated event
+    # exactly like `AuthorizationGrantRecord.state`/`WorkspaceRecord.
+    # state` are overlaid by their own later lifecycle events — never
+    # set at PlanStepCreated time (a PlanStep cannot be born invalidated).
+    invalidated: bool = False
+    invalidation_reason: str | None = None
+    invalidating_observation_event_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -289,7 +311,12 @@ def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
 
     goal: GoalRecord | None = None
     plans: list[PlanRecord] = []
-    plan_steps: list[PlanStepRecord] = []
+    # Phase 6: keyed by the PlanStepCreated event's own id — the same id
+    # PlanStepInvalidated causally references — so a later invalidation
+    # OVERLAYS the record here rather than appending a second one,
+    # mirroring `grants_by_event_id`/`workspaces_by_event_id`'s identical
+    # pattern below.
+    plan_steps_by_event_id: dict[uuid.UUID, PlanStepRecord] = {}
     decisions: list[DecisionRecord] = []
     evidence: list[EvidenceRecord] = []
     beliefs: list[BeliefRecord] = []
@@ -327,22 +354,38 @@ def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
                     postconditions=tuple(payload.get("postconditions", goal.postconditions)),
                 )
         elif event.event_type == PLAN_CREATED:
+            supersedes_raw = payload.get("supersedes_plan_event_id")
             plans.append(
                 PlanRecord(
                     event_id=event.id,
                     goal_event_id=payload["goal_event_id"],
                     scope=payload["scope"],
+                    supersedes_plan_event_id=(
+                        uuid.UUID(supersedes_raw) if supersedes_raw is not None else None
+                    ),
                 )
             )
         elif event.event_type == PLAN_STEP_CREATED:
-            plan_steps.append(
-                PlanStepRecord(
-                    event_id=event.id,
-                    plan_event_id=payload["plan_event_id"],
-                    description=payload["description"],
-                    postcondition=payload["postcondition"],
-                )
+            depends_on_raw = payload.get("depends_on") or []
+            plan_steps_by_event_id[event.id] = PlanStepRecord(
+                event_id=event.id,
+                plan_event_id=payload["plan_event_id"],
+                description=payload["description"],
+                postcondition=payload["postcondition"],
+                depends_on=tuple(uuid.UUID(str(d)) for d in depends_on_raw),
             )
+        elif event.event_type == PLAN_STEP_INVALIDATED:
+            plan_step_event_id = uuid.UUID(str(payload["plan_step_event_id"]))
+            existing_step = plan_steps_by_event_id.get(plan_step_event_id)
+            if existing_step is not None:
+                plan_steps_by_event_id[plan_step_event_id] = dataclasses.replace(
+                    existing_step,
+                    invalidated=True,
+                    invalidation_reason=payload["reason"],
+                    invalidating_observation_event_id=uuid.UUID(
+                        str(payload["contradiction_observation_event_id"])
+                    ),
+                )
         elif event.event_type == DECISION_MADE:
             decisions.append(
                 DecisionRecord(
@@ -492,7 +535,7 @@ def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
         task_id=task_id,
         goal=goal,
         plans=tuple(plans),
-        plan_steps=tuple(plan_steps),
+        plan_steps=tuple(plan_steps_by_event_id.values()),
         decisions=tuple(decisions),
         evidence=tuple(evidence),
         beliefs=tuple(beliefs),
@@ -593,3 +636,80 @@ def has_unresolved_outcome_unknown(state: MaterializedEngineeringState) -> bool:
     state" precedent above.
     """
     return any(obs.outcome == "outcome_unknown" for obs in state.observations)
+
+
+def superseded_plan_event_ids(state: MaterializedEngineeringState) -> frozenset[uuid.UUID]:
+    """Phase 6, ES §11: which Plan(s), among every `PlanCreated` event
+    ever recorded for this task, have been superseded by a later Plan
+    version — a PURELY DERIVED fact, computed fresh from
+    `PlanRecord.supersedes_plan_event_id` every time, never a stored
+    "authoritative" flag anywhere (see `PlanRecord`'s own docstring on
+    exactly why). A Plan not in this set is currently eligible; nothing
+    about "eligible" implies "approved" or "safe to execute under" —
+    those remain separate, existing checks (Human Approval, Policy,
+    Safety Validity), entirely unmodified by this function.
+
+    Deliberately does NOT implement "latest Plan wins" — a Plan is
+    superseded only if SOME other Plan's own `supersedes_plan_event_id`
+    durably names it, never merely because it is not the most recently
+    created.
+    """
+    return frozenset(
+        plan.supersedes_plan_event_id
+        for plan in state.plans
+        if plan.supersedes_plan_event_id is not None
+    )
+
+
+def transitively_dependent_plan_steps(
+    state: MaterializedEngineeringState, plan_step_event_id: uuid.UUID
+) -> frozenset[uuid.UUID]:
+    """Phase 6, ES §11: "Invalidation MUST propagate only to dependent
+    PlanSteps in the DAG, not to the whole Plan by default." Given the
+    PlanStep DIRECTLY falsified by a Contradiction, returns every OTHER
+    PlanStep in `state.plan_steps` that depends on it — directly or
+    transitively, via `PlanStepRecord.depends_on` edges — computed by a
+    plain reverse-adjacency BFS over already-folded state. Does NOT
+    include `plan_step_event_id` itself (the caller already knows that
+    one is invalidated; this answers only "what else becomes invalidated
+    as a consequence").
+
+    This is the ENTIRE extent of "DAG" behavior Phase 6 implements — no
+    scheduling, no parallel-branch execution, no conditional-branch
+    evaluation, no nested-Plan traversal. It exists to support exactly
+    one MUST: correct invalidation propagation, nothing broader.
+    """
+    # Reverse adjacency: for each PlanStep, which OTHER PlanSteps declare
+    # it in their own `depends_on` (i.e., which PlanSteps depend ON it).
+    dependents_of: dict[uuid.UUID, list[uuid.UUID]] = {}
+    for step in state.plan_steps:
+        for dependency_id in step.depends_on:
+            dependents_of.setdefault(dependency_id, []).append(step.event_id)
+
+    visited: set[uuid.UUID] = set()
+    frontier = [plan_step_event_id]
+    while frontier:
+        current = frontier.pop()
+        for dependent_id in dependents_of.get(current, ()):
+            if dependent_id not in visited:
+                visited.add(dependent_id)
+                frontier.append(dependent_id)
+    return frozenset(visited)
+
+
+def is_plan_step_invalidated(
+    state: MaterializedEngineeringState, plan_step_event_id: uuid.UUID
+) -> bool:
+    """Phase 6, ES §11: whether `plan_step_event_id` currently carries a
+    durable `PlanStepInvalidated` overlay — the minimum derived helper
+    needed to ensure an invalidated PlanStep cannot satisfy execution
+    preconditions. Mirrors `has_unresolved_outcome_unknown`'s exact
+    shape: a caller (e.g. before invoking `ControlPlane.check_eligibility`
+    for an Action bound to this PlanStep) derives
+    `preconditions_hold=not is_plan_step_invalidated(state, action.plan_step_id)`
+    — combined with `has_unresolved_outcome_unknown` via `and`/`or` as
+    the caller's own composition, never fused into one mega-helper here.
+    """
+    return any(
+        step.event_id == plan_step_event_id and step.invalidated for step in state.plan_steps
+    )

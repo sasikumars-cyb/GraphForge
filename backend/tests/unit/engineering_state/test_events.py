@@ -155,6 +155,59 @@ def test_plan_step_created_requires_a_postcondition() -> None:
     )
 
 
+def test_plan_created_supersedes_field_is_optional_but_validated_when_present() -> None:
+    """ES §11: 'Any revision after approval MUST produce a new Plan
+    version; the approved version MUST remain retrievable unchanged.'
+    `supersedes_plan_event_id` is OPTIONAL (a base Plan supersedes
+    nothing) but must be a non-empty str when present."""
+    base = {"goal_event_id": "g", "scope": ["repo-a"]}
+    ev.validate_payload(ev.PLAN_CREATED, base)  # no supersedes — fine.
+    ev.validate_payload(ev.PLAN_CREATED, {**base, "supersedes_plan_event_id": "prior-event-id"})
+    with pytest.raises(ev.InvalidEventPayloadError, match="supersedes_plan_event_id"):
+        ev.validate_payload(ev.PLAN_CREATED, {**base, "supersedes_plan_event_id": "   "})
+    with pytest.raises(ev.InvalidEventPayloadError, match="supersedes_plan_event_id"):
+        ev.validate_payload(ev.PLAN_CREATED, {**base, "supersedes_plan_event_id": 123})
+
+
+def test_plan_step_created_depends_on_is_optional_but_must_be_a_list() -> None:
+    """ES §11: the minimum dependency-edge representation — optional,
+    most PlanSteps depend on nothing."""
+    base = {"plan_event_id": "p", "description": "d", "postcondition": "x exits 0"}
+    ev.validate_payload(ev.PLAN_STEP_CREATED, base)  # no depends_on — fine.
+    ev.validate_payload(ev.PLAN_STEP_CREATED, {**base, "depends_on": []})
+    ev.validate_payload(ev.PLAN_STEP_CREATED, {**base, "depends_on": ["a", "b"]})
+    with pytest.raises(ev.InvalidEventPayloadError, match="depends_on"):
+        ev.validate_payload(ev.PLAN_STEP_CREATED, {**base, "depends_on": "not-a-list"})
+
+
+def test_plan_step_invalidated_requires_the_full_shape() -> None:
+    """ES §10: `contradiction_observation_event_id` is what makes this a
+    genuinely evidenced fact — required, never optional."""
+    with pytest.raises(ev.InvalidEventPayloadError, match="missing required field"):
+        ev.validate_payload(ev.PLAN_STEP_INVALIDATED, {"plan_step_event_id": "s"})
+
+    ev.validate_payload(
+        ev.PLAN_STEP_INVALIDATED,
+        {
+            "plan_step_event_id": "s",
+            "contradiction_observation_event_id": "o",
+            "reason": "postcondition falsified",
+        },
+    )
+
+
+def test_plan_step_invalidated_reason_must_be_non_empty() -> None:
+    with pytest.raises(ev.InvalidEventPayloadError, match="reason"):
+        ev.validate_payload(
+            ev.PLAN_STEP_INVALIDATED,
+            {
+                "plan_step_event_id": "s",
+                "contradiction_observation_event_id": "o",
+                "reason": "   ",
+            },
+        )
+
+
 def test_decision_requires_alternatives_considered_as_a_list() -> None:
     """ES §12: a Decision without recorded alternatives is not
     meaningfully a Decision."""

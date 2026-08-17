@@ -16,7 +16,13 @@ import uuid
 import pytest
 
 from app.engineering_state import events as ev
-from app.engineering_state.materialize import MixedTaskEventsError, fold
+from app.engineering_state.materialize import (
+    MixedTaskEventsError,
+    fold,
+    is_plan_step_invalidated,
+    superseded_plan_event_ids,
+    transitively_dependent_plan_steps,
+)
 from app.models.engineering_event import EngineeringEvent
 
 
@@ -446,3 +452,385 @@ def test_fold_grant_lifecycle_is_order_derived_from_sequence_number() -> None:
 
     assert forward.authorization_grants[0].state == reversed_input.authorization_grants[0].state
     assert forward.authorization_grants[0].state == "consuming"
+
+
+# --- Phase 6: Plan supersession + PlanStep dependency/invalidation ---------
+
+
+def _goal(task_id: uuid.UUID, sequence_number: int = 1) -> EngineeringEvent:
+    return _event(
+        task_id=task_id,
+        sequence_number=sequence_number,
+        event_type=ev.GOAL_CREATED,
+        payload={"description": "d", "postconditions": ["p"]},
+    )
+
+
+class TestPlanSupersession:
+    def test_a_base_plan_supersedes_nothing(self) -> None:
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": ["repo-a"]},
+        )
+
+        state = fold([goal, plan])
+
+        assert len(state.plans) == 1
+        assert state.plans[0].supersedes_plan_event_id is None
+        assert superseded_plan_event_ids(state) == frozenset()
+
+    def test_a_replan_plan_carries_supersedes_and_the_old_plan_is_reported_superseded(
+        self,
+    ) -> None:
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan_a = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": ["repo-a"]},
+        )
+        plan_b = _event(
+            task_id=task_id,
+            sequence_number=3,
+            event_type=ev.PLAN_CREATED,
+            payload={
+                "goal_event_id": str(goal.id),
+                "scope": ["repo-a"],
+                "supersedes_plan_event_id": str(plan_a.id),
+            },
+        )
+
+        state = fold([goal, plan_a, plan_b])
+
+        assert len(state.plans) == 2
+        assert superseded_plan_event_ids(state) == frozenset({plan_a.id})
+
+    def test_old_plan_record_is_byte_identical_after_supersession(self) -> None:
+        """ES §11: 'the approved version MUST remain retrievable
+        unchanged.' Folding BEFORE and AFTER the superseding Plan exists
+        must reconstruct the OLD Plan's own record identically — nothing
+        about Plan B's creation may mutate Plan A's materialized shape."""
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan_a = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": ["repo-a"]},
+        )
+
+        state_before = fold([goal, plan_a])
+        record_before = next(p for p in state_before.plans if p.event_id == plan_a.id)
+
+        plan_b = _event(
+            task_id=task_id,
+            sequence_number=3,
+            event_type=ev.PLAN_CREATED,
+            payload={
+                "goal_event_id": str(goal.id),
+                "scope": ["repo-a"],
+                "supersedes_plan_event_id": str(plan_a.id),
+            },
+        )
+        state_after = fold([goal, plan_a, plan_b])
+        record_after = next(p for p in state_after.plans if p.event_id == plan_a.id)
+
+        assert record_before == record_after
+
+    def test_no_latest_plan_wins_shortcut(self) -> None:
+        """A Plan is superseded ONLY if some other Plan durably names it
+        via `supersedes_plan_event_id` — never merely because it isn't
+        the most recently created. Two independent (non-superseding)
+        Plans for the same Goal: neither is reported superseded."""
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan_a = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": ["repo-a"]},
+        )
+        plan_b = _event(
+            task_id=task_id,
+            sequence_number=3,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": ["repo-b"]},  # no supersedes
+        )
+
+        state = fold([goal, plan_a, plan_b])
+
+        assert superseded_plan_event_ids(state) == frozenset()
+
+
+def _plan_step(
+    task_id: uuid.UUID,
+    *,
+    sequence_number: int,
+    plan_event_id: uuid.UUID,
+    depends_on: list[uuid.UUID] | None = None,
+) -> EngineeringEvent:
+    return _event(
+        task_id=task_id,
+        sequence_number=sequence_number,
+        event_type=ev.PLAN_STEP_CREATED,
+        payload={
+            "plan_event_id": str(plan_event_id),
+            "description": "d",
+            "postcondition": "x",
+            "depends_on": [str(d) for d in (depends_on or [])],
+        },
+    )
+
+
+def _invalidated(
+    task_id: uuid.UUID,
+    *,
+    sequence_number: int,
+    plan_step_event_id: uuid.UUID,
+    contradiction_observation_event_id: uuid.UUID,
+    reason: str = "postcondition falsified",
+) -> EngineeringEvent:
+    return _event(
+        task_id=task_id,
+        sequence_number=sequence_number,
+        event_type=ev.PLAN_STEP_INVALIDATED,
+        payload={
+            "plan_step_event_id": str(plan_step_event_id),
+            "contradiction_observation_event_id": str(contradiction_observation_event_id),
+            "reason": reason,
+        },
+    )
+
+
+class TestPlanStepDependencies:
+    def test_depends_on_defaults_empty(self) -> None:
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": []},
+        )
+        step = _plan_step(task_id, sequence_number=3, plan_event_id=plan.id)
+
+        state = fold([goal, plan, step])
+
+        assert state.plan_steps[0].depends_on == ()
+
+    def test_depends_on_reconstructs_the_declared_edges(self) -> None:
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": []},
+        )
+        step_a = _plan_step(task_id, sequence_number=3, plan_event_id=plan.id)
+        step_b = _plan_step(
+            task_id, sequence_number=4, plan_event_id=plan.id, depends_on=[step_a.id]
+        )
+
+        state = fold([goal, plan, step_a, step_b])
+
+        record_b = next(s for s in state.plan_steps if s.event_id == step_b.id)
+        assert record_b.depends_on == (step_a.id,)
+
+
+class TestPlanStepInvalidation:
+    def _contradiction_observation(
+        self, task_id: uuid.UUID, sequence_number: int
+    ) -> EngineeringEvent:
+        return _event(
+            task_id=task_id,
+            sequence_number=sequence_number,
+            event_type=ev.OBSERVATION_RECORDED,
+            payload={
+                "raw_result": {"note": "postcondition falsified"},
+                "capability": "query_knowledge_graph",
+                "outcome": "completed",
+                "classification": "contradiction",
+            },
+        )
+
+    def test_direct_invalidation_overlays_the_planstep_record(self) -> None:
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": []},
+        )
+        step = _plan_step(task_id, sequence_number=3, plan_event_id=plan.id)
+        contradiction = self._contradiction_observation(task_id, 4)
+        invalidation = _invalidated(
+            task_id,
+            sequence_number=5,
+            plan_step_event_id=step.id,
+            contradiction_observation_event_id=contradiction.id,
+        )
+
+        state = fold([goal, plan, step, contradiction, invalidation])
+
+        record = next(s for s in state.plan_steps if s.event_id == step.id)
+        assert record.invalidated is True
+        assert record.invalidation_reason == "postcondition falsified"
+        assert record.invalidating_observation_event_id == contradiction.id
+        assert is_plan_step_invalidated(state, step.id) is True
+
+    def test_plan_step_created_event_itself_is_never_mutated(self) -> None:
+        """ES §8 inv. 13: invalidation is an OVERLAY, never an edit —
+        proven by comparing the record reconstructed before and after
+        the invalidating event, on every field the base event itself
+        set."""
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": []},
+        )
+        step = _plan_step(task_id, sequence_number=3, plan_event_id=plan.id)
+        state_before = fold([goal, plan, step])
+        record_before = state_before.plan_steps[0]
+
+        contradiction = self._contradiction_observation(task_id, 4)
+        invalidation = _invalidated(
+            task_id,
+            sequence_number=5,
+            plan_step_event_id=step.id,
+            contradiction_observation_event_id=contradiction.id,
+        )
+        state_after = fold([goal, plan, step, contradiction, invalidation])
+        record_after = next(s for s in state_after.plan_steps if s.event_id == step.id)
+
+        assert record_before.description == record_after.description
+        assert record_before.postcondition == record_after.postcondition
+        assert record_before.plan_event_id == record_after.plan_event_id
+
+    def test_non_dependent_planstep_is_unaffected_by_a_sibling_invalidation(self) -> None:
+        """ES §11: 'Invalidation MUST propagate only to dependent
+        PlanSteps in the DAG, not to the whole Plan by default.' Two
+        sibling PlanSteps, neither depending on the other — invalidating
+        one MUST NOT invalidate the other."""
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": []},
+        )
+        step_a = _plan_step(task_id, sequence_number=3, plan_event_id=plan.id)
+        step_b = _plan_step(task_id, sequence_number=4, plan_event_id=plan.id)  # independent
+        contradiction = self._contradiction_observation(task_id, 5)
+        invalidation = _invalidated(
+            task_id,
+            sequence_number=6,
+            plan_step_event_id=step_a.id,
+            contradiction_observation_event_id=contradiction.id,
+        )
+
+        state = fold([goal, plan, step_a, step_b, contradiction, invalidation])
+
+        assert is_plan_step_invalidated(state, step_a.id) is True
+        assert is_plan_step_invalidated(state, step_b.id) is False
+        assert transitively_dependent_plan_steps(state, step_a.id) == frozenset()
+
+    def test_transitive_invalidation_propagates_the_full_dependency_chain(self) -> None:
+        """A -> B -> C (B depends_on A, C depends_on B). Contradicting A
+        must transitively implicate both B and C, and NOT any unrelated
+        sibling D."""
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": []},
+        )
+        step_a = _plan_step(task_id, sequence_number=3, plan_event_id=plan.id)
+        step_b = _plan_step(
+            task_id, sequence_number=4, plan_event_id=plan.id, depends_on=[step_a.id]
+        )
+        step_c = _plan_step(
+            task_id, sequence_number=5, plan_event_id=plan.id, depends_on=[step_b.id]
+        )
+        step_d = _plan_step(task_id, sequence_number=6, plan_event_id=plan.id)  # unrelated
+
+        state = fold([goal, plan, step_a, step_b, step_c, step_d])
+
+        dependents = transitively_dependent_plan_steps(state, step_a.id)
+        assert dependents == frozenset({step_b.id, step_c.id})
+        assert step_d.id not in dependents
+        assert step_a.id not in dependents  # never includes the seed itself
+
+    def test_diamond_dependency_is_visited_exactly_once(self) -> None:
+        """A -> B, A -> C, B -> D, C -> D (D depends on both B and C).
+        The BFS must not double-count or infinite-loop on the shared
+        dependent D."""
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": []},
+        )
+        step_a = _plan_step(task_id, sequence_number=3, plan_event_id=plan.id)
+        step_b = _plan_step(
+            task_id, sequence_number=4, plan_event_id=plan.id, depends_on=[step_a.id]
+        )
+        step_c = _plan_step(
+            task_id, sequence_number=5, plan_event_id=plan.id, depends_on=[step_a.id]
+        )
+        step_d = _plan_step(
+            task_id, sequence_number=6, plan_event_id=plan.id, depends_on=[step_b.id, step_c.id]
+        )
+
+        state = fold([goal, plan, step_a, step_b, step_c, step_d])
+
+        assert transitively_dependent_plan_steps(state, step_a.id) == frozenset(
+            {step_b.id, step_c.id, step_d.id}
+        )
+
+    def test_invalidation_order_is_derived_from_sequence_number_not_list_order(self) -> None:
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        plan = _event(
+            task_id=task_id,
+            sequence_number=2,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal.id), "scope": []},
+        )
+        step = _plan_step(task_id, sequence_number=3, plan_event_id=plan.id)
+        contradiction = self._contradiction_observation(task_id, 4)
+        invalidation = _invalidated(
+            task_id,
+            sequence_number=5,
+            plan_step_event_id=step.id,
+            contradiction_observation_event_id=contradiction.id,
+        )
+        events = [goal, plan, step, contradiction, invalidation]
+
+        forward = fold(events)
+        backward = fold(list(reversed(events)))
+
+        assert forward == backward
+        assert forward.plan_steps[0].invalidated is True
+
+
+class TestIsPlanStepInvalidatedHelper:
+    def test_unknown_plan_step_id_is_not_invalidated(self) -> None:
+        task_id = uuid.uuid4()
+        goal = _goal(task_id)
+        state = fold([goal])
+        assert is_plan_step_invalidated(state, uuid.uuid4()) is False

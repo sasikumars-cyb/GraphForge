@@ -45,6 +45,14 @@ GOAL_CREATED = "GoalCreated"
 GOAL_UPDATED = "GoalUpdated"
 PLAN_CREATED = "PlanCreated"
 PLAN_STEP_CREATED = "PlanStepCreated"
+# Phase 6, ES §11/§8: the minimum new event type needed to durably mark an
+# ALREADY-APPENDED PlanStepCreated as invalidated, without editing it —
+# mirrors the Phase 4 Workspace-lifecycle precedent exactly (a base
+# creation event plus a satellite lifecycle event causally anchored to
+# it), applied to PlanStep instead of Workspace. See this module's own
+# `validate_plan_step_invalidated` for why this is the smallest addition
+# that satisfies the contract, not a broader Replan event/workflow.
+PLAN_STEP_INVALIDATED = "PlanStepInvalidated"
 DECISION_MADE = "DecisionMade"
 EVIDENCE_RECORDED = "EvidenceRecorded"
 BELIEF_RECORDED = "BeliefRecorded"
@@ -76,6 +84,7 @@ EVENT_TYPES: frozenset[str] = frozenset(
         GOAL_UPDATED,
         PLAN_CREATED,
         PLAN_STEP_CREATED,
+        PLAN_STEP_INVALIDATED,
         DECISION_MADE,
         EVIDENCE_RECORDED,
         BELIEF_RECORDED,
@@ -118,6 +127,16 @@ CAUSAL_REQUIREMENTS: dict[str, frozenset[str]] = {
     GOAL_UPDATED: frozenset({GOAL_CREATED}),
     PLAN_CREATED: frozenset({GOAL_CREATED}),
     PLAN_STEP_CREATED: frozenset({PLAN_CREATED}),
+    # Phase 6: PlanStepInvalidated's one mandatory causal parent is the
+    # specific PlanStepCreated event it invalidates — mirrors every
+    # Workspace lifecycle event's identical "always the base creation
+    # event" choice immediately below. `contradiction_observation_event_id`
+    # (the OTHER reference this event carries) is validated separately,
+    # by `EngineeringEventRepository`, against `OBSERVATION_RECORDED`'s
+    # `classification` field — not expressible through this single-parent
+    # mechanism, the same reasoning `BeliefRecorded.evidence_ids` already
+    # established for why some references need their own check.
+    PLAN_STEP_INVALIDATED: frozenset({PLAN_STEP_CREATED}),
     # Phase 3: the Grant lifecycle is itself a causal chain — each stage
     # exists only because the prior one happened. AuthorizationDenied is
     # deliberately NOT here: a denial is a base case (like GoalCreated),
@@ -149,6 +168,7 @@ CAUSAL_PAYLOAD_REFERENCE_FIELD: dict[str, str] = {
     GOAL_UPDATED: "goal_event_id",
     PLAN_CREATED: "goal_event_id",
     PLAN_STEP_CREATED: "plan_event_id",
+    PLAN_STEP_INVALIDATED: "plan_step_event_id",
     # AUTHORIZATION_CONSUMING's immediate causal parent is the Granted
     # event; AUTHORIZATION_CONSUMED's immediate causal parent is the
     # Consuming event (not Granted directly) — checked against
@@ -211,6 +231,24 @@ def validate_goal_updated(payload: dict[str, Any]) -> None:
 
 def validate_plan_created(payload: dict[str, Any]) -> None:
     _require(payload, "goal_event_id", "scope", event_type=PLAN_CREATED)
+    # Phase 6, ES §11: "Any revision after approval MUST produce a new
+    # Plan version; the approved version MUST remain retrievable
+    # unchanged." `supersedes_plan_event_id` is OPTIONAL — a base/first
+    # Plan for a Goal supersedes nothing. When present, it is a durable
+    # reference to the specific prior `PlanCreated` event this new Plan
+    # version replaces — deliberately NOT the causal parent (that remains
+    # `goal_event_id`, unchanged): a Plan's cause is always its Goal;
+    # supersession is a second, independent relationship, mirroring
+    # `EvidenceRecorded`'s own `supersedes: <EvidenceID>` precedent (ES
+    # §4) applied to Plan instead of Evidence. Deliberately does NOT
+    # introduce a mutable "authoritative" flag anywhere — which Plan is
+    # currently eligible remains a DERIVED fact (see
+    # `materialize.superseded_plan_event_ids`), never a stored one.
+    supersedes = payload.get("supersedes_plan_event_id")
+    if supersedes is not None and (not isinstance(supersedes, str) or not supersedes.strip()):
+        raise InvalidEventPayloadError(
+            f"{PLAN_CREATED}.supersedes_plan_event_id, when present, must be a non-empty str."
+        )
 
 
 def validate_plan_step_created(payload: dict[str, Any]) -> None:
@@ -224,7 +262,44 @@ def validate_plan_step_created(payload: dict[str, Any]) -> None:
     # without a pinned postcondition to pin it to.
     _require(payload, "plan_event_id", "description", "postcondition", event_type=PLAN_STEP_CREATED)
     if not isinstance(payload["postcondition"], str) or not payload["postcondition"].strip():
-        raise InvalidEventPayloadError(f"{PLAN_STEP_CREATED}.postcondition must be a non-empty str.")
+        raise InvalidEventPayloadError(
+            f"{PLAN_STEP_CREATED}.postcondition must be a non-empty str."
+        )
+    # Phase 6, ES §11: "Invalidation MUST propagate only to dependent
+    # PlanSteps in the DAG, not to the whole Plan by default." This is
+    # the minimum dependency-edge representation that makes that MUST
+    # satisfiable at all — NOT a full DAG execution model (no
+    # scheduling, no parallel/conditional branches; see
+    # `app.engineering_state.materialize.transitively_dependent_plan_steps`
+    # for the one thing this field exists to support). OPTIONAL — most
+    # PlanSteps depend on nothing; defaults to empty, mirroring
+    # `BeliefRecorded.evidence_ids`'s own "list, may be empty" shape.
+    depends_on = payload.get("depends_on")
+    if depends_on is not None and not isinstance(depends_on, list):
+        raise InvalidEventPayloadError(
+            f"{PLAN_STEP_CREATED}.depends_on, when present, must be a list."
+        )
+
+
+def validate_plan_step_invalidated(payload: dict[str, Any]) -> None:
+    # ES §10: "Contradiction... MUST trigger Belief revision, dependent
+    # PlanStep invalidation, and Replan. This is the ONLY classification
+    # that may trigger Replan." `contradiction_observation_event_id` is
+    # what makes this a genuinely EVIDENCED fact, not an arbitrary claim
+    # — the repository (not this I/O-free module) additionally verifies
+    # it references a real `ObservationRecorded` event, in the same task,
+    # whose `classification` is literally `"contradiction"`, closing the
+    # same class of gap the Phase 1 causal-order correction closed for
+    # every other event type.
+    _require(
+        payload,
+        "plan_step_event_id",
+        "contradiction_observation_event_id",
+        "reason",
+        event_type=PLAN_STEP_INVALIDATED,
+    )
+    if not isinstance(payload["reason"], str) or not payload["reason"].strip():
+        raise InvalidEventPayloadError(f"{PLAN_STEP_INVALIDATED}.reason must be a non-empty str.")
 
 
 def validate_decision_made(payload: dict[str, Any]) -> None:
@@ -520,6 +595,7 @@ _VALIDATORS: dict[str, Any] = {
     GOAL_UPDATED: validate_goal_updated,
     PLAN_CREATED: validate_plan_created,
     PLAN_STEP_CREATED: validate_plan_step_created,
+    PLAN_STEP_INVALIDATED: validate_plan_step_invalidated,
     DECISION_MADE: validate_decision_made,
     EVIDENCE_RECORDED: validate_evidence_recorded,
     BELIEF_RECORDED: validate_belief_recorded,
@@ -558,6 +634,7 @@ EventType = Literal[
     "GoalUpdated",
     "PlanCreated",
     "PlanStepCreated",
+    "PlanStepInvalidated",
     "DecisionMade",
     "EvidenceRecorded",
     "BeliefRecorded",
@@ -591,6 +668,7 @@ __all__ = [
     "OBSERVATION_RECORDED",
     "PLAN_CREATED",
     "PLAN_STEP_CREATED",
+    "PLAN_STEP_INVALIDATED",
     "WORKSPACE_CREATED",
     "WORKSPACE_DESTROYED",
     "WORKSPACE_DIAGNOSTIC_HOLD_ENTERED",
