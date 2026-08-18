@@ -480,3 +480,169 @@ class TestContradictionReadiness:
 
         state = fold(await repo.list_for_task(task_id))
         assert is_plan_step_invalidated(state, plan_step_event_id) is True
+
+
+class TestGetEndpoint:
+    """Phase 7.1 — the read-only visibility slice."""
+
+    async def test_post_then_get_round_trip(
+        self, engineering_task_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        headers, _ = await _register_and_login(engineering_task_client)
+        create_response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers,
+            json={
+                "description": "find repositories containing payment processing code",
+                "postconditions": ["at least one repository identified"],
+            },
+        )
+        assert create_response.status_code == 201, create_response.text
+        created = create_response.json()
+        task_id = created["task_id"]
+
+        get_response = await engineering_task_client.get(
+            f"/api/v1/engineering-tasks/{task_id}", headers=headers
+        )
+        assert get_response.status_code == 200, get_response.text
+        fetched = get_response.json()
+
+        # 1. Existing task returns 200 — proven by the assertion above.
+        # 2. Goal is reconstructed correctly.
+        assert fetched["goal"]["description"] == (
+            "find repositories containing payment processing code"
+        )
+        assert fetched["goal"]["postconditions"] == ["at least one repository identified"]
+        # 3. Plan is reconstructed correctly.
+        assert fetched["plan_event_id"] == created["plan_event_id"]
+        # 4. PlanStep is reconstructed correctly.
+        assert fetched["plan_step"]["event_id"] == created["plan_step_event_id"]
+        assert fetched["plan_step"]["description"] == (
+            "find repositories containing payment processing code"
+        )
+        assert fetched["plan_step"]["postcondition"]
+        assert fetched["plan_step"]["invalidated"] is False
+        # 5. Observation is reconstructed correctly.
+        assert fetched["generator_observation"]["success"] is True
+        # 6. Classification is returned correctly.
+        assert fetched["generator_observation"]["classification"] == "expected"
+        # 7. Verification result is returned correctly.
+        assert fetched["verifier_observation"]["classification"] == "expected"
+        assert fetched["verifier_observation"]["actor"] == "control_plane_verifier"
+        assert fetched["task_id"] == task_id
+        assert fetched["created_at"]
+
+        # The GET request itself appended nothing — same event count
+        # before and after, read via the shared db_session.
+        repo = EngineeringEventRepository(db_session)
+        events_after_get = await repo.list_for_task(uuid.UUID(task_id))
+        assert len(events_after_get) == 11  # the exact Phase 7 happy-path count
+
+    async def test_nonexistent_task_returns_404(
+        self, engineering_task_client: AsyncClient
+    ) -> None:
+        headers, _ = await _register_and_login(engineering_task_client)
+        response = await engineering_task_client.get(
+            f"/api/v1/engineering-tasks/{uuid.uuid4()}", headers=headers
+        )
+        assert response.status_code == 404, response.text
+        assert response.json()["error"]["code"] == "not_found"
+
+    async def test_get_performs_no_mutation(
+        self, engineering_task_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        headers, _ = await _register_and_login(engineering_task_client)
+        create_response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers,
+            json={"description": "find repositories", "postconditions": ["found"]},
+        )
+        task_id = create_response.json()["task_id"]
+
+        repo = EngineeringEventRepository(db_session)
+        events_before = await repo.list_for_task(uuid.UUID(task_id))
+        event_ids_before = {e.id for e in events_before}
+
+        # Two GETs in a row — neither should change anything.
+        await engineering_task_client.get(f"/api/v1/engineering-tasks/{task_id}", headers=headers)
+        await engineering_task_client.get(f"/api/v1/engineering-tasks/{task_id}", headers=headers)
+
+        events_after = await repo.list_for_task(uuid.UUID(task_id))
+        event_ids_after = {e.id for e in events_after}
+        assert event_ids_after == event_ids_before
+        assert len(events_after) == len(events_before)
+
+    async def test_fresh_session_get_reconstructs_the_same_state(self) -> None:
+        """State can be reconstructed from a fresh DB session — the GET
+        path is exercised against a genuinely independent connection,
+        not one that shares any in-memory object with how the task was
+        created."""
+        from app.database.session import AsyncSessionLocal
+        from app.services.engineering_task_service import (
+            EngineeringTaskService,
+            get_engineering_task,
+        )
+
+        async with AsyncSessionLocal() as create_session:
+            service = EngineeringTaskService(
+                db=create_session,
+                capability_registry=_capability_registry(),
+                policy_store=_seeded_policy_store(),
+                tool_registry=_tool_registry(),
+            )
+            created = await service.create_and_execute(
+                description="find repositories", postconditions=["found"], user_id=uuid.uuid4()
+            )
+
+        async with AsyncSessionLocal() as fresh_session:
+            fetched = await get_engineering_task(db=fresh_session, task_id=created.task_id)
+
+        assert fetched is not None
+        assert fetched.task_id == created.task_id
+        assert fetched.goal.description == "find repositories"
+        assert fetched.plan_step is not None
+        assert fetched.plan_step.postcondition == created.plan_step.postcondition
+        assert fetched.generator_observation.classification == "expected"
+        assert fetched.verifier_observation.classification == "expected"
+
+    async def test_get_does_not_touch_legacy_workflow_run_or_agent_run_tables(
+        self, engineering_task_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """Behavioral companion to the structural architecture-test proof
+        (`test_reasoning_plane_boundary.py`): the legacy `Run`/`Workflow`/
+        `AgentRun` row counts are IDENTICAL before and after a GET call —
+        real evidence the read path neither creates nor reads-with-a-
+        side-effect any legacy row, not just "no import found by AST"."""
+        from sqlalchemy import func
+        from sqlalchemy import select as sa_select
+
+        from app.models.agent_step import AgentStep
+        from app.models.run import Run
+        from app.models.workflow import Workflow
+
+        async def _counts() -> tuple[int, int, int]:
+            run_count = await db_session.scalar(sa_select(func.count()).select_from(Run))
+            workflow_count = await db_session.scalar(
+                sa_select(func.count()).select_from(Workflow)
+            )
+            agent_step_count = await db_session.scalar(
+                sa_select(func.count()).select_from(AgentStep)
+            )
+            return run_count or 0, workflow_count or 0, agent_step_count or 0
+
+        headers, _ = await _register_and_login(engineering_task_client)
+        create_response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers,
+            json={"description": "find repositories", "postconditions": ["found"]},
+        )
+        task_id = create_response.json()["task_id"]
+
+        counts_before = await _counts()
+        response = await engineering_task_client.get(
+            f"/api/v1/engineering-tasks/{task_id}", headers=headers
+        )
+        assert response.status_code == 200, response.text
+        counts_after = await _counts()
+
+        assert counts_after == counts_before

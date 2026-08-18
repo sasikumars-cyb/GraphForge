@@ -33,6 +33,7 @@ import { ReportsPage } from "../pages/ReportsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WorkflowPage, NewWorkflowPage } from "../pages/WorkflowPage";
 import { ApprovedQueuePage } from "../pages/ApprovedQueuePage";
+import { EngineeringTaskDetailPage } from "../pages/EngineeringTaskDetailPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
 
 // Exported as plain data (not just the created router) so tests can build a
@@ -87,6 +88,10 @@ export const routes: RouteObject[] = [
           { path: "/runs/:runId", element: <RunDetailPage /> },
           { path: "/metrics", element: <MetricsPage /> },
           { path: "/metrics/workflows/:workflowId", element: <WorkflowLLMUsagePage /> },
+          // Phase 7.1 — read-only Engineering Task viewer. No list/history
+          // page yet (creation is API-only for this increment); this is
+          // reachable only by a direct link to a known task_id.
+          { path: "/engineering-tasks/:taskId", element: <EngineeringTaskDetailPage /> },
 
           // ── Knowledge ────────────────────────────────────────────
           { path: "/repositories", element: <RepositoriesPage /> },

@@ -15,6 +15,7 @@ from app.reasoning_plane.plane import ReasoningPlane
 from tests.unit.architecture._source_scan import find_imports_of, relative
 
 _TEST_PATH_PREFIXES: tuple[str, ...] = ("tests/",)
+_ENGINEERING_TASKS_ROUTER_PATH = "app/api/v1/routers/engineering_tasks.py"
 
 
 def test_reasoning_plane_never_imports_tool_executor() -> None:
@@ -162,4 +163,77 @@ def test_only_engineering_tasks_boundary_appends_goal_created_outside_control_pl
         "app/services/engineering_task_service.py no longer imports both "
         "EngineeringEventRepository and GOAL_CREATED — this test's own premise is "
         "stale; update it alongside whatever structural change caused this."
+    )
+
+
+# --- Phase 7.1: GET /{task_id} read-path boundary ---------------------------
+
+
+def test_engineering_tasks_router_does_not_import_control_plane_directly() -> None:
+    """`app/api/v1/routers/engineering_tasks.py` may (and does, for the
+    `POST` handler) import `EngineeringTaskService` — but must never
+    import the `ControlPlane` class itself directly. The GET handler's
+    read path (`get_engineering_task`) has no need for it at all."""
+    hits = find_imports_of("app.control_plane.control_plane", symbol="ControlPlane")
+    offenders = {relative(p) for p in hits if relative(p) == _ENGINEERING_TASKS_ROUTER_PATH}
+    assert not offenders, (
+        "app/api/v1/routers/engineering_tasks.py imports ControlPlane directly — "
+        "the GET read path must reach Engineering State only through "
+        "EngineeringEventRepository/fold(), never construct a ControlPlane itself."
+    )
+
+
+def test_engineering_tasks_router_does_not_import_reasoning_plane_directly() -> None:
+    hits = find_imports_of("app.reasoning_plane.plane", symbol="ReasoningPlane")
+    offenders = {relative(p) for p in hits if relative(p) == _ENGINEERING_TASKS_ROUTER_PATH}
+    assert not offenders, (
+        "app/api/v1/routers/engineering_tasks.py imports ReasoningPlane directly — "
+        "the GET read path must never construct one."
+    )
+
+
+def test_get_engineering_task_function_never_imports_control_plane_or_reasoning_plane() -> None:
+    """AST-based, on the actual `get_engineering_task` read function's
+    home module: `app/services/engineering_task_service.py` legitimately
+    imports `ControlPlane`/`ReasoningPlane` for `EngineeringTaskService`
+    (the POST/write path) — this test instead confirms, function-by-
+    function, that `get_engineering_task` and `_build_response` (the
+    functions the GET route actually calls) reference neither name
+    anywhere in their own bodies."""
+    import ast
+
+    from tests.unit.architecture._source_scan import APP_ROOT
+
+    path = APP_ROOT / "services" / "engineering_task_service.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    read_path_function_names = {"get_engineering_task", "_build_response", "_observation_view"}
+    forbidden_names = {"ControlPlane", "ReasoningPlane", "ToolExecutor"}
+
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef)
+            and node.name in read_path_function_names
+        ):
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Name) and inner.id in forbidden_names:
+                    offenders.append(f"{node.name} references {inner.id} at line {inner.lineno}")
+
+    assert not offenders, (
+        f"The GET read path references authority objects it must never touch: "
+        f"{offenders}."
+    )
+
+
+def test_engineering_tasks_router_get_handler_does_not_call_tool_executor() -> None:
+    """No `ToolExecutor` symbol anywhere in the router module at all —
+    the router never dispatches a Tool itself (POST delegates entirely
+    to `EngineeringTaskService`, which owns the one legitimate
+    `ToolExecutor` construction; GET has no Tool involvement whatsoever)."""
+    hits = find_imports_of("app.tools.executor", symbol="ToolExecutor")
+    offenders = {relative(p) for p in hits if relative(p) == _ENGINEERING_TASKS_ROUTER_PATH}
+    assert not offenders, (
+        "app/api/v1/routers/engineering_tasks.py imports ToolExecutor directly — "
+        "Tool dispatch must remain exclusively inside EngineeringTaskService/ControlPlane."
     )

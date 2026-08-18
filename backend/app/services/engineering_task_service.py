@@ -1,6 +1,7 @@
-"""`EngineeringTaskService` — Phase 7's minimal end-to-end integration.
+"""`EngineeringTaskService` — Phase 7's minimal end-to-end integration,
+plus the Phase 7.1 read-only visibility slice.
 
-**Orchestration only.** This service sequences already-existing,
+**Orchestration only.** `EngineeringTaskService` sequences already-existing,
 already-audited components; it re-implements none of their
 responsibilities:
 
@@ -17,6 +18,14 @@ all remain exactly where Phases 3-6 put them — this module owns none of
 them and duplicates none of their logic. If any of those responsibilities
 appeared to need reimplementing here, that would be a stop-and-report
 condition; none did.
+
+**`get_engineering_task` (Phase 7.1) is a genuinely separate, PURE READ
+path** — a module-level function, not a method on `EngineeringTaskService`,
+deliberately: it needs (and imports) only `EngineeringEventRepository` and
+`fold()`. It never constructs a `ControlPlane`, a `ReasoningPlane`, a
+`CapabilityRegistry`, or a `PolicyStore` — there is no `ControlPlane`/
+`ReasoningPlane` reference anywhere in scope when this function runs, not
+merely "unused." It never appends an event and never calls `.commit()`.
 """
 
 from __future__ import annotations
@@ -35,6 +44,8 @@ from app.control_plane.policy import PolicyStore
 from app.core.exceptions import AppError, ForbiddenError
 from app.engineering_state.events import GOAL_CREATED, PLAN_CREATED
 from app.engineering_state.materialize import (
+    MaterializedEngineeringState,
+    ObservationRecord,
     fold,
     has_unresolved_outcome_unknown,
     is_plan_step_invalidated,
@@ -42,7 +53,12 @@ from app.engineering_state.materialize import (
 from app.models.engineering_event import EngineeringEvent
 from app.reasoning_plane.plane import ReasoningPlane
 from app.repositories.engineering_event_repository import EngineeringEventRepository
-from app.schemas.engineering_task import EngineeringTaskObservation, EngineeringTaskResponse
+from app.schemas.engineering_task import (
+    EngineeringTaskGoal,
+    EngineeringTaskObservation,
+    EngineeringTaskPlanStep,
+    EngineeringTaskResponse,
+)
 from app.tools.executor import ToolExecutor
 from app.tools.registry import ToolRegistry, get_tool_registry
 
@@ -60,7 +76,9 @@ class EngineeringTaskCreationFailedError(AppError):
 
 class EngineeringTaskService:
     """One instance per request — mirrors `ControlPlane`'s own
-    per-request construction convention exactly."""
+    per-request construction convention exactly. Used ONLY by the
+    `POST` (create-and-execute) path — see `get_engineering_task` below
+    for the separate, ControlPlane-free `GET` path."""
 
     def __init__(
         self,
@@ -94,7 +112,7 @@ class EngineeringTaskService:
         # never the Reasoning Plane, never a caller-supplied arbitrary
         # event. `get_current_user` has already verified this is a real
         # human before this method is ever called.
-        goal_event = await self._events.append(
+        await self._events.append(
             task_id=task_id,
             event_type=GOAL_CREATED,
             payload={"description": description, "postconditions": postconditions},
@@ -147,43 +165,108 @@ class EngineeringTaskService:
             )
 
         try:
-            generator_result = await self._control_plane.authorize_and_execute(
+            await self._control_plane.authorize_and_execute(
                 task_id=task_id, action=action, human_approval=None
             )
         except (AuthorizationDeniedError, CapabilityGapError) as exc:
             raise ForbiddenError(str(exc), error_code="engineering_task_denied") from exc
 
-        verifier_result = await self._control_plane.request_verification(
+        await self._control_plane.request_verification(
             task_id=task_id, plan_step_event_id=action.plan_step_id
         )
 
         await self._db.commit()
 
         events = await self._events.list_for_task(task_id)
-        plan_event_id = next(e.id for e in events if e.event_type == PLAN_CREATED)
+        return _build_response(task_id, events)
 
-        return EngineeringTaskResponse(
-            task_id=task_id,
-            goal_event_id=goal_event.id,
-            plan_event_id=plan_event_id,
-            plan_step_event_id=action.plan_step_id,
-            generator_observation=_observation_view(
-                events, generator_result.observation_event_id
-            ),
-            verifier_observation=_observation_view(events, verifier_result.observation_event_id),
+
+async def get_engineering_task(
+    *, db: AsyncSession, task_id: uuid.UUID
+) -> EngineeringTaskResponse | None:
+    """Phase 7.1 — the entire read path. Constructs only
+    `EngineeringEventRepository`; never a `ControlPlane`, never a
+    `ReasoningPlane`, never a Capability/Policy/Tool registry. Returns
+    `None` when no Engineering State exists for `task_id` — the router
+    translates that into a 404, never a fabricated empty response.
+
+    Never appends an event, never calls `.commit()` — a plain read of
+    already-durable state via the existing, unmodified `list_for_task`/
+    `fold()` mechanism.
+    """
+    events = await EngineeringEventRepository(db).list_for_task(task_id)
+    if not events:
+        return None
+    return _build_response(task_id, events)
+
+
+def _build_response(
+    task_id: uuid.UUID, events: list[EngineeringEvent]
+) -> EngineeringTaskResponse:
+    """Shared by both `EngineeringTaskService.create_and_execute` (POST)
+    and `get_engineering_task` (GET) — the two views of one task can
+    never drift, because both are built from the identical materialized
+    state via the identical function. Deliberately tolerant of a
+    Verification-less/Observation-less state (defaults to `None`/empty
+    sub-objects) rather than raising, since a GET may in principle be
+    called against Engineering State that isn't the full expected shape.
+    """
+    state: MaterializedEngineeringState = fold(events)
+    goal_event = next(e for e in events if e.event_type == GOAL_CREATED)
+    plan_event = next(e for e in events if e.event_type == PLAN_CREATED)
+
+    assert state.goal is not None  # guaranteed: goal_event above already proves one exists
+    goal = EngineeringTaskGoal(
+        description=state.goal.description, postconditions=list(state.goal.postconditions)
+    )
+
+    plan_step = state.plan_steps[0] if state.plan_steps else None
+    plan_step_view = (
+        EngineeringTaskPlanStep(
+            event_id=plan_step.event_id,
+            description=plan_step.description,
+            postcondition=plan_step.postcondition,
+            invalidated=plan_step.invalidated,
         )
+        if plan_step is not None
+        else None
+    )
 
+    observations = list(state.observations)
+    generator_observation = next((o for o in observations if o.actor is None), None)
+    verifier_observation = next(
+        (o for o in observations if o.actor == "control_plane_verifier"), None
+    )
 
-def _observation_view(
-    events: list[EngineeringEvent], observation_event_id: uuid.UUID
-) -> EngineeringTaskObservation:
-    event = next(e for e in events if e.id == observation_event_id)
-    payload = event.payload
-    return EngineeringTaskObservation(
-        success=payload.get("success"),
-        classification=payload.get("classification"),
-        actor=payload.get("actor"),
+    return EngineeringTaskResponse(
+        task_id=task_id,
+        created_at=goal_event.recorded_at,
+        goal_event_id=goal_event.id,
+        goal=goal,
+        plan_event_id=plan_event.id,
+        plan_step_event_id=plan_step.event_id if plan_step is not None else plan_event.id,
+        plan_step=plan_step_view,
+        generator_observation=_observation_view(generator_observation),
+        verifier_observation=_observation_view(verifier_observation),
     )
 
 
-__all__ = ["EngineeringTaskCreationFailedError", "EngineeringTaskService"]
+def _observation_view(observation: ObservationRecord | None) -> EngineeringTaskObservation:
+    if observation is None:
+        return EngineeringTaskObservation(
+            success=None, outcome=None, classification=None, actor=None
+        )
+    success = (
+        observation.raw_result.get("success")
+        if isinstance(observation.raw_result, dict)
+        else None
+    )
+    return EngineeringTaskObservation(
+        success=success,
+        outcome=observation.outcome,
+        classification=observation.classification,
+        actor=observation.actor,
+    )
+
+
+__all__ = ["EngineeringTaskCreationFailedError", "EngineeringTaskService", "get_engineering_task"]
