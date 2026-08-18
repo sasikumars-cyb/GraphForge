@@ -32,6 +32,7 @@ import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import text
 
@@ -70,7 +71,8 @@ from app.engineering_state.events import (
     AUTHORIZATION_INVALIDATED,
     OBSERVATION_RECORDED,
 )
-from app.engineering_state.materialize import WorkspaceRecord
+from app.engineering_state.materialize import WorkspaceRecord, fold
+from app.models.engineering_event import EngineeringEvent
 from app.repositories.engineering_event_repository import EngineeringEventRepository
 from app.tools.executor import ToolExecutor
 from app.tools.interfaces import ToolInput, ToolResult
@@ -727,15 +729,34 @@ class ControlPlane:
         # shape exactly (`{"query": str, "parameters": dict}` for
         # `query_knowledge_graph`) — it is NOT itself `ToolInput.parameters`.
         # Passing it through unmapped would silently duplicate `query`
-        # inside `parameters` and drop the real nested parameters (e.g.
-        # `db`/`user_id` the Neo4j tool requires) wherever an Action's
-        # nested `parameters` dict actually carries them.
-        tool_input = ToolInput(
-            query=str(action.parameters.get("query", "")),
-            parameters=dict(action.parameters.get("parameters") or {}),
-        )
+        # inside `parameters` and drop the real nested parameters wherever
+        # an Action's nested `parameters` dict actually carries them.
         bound_capability = self._capabilities.get(action.capability_id, action.capability_version)
         assert bound_capability is not None  # already resolved at the final gate above.
+
+        # Phase 9 (runtime dependency injection design): declared runtime
+        # keys are resolved and merged HERE — strictly after Grant
+        # consumption (the AuthorizationConsuming commit above already
+        # happened), strictly after `action_parameters_hash` was already
+        # compared against `action.parameters` earlier in this method
+        # (Phase 3 exit-audit correction #2, unmodified by this change).
+        # `declared_parameters` starts as exactly what `action.parameters`
+        # already carried — untouched, unhashed-again, unre-derived — and
+        # only THEN gets the Capability-declared runtime keys merged on
+        # top, in a variable that was never part of anything hashed.
+        # `existing_task_events` is the SAME list already fetched above
+        # for the double-consumption check — reused at no extra query
+        # cost, not a new read.
+        declared_parameters = dict(action.parameters.get("parameters") or {})
+        for key in bound_capability.runtime_injected_parameters:
+            declared_parameters[key] = self._resolve_runtime_parameter(
+                key, existing_task_events=existing_task_events
+            )
+
+        tool_input = ToolInput(
+            query=str(action.parameters.get("query", "")),
+            parameters=declared_parameters,
+        )
         tool_result = await self._tool_executor.execute(bound_capability.tool_id, tool_input)
 
         await self._events.append(
@@ -837,6 +858,54 @@ class ControlPlane:
             outcome=outcome,
             tool_success=tool_result.success,
             observation_event_id=observation_event.id,
+        )
+
+    def _resolve_runtime_parameter(
+        self, key: str, *, existing_task_events: list[EngineeringEvent]
+    ) -> Any:
+        """Phase 9 (runtime dependency injection design) — the ENTIRE
+        runtime-injection resolver. Deliberately not a registry, not a
+        plugin mechanism, not reflection: exactly two keys are
+        understood, matching the audited design's explicit instruction
+        against building a general dependency-injection framework for
+        one Capability's two runtime needs.
+
+        - `"db"` — the exact `AsyncSession` this `ControlPlane` instance
+          already holds (`self._events._db`), the same session the
+          request's own commit/rollback lifecycle already owns. Never a
+          new session, never a second connection, never something this
+          method constructs.
+        - `"user_id"` — reconstructed from `GoalCreated.user_id` via
+          `fold()` over this task's own already-fetched event list
+          (Phase 7.3's existing, authoritative ownership field) — never
+          accepted as a parameter from any caller of this method,
+          `_consume_and_dispatch`, or `authorize_and_execute`. `None`
+          for a task whose `GoalCreated` predates Phase 7.3 (no
+          `user_id` was ever recorded) — `Neo4jGraphTool` already
+          handles a `None` `user_id` safely (its own required-parameter
+          check), not a new failure mode this resolver introduces.
+          Returned as the real `uuid.UUID` object (or `None`), matching
+          `app.context_pipeline.reasoning.investigation.SessionContext.
+          user_id`'s existing type exactly — never stringified, since
+          the one real caller (`GetIndexedRepositoriesTool`) compares it
+          directly against a `Uuid`-typed column.
+
+        Raises `ValueError` for any other key — a Capability declaring a
+        `runtime_injected_parameters` key this resolver doesn't
+        understand is a registration-time mistake to surface loudly, not
+        something to silently ignore or pass through as `None`.
+        """
+        if key == "db":
+            return self._events._db
+        if key == "user_id":
+            state = fold(existing_task_events)
+            return state.goal.user_id if state.goal is not None else None
+        raise ValueError(
+            f"ControlPlane._resolve_runtime_parameter does not understand "
+            f"runtime_injected_parameters key {key!r} — this is a narrow, "
+            "two-key resolver (Phase 9 Design Audit §11), not a general "
+            "dependency-injection mechanism. Add explicit support here, "
+            "deliberately, if a new key is genuinely required."
         )
 
     @staticmethod

@@ -895,3 +895,313 @@ def _deny_version(capability_id: str) -> Any:
         effective_at="2026-08-17T00:00:00Z",
         supersedes=None,
     )
+
+
+# --- Phase 9: runtime dependency injection -----------------------------
+
+
+class _CapturingGraphTool(_FakeGraphTool):
+    """Records every `ToolInput` it actually receives — a class-level
+    list, cleared by each test that uses it, mirroring
+    `test_engineering_task_integration.py`'s identical fixture."""
+
+    received_inputs: list[ToolInput] = []
+
+    async def execute(self, input: ToolInput) -> ToolResult:
+        type(self).received_inputs.append(input)
+        return await super().execute(input)
+
+
+class _RequiresDbAndUserIdGraphTool(_FakeGraphTool):
+    """Mirrors `Neo4jGraphTool.execute`'s own real, production guard
+    clauses exactly (`app/tools/implementations/neo4j_tool.py:67-89`) —
+    used to prove the FULL chain (not just the resolver in isolation)
+    behaves safely when `user_id` resolves to `None`."""
+
+    async def execute(self, input: ToolInput) -> ToolResult:
+        if input.parameters.get("db") is None:
+            return ToolResult(
+                tool_id=self.tool_id,
+                tool_name=self.display_name,
+                success=False,
+                error="ToolInput.parameters['db'] (AsyncSession) is required.",
+            )
+        if input.parameters.get("user_id") is None:
+            return ToolResult(
+                tool_id=self.tool_id,
+                tool_name=self.display_name,
+                success=False,
+                error="ToolInput.parameters['user_id'] is required to scope repository access.",
+            )
+        return await super().execute(input)
+
+
+def _tool_registry_injected(tool_cls: type = _FakeGraphTool) -> ToolRegistry:
+    registry = ToolRegistry()
+    registry.register(
+        ToolSpec(
+            tool_id="neo4j_graph",
+            display_name="Fake Graph",
+            description="d",
+            category=ToolCategory.GRAPH,
+            capabilities=[],
+            factory=lambda cfg: tool_cls(cfg),
+            requires_auth=False,
+            default_enabled=True,
+        )
+    )
+    return registry
+
+
+def _capability_registry_injected(tool_cls: type = _FakeGraphTool) -> CapabilityRegistry:
+    """A LOCAL variant of this file's own `_capability_registry()`,
+    declaring `runtime_injected_parameters` — deliberately not a change
+    to the shared fixture above, which many pre-existing denial/lifecycle
+    tests in this file use and which should stay entirely unaffected by
+    Phase 9."""
+    registry = CapabilityRegistry(tool_registry=_tool_registry_injected(tool_cls))
+    registry.register(
+        CapabilityVersion(
+            capability_id="query_knowledge_graph",
+            version=1,
+            description="d",
+            input_schema={"query": "str", "parameters": "dict"},
+            output_schema={"data": "dict", "summary": "str", "evidence_items": "list[str]"},
+            scope_ceiling="the single Neo4j instance",
+            risk_class=RiskClass.LOW,
+            reversibility=ReversibilityClass.REVERSIBLE,
+            compensating_capability_id=None,
+            external_visibility=False,
+            side_effect_class=SideEffectClass.READ_ONLY,
+            required_authorization="none",
+            isolation_requirement=IsolationRequirement.NONE,
+            execution_context_requirements=(),
+            produces_artifact=False,
+            tool_id="neo4j_graph",
+            registered_by="test",
+            kind=CapabilityKind.PRIMITIVE,
+            composed_of=None,
+            runtime_injected_parameters=frozenset({"db", "user_id"}),
+        )
+    )
+    return registry
+
+
+def _control_plane_injected(
+    db_session: AsyncSession, *, tool_cls: type = _FakeGraphTool
+) -> ControlPlane:
+    return ControlPlane(
+        capability_registry=_capability_registry_injected(tool_cls),
+        tool_executor=ToolExecutor(registry=_tool_registry_injected(tool_cls)),
+        policy_store=_seeded_policy_store(),
+        event_repository=EngineeringEventRepository(db_session),
+    )
+
+
+async def _append_goal_created(
+    db_session: AsyncSession, task_id: uuid.UUID, *, user_id: uuid.UUID | None
+) -> None:
+    """Appends a real `GoalCreated` event for `task_id`, with or without
+    `user_id` — the exact durable fact `_resolve_runtime_parameter`
+    reads. `user_id=None` simulates a historical, pre-Phase-7.3 task."""
+    payload: dict[str, object] = {"description": "d", "postconditions": ["p"]}
+    if user_id is not None:
+        payload["user_id"] = str(user_id)
+    repo = EngineeringEventRepository(db_session)
+    await repo.append(
+        task_id=task_id,
+        event_type=ev.GOAL_CREATED,
+        payload=payload,
+        actor="api:engineering_tasks",
+    )
+    await db_session.commit()
+
+
+class TestRuntimeParameterInjection:
+    """Phase 9 — the surgical, direct-`ControlPlane` proofs the audit's
+    test plan requires: hash identity, no `Action.parameters` mutation,
+    historical `user_id=None` safety, session identity, and genuine
+    (non-manipulated) classification outcomes with injection present."""
+
+    async def test_db_is_the_exact_request_session_instance(self, db_session: AsyncSession) -> None:
+        control_plane = _control_plane_injected(db_session, tool_cls=_CapturingGraphTool)
+        task_id = uuid.uuid4()
+        await _append_goal_created(db_session, task_id, user_id=uuid.uuid4())
+        _CapturingGraphTool.received_inputs.clear()
+
+        await control_plane.authorize_and_execute(
+            task_id=task_id, action=_action(), human_approval=None
+        )
+
+        assert len(_CapturingGraphTool.received_inputs) == 1
+        assert _CapturingGraphTool.received_inputs[0].parameters["db"] is db_session
+
+    async def test_user_id_comes_from_goal_created_never_from_action_parameters(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Even if a caller tries to smuggle a DIFFERENT user_id into
+        `Action.parameters["parameters"]`, the resolver's value — derived
+        from `GoalCreated`, never the caller — MUST win."""
+        control_plane = _control_plane_injected(db_session, tool_cls=_CapturingGraphTool)
+        task_id = uuid.uuid4()
+        real_user_id = uuid.uuid4()
+        spoofed_user_id = uuid.uuid4()
+        await _append_goal_created(db_session, task_id, user_id=real_user_id)
+        _CapturingGraphTool.received_inputs.clear()
+
+        action = _action(
+            parameters={"query": "find repos", "parameters": {"user_id": str(spoofed_user_id)}}
+        )
+        await control_plane.authorize_and_execute(
+            task_id=task_id, action=action, human_approval=None
+        )
+
+        received_user_id = _CapturingGraphTool.received_inputs[0].parameters["user_id"]
+        assert received_user_id == real_user_id
+        assert received_user_id != spoofed_user_id
+
+    async def test_action_parameters_hash_is_unchanged_by_injection(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The Grant's `action_parameters_hash` binds `action.parameters`
+        exactly as constructed — `db`/`user_id` injection happens strictly
+        after that hash was already computed and already compared at
+        consumption (Phase 3 exit-audit correction #2, unmodified)."""
+        from app.control_plane.grant import hash_action_parameters
+
+        control_plane = _control_plane_injected(db_session, tool_cls=_CapturingGraphTool)
+        task_id = uuid.uuid4()
+        await _append_goal_created(db_session, task_id, user_id=uuid.uuid4())
+        action = _action()
+        expected_hash = hash_action_parameters(action.parameters)
+
+        await control_plane.authorize_and_execute(
+            task_id=task_id, action=action, human_approval=None
+        )
+
+        events = await EngineeringEventRepository(db_session).list_for_task(task_id)
+        granted = next(e for e in events if e.event_type == "AuthorizationGranted")
+        assert granted.payload["action_parameters_hash"] == expected_hash
+        # And, directly: the injected keys never appear in what was hashed.
+        assert "db" not in action.parameters.get("parameters", {})
+        assert "user_id" not in action.parameters.get("parameters", {})
+
+    async def test_injection_never_mutates_the_original_action_parameters_object(
+        self, db_session: AsyncSession
+    ) -> None:
+        control_plane = _control_plane_injected(db_session, tool_cls=_CapturingGraphTool)
+        task_id = uuid.uuid4()
+        await _append_goal_created(db_session, task_id, user_id=uuid.uuid4())
+        action = _action()
+        original_parameters_dict = action.parameters["parameters"]
+        assert original_parameters_dict == {}
+
+        await control_plane.authorize_and_execute(
+            task_id=task_id, action=action, human_approval=None
+        )
+
+        # The exact same dict object, still exactly as it was — proving
+        # `_resolve_runtime_parameter`'s merge happens on a COPY.
+        assert action.parameters["parameters"] is original_parameters_dict
+        assert action.parameters["parameters"] == {}
+
+    async def test_historical_goal_created_with_no_user_id_resolves_to_none_safely(
+        self, db_session: AsyncSession
+    ) -> None:
+        control_plane = _control_plane_injected(db_session, tool_cls=_RequiresDbAndUserIdGraphTool)
+        task_id = uuid.uuid4()
+        await _append_goal_created(db_session, task_id, user_id=None)
+
+        result = await control_plane.authorize_and_execute(
+            task_id=task_id, action=_action(), human_approval=None
+        )
+
+        # No crash — the real Tool's own safety behavior fires cleanly,
+        # exactly matching Neo4jGraphTool's real production guard clause.
+        assert result.tool_success is False
+        events = await EngineeringEventRepository(db_session).list_for_task(task_id)
+        observation = next(e for e in events if e.event_type == "ObservationRecorded")
+        assert (
+            observation.payload["raw_result"]["error"]
+            == "ToolInput.parameters['user_id'] is required to scope repository access."
+        )
+
+    async def test_session_remains_usable_after_dispatch(self, db_session: AsyncSession) -> None:
+        from sqlalchemy import text as sa_text
+
+        control_plane = _control_plane_injected(db_session, tool_cls=_CapturingGraphTool)
+        task_id = uuid.uuid4()
+        await _append_goal_created(db_session, task_id, user_id=uuid.uuid4())
+
+        await control_plane.authorize_and_execute(
+            task_id=task_id, action=_action(), human_approval=None
+        )
+
+        # The same session, still open, still queryable — no leaked
+        # transaction state from being handed to the Tool.
+        result = await db_session.execute(sa_text("SELECT 1"))
+        assert result.scalar() == 1
+
+    async def test_genuine_tool_failure_still_classifies_as_anomaly_with_injection_present(
+        self, db_session: AsyncSession
+    ) -> None:
+        class _StillFailingGraphTool(_FakeGraphTool):
+            async def execute(self, input: ToolInput) -> ToolResult:
+                # db/user_id ARE present — the failure is for an
+                # unrelated, genuine reason, never manipulated.
+                assert input.parameters.get("db") is not None
+                assert input.parameters.get("user_id") is not None
+                return ToolResult(
+                    tool_id=self.tool_id,
+                    tool_name=self.display_name,
+                    success=False,
+                    error="simulated genuine infrastructure failure",
+                )
+
+        control_plane = _control_plane_injected(db_session, tool_cls=_StillFailingGraphTool)
+        task_id = uuid.uuid4()
+        await _append_goal_created(db_session, task_id, user_id=uuid.uuid4())
+
+        await control_plane.authorize_and_execute(
+            task_id=task_id, action=_action(), human_approval=None
+        )
+
+        events = await EngineeringEventRepository(db_session).list_for_task(task_id)
+        observation = next(e for e in events if e.event_type == "ObservationRecorded")
+        assert observation.payload["classification"] == "anomaly"
+
+    async def test_genuine_empty_result_still_classifies_as_contradiction_with_injection_present(
+        self, db_session: AsyncSession
+    ) -> None:
+        class _StillEmptyGraphTool(_FakeGraphTool):
+            async def execute(self, input: ToolInput) -> ToolResult:
+                assert input.parameters.get("db") is not None
+                assert input.parameters.get("user_id") is not None
+                return ToolResult(
+                    tool_id=self.tool_id,
+                    tool_name=self.display_name,
+                    success=True,
+                    data={"data": {}, "summary": ""},
+                )
+
+        control_plane = _control_plane_injected(db_session, tool_cls=_StillEmptyGraphTool)
+        task_id = uuid.uuid4()
+        await _append_goal_created(db_session, task_id, user_id=uuid.uuid4())
+        action = _action(
+            parameters={"query": "find repos", "parameters": {}},
+            prediction=Prediction(
+                target_observable="summary",
+                falsification_condition="summary is empty",
+                evaluation_procedure="check summary",
+                execution_context={},
+                necessary_condition_rationale="needed for the plan step",
+            ),
+        )
+
+        await control_plane.authorize_and_execute(
+            task_id=task_id, action=action, human_approval=None
+        )
+
+        events = await EngineeringEventRepository(db_session).list_for_task(task_id)
+        observation = next(e for e in events if e.event_type == "ObservationRecorded")
+        assert observation.payload["classification"] == "contradiction"

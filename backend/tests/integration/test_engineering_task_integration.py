@@ -136,6 +136,26 @@ class _ContradictingGraphTool(_FakeGraphTool):
         )
 
 
+class _CapturingGraphTool(_FakeGraphTool):
+    """Phase 9 — records every `ToolInput` it actually receives, so a
+    test can inspect exactly what `ControlPlane._resolve_runtime_parameter`
+    injected, end-to-end through the real HTTP/API path — not merely at
+    the unit level. A class-level list (the factory constructs a fresh
+    instance per dispatch, matching every other fake tool's own
+    convention) — tests using this fixture MUST clear it first."""
+
+    received_inputs: list[ToolInput] = []
+
+    async def execute(self, input: ToolInput) -> ToolResult:
+        type(self).received_inputs.append(input)
+        return ToolResult(
+            tool_id=self.tool_id,
+            tool_name=self.display_name,
+            success=True,
+            data={"data": {}, "summary": f"result for: {input.query}"},
+        )
+
+
 def _tool_registry(tool_cls: type = _FakeGraphTool) -> ToolRegistry:
     registry = ToolRegistry()
     registry.register(
@@ -176,6 +196,10 @@ def _capability_registry(tool_cls: type = _FakeGraphTool) -> CapabilityRegistry:
             registered_by="test",
             kind=CapabilityKind.PRIMITIVE,
             composed_of=None,
+            # Phase 9 — matches the real registration in
+            # app.capabilities.setup exactly, so this test file's fixture
+            # exercises the same runtime-injection path production does.
+            runtime_injected_parameters=frozenset({"db", "user_id"}),
         )
     )
     return registry
@@ -1229,3 +1253,61 @@ class TestOwnership:
                         f"{task_id} was NOT in the list but detail returned "
                         f"{detail_response.status_code}"
                     )
+
+
+class TestRuntimeParameterInjectionEndToEnd:
+    """Phase 9 — proves the runtime-injection design works through the
+    REAL HTTP/API path (`_CapturingGraphTool`), complementing the
+    lower-level, more surgical tests in
+    `tests/integration/test_control_plane_authorization_integration.py`.
+    """
+
+    async def test_db_and_user_id_reach_the_tool_end_to_end(self, db_session: AsyncSession) -> None:
+        _CapturingGraphTool.received_inputs.clear()
+        app = _override_app(db_session, tool_cls=_CapturingGraphTool)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers, user_id = await _register_and_login(client)
+            response = await client.post(
+                "/api/v1/engineering-tasks",
+                headers=headers,
+                json={"description": "find repositories", "postconditions": ["found"]},
+            )
+        app.dependency_overrides.clear()
+
+        assert response.status_code == 201, response.text
+        # Two dispatches happened (generator + verifier) — both must have
+        # received the injected runtime parameters.
+        assert len(_CapturingGraphTool.received_inputs) == 2
+        for received in _CapturingGraphTool.received_inputs:
+            assert received.parameters["db"] is db_session
+            assert received.parameters["user_id"] == user_id
+
+    async def test_two_users_each_get_their_own_user_id_never_the_others(
+        self, db_session: AsyncSession
+    ) -> None:
+        _CapturingGraphTool.received_inputs.clear()
+        app = _override_app(db_session, tool_cls=_CapturingGraphTool)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers_a, user_id_a = await _register_and_login_as(client, "runtime-a@example.com")
+            headers_b, user_id_b = await _register_and_login_as(client, "runtime-b@example.com")
+            assert user_id_a != user_id_b
+
+            await client.post(
+                "/api/v1/engineering-tasks",
+                headers=headers_a,
+                json={"description": "task A", "postconditions": ["found"]},
+            )
+            _CapturingGraphTool.received_inputs.clear()
+            await client.post(
+                "/api/v1/engineering-tasks",
+                headers=headers_b,
+                json={"description": "task B", "postconditions": ["found"]},
+            )
+        app.dependency_overrides.clear()
+
+        assert len(_CapturingGraphTool.received_inputs) == 2
+        for received in _CapturingGraphTool.received_inputs:
+            assert received.parameters["user_id"] == user_id_b
+            assert received.parameters["user_id"] != user_id_a
