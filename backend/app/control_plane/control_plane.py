@@ -50,9 +50,18 @@ from app.control_plane.model import (
     ConformanceResult,
     DenialStage,
     EligibilityResult,
+    Prediction,
+)
+from app.control_plane.observation_classification import (
+    ClassificationInputs,
+    PredictionResult,
+    classify_observation,
 )
 from app.control_plane.policy import PolicyStore
 from app.control_plane.safety import evaluate_safety_validity
+from app.control_plane.verification import VerificationService
+from app.control_plane.workspace_lifecycle import WorkspaceLifecycleService
+from app.control_plane.workspace_model import DestructionReason, WorkspaceLease
 from app.engineering_state.events import (
     AUTHORIZATION_CONSUMED,
     AUTHORIZATION_CONSUMING,
@@ -61,13 +70,24 @@ from app.engineering_state.events import (
     AUTHORIZATION_INVALIDATED,
     OBSERVATION_RECORDED,
 )
+from app.engineering_state.materialize import WorkspaceRecord
 from app.repositories.engineering_event_repository import EngineeringEventRepository
 from app.tools.executor import ToolExecutor
-from app.tools.interfaces import ToolInput
+from app.tools.interfaces import ToolInput, ToolResult
 
 logger = logging.getLogger(__name__)
 
 _CONTROL_PLANE_ACTOR = "control_plane"
+
+# Cap §15.2: "Distinct Role with its own Policy binding." Phase 5
+# exit-audit correction: this constant's ONLY reference site anywhere in
+# this module is `_authorize_and_execute_as_verifier` below — checked
+# structurally by
+# `tests/unit/architecture/test_verification_boundary.py::
+# test_verifier_actor_constant_is_referenced_from_exactly_one_call_site`.
+# Never a parameter on any public or private method's signature, exactly
+# mirroring `_CONTROL_PLANE_ACTOR`'s own precedent immediately above.
+_VERIFIER_ACTOR = "control_plane_verifier"
 
 
 class CapabilityGapError(ValueError):
@@ -113,6 +133,21 @@ class ControlPlane:
         self._tool_executor = tool_executor
         self._policy = policy_store
         self._events = event_repository
+        # Phase 4, Cap §19: an implementation component owned exclusively
+        # by ControlPlane — never imported or instantiated by anything
+        # Reasoning-Plane-adjacent (structurally enforced by
+        # tests/unit/architecture/test_workspace_authority_boundary.py).
+        self._workspaces = WorkspaceLifecycleService(
+            event_repository=event_repository, policy_store=policy_store
+        )
+        # Phase 5, Cap §15: an implementation component owned exclusively
+        # by ControlPlane — never imported or instantiated by anything
+        # Reasoning-Plane-adjacent (structurally enforced by
+        # tests/unit/architecture/test_verification_boundary.py), mirroring
+        # `_workspaces`'s identical ownership pattern immediately above.
+        self._verification = VerificationService(
+            control_plane=self, event_repository=event_repository
+        )
 
     # ------------------------------------------------------------------
     # Proposal-level: Conformance (Cap §6, first phase)
@@ -264,11 +299,76 @@ class ControlPlane:
         lease_conflicts: bool = False,
         emergency_policy_active: bool = False,
     ) -> ActionExecutionResult:
-        """Runs the final gate, issues a Grant, consumes it, dispatches
-        the Tool, and records the Observation. `AuthorizationConsuming` is
-        committed durably (see `_consume_and_dispatch`'s own docstring,
-        Phase 3 exit-audit correction #1) BEFORE the Tool is dispatched,
-        so a crash during or after dispatch leaves a real, queryable
+        """The public entry point every caller outside this module uses
+        — Phase 3's exact original signature, restored unchanged by the
+        Phase 5 exit-audit correction. No `business_actor`/`verifier_*`
+        parameter exists here, structurally (see
+        `tests/unit/architecture/test_verification_boundary.py`'s
+        signature check): nothing about who is calling this method can
+        ever influence the recorded business actor. Delegates to
+        `_run_authorization_pipeline` with `business_actor=None` — the
+        SAME pipeline `_authorize_and_execute_as_verifier` below also
+        delegates to, so there is exactly one authorization
+        implementation, never two.
+        """
+        return await self._run_authorization_pipeline(
+            task_id=task_id,
+            action=action,
+            human_approval=human_approval,
+            lease_conflicts=lease_conflicts,
+            emergency_policy_active=emergency_policy_active,
+            business_actor=None,
+        )
+
+    async def _authorize_and_execute_as_verifier(
+        self,
+        *,
+        task_id: uuid.UUID,
+        action: Action,
+        human_approval: HumanApprovalRecord | None = None,
+    ) -> ActionExecutionResult:
+        """Phase 5 exit-audit correction — the ONLY path that may record
+        `_VERIFIER_ACTOR` as an Observation's business actor. Reachable
+        only from `VerificationService` (this module's own internal
+        authority boundary; not part of the public API — structurally
+        confirmed by `tests/unit/architecture/test_verification_boundary.py`'s
+        `_VERIFIER_ACTOR`-single-reference-site check), and — critically —
+        this method itself accepts NO actor parameter of any kind: the
+        identity is hardcoded in the call below, exactly mirroring
+        `_CONTROL_PLANE_ACTOR`'s own precedent (a constant, never a
+        parameter). No caller, public or private, can make this method
+        record any actor other than `_VERIFIER_ACTOR`. Runs the
+        IDENTICAL Conformance -> Policy -> Safety Validity -> Grant ->
+        Tool pipeline as `authorize_and_execute` — no second
+        authorization implementation exists.
+        """
+        return await self._run_authorization_pipeline(
+            task_id=task_id,
+            action=action,
+            human_approval=human_approval,
+            lease_conflicts=False,
+            emergency_policy_active=False,
+            business_actor=_VERIFIER_ACTOR,
+        )
+
+    async def _run_authorization_pipeline(
+        self,
+        *,
+        task_id: uuid.UUID,
+        action: Action,
+        human_approval: HumanApprovalRecord | None,
+        lease_conflicts: bool,
+        emergency_policy_active: bool,
+        business_actor: str | None,
+    ) -> ActionExecutionResult:
+        """The actual final gate, Grant issuance, consumption, and
+        dispatch — Phase 3's original `authorize_and_execute` body,
+        renamed and made internal-only by the Phase 5 exit-audit
+        correction so `business_actor` is never reachable from the
+        public API surface. `AuthorizationConsuming` is committed
+        durably (see `_consume_and_dispatch`'s own docstring, Phase 3
+        exit-audit correction #1) BEFORE the Tool is dispatched, so a
+        crash during or after dispatch leaves a real, queryable
         `AuthorizationConsuming` event with no matching
         `AuthorizationConsumed` — the durable evidence a future
         reconciliation mechanism needs. That reconciliation sweep itself
@@ -359,7 +459,11 @@ class ControlPlane:
         )
 
         return await self._consume_and_dispatch(
-            task_id=task_id, action=action, grant=grant, granted_event_id=granted_event_id
+            task_id=task_id,
+            action=action,
+            grant=grant,
+            granted_event_id=granted_event_id,
+            business_actor=business_actor,
         )
 
     async def _issue_grant(
@@ -441,6 +545,7 @@ class ControlPlane:
         action: Action,
         grant: AuthorizationGrant,
         granted_event_id: uuid.UUID,
+        business_actor: str | None = None,
     ) -> ActionExecutionResult:
         """Explicit reuse of the Phase 1 advisory-lock pattern: this
         method acquires `pg_advisory_xact_lock` on `task_id` itself,
@@ -672,6 +777,30 @@ class ControlPlane:
         # "completed" here; the field exists on `ActionExecutionResult`
         # so that future source of indeterminacy has somewhere to report.
         outcome = "completed"
+
+        # Phase 5, Cap §16.2 steps 2-6 — computed and durably recorded in
+        # the SAME atomic append as the Observation itself, never in a
+        # later mutation (events are immutable; see
+        # `app.control_plane.observation_classification`'s own module
+        # docstring on why this must happen before, not after, append).
+        # `infrastructure_failure`/`execution_context_mismatch`/
+        # `prediction_result` are this phase's minimal, deterministic
+        # derivations for the one registered Capability — see
+        # `ClassificationInputs`'s own field docstrings for exactly why
+        # each is computed this way and what a future Capability with
+        # real Execution Context requirements would need to add.
+        infrastructure_failure = not tool_result.success
+        execution_context_mismatch = False
+        prediction_result = self._evaluate_prediction_result(action.prediction, tool_result)
+        classification = classify_observation(
+            ClassificationInputs(
+                outcome=outcome,
+                infrastructure_failure=infrastructure_failure,
+                execution_context_mismatch=execution_context_mismatch,
+                prediction_result=prediction_result,
+            )
+        )
+
         observation_event = await self._events.append(
             task_id=task_id,
             event_type=OBSERVATION_RECORDED,
@@ -690,6 +819,14 @@ class ControlPlane:
                 "tool_id": tool_result.tool_id,
                 "success": tool_result.success,
                 "grant_id": str(grant.grant_id),
+                # Phase 5 additions — all optional per
+                # `events.validate_observation_recorded`, so this producer
+                # remains backward compatible with
+                # `run_coordinator.py`'s independent, unchanged producer.
+                "outcome": outcome,
+                "classification": classification,
+                "actor": business_actor,
+                "plan_step_id": str(action.plan_step_id),
             },
             actor=_CONTROL_PLANE_ACTOR,
         )
@@ -701,6 +838,123 @@ class ControlPlane:
             tool_success=tool_result.success,
             observation_event_id=observation_event.id,
         )
+
+    @staticmethod
+    def _evaluate_prediction_result(
+        prediction: Prediction, tool_result: ToolResult
+    ) -> PredictionResult:
+        """Cap §16.2 steps 5-6's "pinned Prediction evaluated" input.
+
+        This phase's minimal, deterministic evaluator for the one
+        registered Capability's shape: does the Tool's actual result
+        data contain a truthy value at `prediction.target_observable`?
+        Present and truthy -> "true"; present but falsy/empty -> "false";
+        absent entirely -> "inconclusive". This is deliberately NOT a
+        general Prediction-evaluation engine (Cap §13's
+        `evaluation_procedure` free-text field is declarative, not
+        executed — see `app.control_plane.model.Prediction`'s own
+        docstring on requirement 5 being "declared, not mechanically
+        checked") — it is the smallest real evaluation that makes Cap
+        §16.2 steps 5-6 reachable at all for `query_knowledge_graph`.
+        """
+        if not tool_result.success or not tool_result.data:
+            return "inconclusive"
+        if prediction.target_observable not in tool_result.data:
+            return "inconclusive"
+        value = tool_result.data[prediction.target_observable]
+        return "true" if value else "false"
+
+    # ------------------------------------------------------------------
+    # Independent Verification (Cap §15) — the ONLY entry point into
+    # `VerificationService`; nothing Reasoning-Plane-adjacent may
+    # construct or call it directly (structurally enforced by
+    # tests/unit/architecture/test_verification_boundary.py).
+    # ------------------------------------------------------------------
+
+    async def request_verification(
+        self, *, task_id: uuid.UUID, plan_step_event_id: uuid.UUID
+    ) -> ActionExecutionResult:
+        return await self._verification.request_verification(
+            task_id=task_id, plan_step_event_id=plan_step_event_id
+        )
+
+    # ------------------------------------------------------------------
+    # Workspace lifecycle (Cap §19) — every method here is the ONLY way
+    # to reach `WorkspaceLifecycleService`; nothing Reasoning-Plane-
+    # adjacent may call the service directly (structurally enforced by
+    # tests/unit/architecture/test_workspace_authority_boundary.py).
+    # ------------------------------------------------------------------
+
+    async def create_workspace(
+        self,
+        *,
+        task_id: uuid.UUID,
+        actor: str,
+        user_id: uuid.UUID,
+        execution_context: dict[str, object],
+        repository_url: str | None,
+        ref: str = "main",
+        access_token: str | None = None,
+        initial_lease_seconds: int,
+        max_lifetime_seconds: int,
+    ) -> tuple[WorkspaceLease, uuid.UUID]:
+        return await self._workspaces.create_workspace(
+            task_id=task_id,
+            actor=actor,
+            user_id=user_id,
+            execution_context=execution_context,
+            repository_url=repository_url,
+            ref=ref,
+            access_token=access_token,
+            initial_lease_seconds=initial_lease_seconds,
+            max_lifetime_seconds=max_lifetime_seconds,
+        )
+
+    async def renew_workspace_lease(
+        self, *, task_id: uuid.UUID, workspace_event_id: uuid.UUID, new_expires_at: datetime
+    ) -> WorkspaceRecord:
+        return await self._workspaces.renew_workspace_lease(
+            task_id=task_id, workspace_event_id=workspace_event_id, new_expires_at=new_expires_at
+        )
+
+    async def enter_diagnostic_hold(
+        self,
+        *,
+        task_id: uuid.UUID,
+        workspace_event_id: uuid.UUID,
+        reason: str,
+        hold_ttl_seconds: int,
+    ) -> WorkspaceRecord:
+        return await self._workspaces.enter_diagnostic_hold(
+            task_id=task_id,
+            workspace_event_id=workspace_event_id,
+            reason=reason,
+            hold_ttl_seconds=hold_ttl_seconds,
+        )
+
+    async def revoke_workspace_write_authorization(
+        self, *, task_id: uuid.UUID, workspace_event_id: uuid.UUID, reason: str
+    ) -> WorkspaceRecord:
+        return await self._workspaces.revoke_write_authorization(
+            task_id=task_id, workspace_event_id=workspace_event_id, reason=reason
+        )
+
+    async def destroy_workspace(
+        self, *, task_id: uuid.UUID, workspace_event_id: uuid.UUID, reason: DestructionReason
+    ) -> WorkspaceRecord:
+        return await self._workspaces.destroy_workspace(
+            task_id=task_id, workspace_event_id=workspace_event_id, reason=reason
+        )
+
+    async def custodial_destroy_workspace(
+        self, *, task_id: uuid.UUID, workspace_event_id: uuid.UUID, actor: str, user_id: uuid.UUID
+    ) -> WorkspaceRecord:
+        return await self._workspaces.custodial_destroy_workspace(
+            task_id=task_id, workspace_event_id=workspace_event_id, actor=actor, user_id=user_id
+        )
+
+    async def run_workspace_sweep(self, *, now: datetime | None = None) -> dict[str, int]:
+        return await self._workspaces.run_sweep(now=now)
 
     async def _record_denial(
         self,

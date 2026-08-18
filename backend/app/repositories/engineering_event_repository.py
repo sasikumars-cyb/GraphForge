@@ -27,6 +27,10 @@ from app.engineering_state.events import (
     CAUSAL_PAYLOAD_REFERENCE_FIELD,
     CAUSAL_REQUIREMENTS,
     EVIDENCE_RECORDED,
+    OBSERVATION_RECORDED,
+    PLAN_CREATED,
+    PLAN_STEP_CREATED,
+    PLAN_STEP_INVALIDATED,
     validate_payload,
 )
 from app.models.engineering_event import EngineeringEvent
@@ -177,6 +181,38 @@ class EngineeringEventRepository:
         )
         return list(result.scalars().all())
 
+    async def list_by_event_types(self, event_types: frozenset[str]) -> list[EngineeringEvent]:
+        """Every event whose `event_type` is one of `event_types`, across
+        ALL tasks — a genuinely new query shape, not `list_for_task`'s
+        single-task scope. Added in Phase 4, deliberately narrow (not a
+        general unscoped-query escape hatch): the one real need is the
+        Workspace concurrency cap (Cap §19, "Policy MUST cap concurrent
+        Workspaces per Role and per tenant"), which requires counting a
+        Role's open Workspaces across potentially many different
+        task_ids — something `list_for_task`'s per-task scope
+        structurally cannot answer.
+
+        Deliberately does NOT filter by owning Role/tenant here — that
+        information lives inside `payload` (a Workspace event's outer
+        `EngineeringEvent.actor` is always `"control_plane"`, the
+        WRITER, never the owning Role; the OWNING Role is a payload
+        field), and this repository stays a thin, typed-column query
+        seam. Owner-scoped filtering is `WorkspaceLifecycleService`'s
+        job, applied in Python to this method's result — the same
+        division of labor `materialize.fold()` already has relative to
+        this repository (repository fetches, a higher layer interprets).
+
+        Order is by `recorded_at` — there is no single cross-task
+        `sequence_number` to order by, since that column is only unique
+        per `task_id`.
+        """
+        result = await self._db.execute(
+            select(EngineeringEvent)
+            .where(EngineeringEvent.event_type.in_(event_types))
+            .order_by(EngineeringEvent.recorded_at)
+        )
+        return list(result.scalars().all())
+
     async def _validate_causal_references(
         self,
         *,
@@ -250,7 +286,14 @@ class EngineeringEventRepository:
                     f"{sorted(required_parent_types)}."
                 )
 
-        elif event_type == BELIEF_RECORDED:
+        # From here on, checks are NOT mutually exclusive with the
+        # CAUSAL_REQUIREMENTS block above (or with each other) — several
+        # event types carry a SECOND reference that isn't expressible
+        # through the single `causation_event_id` column, mirroring
+        # BeliefRecorded.evidence_ids's own established precedent for
+        # exactly that reason.
+
+        if event_type == BELIEF_RECORDED:
             evidence_ids = payload.get("evidence_ids") or []
             for raw_id in evidence_ids:
                 evidence_event = await self._db.get(EngineeringEvent, uuid.UUID(str(raw_id)))
@@ -270,4 +313,101 @@ class EngineeringEventRepository:
                         f"{BELIEF_RECORDED} cites evidence_ids entry "
                         f"{raw_id!r}, whose event_type is "
                         f"{evidence_event.event_type!r}, not {EVIDENCE_RECORDED!r}."
+                    )
+
+        if event_type == PLAN_CREATED:
+            # Phase 6, ES §11: when present, `supersedes_plan_event_id`
+            # MUST reference a real, same-task PlanCreated event — closing
+            # the exact "dangling or cross-task supersession claim" gap
+            # this whole mechanism exists to prevent, mirroring every
+            # other reference check in this method.
+            supersedes = payload.get("supersedes_plan_event_id")
+            if supersedes is not None:
+                superseded_event = await self._db.get(EngineeringEvent, uuid.UUID(str(supersedes)))
+                if superseded_event is None:
+                    raise CausalOrderViolationError(
+                        f"{PLAN_CREATED}.supersedes_plan_event_id={supersedes!r} "
+                        "does not exist."
+                    )
+                if superseded_event.task_id != task_id:
+                    raise CausalOrderViolationError(
+                        f"{PLAN_CREATED}.supersedes_plan_event_id={supersedes!r} "
+                        f"belongs to a different task ({superseded_event.task_id}, "
+                        f"not {task_id})."
+                    )
+                if superseded_event.event_type != PLAN_CREATED:
+                    raise CausalOrderViolationError(
+                        f"{PLAN_CREATED}.supersedes_plan_event_id={supersedes!r} "
+                        f"has event_type {superseded_event.event_type!r}, not "
+                        f"{PLAN_CREATED!r}."
+                    )
+
+        if event_type == PLAN_STEP_CREATED:
+            # Phase 6, ES §11: every id in `depends_on`, when present,
+            # MUST reference a real, same-task PlanStepCreated event —
+            # the minimum integrity check that makes
+            # `materialize.transitively_dependent_plan_steps` trustworthy
+            # (a dangling dependency edge would silently under-propagate
+            # invalidation).
+            depends_on = payload.get("depends_on") or []
+            for raw_id in depends_on:
+                dependency_event = await self._db.get(EngineeringEvent, uuid.UUID(str(raw_id)))
+                if dependency_event is None:
+                    raise CausalOrderViolationError(
+                        f"{PLAN_STEP_CREATED}.depends_on entry {raw_id!r} does not exist."
+                    )
+                if dependency_event.task_id != task_id:
+                    raise CausalOrderViolationError(
+                        f"{PLAN_STEP_CREATED}.depends_on entry {raw_id!r} belongs to "
+                        f"a different task ({dependency_event.task_id}, not {task_id})."
+                    )
+                if dependency_event.event_type != PLAN_STEP_CREATED:
+                    raise CausalOrderViolationError(
+                        f"{PLAN_STEP_CREATED}.depends_on entry {raw_id!r} has "
+                        f"event_type {dependency_event.event_type!r}, not "
+                        f"{PLAN_STEP_CREATED!r}."
+                    )
+
+        if event_type == PLAN_STEP_INVALIDATED:
+            # ES §10: "Contradiction... is the ONLY classification that
+            # may trigger Replan." Structurally enforced here, not merely
+            # by convention: `contradiction_observation_event_id` MUST
+            # reference a real, same-task ObservationRecorded event whose
+            # `classification` is literally "contradiction" — the single
+            # most contract-critical check this whole event type exists
+            # to carry. Unlike every other reference check in this
+            # method, this one additionally inspects the referenced
+            # event's OWN payload content, not just its existence/task/
+            # type — a deliberate, narrowly-scoped exception justified by
+            # how explicit and repeated ES §10's "ONLY Contradiction"
+            # rule is.
+            contradiction_id = payload.get("contradiction_observation_event_id")
+            if contradiction_id is not None:
+                contradiction_event = await self._db.get(
+                    EngineeringEvent, uuid.UUID(str(contradiction_id))
+                )
+                if contradiction_event is None:
+                    raise CausalOrderViolationError(
+                        f"{PLAN_STEP_INVALIDATED}.contradiction_observation_event_id="
+                        f"{contradiction_id!r} does not exist."
+                    )
+                if contradiction_event.task_id != task_id:
+                    raise CausalOrderViolationError(
+                        f"{PLAN_STEP_INVALIDATED}.contradiction_observation_event_id="
+                        f"{contradiction_id!r} belongs to a different task "
+                        f"({contradiction_event.task_id}, not {task_id})."
+                    )
+                if contradiction_event.event_type != OBSERVATION_RECORDED:
+                    raise CausalOrderViolationError(
+                        f"{PLAN_STEP_INVALIDATED}.contradiction_observation_event_id="
+                        f"{contradiction_id!r} has event_type "
+                        f"{contradiction_event.event_type!r}, not {OBSERVATION_RECORDED!r}."
+                    )
+                if contradiction_event.payload.get("classification") != "contradiction":
+                    raise CausalOrderViolationError(
+                        f"{PLAN_STEP_INVALIDATED}.contradiction_observation_event_id="
+                        f"{contradiction_id!r} has classification "
+                        f"{contradiction_event.payload.get('classification')!r}, not "
+                        "'contradiction' — ES §10: Contradiction is the ONLY "
+                        "classification that may trigger Replan/PlanStep invalidation."
                     )

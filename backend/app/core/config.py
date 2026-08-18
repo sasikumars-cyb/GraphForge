@@ -97,6 +97,26 @@ class Settings(BaseSettings):
     # after each indexing run, success or failure.
     indexer_clone_root: str = Field(default="/tmp/graphforge-indexer")
 
+    # --- Workspace lifecycle (Control Plane Phase 4, Cap §19) ---
+    # A separate root from indexer_clone_root: different subsystem,
+    # different lifecycle (a Workspace persists across reasoning cycles
+    # until explicitly destroyed; an indexer clone never outlives one
+    # scan). Both happen to use the same underlying `run_git_clone`
+    # primitive — that is code reuse, not a shared lifecycle.
+    workspace_root: str = Field(default="/tmp/graphforge-workspaces")
+    # Cap §19: "A Role MUST NOT be able to keep a Workspace alive
+    # indefinitely through lease renewal. Total lease lifetime is
+    # bounded." A fixed system constant — not per-request-settable, since
+    # a caller-settable ceiling would itself be the indefinite-renewal
+    # loophole the contract forbids.
+    workspace_max_lifetime_seconds: int = Field(default=3600)
+    workspace_initial_lease_seconds: int = Field(default=900)
+    # This value is only the SEED loaded into Policy at startup/test
+    # wiring — the actual authoritative source at evaluation time is
+    # `PolicyStore.resource_limit()` (Cap §19: "Policy MUST cap"), never
+    # this setting read directly by any enforcement code path.
+    workspace_default_concurrency_cap_seed: int = Field(default=3)
+
     # --- Version control provider (local demo support) ---
     # "github" (default, unchanged production behavior) or "local_git" - an
     # explicit opt-in used only by the local demo environment (see

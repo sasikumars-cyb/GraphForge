@@ -96,17 +96,116 @@ def test_belief_qualitative_status_is_closed_vocabulary() -> None:
         ev.validate_payload(ev.BELIEF_RECORDED, payload)
 
 
-def test_observation_recorded_has_no_classification_field() -> None:
-    """Deliberate scope boundary: Observation *classification* is
-    Capabilities contract §16, Control-Plane-owned, deterministic, and
-    does not exist until Phase 5. A Phase 1 ObservationRecorded payload
-    is accepted without any classification field — and this test exists
-    specifically to fail loudly if a future edit adds an unenforced
-    'classification' key to the required set, which would let something
-    other than the future Control Plane silently establish it."""
+def test_observation_recorded_classification_remains_optional() -> None:
+    """Phase 5 adds `outcome`/`classification` as OPTIONAL fields (Cap
+    §16), never required — `app.orchestrator.run_coordinator`'s existing,
+    independent producer supplies neither, and must remain valid. This
+    test exists specifically to fail loudly if a future edit moves either
+    field into the required set, which would break that real producer."""
     ev.validate_payload(
         ev.OBSERVATION_RECORDED, {"raw_result": {"exit_code": 0}, "capability": "run_test_suite"}
     )
+
+
+def test_observation_recorded_outcome_is_closed_vocabulary() -> None:
+    base = {"raw_result": {"exit_code": 0}, "capability": "run_test_suite"}
+    with pytest.raises(ev.InvalidEventPayloadError, match="outcome"):
+        ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "outcome": "made_up"})
+
+    ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "outcome": "completed"})
+    ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "outcome": "outcome_unknown"})
+
+
+def test_observation_recorded_classification_is_closed_vocabulary() -> None:
+    """Cap §16.1's five-way vocabulary, minus `blocked` — a Blocked
+    Observation never reaches this event type (see
+    `app.control_plane.observation_classification`'s module docstring)."""
+    base = {"raw_result": {"exit_code": 0}, "capability": "run_test_suite"}
+    with pytest.raises(ev.InvalidEventPayloadError, match="classification"):
+        ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "classification": "blocked"})
+    with pytest.raises(ev.InvalidEventPayloadError, match="classification"):
+        ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "classification": "made_up"})
+
+    for valid in ("expected", "anomaly", "uncertain_outcome", "contradiction"):
+        ev.validate_payload(ev.OBSERVATION_RECORDED, {**base, "classification": valid})
+
+
+def test_plan_step_created_requires_a_postcondition() -> None:
+    """Cap §15.1: Independent Verification resolves the postcondition it
+    evaluates ONLY from the immutable `PlanStepCreated` event — it must
+    exist, or there is nothing to pin."""
+    with pytest.raises(ev.InvalidEventPayloadError, match="postcondition"):
+        ev.validate_payload(
+            ev.PLAN_STEP_CREATED,
+            {"plan_event_id": "x", "description": "run the test suite"},
+        )
+    with pytest.raises(ev.InvalidEventPayloadError, match="postcondition"):
+        ev.validate_payload(
+            ev.PLAN_STEP_CREATED,
+            {"plan_event_id": "x", "description": "run the test suite", "postcondition": "   "},
+        )
+
+    ev.validate_payload(
+        ev.PLAN_STEP_CREATED,
+        {
+            "plan_event_id": "x",
+            "description": "run the test suite",
+            "postcondition": "the test suite exits 0",
+        },
+    )
+
+
+def test_plan_created_supersedes_field_is_optional_but_validated_when_present() -> None:
+    """ES §11: 'Any revision after approval MUST produce a new Plan
+    version; the approved version MUST remain retrievable unchanged.'
+    `supersedes_plan_event_id` is OPTIONAL (a base Plan supersedes
+    nothing) but must be a non-empty str when present."""
+    base = {"goal_event_id": "g", "scope": ["repo-a"]}
+    ev.validate_payload(ev.PLAN_CREATED, base)  # no supersedes — fine.
+    ev.validate_payload(ev.PLAN_CREATED, {**base, "supersedes_plan_event_id": "prior-event-id"})
+    with pytest.raises(ev.InvalidEventPayloadError, match="supersedes_plan_event_id"):
+        ev.validate_payload(ev.PLAN_CREATED, {**base, "supersedes_plan_event_id": "   "})
+    with pytest.raises(ev.InvalidEventPayloadError, match="supersedes_plan_event_id"):
+        ev.validate_payload(ev.PLAN_CREATED, {**base, "supersedes_plan_event_id": 123})
+
+
+def test_plan_step_created_depends_on_is_optional_but_must_be_a_list() -> None:
+    """ES §11: the minimum dependency-edge representation — optional,
+    most PlanSteps depend on nothing."""
+    base = {"plan_event_id": "p", "description": "d", "postcondition": "x exits 0"}
+    ev.validate_payload(ev.PLAN_STEP_CREATED, base)  # no depends_on — fine.
+    ev.validate_payload(ev.PLAN_STEP_CREATED, {**base, "depends_on": []})
+    ev.validate_payload(ev.PLAN_STEP_CREATED, {**base, "depends_on": ["a", "b"]})
+    with pytest.raises(ev.InvalidEventPayloadError, match="depends_on"):
+        ev.validate_payload(ev.PLAN_STEP_CREATED, {**base, "depends_on": "not-a-list"})
+
+
+def test_plan_step_invalidated_requires_the_full_shape() -> None:
+    """ES §10: `contradiction_observation_event_id` is what makes this a
+    genuinely evidenced fact — required, never optional."""
+    with pytest.raises(ev.InvalidEventPayloadError, match="missing required field"):
+        ev.validate_payload(ev.PLAN_STEP_INVALIDATED, {"plan_step_event_id": "s"})
+
+    ev.validate_payload(
+        ev.PLAN_STEP_INVALIDATED,
+        {
+            "plan_step_event_id": "s",
+            "contradiction_observation_event_id": "o",
+            "reason": "postcondition falsified",
+        },
+    )
+
+
+def test_plan_step_invalidated_reason_must_be_non_empty() -> None:
+    with pytest.raises(ev.InvalidEventPayloadError, match="reason"):
+        ev.validate_payload(
+            ev.PLAN_STEP_INVALIDATED,
+            {
+                "plan_step_event_id": "s",
+                "contradiction_observation_event_id": "o",
+                "reason": "   ",
+            },
+        )
 
 
 def test_decision_requires_alternatives_considered_as_a_list() -> None:

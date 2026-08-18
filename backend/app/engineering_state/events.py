@@ -45,6 +45,14 @@ GOAL_CREATED = "GoalCreated"
 GOAL_UPDATED = "GoalUpdated"
 PLAN_CREATED = "PlanCreated"
 PLAN_STEP_CREATED = "PlanStepCreated"
+# Phase 6, ES §11/§8: the minimum new event type needed to durably mark an
+# ALREADY-APPENDED PlanStepCreated as invalidated, without editing it —
+# mirrors the Phase 4 Workspace-lifecycle precedent exactly (a base
+# creation event plus a satellite lifecycle event causally anchored to
+# it), applied to PlanStep instead of Workspace. See this module's own
+# `validate_plan_step_invalidated` for why this is the smallest addition
+# that satisfies the contract, not a broader Replan event/workflow.
+PLAN_STEP_INVALIDATED = "PlanStepInvalidated"
 DECISION_MADE = "DecisionMade"
 EVIDENCE_RECORDED = "EvidenceRecorded"
 BELIEF_RECORDED = "BeliefRecorded"
@@ -57,12 +65,26 @@ AUTHORIZATION_CONSUMED = "AuthorizationConsumed"
 AUTHORIZATION_DENIED = "AuthorizationDenied"
 AUTHORIZATION_INVALIDATED = "AuthorizationInvalidated"
 
+# --- Phase 4: Workspace lifecycle (Cap §19) ---------------------------------
+#
+# Five event types, each independently justified against a distinct durable
+# fact §19 requires (design audit ruled out folding these into fewer types,
+# and ruled out a sixth for credential-incident/custodial/lease-expiry
+# destruction — those are `WorkspaceDestroyed.reason` values, mirroring the
+# `AuthorizationDenied.denial_stage` precedent, not separate event types).
+WORKSPACE_CREATED = "WorkspaceCreated"
+WORKSPACE_LEASE_RENEWED = "WorkspaceLeaseRenewed"
+WORKSPACE_DIAGNOSTIC_HOLD_ENTERED = "WorkspaceDiagnosticHoldEntered"
+WORKSPACE_WRITE_AUTHORIZATION_REVOKED = "WorkspaceWriteAuthorizationRevoked"
+WORKSPACE_DESTROYED = "WorkspaceDestroyed"
+
 EVENT_TYPES: frozenset[str] = frozenset(
     {
         GOAL_CREATED,
         GOAL_UPDATED,
         PLAN_CREATED,
         PLAN_STEP_CREATED,
+        PLAN_STEP_INVALIDATED,
         DECISION_MADE,
         EVIDENCE_RECORDED,
         BELIEF_RECORDED,
@@ -72,6 +94,11 @@ EVENT_TYPES: frozenset[str] = frozenset(
         AUTHORIZATION_CONSUMED,
         AUTHORIZATION_DENIED,
         AUTHORIZATION_INVALIDATED,
+        WORKSPACE_CREATED,
+        WORKSPACE_LEASE_RENEWED,
+        WORKSPACE_DIAGNOSTIC_HOLD_ENTERED,
+        WORKSPACE_WRITE_AUTHORIZATION_REVOKED,
+        WORKSPACE_DESTROYED,
     }
 )
 
@@ -100,6 +127,16 @@ CAUSAL_REQUIREMENTS: dict[str, frozenset[str]] = {
     GOAL_UPDATED: frozenset({GOAL_CREATED}),
     PLAN_CREATED: frozenset({GOAL_CREATED}),
     PLAN_STEP_CREATED: frozenset({PLAN_CREATED}),
+    # Phase 6: PlanStepInvalidated's one mandatory causal parent is the
+    # specific PlanStepCreated event it invalidates — mirrors every
+    # Workspace lifecycle event's identical "always the base creation
+    # event" choice immediately below. `contradiction_observation_event_id`
+    # (the OTHER reference this event carries) is validated separately,
+    # by `EngineeringEventRepository`, against `OBSERVATION_RECORDED`'s
+    # `classification` field — not expressible through this single-parent
+    # mechanism, the same reasoning `BeliefRecorded.evidence_ids` already
+    # established for why some references need their own check.
+    PLAN_STEP_INVALIDATED: frozenset({PLAN_STEP_CREATED}),
     # Phase 3: the Grant lifecycle is itself a causal chain — each stage
     # exists only because the prior one happened. AuthorizationDenied is
     # deliberately NOT here: a denial is a base case (like GoalCreated),
@@ -107,6 +144,18 @@ CAUSAL_REQUIREMENTS: dict[str, frozenset[str]] = {
     AUTHORIZATION_CONSUMING: frozenset({AUTHORIZATION_GRANTED}),
     AUTHORIZATION_CONSUMED: frozenset({AUTHORIZATION_CONSUMING}),
     AUTHORIZATION_INVALIDATED: frozenset({AUTHORIZATION_GRANTED}),
+    # Phase 4: every Workspace lifecycle event after creation causally
+    # references WorkspaceCreated directly (not the latest intermediate
+    # event) — a Destroyed event, for instance, can follow a leased,
+    # held, or write-revoked state, so its one stable causal anchor is
+    # always the base WorkspaceCreated, mirroring
+    # AUTHORIZATION_INVALIDATED's identical choice to reference
+    # AUTHORIZATION_GRANTED directly rather than whatever the most
+    # recent intermediate event happened to be.
+    WORKSPACE_LEASE_RENEWED: frozenset({WORKSPACE_CREATED}),
+    WORKSPACE_DIAGNOSTIC_HOLD_ENTERED: frozenset({WORKSPACE_CREATED}),
+    WORKSPACE_WRITE_AUTHORIZATION_REVOKED: frozenset({WORKSPACE_CREATED}),
+    WORKSPACE_DESTROYED: frozenset({WORKSPACE_CREATED}),
 }
 
 # For the event types in CAUSAL_REQUIREMENTS, the payload field that must
@@ -119,6 +168,7 @@ CAUSAL_PAYLOAD_REFERENCE_FIELD: dict[str, str] = {
     GOAL_UPDATED: "goal_event_id",
     PLAN_CREATED: "goal_event_id",
     PLAN_STEP_CREATED: "plan_event_id",
+    PLAN_STEP_INVALIDATED: "plan_step_event_id",
     # AUTHORIZATION_CONSUMING's immediate causal parent is the Granted
     # event; AUTHORIZATION_CONSUMED's immediate causal parent is the
     # Consuming event (not Granted directly) — checked against
@@ -134,6 +184,15 @@ CAUSAL_PAYLOAD_REFERENCE_FIELD: dict[str, str] = {
     AUTHORIZATION_CONSUMING: "grant_event_id",
     AUTHORIZATION_CONSUMED: "consuming_event_id",
     AUTHORIZATION_INVALIDATED: "grant_event_id",
+    # Phase 4: all four reference the base WorkspaceCreated event, via the
+    # same "workspace_event_id" payload field name across all of them —
+    # one consistent name, since (unlike Authorization*'s multi-hop
+    # chain) every Workspace event's causal parent is always the same
+    # single event.
+    WORKSPACE_LEASE_RENEWED: "workspace_event_id",
+    WORKSPACE_DIAGNOSTIC_HOLD_ENTERED: "workspace_event_id",
+    WORKSPACE_WRITE_AUTHORIZATION_REVOKED: "workspace_event_id",
+    WORKSPACE_DESTROYED: "workspace_event_id",
 }
 
 
@@ -172,10 +231,75 @@ def validate_goal_updated(payload: dict[str, Any]) -> None:
 
 def validate_plan_created(payload: dict[str, Any]) -> None:
     _require(payload, "goal_event_id", "scope", event_type=PLAN_CREATED)
+    # Phase 6, ES §11: "Any revision after approval MUST produce a new
+    # Plan version; the approved version MUST remain retrievable
+    # unchanged." `supersedes_plan_event_id` is OPTIONAL — a base/first
+    # Plan for a Goal supersedes nothing. When present, it is a durable
+    # reference to the specific prior `PlanCreated` event this new Plan
+    # version replaces — deliberately NOT the causal parent (that remains
+    # `goal_event_id`, unchanged): a Plan's cause is always its Goal;
+    # supersession is a second, independent relationship, mirroring
+    # `EvidenceRecorded`'s own `supersedes: <EvidenceID>` precedent (ES
+    # §4) applied to Plan instead of Evidence. Deliberately does NOT
+    # introduce a mutable "authoritative" flag anywhere — which Plan is
+    # currently eligible remains a DERIVED fact (see
+    # `materialize.superseded_plan_event_ids`), never a stored one.
+    supersedes = payload.get("supersedes_plan_event_id")
+    if supersedes is not None and (not isinstance(supersedes, str) or not supersedes.strip()):
+        raise InvalidEventPayloadError(
+            f"{PLAN_CREATED}.supersedes_plan_event_id, when present, must be a non-empty str."
+        )
 
 
 def validate_plan_step_created(payload: dict[str, Any]) -> None:
-    _require(payload, "plan_event_id", "description", event_type=PLAN_STEP_CREATED)
+    # Phase 5, Cap §15.1: Independent Verification resolves the PlanStep
+    # postcondition it evaluates ONLY by reading this field back from the
+    # immutable event log (by `plan_step_event_id` reference) — never by
+    # accepting a postcondition value from a caller (see
+    # `app.control_plane.verification`). Making it required here, at the
+    # single point PlanStepCreated is ever durably appended, is what
+    # makes that reference-only retrieval possible: there is no PlanStep
+    # without a pinned postcondition to pin it to.
+    _require(payload, "plan_event_id", "description", "postcondition", event_type=PLAN_STEP_CREATED)
+    if not isinstance(payload["postcondition"], str) or not payload["postcondition"].strip():
+        raise InvalidEventPayloadError(
+            f"{PLAN_STEP_CREATED}.postcondition must be a non-empty str."
+        )
+    # Phase 6, ES §11: "Invalidation MUST propagate only to dependent
+    # PlanSteps in the DAG, not to the whole Plan by default." This is
+    # the minimum dependency-edge representation that makes that MUST
+    # satisfiable at all — NOT a full DAG execution model (no
+    # scheduling, no parallel/conditional branches; see
+    # `app.engineering_state.materialize.transitively_dependent_plan_steps`
+    # for the one thing this field exists to support). OPTIONAL — most
+    # PlanSteps depend on nothing; defaults to empty, mirroring
+    # `BeliefRecorded.evidence_ids`'s own "list, may be empty" shape.
+    depends_on = payload.get("depends_on")
+    if depends_on is not None and not isinstance(depends_on, list):
+        raise InvalidEventPayloadError(
+            f"{PLAN_STEP_CREATED}.depends_on, when present, must be a list."
+        )
+
+
+def validate_plan_step_invalidated(payload: dict[str, Any]) -> None:
+    # ES §10: "Contradiction... MUST trigger Belief revision, dependent
+    # PlanStep invalidation, and Replan. This is the ONLY classification
+    # that may trigger Replan." `contradiction_observation_event_id` is
+    # what makes this a genuinely EVIDENCED fact, not an arbitrary claim
+    # — the repository (not this I/O-free module) additionally verifies
+    # it references a real `ObservationRecorded` event, in the same task,
+    # whose `classification` is literally `"contradiction"`, closing the
+    # same class of gap the Phase 1 causal-order correction closed for
+    # every other event type.
+    _require(
+        payload,
+        "plan_step_event_id",
+        "contradiction_observation_event_id",
+        "reason",
+        event_type=PLAN_STEP_INVALIDATED,
+    )
+    if not isinstance(payload["reason"], str) or not payload["reason"].strip():
+        raise InvalidEventPayloadError(f"{PLAN_STEP_INVALIDATED}.reason must be a non-empty str.")
 
 
 def validate_decision_made(payload: dict[str, Any]) -> None:
@@ -248,16 +372,48 @@ def validate_belief_recorded(payload: dict[str, Any]) -> None:
         raise InvalidEventPayloadError(f"{BELIEF_RECORDED}.evidence_ids must be a list.")
 
 
+_OBSERVATION_OUTCOMES: frozenset[str] = frozenset({"completed", "outcome_unknown"})
+
+# Cap §16.1's five-way vocabulary, minus `blocked` — a Blocked
+# Observation never reaches this event type at all (an authorization
+# failure never reaches Tool dispatch; it is durably recorded as
+# `AuthorizationDenied` instead, see
+# `app.control_plane.observation_classification`'s own module docstring).
+_OBSERVATION_CLASSIFICATIONS: frozenset[str] = frozenset(
+    {"expected", "anomaly", "uncertain_outcome", "contradiction"}
+)
+
+
 def validate_observation_recorded(payload: dict[str, Any]) -> None:
-    # Deliberately does NOT require a `classification` field. Observation
-    # classification is Capabilities contract §16, Control-Plane-owned,
-    # deterministic, fixed-evaluation-order — none of which exists until
-    # Phase 5. A Phase 1 ObservationRecorded event records the raw fact
-    # only; adding an unenforced "classification" field here would let
-    # something other than the future Control Plane silently set it,
-    # which is exactly the violation Cap inv. 18 forbids. See this
-    # module's own docstring on not inventing Phase 2+ shape early.
+    # `raw_result`/`capability` remain the only REQUIRED fields — Phase 1's
+    # original shape, unchanged. `run_coordinator.py`'s existing,
+    # independent producer (Phase 0/1) supplies neither `outcome` nor
+    # `classification` today; requiring either here would break that real,
+    # already-durable producer. Phase 5 adds two OPTIONAL fields instead:
+    #
+    # `outcome` ("completed" | "outcome_unknown") — Cap §8 state-ladder
+    # determinacy, distinct from `success` (Tool-level result, Phase 1/3)
+    # and from `classification` (Engineering interpretation, Cap §16.2)
+    # — never conflated.
+    #
+    # `classification` — Cap §16.2's five-way vocabulary, minus
+    # `blocked` (see `_OBSERVATION_CLASSIFICATIONS` above). Absent/None
+    # means "not yet classified" (e.g. `outcome_unknown` halts evaluation
+    # before classification per Cap §16.2 step 2 — see this repo's Phase
+    # 5 design audit §8, "ActionOutcomeUnknown is NOT uncertain_outcome").
     _require(payload, "raw_result", "capability", event_type=OBSERVATION_RECORDED)
+    outcome = payload.get("outcome")
+    if outcome is not None and outcome not in _OBSERVATION_OUTCOMES:
+        raise InvalidEventPayloadError(
+            f"{OBSERVATION_RECORDED}.outcome must be one of {sorted(_OBSERVATION_OUTCOMES)} "
+            "or absent/None."
+        )
+    classification = payload.get("classification")
+    if classification is not None and classification not in _OBSERVATION_CLASSIFICATIONS:
+        raise InvalidEventPayloadError(
+            f"{OBSERVATION_RECORDED}.classification must be one of "
+            f"{sorted(_OBSERVATION_CLASSIFICATIONS)} or absent/None."
+        )
 
 
 def validate_authorization_granted(payload: dict[str, Any]) -> None:
@@ -344,11 +500,102 @@ def validate_authorization_invalidated(payload: dict[str, Any]) -> None:
     _require(payload, "grant_event_id", "action_id", "reason", event_type=AUTHORIZATION_INVALIDATED)
 
 
+def validate_workspace_created(payload: dict[str, Any]) -> None:
+    # Cap §19: "A Workspace has an identity, a bound Execution Context,
+    # and a bounded, renewable lease." `workspace_id` is the business
+    # identifier (distinct from this event's own database id, exactly as
+    # `AuthorizationGrant.grant_id` is distinct from `granted_event_id`
+    # in Phase 3). `physical_location`/`repository_url` are operational
+    # metadata, never credentials (Phase 4 design: credentials are never
+    # persisted anywhere in Engineering State).
+    _require(
+        payload,
+        "workspace_id",
+        "task_id",
+        "actor",
+        "user_id",
+        "execution_context",
+        "physical_location",
+        "repository_url",
+        "created_at",
+        "max_lifetime_seconds",
+        "initial_expires_at",
+        event_type=WORKSPACE_CREATED,
+    )
+    if not isinstance(payload["max_lifetime_seconds"], int) or payload["max_lifetime_seconds"] <= 0:
+        raise InvalidEventPayloadError(
+            f"{WORKSPACE_CREATED}.max_lifetime_seconds must be a positive int."
+        )
+    if not isinstance(payload["execution_context"], dict):
+        raise InvalidEventPayloadError(f"{WORKSPACE_CREATED}.execution_context must be a dict.")
+
+
+def validate_workspace_lease_renewed(payload: dict[str, Any]) -> None:
+    _require(
+        payload,
+        "workspace_event_id",
+        "new_expires_at",
+        "renewal_count",
+        event_type=WORKSPACE_LEASE_RENEWED,
+    )
+    if not isinstance(payload["renewal_count"], int) or payload["renewal_count"] < 1:
+        raise InvalidEventPayloadError(
+            f"{WORKSPACE_LEASE_RENEWED}.renewal_count must be a positive int."
+        )
+
+
+def validate_workspace_diagnostic_hold_entered(payload: dict[str, Any]) -> None:
+    _require(
+        payload,
+        "workspace_event_id",
+        "reason",
+        "hold_expires_at",
+        event_type=WORKSPACE_DIAGNOSTIC_HOLD_ENTERED,
+    )
+
+
+def validate_workspace_write_authorization_revoked(payload: dict[str, Any]) -> None:
+    _require(
+        payload,
+        "workspace_event_id",
+        "reason",
+        event_type=WORKSPACE_WRITE_AUTHORIZATION_REVOKED,
+    )
+
+
+# Mirrors `AuthorizationDenied.denial_stage`'s existing precedent — one
+# event type, one closed discriminating field — rather than five separate
+# WorkspaceDestroyed-shaped event types. Duplicated here (not imported)
+# for the same layering reason `_DENIAL_STAGES` is duplicated rather than
+# imported from `app.control_plane.model.DenialStage`: this module must
+# not depend on `app.control_plane`.
+_WORKSPACE_DESTRUCTION_REASONS: frozenset[str] = frozenset(
+    {
+        "completed_success",
+        "diagnostic_hold_expired",
+        "lease_expired_reclaimed",
+        "custodial",
+        "credential_incident",
+        "creation_failed",
+    }
+)
+
+
+def validate_workspace_destroyed(payload: dict[str, Any]) -> None:
+    _require(payload, "workspace_event_id", "reason", event_type=WORKSPACE_DESTROYED)
+    if payload["reason"] not in _WORKSPACE_DESTRUCTION_REASONS:
+        raise InvalidEventPayloadError(
+            f"{WORKSPACE_DESTROYED}.reason must be one of "
+            f"{sorted(_WORKSPACE_DESTRUCTION_REASONS)}."
+        )
+
+
 _VALIDATORS: dict[str, Any] = {
     GOAL_CREATED: validate_goal_created,
     GOAL_UPDATED: validate_goal_updated,
     PLAN_CREATED: validate_plan_created,
     PLAN_STEP_CREATED: validate_plan_step_created,
+    PLAN_STEP_INVALIDATED: validate_plan_step_invalidated,
     DECISION_MADE: validate_decision_made,
     EVIDENCE_RECORDED: validate_evidence_recorded,
     BELIEF_RECORDED: validate_belief_recorded,
@@ -358,6 +605,11 @@ _VALIDATORS: dict[str, Any] = {
     AUTHORIZATION_CONSUMED: validate_authorization_consumed,
     AUTHORIZATION_DENIED: validate_authorization_denied,
     AUTHORIZATION_INVALIDATED: validate_authorization_invalidated,
+    WORKSPACE_CREATED: validate_workspace_created,
+    WORKSPACE_LEASE_RENEWED: validate_workspace_lease_renewed,
+    WORKSPACE_DIAGNOSTIC_HOLD_ENTERED: validate_workspace_diagnostic_hold_entered,
+    WORKSPACE_WRITE_AUTHORIZATION_REVOKED: validate_workspace_write_authorization_revoked,
+    WORKSPACE_DESTROYED: validate_workspace_destroyed,
 }
 
 
@@ -382,6 +634,7 @@ EventType = Literal[
     "GoalUpdated",
     "PlanCreated",
     "PlanStepCreated",
+    "PlanStepInvalidated",
     "DecisionMade",
     "EvidenceRecorded",
     "BeliefRecorded",
@@ -391,6 +644,11 @@ EventType = Literal[
     "AuthorizationConsumed",
     "AuthorizationDenied",
     "AuthorizationInvalidated",
+    "WorkspaceCreated",
+    "WorkspaceLeaseRenewed",
+    "WorkspaceDiagnosticHoldEntered",
+    "WorkspaceWriteAuthorizationRevoked",
+    "WorkspaceDestroyed",
 ]
 
 __all__ = [
@@ -410,6 +668,12 @@ __all__ = [
     "OBSERVATION_RECORDED",
     "PLAN_CREATED",
     "PLAN_STEP_CREATED",
+    "PLAN_STEP_INVALIDATED",
+    "WORKSPACE_CREATED",
+    "WORKSPACE_DESTROYED",
+    "WORKSPACE_DIAGNOSTIC_HOLD_ENTERED",
+    "WORKSPACE_LEASE_RENEWED",
+    "WORKSPACE_WRITE_AUTHORIZATION_REVOKED",
     "EventType",
     "InvalidEventPayloadError",
     "validate_payload",
