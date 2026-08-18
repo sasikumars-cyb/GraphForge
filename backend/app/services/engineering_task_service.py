@@ -38,8 +38,7 @@ This is O(N tasks) additional `list_for_task` queries — acceptable for
 this minimal productization slice's expected task volumes, and
 deliberately NOT a new database projection (no new table, no
 materialized view) per the Phase 7.2 instruction; revisit only if this
-becomes a real bottleneck. Returns every task in the system, not scoped
-to any caller — a known limitation, not fixed in this phase.
+becomes a real bottleneck.
 """
 
 from __future__ import annotations
@@ -130,7 +129,15 @@ class EngineeringTaskService:
         await self._events.append(
             task_id=task_id,
             event_type=GOAL_CREATED,
-            payload={"description": description, "postconditions": postconditions},
+            payload={
+                "description": description,
+                "postconditions": postconditions,
+                # Phase 7.3 (ownership fix): `user_id` was already
+                # received as this method's own parameter but, until now,
+                # never persisted — see the ownership design audit. This
+                # is the only place a new task's owner is ever recorded.
+                "user_id": str(user_id),
+            },
             actor=_API_BOUNDARY_ACTOR,
         )
 
@@ -196,14 +203,37 @@ class EngineeringTaskService:
         return _build_response(task_id, events)
 
 
+def _is_owned_by(state: MaterializedEngineeringState, requesting_user_id: uuid.UUID) -> bool:
+    """Phase 7.3 (ownership fix) — the SINGLE ownership rule shared by
+    both `get_engineering_task` and `list_engineering_tasks`, so the two
+    views can never disagree about who may see a task (Ownership Design
+    Audit §8, "the SAME ownership rule").
+
+    `state.goal.user_id is None` (a task created before this field
+    existed) is deliberately treated as NOT owned by anyone — never
+    "visible to all" (that was the legacy Workflow behavior, explicitly
+    rejected for this fix; see the audit's §4). This mirrors
+    `CAPABILITIES_CONTROL_PLANE_ARCHITECTURE.md` §20.3's own fail-closed
+    convention: "Unreadable or unresolvable Policy = deny; unavailable
+    Policy is never permissive." Unresolvable ownership = deny, the same
+    way. No admin bypass — see the audit's §5; this function does not
+    even receive a role, by design, so one cannot accidentally be added
+    without a deliberate signature change.
+    """
+    return state.goal is not None and state.goal.user_id == requesting_user_id
+
+
 async def get_engineering_task(
-    *, db: AsyncSession, task_id: uuid.UUID
+    *, db: AsyncSession, task_id: uuid.UUID, requesting_user_id: uuid.UUID
 ) -> EngineeringTaskResponse | None:
-    """Phase 7.1 — the entire read path. Constructs only
-    `EngineeringEventRepository`; never a `ControlPlane`, never a
-    `ReasoningPlane`, never a Capability/Policy/Tool registry. Returns
-    `None` when no Engineering State exists for `task_id` — the router
-    translates that into a 404, never a fabricated empty response.
+    """Phase 7.1 — the entire read path, ownership-checked as of Phase
+    7.3. Constructs only `EngineeringEventRepository`; never a
+    `ControlPlane`, never a `ReasoningPlane`, never a Capability/Policy/
+    Tool registry. Returns `None` both when no Engineering State exists
+    for `task_id` AND when it exists but isn't owned by
+    `requesting_user_id` — the router translates either case into an
+    identical 404, deliberately never distinguishing "doesn't exist" from
+    "exists, but isn't yours" (Ownership Design Audit §8: no disclosure).
 
     Never appends an event, never calls `.commit()` — a plain read of
     already-durable state via the existing, unmodified `list_for_task`/
@@ -212,10 +242,14 @@ async def get_engineering_task(
     events = await EngineeringEventRepository(db).list_for_task(task_id)
     if not events:
         return None
+    if not _is_owned_by(fold(events), requesting_user_id):
+        return None
     return _build_response(task_id, events)
 
 
-async def list_engineering_tasks(*, db: AsyncSession) -> list[EngineeringTaskSummary]:
+async def list_engineering_tasks(
+    *, db: AsyncSession, requesting_user_id: uuid.UUID
+) -> list[EngineeringTaskSummary]:
     """Phase 7.2 — the entire list-view read path. Constructs only
     `EngineeringEventRepository`; never a `ControlPlane`, never a
     `ReasoningPlane`, never a Capability/Policy/Tool registry.
@@ -240,8 +274,11 @@ async def list_engineering_tasks(*, db: AsyncSession) -> list[EngineeringTaskSum
     default, a real Engineering State domain-model change and out of
     scope for this productization-only phase.
 
-    Returns every task in the system, not scoped to any caller — a known
-    limitation, not fixed in this phase.
+    Ownership-filtered as of Phase 7.3 (`_is_owned_by`, the identical
+    rule `get_engineering_task` uses) — only tasks owned by
+    `requesting_user_id` are returned; other users' tasks and
+    unowned/historical tasks are silently omitted, never a 403 or any
+    other signal that they exist.
 
     Never appends an event, never calls `.commit()`.
     """
@@ -251,6 +288,9 @@ async def list_engineering_tasks(*, db: AsyncSession) -> list[EngineeringTaskSum
     summaries: list[EngineeringTaskSummary] = []
     for goal_event in goal_events:
         events = await repo.list_for_task(goal_event.task_id)
+        state = fold(events)
+        if not _is_owned_by(state, requesting_user_id):
+            continue
         response = _build_response(goal_event.task_id, events)
         summaries.append(
             EngineeringTaskSummary(

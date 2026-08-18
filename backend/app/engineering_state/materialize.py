@@ -83,6 +83,14 @@ class GoalRecord:
     event_id: uuid.UUID
     description: str
     postconditions: tuple[str, ...]
+    # Phase 7.3 (ownership fix): the authenticated human who created this
+    # Goal — `None` for Goals created before this field existed (a real,
+    # permanently-supported shape, not a migration debt). Set once at
+    # `GoalCreated` and immutable thereafter — `GoalUpdated` carries it
+    # forward unchanged (see the GOAL_UPDATED branch below); ownership is
+    # not something an update can reassign. Distinct from ES §14's "Role"
+    # (multi-agent execution ownership) — this is the human requester.
+    user_id: uuid.UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -336,10 +344,12 @@ def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
     for event in ordered:
         payload = event.payload
         if event.event_type == GOAL_CREATED:
+            raw_user_id = payload.get("user_id")
             goal = GoalRecord(
                 event_id=event.id,
                 description=payload["description"],
                 postconditions=tuple(payload["postconditions"]),
+                user_id=uuid.UUID(str(raw_user_id)) if raw_user_id is not None else None,
             )
         elif event.event_type == GOAL_UPDATED:
             # Overlay only the fields this update actually carries, onto
@@ -347,11 +357,15 @@ def fold(events: Sequence[EngineeringEvent]) -> MaterializedEngineeringState:
             # replacement of fields it didn't mention. If no GoalCreated
             # preceded this (a malformed history), there is nothing to
             # overlay onto; leave `goal` as None rather than fabricate one.
+            # `user_id` is never overlaid here — ownership is set once at
+            # creation and carried forward unchanged (GoalRecord's own
+            # docstring); GoalUpdated has no `user_id` field at all.
             if goal is not None:
                 goal = GoalRecord(
                     event_id=event.id,
                     description=payload.get("description", goal.description),
                     postconditions=tuple(payload.get("postconditions", goal.postconditions)),
+                    user_id=goal.user_id,
                 )
         elif event.event_type == PLAN_CREATED:
             supersedes_raw = payload.get("supersedes_plan_event_id")

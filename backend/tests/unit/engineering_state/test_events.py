@@ -31,6 +31,37 @@ def test_goal_created_requires_checkable_postconditions() -> None:
     )
 
 
+def test_goal_created_user_id_is_optional() -> None:
+    """Phase 7.3 ownership fix — a Goal created before this field existed
+    has no `user_id`, and that MUST remain a valid, permanently-supported
+    shape (Ownership Design Audit §4/§7), never a required field."""
+    ev.validate_payload(
+        ev.GOAL_CREATED,
+        {"description": "no owner recorded", "postconditions": ["p"]},
+    )
+
+
+def test_goal_created_user_id_accepts_a_real_uuid() -> None:
+    ev.validate_payload(
+        ev.GOAL_CREATED,
+        {
+            "description": "owned goal",
+            "postconditions": ["p"],
+            "user_id": "11111111-1111-1111-1111-111111111111",
+        },
+    )
+
+
+def test_goal_created_user_id_rejects_a_non_uuid_value() -> None:
+    """Fail closed at write time — an unparseable `user_id` would
+    silently defeat the ownership check at read time otherwise."""
+    with pytest.raises(ev.InvalidEventPayloadError, match="user_id"):
+        ev.validate_payload(
+            ev.GOAL_CREATED,
+            {"description": "bad owner", "postconditions": ["p"], "user_id": "not-a-uuid"},
+        )
+
+
 def test_evidence_requires_origin_class_from_the_closed_set() -> None:
     """ES §4: origin_class is structural and closed — {world_fact,
     human_directive, repository_content}."""

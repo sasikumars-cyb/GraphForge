@@ -24,11 +24,16 @@ are both pure read paths** — they call `get_engineering_task`/
 which needs all of them). Neither reads the legacy `Run`/`Workflow`/
 `AgentRun` models — only `EngineeringEventRepository`/`fold()`.
 
-**Known limitation, as of this phase:** Engineering State carries no
-per-user/tenant field anywhere yet, so `GET ""` and `GET /{task_id}`
-return/accept every task in the system to/from any authenticated user,
-not scoped to the caller's own. This is tracked as follow-up work, not
-fixed in this phase.
+**Ownership enforcement (Phase 7.3):** `GoalCreated` now optionally
+carries `user_id` — the authenticated creator's identity — and both `GET`
+endpoints enforce it. `GET ""` returns only the caller's own tasks; other
+users' tasks and tasks created before this field existed (`user_id is
+None`) are silently omitted, never disclosed. `GET /{task_id}` returns
+`404` — identical to "does not exist" — for a task that exists but isn't
+owned by the caller, including unowned/historical tasks; no distinguishing
+signal either way (Ownership Design Audit §8). No admin bypass exists.
+Both endpoints share one rule, `EngineeringTaskService._is_owned_by`, so
+list and detail can never disagree about who may see a task.
 """
 
 from __future__ import annotations
@@ -112,12 +117,11 @@ async def list_engineering_tasks_endpoint(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> list[EngineeringTaskSummary]:
-    """List every Engineering Task, read-only, newest first.
-
-    `user` gates authenticated access only — it does not scope the
-    result. See this module's own docstring for the known limitation.
+    """List the CALLER'S OWN Engineering Tasks, read-only, newest first.
+    Phase 7.2 (list view), ownership-enforced as of Phase 7.3 — see this
+    module's own docstring.
     """
-    return await list_engineering_tasks(db=db)
+    return await list_engineering_tasks(db=db, requesting_user_id=user.id)
 
 
 @router.get("/{task_id}", response_model=EngineeringTaskResponse)
@@ -126,15 +130,15 @@ async def get_engineering_task_endpoint(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db_session),
 ) -> EngineeringTaskResponse:
-    """Retrieve one task's materialized Engineering State, read-only.
+    """Retrieve one task's materialized Engineering State, read-only —
+    ownership-enforced as of Phase 7.3 (see this module's own docstring).
 
-    `user` gates authenticated access only — it does not scope the
-    result. See this module's own docstring for the known limitation.
-
-    404s when no Engineering State exists for `task_id` — never a
-    fabricated empty response.
+    404s both when no Engineering State exists for `task_id` AND when it
+    exists but isn't owned by `user` — deliberately the same response
+    either way, never a fabricated empty response and never a
+    distinguishing signal that someone else's task exists.
     """
-    result = await get_engineering_task(db=db, task_id=task_id)
+    result = await get_engineering_task(db=db, task_id=task_id, requesting_user_id=user.id)
     if result is None:
         raise NotFoundError(f"No engineering task found for id {task_id}.")
     return result

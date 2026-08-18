@@ -225,14 +225,51 @@ async def engineering_task_client(
 
 
 async def _register_and_login(client: AsyncClient) -> tuple[dict[str, str], uuid.UUID]:
-    await client.post("/api/v1/auth/register", json=_REGISTER_PAYLOAD)
-    login = await client.post(
-        "/api/v1/auth/login",
-        json={"email": _REGISTER_PAYLOAD["email"], "password": _REGISTER_PAYLOAD["password"]},
+    return await _register_and_login_as(client, _REGISTER_PAYLOAD["email"])
+
+
+async def _register_and_login_as(
+    client: AsyncClient,
+    email: str,
+    *,
+    is_active: bool = True,
+    db_session: AsyncSession | None = None,
+) -> tuple[dict[str, str], uuid.UUID]:
+    """Phase 7.3 (ownership fix) — the multi-user variant `TestOwnership`
+    needs: `_register_and_login` alone always uses the same fixed
+    identity, which cannot prove cross-user isolation.
+
+    `is_active=False` (requires `db_session` — the SAME transactional
+    session `engineering_task_client` is wired to, per
+    `_override_app`/`override_get_db_session` above) is set directly here
+    purely to exercise `get_current_user`'s own, pre-existing, unmodified
+    `is_active` check — not a new mechanism this phase introduces. A
+    genuinely separate `AsyncSessionLocal()` would not see this test's
+    still-uncommitted `register` write (`db_session` wraps the whole test
+    in one transaction, rolled back at teardown, per its own docstring
+    above) — this must reuse the identical session the HTTP client itself
+    reads and writes through.
+    """
+    password = "correct-horse-battery-staple"
+    await client.post(
+        "/api/v1/auth/register",
+        json={"email": email, "password": password, "full_name": email},
     )
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": password})
     token = login.json()["access_token"]
     me = await client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
-    return {"Authorization": f"Bearer {token}"}, uuid.UUID(me.json()["id"])
+    user_id = uuid.UUID(me.json()["id"])
+
+    if not is_active:
+        assert db_session is not None, "is_active=False requires db_session"
+        from sqlalchemy import update as sa_update
+
+        from app.models.user import User
+
+        await db_session.execute(sa_update(User).where(User.id == user_id).values(is_active=False))
+        await db_session.flush()
+
+    return {"Authorization": f"Bearer {token}"}, user_id
 
 
 class TestHappyPath:
@@ -581,6 +618,7 @@ class TestGetEndpoint:
             get_engineering_task,
         )
 
+        creating_user_id = uuid.uuid4()
         async with AsyncSessionLocal() as create_session:
             service = EngineeringTaskService(
                 db=create_session,
@@ -589,11 +627,15 @@ class TestGetEndpoint:
                 tool_registry=_tool_registry(),
             )
             created = await service.create_and_execute(
-                description="find repositories", postconditions=["found"], user_id=uuid.uuid4()
+                description="find repositories",
+                postconditions=["found"],
+                user_id=creating_user_id,
             )
 
         async with AsyncSessionLocal() as fresh_session:
-            fetched = await get_engineering_task(db=fresh_session, task_id=created.task_id)
+            fetched = await get_engineering_task(
+                db=fresh_session, task_id=created.task_id, requesting_user_id=creating_user_id
+            )
 
         assert fetched is not None
         assert fetched.task_id == created.task_id
@@ -787,3 +829,236 @@ class TestListEndpoint:
         counts_after = await _counts()
 
         assert counts_after == counts_before
+
+
+class TestOwnership:
+    """Phase 7.3 — the ownership fix. Reproduces the exact adversarial
+    scenario from the Live Human UX Review's security finding, now
+    proving it is closed, plus every adjacent edge case named in the
+    Ownership Design Audit's §9 test plan."""
+
+    async def test_owner_sees_their_own_task_in_list_and_detail(
+        self, engineering_task_client: AsyncClient
+    ) -> None:
+        headers_a, _ = await _register_and_login_as(engineering_task_client, "owner-a@example.com")
+        create_response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers_a,
+            json={"description": "task A", "postconditions": ["found"]},
+        )
+        assert create_response.status_code == 201, create_response.text
+        task_id = create_response.json()["task_id"]
+
+        list_response = await engineering_task_client.get(
+            "/api/v1/engineering-tasks", headers=headers_a
+        )
+        assert task_id in [s["task_id"] for s in list_response.json()]
+
+        detail_response = await engineering_task_client.get(
+            f"/api/v1/engineering-tasks/{task_id}", headers=headers_a
+        )
+        assert detail_response.status_code == 200, detail_response.text
+
+    async def test_other_user_cannot_see_task_in_list_or_detail(
+        self, engineering_task_client: AsyncClient
+    ) -> None:
+        """The exact scenario reproduced live against the running dev
+        stack in the security review: User A creates a task, User B must
+        never see it via either endpoint."""
+        headers_a, _ = await _register_and_login_as(engineering_task_client, "owner-b1@example.com")
+        headers_b, _ = await _register_and_login_as(
+            engineering_task_client, "intruder-b1@example.com"
+        )
+
+        create_response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers_a,
+            json={"description": "USER-A-SECRET-marker", "postconditions": ["found"]},
+        )
+        task_id = create_response.json()["task_id"]
+
+        list_response = await engineering_task_client.get(
+            "/api/v1/engineering-tasks", headers=headers_b
+        )
+        assert list_response.status_code == 200, list_response.text
+        assert task_id not in [s["task_id"] for s in list_response.json()]
+        assert not any("USER-A-SECRET-marker" in s["description"] for s in list_response.json())
+
+        detail_response = await engineering_task_client.get(
+            f"/api/v1/engineering-tasks/{task_id}", headers=headers_b
+        )
+        assert detail_response.status_code == 404, detail_response.text
+        # Identical error shape to a genuinely nonexistent task — no
+        # distinguishing signal.
+        assert detail_response.json()["error"]["code"] == "not_found"
+
+    async def test_404_error_matches_a_genuinely_nonexistent_task_exactly(
+        self, engineering_task_client: AsyncClient
+    ) -> None:
+        headers_a, _ = await _register_and_login_as(engineering_task_client, "owner-b2@example.com")
+        headers_b, _ = await _register_and_login_as(
+            engineering_task_client, "intruder-b2@example.com"
+        )
+        create_response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers_a,
+            json={"description": "task A", "postconditions": ["found"]},
+        )
+        task_id = create_response.json()["task_id"]
+
+        someone_elses_task = await engineering_task_client.get(
+            f"/api/v1/engineering-tasks/{task_id}", headers=headers_b
+        )
+        genuinely_nonexistent = await engineering_task_client.get(
+            f"/api/v1/engineering-tasks/{uuid.uuid4()}", headers=headers_b
+        )
+
+        assert someone_elses_task.status_code == genuinely_nonexistent.status_code == 404
+        assert someone_elses_task.json() == {
+            "error": {
+                "code": "not_found",
+                "message": someone_elses_task.json()["error"]["message"],
+            }
+        }
+        # Same error CODE for both — the only thing that legitimately
+        # differs is the message's own echoed task_id text, not the shape
+        # or the code.
+        assert (
+            someone_elses_task.json()["error"]["code"]
+            == genuinely_nonexistent.json()["error"]["code"]
+        )
+
+    async def test_unauthenticated_request_is_rejected(
+        self, engineering_task_client: AsyncClient
+    ) -> None:
+        list_response = await engineering_task_client.get("/api/v1/engineering-tasks")
+        assert list_response.status_code == 401, list_response.text
+
+        detail_response = await engineering_task_client.get(
+            f"/api/v1/engineering-tasks/{uuid.uuid4()}"
+        )
+        assert detail_response.status_code == 401, detail_response.text
+
+    async def test_deactivated_user_is_rejected(
+        self, engineering_task_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """Proves the EXISTING, unmodified `get_current_user.is_active`
+        check already covers this — no new mechanism was needed."""
+        headers, _ = await _register_and_login_as(
+            engineering_task_client,
+            "deactivated@example.com",
+            is_active=False,
+            db_session=db_session,
+        )
+        response = await engineering_task_client.get("/api/v1/engineering-tasks", headers=headers)
+        assert response.status_code == 401, response.text
+
+    async def test_historical_task_with_no_user_id_is_hidden_from_everyone(
+        self, engineering_task_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """Ownership Design Audit §4, Option C: a task whose `GoalCreated`
+        predates this field must be invisible to EVERY user — never
+        'visible to all' (the legacy Workflow behavior, explicitly
+        rejected) — including the two real users below."""
+        headers_a, _ = await _register_and_login_as(engineering_task_client, "owner-b3@example.com")
+        headers_b, _ = await _register_and_login_as(
+            engineering_task_client, "intruder-b3@example.com"
+        )
+
+        repo = EngineeringEventRepository(db_session)
+        historical_task_id = uuid.uuid4()
+        await repo.append(
+            task_id=historical_task_id,
+            event_type=ev.GOAL_CREATED,
+            payload={"description": "pre-ownership-fix task", "postconditions": ["p"]},
+            actor="api:engineering_tasks",
+        )
+        await db_session.commit()
+
+        for headers in (headers_a, headers_b):
+            list_response = await engineering_task_client.get(
+                "/api/v1/engineering-tasks", headers=headers
+            )
+            assert str(historical_task_id) not in [s["task_id"] for s in list_response.json()]
+
+            detail_response = await engineering_task_client.get(
+                f"/api/v1/engineering-tasks/{historical_task_id}", headers=headers
+            )
+            assert detail_response.status_code == 404, detail_response.text
+
+    async def test_admin_does_not_bypass_ownership(
+        self, engineering_task_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        """Ownership Design Audit §5: no admin bypass — an admin is an
+        ordinary caller for someone else's task, and for an unowned
+        historical task, exactly like the legacy Workflow precedent."""
+        from sqlalchemy import update as sa_update
+
+        from app.models.user import User
+
+        headers_owner, _ = await _register_and_login_as(
+            engineering_task_client, "owner-b4@example.com"
+        )
+        headers_admin, admin_id = await _register_and_login_as(
+            engineering_task_client, "admin-b4@example.com"
+        )
+        await db_session.execute(sa_update(User).where(User.id == admin_id).values(role="admin"))
+        await db_session.commit()
+
+        create_response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers_owner,
+            json={"description": "owner's task", "postconditions": ["found"]},
+        )
+        task_id = create_response.json()["task_id"]
+
+        list_response = await engineering_task_client.get(
+            "/api/v1/engineering-tasks", headers=headers_admin
+        )
+        assert task_id not in [s["task_id"] for s in list_response.json()]
+
+        detail_response = await engineering_task_client.get(
+            f"/api/v1/engineering-tasks/{task_id}", headers=headers_admin
+        )
+        assert detail_response.status_code == 404, detail_response.text
+
+    async def test_list_and_detail_never_disagree_about_who_may_see_a_task(
+        self, engineering_task_client: AsyncClient
+    ) -> None:
+        """Structural consistency check, not just two separate
+        assertions that could independently drift: for a set of tasks
+        spanning both users, whatever the list includes must 200 on
+        direct detail access by the SAME caller, and whatever it omits
+        must 404 for that same caller."""
+        headers_a, _ = await _register_and_login_as(engineering_task_client, "owner-b5@example.com")
+        headers_b, _ = await _register_and_login_as(engineering_task_client, "other-b5@example.com")
+
+        task_ids = []
+        for i in range(3):
+            resp = await engineering_task_client.post(
+                "/api/v1/engineering-tasks",
+                headers=headers_a,
+                json={"description": f"task {i}", "postconditions": ["found"]},
+            )
+            task_ids.append(resp.json()["task_id"])
+
+        for headers in (headers_a, headers_b):
+            list_response = await engineering_task_client.get(
+                "/api/v1/engineering-tasks", headers=headers
+            )
+            visible_ids = {s["task_id"] for s in list_response.json()}
+
+            for task_id in task_ids:
+                detail_response = await engineering_task_client.get(
+                    f"/api/v1/engineering-tasks/{task_id}", headers=headers
+                )
+                if task_id in visible_ids:
+                    assert detail_response.status_code == 200, (
+                        f"{task_id} was in the list but detail returned "
+                        f"{detail_response.status_code}"
+                    )
+                else:
+                    assert detail_response.status_code == 404, (
+                        f"{task_id} was NOT in the list but detail returned "
+                        f"{detail_response.status_code}"
+                    )
