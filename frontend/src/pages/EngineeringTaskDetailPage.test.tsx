@@ -86,8 +86,66 @@ describe("EngineeringTaskDetailPage", () => {
         .length,
     ).toBeGreaterThan(0);
     expect(screen.getByText("at least one repository identified")).toBeInTheDocument();
-    expect(screen.getAllByText("expected")).toHaveLength(2);
+    // Top-level status badge + Execution card + Verification card — all
+    // three read the same underlying classification via the same shared
+    // helper, so they can never disagree.
+    expect(screen.getAllByText("Verified as expected")).toHaveLength(3);
     expect(screen.getByText("control_plane_verifier")).toBeInTheDocument();
+  });
+
+  it("shows a 'Back to Engineering Tasks' link", async () => {
+    vi.mocked(engineeringTasksApi.getEngineeringTask).mockResolvedValue(makeTask());
+    renderPage();
+    await screen.findAllByText("find repositories containing payment processing code");
+    expect(screen.getByRole("link", { name: /Back to Engineering Tasks/ })).toHaveAttribute(
+      "href",
+      "/engineering-tasks",
+    );
+  });
+
+  it("explains what the classification means in human terms", async () => {
+    vi.mocked(engineeringTasksApi.getEngineeringTask).mockResolvedValue(makeTask());
+    renderPage();
+    await screen.findAllByText("find repositories containing payment processing code");
+    expect(
+      screen.getAllByText(
+        "The predicted outcome was confirmed by Independent Verification.",
+      ).length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("explains that control_plane_verifier is automated, not a human", async () => {
+    vi.mocked(engineeringTasksApi.getEngineeringTask).mockResolvedValue(makeTask());
+    renderPage();
+    await screen.findAllByText("find repositories containing payment processing code");
+    expect(
+      screen.getByText(/automated verification, not a human reviewer/),
+    ).toBeInTheDocument();
+  });
+
+  it("renders an anomaly classification with its own explanation and warning tone", async () => {
+    vi.mocked(engineeringTasksApi.getEngineeringTask).mockResolvedValue(
+      makeTask({
+        generator_observation: {
+          success: false,
+          outcome: "completed",
+          classification: "anomaly",
+          actor: null,
+        },
+        verifier_observation: {
+          success: false,
+          outcome: "completed",
+          classification: "anomaly",
+          actor: "control_plane_verifier",
+        },
+      }),
+    );
+    renderPage();
+    await screen.findAllByText("find repositories containing payment processing code");
+    expect(screen.getAllByText("Anomaly").length).toBeGreaterThan(0);
+    expect(
+      screen.getAllByText(/Something unexpected happened at the infrastructure/).length,
+    ).toBeGreaterThan(0);
   });
 
   it("shows a loading state before the response resolves", () => {
@@ -106,6 +164,17 @@ describe("EngineeringTaskDetailPage", () => {
     renderPage();
 
     expect(await screen.findByText(/not found/i)).toBeInTheDocument();
+  });
+
+  it("shows a friendly message on a malformed task id (422/validation_error), not the raw backend text", async () => {
+    vi.mocked(engineeringTasksApi.getEngineeringTask).mockRejectedValue(
+      new ApiError(422, "validation_error", "Request validation failed."),
+    );
+
+    renderPage("not-a-real-uuid");
+
+    expect(await screen.findByText(/doesn't look like a valid Engineering Task link/i)).toBeInTheDocument();
+    expect(screen.queryByText("Request validation failed.")).not.toBeInTheDocument();
   });
 
   it("shows an error state on a non-404 API failure", async () => {

@@ -1,5 +1,6 @@
 """`EngineeringTaskService` — Phase 7's minimal end-to-end integration,
-plus the Phase 7.1 read-only visibility slice.
+plus the Phase 7.1 read-only visibility slice and Phase 7.2's
+productization (list view).
 
 **Orchestration only.** `EngineeringTaskService` sequences already-existing,
 already-audited components; it re-implements none of their
@@ -19,13 +20,26 @@ them and duplicates none of their logic. If any of those responsibilities
 appeared to need reimplementing here, that would be a stop-and-report
 condition; none did.
 
-**`get_engineering_task` (Phase 7.1) is a genuinely separate, PURE READ
-path** — a module-level function, not a method on `EngineeringTaskService`,
-deliberately: it needs (and imports) only `EngineeringEventRepository` and
-`fold()`. It never constructs a `ControlPlane`, a `ReasoningPlane`, a
-`CapabilityRegistry`, or a `PolicyStore` — there is no `ControlPlane`/
-`ReasoningPlane` reference anywhere in scope when this function runs, not
-merely "unused." It never appends an event and never calls `.commit()`.
+**`get_engineering_task` (Phase 7.1) and `list_engineering_tasks` (Phase
+7.2) are genuinely separate, PURE READ paths** — module-level functions,
+not methods on `EngineeringTaskService`, deliberately: they need (and
+import) only `EngineeringEventRepository` and `fold()`. Neither ever
+constructs a `ControlPlane`, a `ReasoningPlane`, a `CapabilityRegistry`,
+or a `PolicyStore` — there is no `ControlPlane`/`ReasoningPlane`
+reference anywhere in scope when either function runs, not merely
+"unused." Neither ever appends an event or calls `.commit()`.
+
+`list_engineering_tasks` reuses Phase 4's `list_by_event_types` (already
+existing, cross-task-scoped repository method — no new repository method
+was added for this) to find every task's `GoalCreated` event, then folds
+each task's own stream through the identical `_build_response` the
+detail `GET` already uses, projected down to `EngineeringTaskSummary`.
+This is O(N tasks) additional `list_for_task` queries — acceptable for
+this minimal productization slice's expected task volumes, and
+deliberately NOT a new database projection (no new table, no
+materialized view) per the Phase 7.2 instruction; revisit only if this
+becomes a real bottleneck. Returns every task in the system, not scoped
+to any caller — a known limitation, not fixed in this phase.
 """
 
 from __future__ import annotations
@@ -58,6 +72,7 @@ from app.schemas.engineering_task import (
     EngineeringTaskObservation,
     EngineeringTaskPlanStep,
     EngineeringTaskResponse,
+    EngineeringTaskSummary,
 )
 from app.tools.executor import ToolExecutor
 from app.tools.registry import ToolRegistry, get_tool_registry
@@ -200,9 +215,58 @@ async def get_engineering_task(
     return _build_response(task_id, events)
 
 
-def _build_response(
-    task_id: uuid.UUID, events: list[EngineeringEvent]
-) -> EngineeringTaskResponse:
+async def list_engineering_tasks(*, db: AsyncSession) -> list[EngineeringTaskSummary]:
+    """Phase 7.2 — the entire list-view read path. Constructs only
+    `EngineeringEventRepository`; never a `ControlPlane`, never a
+    `ReasoningPlane`, never a Capability/Policy/Tool registry.
+
+    Every task is identified by its `GoalCreated` event (exactly one per
+    task, always the first event in that task's stream — see
+    `EngineeringEventRepository.append`'s causal-order enforcement).
+    `list_by_event_types` (Phase 4, unmodified) already provides the
+    one genuinely new query shape this needs — no repository change was
+    required for this endpoint.
+
+    Newest-created first. Ties (equal `created_at`) are broken by
+    `task_id` alone — `recorded_at`'s column default is `func.now()`,
+    Postgres's TRANSACTION-START time, not statement time, so two
+    requests whose transactions begin within the same instant can share
+    an identical `recorded_at`; Engineering State records nothing else
+    that would meaningfully order them. This is a deliberate, honest
+    choice: deterministic and reproducible across calls, but it does NOT
+    claim to know which of two same-instant tasks came "first" — because
+    the durable state genuinely doesn't say. Fixing the underlying
+    timestamp granularity would mean changing `EngineeringEvent`'s column
+    default, a real Engineering State domain-model change and out of
+    scope for this productization-only phase.
+
+    Returns every task in the system, not scoped to any caller — a known
+    limitation, not fixed in this phase.
+
+    Never appends an event, never calls `.commit()`.
+    """
+    repo = EngineeringEventRepository(db)
+    goal_events = await repo.list_by_event_types(frozenset({GOAL_CREATED}))
+
+    summaries: list[EngineeringTaskSummary] = []
+    for goal_event in goal_events:
+        events = await repo.list_for_task(goal_event.task_id)
+        response = _build_response(goal_event.task_id, events)
+        summaries.append(
+            EngineeringTaskSummary(
+                task_id=response.task_id,
+                created_at=response.created_at,
+                updated_at=max(e.recorded_at for e in events),
+                description=response.goal.description,
+                classification=response.verifier_observation.classification,
+            )
+        )
+
+    summaries.sort(key=lambda s: (s.created_at, str(s.task_id)), reverse=True)
+    return summaries
+
+
+def _build_response(task_id: uuid.UUID, events: list[EngineeringEvent]) -> EngineeringTaskResponse:
     """Shared by both `EngineeringTaskService.create_and_execute` (POST)
     and `get_engineering_task` (GET) — the two views of one task can
     never drift, because both are built from the identical materialized
@@ -257,9 +321,7 @@ def _observation_view(observation: ObservationRecord | None) -> EngineeringTaskO
             success=None, outcome=None, classification=None, actor=None
         )
     success = (
-        observation.raw_result.get("success")
-        if isinstance(observation.raw_result, dict)
-        else None
+        observation.raw_result.get("success") if isinstance(observation.raw_result, dict) else None
     )
     return EngineeringTaskObservation(
         success=success,
@@ -269,4 +331,9 @@ def _observation_view(observation: ObservationRecord | None) -> EngineeringTaskO
     )
 
 
-__all__ = ["EngineeringTaskCreationFailedError", "EngineeringTaskService", "get_engineering_task"]
+__all__ = [
+    "EngineeringTaskCreationFailedError",
+    "EngineeringTaskService",
+    "get_engineering_task",
+    "list_engineering_tasks",
+]

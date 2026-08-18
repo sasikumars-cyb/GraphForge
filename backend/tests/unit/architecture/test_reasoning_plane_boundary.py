@@ -63,9 +63,7 @@ def test_reasoning_plane_never_imports_verification_service() -> None:
     )
 
 
-def test_reasoning_plane_never_appends_authorization_or_workspace_or_observation_events() -> (
-    None
-):
+def test_reasoning_plane_never_appends_authorization_or_workspace_or_observation_events() -> None:
     """The only Engineering State event-type constants
     `app.reasoning_plane.plane` may import are `PLAN_CREATED`/
     `PLAN_STEP_CREATED` — never `AUTHORIZATION_*`/`WORKSPACE_*`/
@@ -127,9 +125,7 @@ def test_reasoning_plane_run_signature_has_no_authority_bypassing_parameter() ->
     )
 
 
-def test_only_engineering_tasks_boundary_appends_goal_created_outside_control_plane() -> (
-    None
-):
+def test_only_engineering_tasks_boundary_appends_goal_created_outside_control_plane() -> None:
     """The one narrow approved exception (Phase 7 design §3): only
     `app.services.engineering_task_service` (the authenticated API
     boundary's own service) may append `GoalCreated` directly, outside
@@ -207,7 +203,12 @@ def test_get_engineering_task_function_never_imports_control_plane_or_reasoning_
     path = APP_ROOT / "services" / "engineering_task_service.py"
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
-    read_path_function_names = {"get_engineering_task", "_build_response", "_observation_view"}
+    read_path_function_names = {
+        "get_engineering_task",
+        "list_engineering_tasks",
+        "_build_response",
+        "_observation_view",
+    }
     forbidden_names = {"ControlPlane", "ReasoningPlane", "ToolExecutor"}
 
     offenders: list[str] = []
@@ -221,8 +222,7 @@ def test_get_engineering_task_function_never_imports_control_plane_or_reasoning_
                     offenders.append(f"{node.name} references {inner.id} at line {inner.lineno}")
 
     assert not offenders, (
-        f"The GET read path references authority objects it must never touch: "
-        f"{offenders}."
+        f"The GET/list read paths reference authority objects they must never touch: {offenders}."
     )
 
 

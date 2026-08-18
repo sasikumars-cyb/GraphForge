@@ -204,7 +204,7 @@ def _override_app(
     app = create_app()
     app.dependency_overrides[get_db_session] = override_get_db_session
     app.dependency_overrides[get_capability_registry] = lambda: _capability_registry(tool_cls)
-    app.dependency_overrides[get_policy_store] = lambda: (policy_store or _seeded_policy_store())
+    app.dependency_overrides[get_policy_store] = lambda: policy_store or _seeded_policy_store()
     app.dependency_overrides[get_tool_registry] = lambda: _tool_registry(tool_cls)
     return app
 
@@ -538,9 +538,7 @@ class TestGetEndpoint:
         events_after_get = await repo.list_for_task(uuid.UUID(task_id))
         assert len(events_after_get) == 11  # the exact Phase 7 happy-path count
 
-    async def test_nonexistent_task_returns_404(
-        self, engineering_task_client: AsyncClient
-    ) -> None:
+    async def test_nonexistent_task_returns_404(self, engineering_task_client: AsyncClient) -> None:
         headers, _ = await _register_and_login(engineering_task_client)
         response = await engineering_task_client.get(
             f"/api/v1/engineering-tasks/{uuid.uuid4()}", headers=headers
@@ -622,9 +620,7 @@ class TestGetEndpoint:
 
         async def _counts() -> tuple[int, int, int]:
             run_count = await db_session.scalar(sa_select(func.count()).select_from(Run))
-            workflow_count = await db_session.scalar(
-                sa_select(func.count()).select_from(Workflow)
-            )
+            workflow_count = await db_session.scalar(sa_select(func.count()).select_from(Workflow))
             agent_step_count = await db_session.scalar(
                 sa_select(func.count()).select_from(AgentStep)
             )
@@ -642,6 +638,151 @@ class TestGetEndpoint:
         response = await engineering_task_client.get(
             f"/api/v1/engineering-tasks/{task_id}", headers=headers
         )
+        assert response.status_code == 200, response.text
+        counts_after = await _counts()
+
+        assert counts_after == counts_before
+
+
+class TestListEndpoint:
+    """Phase 7.2 — the Engineering Task list view's read path.
+
+    This test file's own established convention is real, committed
+    writes (see the module docstring) — tasks created by earlier tests
+    in the same session remain in the database. So these tests never
+    assert an exact total count; they assert this test's own task is
+    present with correct data, and that relative ordering/no-mutation/
+    legacy-isolation hold — properties that stay true regardless of how
+    many other tasks already exist.
+    """
+
+    async def test_list_includes_created_task_with_correct_summary_fields(
+        self, engineering_task_client: AsyncClient
+    ) -> None:
+        headers, _ = await _register_and_login(engineering_task_client)
+        create_response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers,
+            json={
+                "description": "find repositories containing payment processing code",
+                "postconditions": ["at least one repository identified"],
+            },
+        )
+        assert create_response.status_code == 201, create_response.text
+        created = create_response.json()
+
+        list_response = await engineering_task_client.get(
+            "/api/v1/engineering-tasks", headers=headers
+        )
+        assert list_response.status_code == 200, list_response.text
+        summaries = list_response.json()
+
+        matching = [s for s in summaries if s["task_id"] == created["task_id"]]
+        assert len(matching) == 1
+        summary = matching[0]
+        assert summary["description"] == ("find repositories containing payment processing code")
+        assert summary["classification"] == "expected"
+        assert summary["created_at"] == created["created_at"]
+        assert summary["updated_at"]
+
+    async def test_list_matches_detail_endpoint_classification(
+        self, engineering_task_client: AsyncClient
+    ) -> None:
+        """The list and detail views must never disagree about one task —
+        both are built from the same `_build_response` output."""
+        headers, _ = await _register_and_login(engineering_task_client)
+        create_response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers,
+            json={"description": "find repositories", "postconditions": ["found"]},
+        )
+        task_id = create_response.json()["task_id"]
+
+        detail_response = await engineering_task_client.get(
+            f"/api/v1/engineering-tasks/{task_id}", headers=headers
+        )
+        list_response = await engineering_task_client.get(
+            "/api/v1/engineering-tasks", headers=headers
+        )
+        detail = detail_response.json()
+        summary = next(s for s in list_response.json() if s["task_id"] == task_id)
+
+        assert summary["classification"] == detail["verifier_observation"]["classification"]
+        assert summary["description"] == detail["goal"]["description"]
+        assert summary["created_at"] == detail["created_at"]
+
+    async def test_list_is_newest_first(self, engineering_task_client: AsyncClient) -> None:
+        """Verifies the genuine, always-true invariant — `created_at` is
+        non-increasing down the list — rather than assuming two
+        sequential creates get strictly different timestamps.
+        `recorded_at`'s column default is Postgres transaction-start
+        time, not statement time; two requests issued back-to-back over
+        an in-process ASGI transport (no real network hop) can
+        legitimately tie. A tie is not an ordering violation — only a
+        later entry with a STRICTLY GREATER `created_at` than an earlier
+        one would be."""
+        headers, _ = await _register_and_login(engineering_task_client)
+        await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers,
+            json={"description": "task A", "postconditions": ["found"]},
+        )
+        await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers,
+            json={"description": "task B", "postconditions": ["found"]},
+        )
+
+        list_response = await engineering_task_client.get(
+            "/api/v1/engineering-tasks", headers=headers
+        )
+        created_ats = [s["created_at"] for s in list_response.json()]
+
+        assert created_ats == sorted(created_ats, reverse=True)
+
+    async def test_list_performs_no_mutation(
+        self, engineering_task_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        headers, _ = await _register_and_login(engineering_task_client)
+        create_response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers,
+            json={"description": "find repositories", "postconditions": ["found"]},
+        )
+        task_id = create_response.json()["task_id"]
+
+        repo = EngineeringEventRepository(db_session)
+        events_before = await repo.list_for_task(uuid.UUID(task_id))
+        event_ids_before = {e.id for e in events_before}
+
+        await engineering_task_client.get("/api/v1/engineering-tasks", headers=headers)
+        await engineering_task_client.get("/api/v1/engineering-tasks", headers=headers)
+
+        events_after = await repo.list_for_task(uuid.UUID(task_id))
+        event_ids_after = {e.id for e in events_after}
+        assert event_ids_after == event_ids_before
+
+    async def test_list_does_not_touch_legacy_workflow_run_or_agent_run_tables(
+        self, engineering_task_client: AsyncClient, db_session: AsyncSession
+    ) -> None:
+        from sqlalchemy import func
+        from sqlalchemy import select as sa_select
+
+        from app.models.agent_step import AgentStep
+        from app.models.run import Run
+        from app.models.workflow import Workflow
+
+        async def _counts() -> tuple[int, int, int]:
+            run_count = await db_session.scalar(sa_select(func.count()).select_from(Run))
+            workflow_count = await db_session.scalar(sa_select(func.count()).select_from(Workflow))
+            agent_step_count = await db_session.scalar(
+                sa_select(func.count()).select_from(AgentStep)
+            )
+            return run_count or 0, workflow_count or 0, agent_step_count or 0
+
+        headers, _ = await _register_and_login(engineering_task_client)
+        counts_before = await _counts()
+        response = await engineering_task_client.get("/api/v1/engineering-tasks", headers=headers)
         assert response.status_code == 200, response.text
         counts_after = await _counts()
 

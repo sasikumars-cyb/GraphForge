@@ -1,5 +1,6 @@
 """`POST`/`GET /api/v1/engineering-tasks` — Phase 7's minimal end-to-end
-integration entry point, plus the Phase 7.1 read-only visibility slice.
+integration entry point, the Phase 7.1 read-only visibility slice, and
+Phase 7.2's productization (list view).
 
 The first, and currently only, production entry point into the Phase 1-6
 Engineering State / Control Plane stack. Deliberately API-only-for-create
@@ -15,12 +16,19 @@ proxy for their own Goal). It never appends `Authorization*`,
 State only through `ControlPlane`, structurally enforced by
 `tests/unit/architecture/test_reasoning_plane_boundary.py`.
 
-**`GET /{task_id}` (Phase 7.1) is a pure read path** — it calls
-`get_engineering_task`, a function that imports and constructs no
+**`GET /{task_id}` (Phase 7.1) and `GET ""` (Phase 7.2, the list view)
+are both pure read paths** — they call `get_engineering_task`/
+`list_engineering_tasks`, functions that import and construct no
 `ControlPlane`/`ReasoningPlane`/`CapabilityRegistry`/`PolicyStore`/
 `ToolRegistry` at all (unlike the `POST` handler immediately below,
-which needs all of them). It never reads the legacy `Run`/`Workflow`/
+which needs all of them). Neither reads the legacy `Run`/`Workflow`/
 `AgentRun` models — only `EngineeringEventRepository`/`fold()`.
+
+**Known limitation, as of this phase:** Engineering State carries no
+per-user/tenant field anywhere yet, so `GET ""` and `GET /{task_id}`
+return/accept every task in the system to/from any authenticated user,
+not scoped to the caller's own. This is tracked as follow-up work, not
+fixed in this phase.
 """
 
 from __future__ import annotations
@@ -40,8 +48,13 @@ from app.models.user import User
 from app.schemas.engineering_task import (
     CreateEngineeringTaskRequest,
     EngineeringTaskResponse,
+    EngineeringTaskSummary,
 )
-from app.services.engineering_task_service import EngineeringTaskService, get_engineering_task
+from app.services.engineering_task_service import (
+    EngineeringTaskService,
+    get_engineering_task,
+    list_engineering_tasks,
+)
 from app.tools.registry import ToolRegistry, get_tool_registry
 
 router = APIRouter(prefix="/engineering-tasks", tags=["engineering-tasks"])
@@ -94,6 +107,19 @@ async def create_engineering_task(
     )
 
 
+@router.get("", response_model=list[EngineeringTaskSummary])
+async def list_engineering_tasks_endpoint(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db_session),
+) -> list[EngineeringTaskSummary]:
+    """List every Engineering Task, read-only, newest first.
+
+    `user` gates authenticated access only — it does not scope the
+    result. See this module's own docstring for the known limitation.
+    """
+    return await list_engineering_tasks(db=db)
+
+
 @router.get("/{task_id}", response_model=EngineeringTaskResponse)
 async def get_engineering_task_endpoint(
     task_id: uuid.UUID,
@@ -102,12 +128,8 @@ async def get_engineering_task_endpoint(
 ) -> EngineeringTaskResponse:
     """Retrieve one task's materialized Engineering State, read-only.
 
-    `user` gates authenticated access only — it does NOT scope the
-    result — Engineering State carries no per-user/tenant field
-    anywhere yet (a pre-existing, already-documented limitation, not
-    introduced or fixed by this endpoint; `task_id` is an unguessable
-    random UUID, never listed anywhere, so this matches — not weakens —
-    the same scoping posture `POST` already has).
+    `user` gates authenticated access only — it does not scope the
+    result. See this module's own docstring for the known limitation.
 
     404s when no Engineering State exists for `task_id` — never a
     fabricated empty response.

@@ -1,9 +1,11 @@
 /**
  * Types for the Engineering Task API — mirrors
- * backend/app/schemas/engineering_task.py's `EngineeringTaskResponse`
- * exactly. Read-only: no create/update/delete request types live here,
- * since creation stays API-only for this increment (see
- * EngineeringTaskDetailPage's own docstring).
+ * backend/app/schemas/engineering_task.py exactly (`EngineeringTaskResponse`,
+ * `EngineeringTaskSummary`, `CreateEngineeringTaskRequest`).
+ *
+ * Phase 7.2 productizes creation and listing in the UI — `CreateEngineeringTaskInput`
+ * is genuinely new, but still mirrors the existing, unmodified POST body exactly;
+ * no new backend request shape was introduced for this.
  */
 
 export interface EngineeringTaskGoal {
@@ -35,4 +37,21 @@ export interface EngineeringTask {
   plan_step: EngineeringTaskPlanStep | null;
   generator_observation: EngineeringTaskObservation;
   verifier_observation: EngineeringTaskObservation;
+}
+
+/** One row of `GET /engineering-tasks` — mirrors `EngineeringTaskSummary`. */
+export interface EngineeringTaskSummary {
+  task_id: string;
+  created_at: string;
+  updated_at: string;
+  description: string;
+  classification: string | null;
+}
+
+/** Mirrors `CreateEngineeringTaskRequest` exactly — the existing, unmodified
+ * POST body. `postconditions` is required by that existing schema (min length
+ * 1), not an addition invented for this form. */
+export interface CreateEngineeringTaskInput {
+  description: string;
+  postconditions: string[];
 }
