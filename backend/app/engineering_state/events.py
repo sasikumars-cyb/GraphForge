@@ -223,6 +223,26 @@ def validate_goal_created(payload: dict[str, Any]) -> None:
             "with no checkable postconditions can never establish Goal "
             "Satisfied (Capabilities contract §17)."
         )
+    # Phase 7.3 (ownership fix): OPTIONAL — a Goal created before this field
+    # existed has none, and that is a valid, permanently-supported shape
+    # (see materialize.py's GoalRecord and get_engineering_task/
+    # list_engineering_tasks's ownership check), never something to
+    # backfill or require retroactively. Human Intent (ES §13: "the
+    # durable, high-level Goal a human wants achieved") is inherently
+    # human-scoped in the contract's own vocabulary; this simply records
+    # which human. Distinct from ES §14's "Role" (multi-agent execution
+    # ownership) — this is the authenticated human requester's identity,
+    # never a Role. When present, MUST be a real UUID — fail closed at
+    # write time rather than let an unparseable value silently defeat the
+    # ownership check at read time.
+    user_id = payload.get("user_id")
+    if user_id is not None:
+        try:
+            uuid.UUID(str(user_id))
+        except ValueError as exc:
+            raise InvalidEventPayloadError(
+                f"{GOAL_CREATED}.user_id, when present, must be a valid UUID."
+            ) from exc
 
 
 def validate_goal_updated(payload: dict[str, Any]) -> None:
@@ -585,8 +605,7 @@ def validate_workspace_destroyed(payload: dict[str, Any]) -> None:
     _require(payload, "workspace_event_id", "reason", event_type=WORKSPACE_DESTROYED)
     if payload["reason"] not in _WORKSPACE_DESTRUCTION_REASONS:
         raise InvalidEventPayloadError(
-            f"{WORKSPACE_DESTROYED}.reason must be one of "
-            f"{sorted(_WORKSPACE_DESTRUCTION_REASONS)}."
+            f"{WORKSPACE_DESTROYED}.reason must be one of {sorted(_WORKSPACE_DESTRUCTION_REASONS)}."
         )
 
 
@@ -624,7 +643,7 @@ def validate_payload(event_type: str, payload: dict[str, Any]) -> None:
     validator = _VALIDATORS.get(event_type)
     if validator is None:
         raise InvalidEventPayloadError(
-            f"Unrecognized event_type {event_type!r}. Valid types: " f"{sorted(EVENT_TYPES)}."
+            f"Unrecognized event_type {event_type!r}. Valid types: {sorted(EVENT_TYPES)}."
         )
     validator(payload)
 

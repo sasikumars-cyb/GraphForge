@@ -9,6 +9,7 @@ import {
   History,
   CheckCircle2,
   MessageCircleQuestion,
+  ListChecks,
   type LucideIcon,
 } from "lucide-react";
 
@@ -38,6 +39,11 @@ export interface NavSection {
  *   bookmark keeps working) but is deliberately not in the sidebar — Ask
  *   GraphForge is the one prioritization/current-state surface now.
  * • Build — create and execute AI-powered engineering work
+ * • Engineering Tasks — Phase 7.2: a SEPARATE system from Workflows
+ *   (Goal -> Plan -> PlanStep -> Control Plane -> Observation ->
+ *   Verification), its own section rather than folded into Build/Monitor
+ *   so it doesn't read as "another kind of Workflow" — see the Live
+ *   Human UX Review this phase responds to.
  * • Monitor — observe execution history and status
  * • Knowledge — understand the codebase
  * • Administration — configure GraphForge
@@ -58,6 +64,10 @@ export const NAV_SECTIONS: NavSection[] = [
       { label: "New Workflow", path: "/workflows/new", icon: GitMerge },
       { label: "Approved Queue", path: "/workflows/approved", icon: CheckCircle2 },
     ],
+  },
+  {
+    section: "Engineering Tasks",
+    items: [{ label: "Engineering Tasks", path: "/engineering-tasks", icon: ListChecks }],
   },
   {
     section: "Monitor",

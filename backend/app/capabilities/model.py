@@ -14,7 +14,7 @@ alone decides whether that requirement is currently satisfied" — the
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 
 
@@ -159,6 +159,21 @@ class CapabilityVersion:
     # change.
     kind: CapabilityKind = CapabilityKind.PRIMITIVE
     composed_of: tuple[str, ...] | None = None
+
+    # Phase 9 (runtime dependency injection design) — Cap §3's declared-
+    # metadata pattern, applied to a distinct question: which
+    # `ToolInput.parameters` keys does this Capability's Tool need that
+    # are NOT part of what the Reasoning Plane proposes, but are instead
+    # supplied by the Control Plane at dispatch time (a live request
+    # `AsyncSession`, the task's owning `user_id`)? Declared here, never
+    # inferred, so `ControlPlane._consume_and_dispatch` never needs
+    # Tool-specific knowledge hardcoded into its generically-named
+    # dispatch path (Cap §1: "Capability ≠ Tool"). Deliberately NOT a
+    # general dependency-injection framework — see
+    # `ControlPlane._resolve_runtime_parameter`'s own docstring for the
+    # two, and only two, keys this phase's resolver understands.
+    # Defaults to empty: most Capabilities need nothing runtime-injected.
+    runtime_injected_parameters: frozenset[str] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         if not self.capability_id:

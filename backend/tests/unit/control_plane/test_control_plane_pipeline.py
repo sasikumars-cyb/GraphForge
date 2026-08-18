@@ -45,7 +45,10 @@ class _FakeGraphTool:
             tool_id=self.tool_id,
             tool_name=self.display_name,
             success=True,
-            data={"data": {}, "summary": "ok"},
+            # Phase 10 fix: `summary` is a TOP-LEVEL `ToolResult` field,
+            # never nested inside `data` (matches the real Neo4jGraphTool).
+            data={},
+            summary="ok",
         )
 
     async def health_check(self) -> ToolHealth:

@@ -64,7 +64,11 @@ class _FakeGraphTool:
             tool_id=self.tool_id,
             tool_name=self.display_name,
             success=True,
-            data={"data": {"repositories": []}, "summary": f"result for: {input.query}"},
+            # Phase 10 fix: `summary` is a TOP-LEVEL `ToolResult` field
+            # (matching the real `Neo4jGraphTool`'s actual contract),
+            # never nested inside `data`.
+            data={"repositories": []},
+            summary=f"result for: {input.query}",
         )
 
     async def health_check(self) -> ToolHealth:

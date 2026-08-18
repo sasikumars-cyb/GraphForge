@@ -88,6 +88,13 @@ def _register_query_knowledge_graph(registry: CapabilityRegistry) -> None:
             registered_by=_REGISTERED_BY,
             kind=CapabilityKind.PRIMITIVE,
             composed_of=None,
+            # Phase 9: `Neo4jGraphTool.execute` requires `db` (an
+            # `AsyncSession`, to scope repository rows) and `user_id` (to
+            # scope which user's repositories those rows are) — neither
+            # is something the Reasoning Plane proposes; both are
+            # Control-Plane-owned runtime dispatch dependencies. See
+            # `ControlPlane._resolve_runtime_parameter`'s own docstring.
+            runtime_injected_parameters=frozenset({"db", "user_id"}),
         )
     )
 

@@ -248,6 +248,63 @@ def test_goal_updated_overlays_without_losing_original_event_provenance() -> Non
     assert state.goal.event_id == updated.id
 
 
+def test_goal_created_materializes_user_id_when_present() -> None:
+    """Phase 7.3 ownership fix."""
+    task_id = uuid.uuid4()
+    owner_id = uuid.uuid4()
+    created = _event(
+        task_id=task_id,
+        sequence_number=1,
+        event_type=ev.GOAL_CREATED,
+        payload={"description": "owned", "postconditions": ["p"], "user_id": str(owner_id)},
+    )
+
+    state = fold([created])
+
+    assert state.goal is not None
+    assert state.goal.user_id == owner_id
+
+
+def test_goal_created_user_id_is_none_when_absent() -> None:
+    """A historical Goal, created before this field existed."""
+    task_id = uuid.uuid4()
+    created = _event(
+        task_id=task_id,
+        sequence_number=1,
+        event_type=ev.GOAL_CREATED,
+        payload={"description": "unowned", "postconditions": ["p"]},
+    )
+
+    state = fold([created])
+
+    assert state.goal is not None
+    assert state.goal.user_id is None
+
+
+def test_goal_updated_preserves_user_id_from_creation() -> None:
+    """Ownership is set once at creation and immutable thereafter —
+    GoalUpdated never carries a `user_id` field and must not clear it."""
+    task_id = uuid.uuid4()
+    owner_id = uuid.uuid4()
+    created = _event(
+        task_id=task_id,
+        sequence_number=1,
+        event_type=ev.GOAL_CREATED,
+        payload={"description": "original", "postconditions": ["p"], "user_id": str(owner_id)},
+    )
+    updated = _event(
+        task_id=task_id,
+        sequence_number=2,
+        event_type=ev.GOAL_UPDATED,
+        payload={"goal_event_id": str(created.id), "description": "revised"},
+    )
+
+    state = fold([created, updated])
+
+    assert state.goal is not None
+    assert state.goal.user_id == owner_id
+
+
 def test_fold_rejects_mixed_task_events() -> None:
     task_a, task_b = uuid.uuid4(), uuid.uuid4()
     event_a = _event(

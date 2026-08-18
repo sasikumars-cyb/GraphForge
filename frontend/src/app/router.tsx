@@ -33,6 +33,9 @@ import { ReportsPage } from "../pages/ReportsPage";
 import { SettingsPage } from "../pages/SettingsPage";
 import { WorkflowPage, NewWorkflowPage } from "../pages/WorkflowPage";
 import { ApprovedQueuePage } from "../pages/ApprovedQueuePage";
+import { EngineeringTaskDetailPage } from "../pages/EngineeringTaskDetailPage";
+import { EngineeringTaskListPage } from "../pages/EngineeringTaskListPage";
+import { NewEngineeringTaskPage } from "../pages/NewEngineeringTaskPage";
 import { NotFoundPage } from "../pages/NotFoundPage";
 
 // Exported as plain data (not just the created router) so tests can build a
@@ -87,6 +90,15 @@ export const routes: RouteObject[] = [
           { path: "/runs/:runId", element: <RunDetailPage /> },
           { path: "/metrics", element: <MetricsPage /> },
           { path: "/metrics/workflows/:workflowId", element: <WorkflowLLMUsagePage /> },
+          // Phase 7.2 — Engineering Tasks: a separate system from
+          // Workflows (see nav-items.ts). Static segments ("new") are
+          // listed before the ":taskId" dynamic route for readability —
+          // React Router already prefers static matches regardless of
+          // declaration order, so this ordering isn't load-bearing, but
+          // keeps the intent obvious on read.
+          { path: "/engineering-tasks", element: <EngineeringTaskListPage /> },
+          { path: "/engineering-tasks/new", element: <NewEngineeringTaskPage /> },
+          { path: "/engineering-tasks/:taskId", element: <EngineeringTaskDetailPage /> },
 
           // ── Knowledge ────────────────────────────────────────────
           { path: "/repositories", element: <RepositoriesPage /> },
