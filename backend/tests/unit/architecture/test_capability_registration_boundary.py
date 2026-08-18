@@ -36,6 +36,33 @@ _ALLOWED_IMPORTERS_OF_CAPABILITY_REGISTRY: frozenset[str] = frozenset(
         "app/capabilities/registry.py",
         "app/capabilities/setup.py",
         "app/control_plane/control_plane.py",
+        # Phase 7 (minimal integration) — three files added deliberately,
+        # for the same reason `control_plane.py` was added in Phase 3:
+        #
+        # `app/control_plane/runtime.py` is the first genuine STARTUP-TIME
+        # caller `register_all_capabilities()` was always meant to have
+        # (Phase 2's own docstring: "Nothing in the running application
+        # consumes a CapabilityRegistry yet... Phase 3 imports and calls
+        # when it actually needs the registry to exist at request time" —
+        # this is that call, made once, at `app.main.create_app()` time,
+        # never from a request handler; see `test_no_http_router_imports_
+        # capability_registration` below, still passing, for the
+        # complementary "no API router" guarantee this doesn't weaken).
+        # It calls only the ALREADY-trusted `register_all_capabilities`
+        # function — never `.register()` directly on the registry object
+        # itself (confirmed: grep finds zero `.register(` calls in this
+        # file outside its own docstring prose).
+        #
+        # `app/services/engineering_task_service.py` and
+        # `app/api/v1/routers/engineering_tasks.py` hold a
+        # `CapabilityRegistry` only as an ALREADY-POPULATED, injected
+        # constructor/dependency parameter — read-only, passed straight
+        # through to `ControlPlane` (which itself only ever calls `.get()`,
+        # per `test_control_plane_never_calls_register_on_capability_registry`
+        # below) — never registering anything themselves.
+        "app/control_plane/runtime.py",
+        "app/services/engineering_task_service.py",
+        "app/api/v1/routers/engineering_tasks.py",
     }
 )
 _TEST_PATH_PREFIXES: tuple[str, ...] = ("tests/",)
@@ -97,3 +124,44 @@ def test_control_plane_never_calls_register_on_capability_registry() -> None:
         "CapabilityRegistry.get()/all_versions() (lookup), never register() "
         "(Cap §10: registration is an out-of-band engineering act)."
     )
+
+
+# Phase 7 gap closed: the import-boundary check above cannot distinguish
+# read (.get()) from write (.register()) access, and — until this test —
+# the ONLY file with a `.register()`-call AST check was
+# `control_plane.py` (the one existing test right above this comment),
+# hardcoded to that single path. The three Phase 7 additions to
+# `_ALLOWED_IMPORTERS_OF_CAPABILITY_REGISTRY` were left with NO structural
+# guarantee against a future `.register()` call being added inside them —
+# a real, found gap, closed here rather than silently left open.
+_PHASE_7_READ_ONLY_CAPABILITY_REGISTRY_CONSUMERS: tuple[str, ...] = (
+    "control_plane/runtime.py",
+    "services/engineering_task_service.py",
+    "api/v1/routers/engineering_tasks.py",
+)
+
+
+def test_phase_7_capability_registry_consumers_never_call_register_directly() -> None:
+    """`app/control_plane/runtime.py` legitimately calls the TRUSTED
+    `register_all_capabilities(...)` function (a plain function call, not
+    a `.register(...)` method call on the registry object) exactly once,
+    at startup — that call is intentionally NOT what this test forbids.
+    What it forbids, for all three files, is any direct
+    `<expr>.register(...)` attribute-call on the `CapabilityRegistry`
+    object itself, which would bypass `app.capabilities.setup` entirely."""
+    for relative_path in _PHASE_7_READ_ONLY_CAPABILITY_REGISTRY_CONSUMERS:
+        path = APP_ROOT / relative_path
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        offending_lines = [
+            node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "register"
+        ]
+        assert not offending_lines, (
+            f"app/{relative_path} calls .register(...) at line(s) {offending_lines} "
+            "— this file is allowlisted as a READ-ONLY CapabilityRegistry consumer; "
+            "registration authority remains exclusively "
+            "app.capabilities.setup.register_all_capabilities (Cap §10)."
+        )

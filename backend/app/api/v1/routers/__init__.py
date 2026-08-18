@@ -13,6 +13,7 @@ from app.api.v1.routers.calibration import router as calibration_router
 from app.api.v1.routers.conversations import router as conversations_router
 from app.api.v1.routers.documentation import router as documentation_router
 from app.api.v1.routers.engineering_sessions import router as engineering_sessions_router
+from app.api.v1.routers.engineering_tasks import router as engineering_tasks_router
 from app.api.v1.routers.github import router as github_router
 from app.api.v1.routers.google_drive import router as google_drive_router
 from app.api.v1.routers.health import router as health_router
@@ -66,6 +67,7 @@ api_router.include_router(jira_router)
 api_router.include_router(testrail_router)
 api_router.include_router(test_case_uploads_router)
 api_router.include_router(engineering_sessions_router)
+api_router.include_router(engineering_tasks_router)
 api_router.include_router(metrics_router)
 api_router.include_router(reports_router)
 api_router.include_router(documentation_router)

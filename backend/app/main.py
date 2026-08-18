@@ -28,6 +28,7 @@ import app.orchestrator.background_execution as background_execution  # noqa: E4
 from app.agents.setup import register_agents
 from app.ai.config import store
 from app.api.v1.routers import api_router
+from app.control_plane.runtime import bootstrap_control_plane_runtime
 from app.core.config import get_settings
 from app.core.error_handlers import register_exception_handlers
 from app.core.logging import configure_logging
@@ -239,6 +240,12 @@ def create_app() -> FastAPI:
 
     register_all_tools()
     register_agents()
+    # Phase 7 (minimal integration): the Capability/Policy bootstrap
+    # Phase 2/3 deliberately deferred until a real caller existed — see
+    # app.control_plane.runtime's own module docstring. Idempotent, same
+    # reason register_all_tools() above is: create_app() runs multiple
+    # times across the test suite.
+    bootstrap_control_plane_runtime()
 
     return app
 
