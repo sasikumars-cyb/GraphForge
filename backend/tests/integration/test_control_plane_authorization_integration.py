@@ -66,7 +66,10 @@ class _FakeGraphTool:
             tool_id=self.tool_id,
             tool_name=self.display_name,
             success=True,
-            data={"data": {"repositories": []}, "summary": "0 repositories found"},
+            # Phase 10 fix: `summary` is a TOP-LEVEL `ToolResult` field,
+            # never nested inside `data` (matches the real Neo4jGraphTool).
+            data={"repositories": []},
+            summary="0 repositories found",
         )
 
     async def health_check(self) -> ToolHealth:
@@ -570,7 +573,10 @@ class _CountingFakeGraphTool:
             tool_id=self.tool_id,
             tool_name=self.display_name,
             success=True,
-            data={"data": {"repositories": []}, "summary": "0 repositories found"},
+            # Phase 10 fix: `summary` is a TOP-LEVEL `ToolResult` field,
+            # never nested inside `data` (matches the real Neo4jGraphTool).
+            data={"repositories": []},
+            summary="0 repositories found",
         )
 
     async def health_check(self) -> ToolHealth:
@@ -1181,7 +1187,12 @@ class TestRuntimeParameterInjection:
                     tool_id=self.tool_id,
                     tool_name=self.display_name,
                     success=True,
-                    data={"data": {}, "summary": ""},
+                    # Phase 10 fix: `summary` is a TOP-LEVEL `ToolResult`
+                    # field, never nested inside `data` — still empty/
+                    # falsy here, still exercising the Contradiction
+                    # path, just at the correct location.
+                    data={},
+                    summary="",
                 )
 
         control_plane = _control_plane_injected(db_session, tool_cls=_StillEmptyGraphTool)

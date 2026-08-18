@@ -13,6 +13,28 @@ prior phase's own precedent of testing `query_knowledge_graph` against a
 fake Tool (no real Neo4j is part of this test suite's infrastructure —
 confirmed by grep against every existing test that exercises this
 Capability).
+
+Phase 10 (`TestRealNeo4jGraphToolIntegration`) adds one exception: the
+REAL `Neo4jGraphTool` class is registered in place of the fake, for a
+0-indexed-repository user. This still requires no live Neo4j round trip
+— `TraverseArchitectureGraphTool.execute` short-circuits before touching
+`graph_repo` when `repositories` is empty (see that method's own `if not
+repositories: return ...` guard) — but it IS the real Tool class, real
+Postgres, and the real Control Plane dispatch path, closing the "every
+existing test uses a fake tool" gap Phase 10's own root-cause audit
+identified as why the summary-resolution bug went unnoticed for four
+prior phases.
+
+Phase 10 follow-up (`TestRealNeo4jTraversalIntegration`) goes one step
+further: a real, non-empty Neo4j graph (one `Component` node) is written
+under a real `Repository` row before the real `Neo4jGraphTool` runs, so
+`TraverseArchitectureGraphTool` actually issues a live Neo4j query
+instead of short-circuiting. This uses the SAME real Neo4j instance
+(`app.graph.session.get_driver()`) already relied on by
+`tests/integration/test_neo4j_get_neighborhood.py`,
+`tests/integration/test_graph_health_explainability.py`, and several
+other existing integration tests — no new infrastructure, no Docker/
+service dependency beyond what this suite already requires to run.
 """
 
 from __future__ import annotations
@@ -47,9 +69,15 @@ from app.control_plane.runtime import get_capability_registry, get_policy_store
 from app.database.session import get_db_session
 from app.engineering_state import events as ev
 from app.engineering_state.materialize import fold, is_plan_step_invalidated
+from app.graph.models import GraphNode, GraphPayload
+from app.graph.neo4j_repository import Neo4jGraphRepository
+from app.graph.session import get_driver
 from app.main import create_app
 from app.models.engineering_event import EngineeringEvent
+from app.models.repository import Repository
+from app.models.user import User
 from app.repositories.engineering_event_repository import EngineeringEventRepository
+from app.tools.implementations.neo4j_tool import Neo4jGraphTool
 from app.tools.interfaces import ToolCategory, ToolHealth, ToolInput, ToolResult
 from app.tools.registry import ToolRegistry, ToolSpec, get_tool_registry
 
@@ -81,7 +109,10 @@ class _FakeGraphTool:
             tool_id=self.tool_id,
             tool_name=self.display_name,
             success=True,
-            data={"data": {}, "summary": f"result for: {input.query}"},
+            # Phase 10 fix: `summary` is a TOP-LEVEL `ToolResult` field,
+            # never nested inside `data` (matches the real Neo4jGraphTool).
+            data={},
+            summary=f"result for: {input.query}",
         )
 
     async def health_check(self) -> ToolHealth:
@@ -132,7 +163,12 @@ class _ContradictingGraphTool(_FakeGraphTool):
             tool_id=self.tool_id,
             tool_name=self.display_name,
             success=True,
-            data={"data": {}, "summary": ""},
+            # Phase 10 fix: `summary` is a TOP-LEVEL `ToolResult` field,
+            # never nested inside `data` — still empty/falsy here, still
+            # exercising the Contradiction path, just at the correct
+            # location.
+            data={},
+            summary="",
         )
 
 
@@ -152,7 +188,10 @@ class _CapturingGraphTool(_FakeGraphTool):
             tool_id=self.tool_id,
             tool_name=self.display_name,
             success=True,
-            data={"data": {}, "summary": f"result for: {input.query}"},
+            # Phase 10 fix: `summary` is a TOP-LEVEL `ToolResult` field,
+            # never nested inside `data` (matches the real Neo4jGraphTool).
+            data={},
+            summary=f"result for: {input.query}",
         )
 
 
@@ -1311,3 +1350,204 @@ class TestRuntimeParameterInjectionEndToEnd:
         for received in _CapturingGraphTool.received_inputs:
             assert received.parameters["user_id"] == user_id_b
             assert received.parameters["user_id"] != user_id_a
+
+
+class TestRealNeo4jGraphToolIntegration:
+    """Phase 10 — proves the root-cause fix (`ControlPlane` resolving
+    `Prediction.target_observable` against `ToolResult`'s own top-level
+    attributes, not `tool_result.data`) end-to-end against the REAL
+    `Neo4jGraphTool`, not a fake. This is the exact test category the
+    Phase 10 Design Audit §9 identified as entirely absent before this
+    phase — every earlier test's fake tool modeled `summary` inside
+    `data`, which is why the bug went unnoticed through Phases 3, 5, 7,
+    8, and 9.
+
+    Uses a genuinely 0-indexed-repository user (mirrors the real Phase 9
+    browser acceptance run exactly) — `Neo4jGraphTool.execute` still
+    runs its full real code path (`GetIndexedRepositoriesTool` against
+    real Postgres, then `TraverseArchitectureGraphTool`'s early-return
+    guard for an empty repository list) and still produces a genuinely
+    non-empty top-level `summary` (its f-string template always renders
+    text, e.g. "Knowledge Graph: 0 repositories, 0 components, 0 Kafka
+    topics." — never an empty string), so this is a real, honest
+    `success=True` observation with a real, non-empty observable, not a
+    contrived one.
+    """
+
+    async def test_real_neo4j_tool_produces_expected_classification_end_to_end(
+        self, db_session: AsyncSession
+    ) -> None:
+        app = _override_app(db_session, tool_cls=Neo4jGraphTool)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers, _ = await _register_and_login_as(client, "real-neo4j-tool@example.com")
+            response = await client.post(
+                "/api/v1/engineering-tasks",
+                headers=headers,
+                json={"description": "find repositories", "postconditions": ["found"]},
+            )
+        app.dependency_overrides.clear()
+
+        assert response.status_code == 201, response.text
+        body = response.json()
+
+        for observation_key in ("generator_observation", "verifier_observation"):
+            observation = body[observation_key]
+            assert observation["success"] is True
+            assert observation["capability"] == "query_knowledge_graph"
+            # The core Phase 10 proof: a genuinely successful real-Tool
+            # dispatch now classifies as "expected", not
+            # "uncertain_outcome" — the pre-Phase-10 bug's exact
+            # symptom, observed live during the Phase 9 browser
+            # acceptance run and root-caused in the Phase 10 audit.
+            assert observation["classification"] == "expected"
+            # Phase 8 interaction: `EngineeringTaskObservation.summary`
+            # is now non-null for a real successful query — closing the
+            # exact gap the Phase 9 browser acceptance run surfaced
+            # (`"summary": null` on a `success: true` observation).
+            assert observation["summary"] is not None
+            assert "Knowledge Graph:" in observation["summary"]
+            assert observation["error"] is None
+
+
+async def _seed_real_repository_with_graph(
+    db_session: AsyncSession, *, user_id: uuid.UUID, name: str
+) -> Repository:
+    """Phase 10 follow-up — writes a real, minimal, deterministic
+    `Repository` row (Postgres) plus a matching real Neo4j graph (one
+    `Component` node), using the SAME real Neo4j instance
+    (`app.graph.session.get_driver()`) already relied on by several
+    existing integration tests (`test_neo4j_get_neighborhood.py`,
+    `test_graph_health_explainability.py`, ...) — no new infrastructure.
+
+    `GraphHealthService.for_repositories` (consulted by the real
+    `GetIndexedRepositoriesTool`) considers a repository HEALTHY purely
+    from `graph_repository.has_graph(repository_id) == True` — any node
+    at all under that `repository_id` is sufficient; no Postgres
+    `IndexingJob` row is required for the HEALTHY path (see
+    `app.graph.health._status_for`: `has_graph=True` short-circuits
+    straight to HEALTHY). A fresh, unique `repository.id` per call keeps
+    this independently re-runnable with no teardown, the same pattern
+    `test_graph_health_explainability.py` already uses.
+    """
+    repo = Repository(
+        id=uuid.uuid4(),
+        user_id=user_id,
+        github_repo_id=str(uuid.uuid4().int)[:10],
+        owner="acme",
+        name=name,
+        full_name=f"acme/{name}",
+        private=False,
+        default_branch="main",
+        html_url=f"https://github.com/acme/{name}",
+    )
+    db_session.add(repo)
+    await db_session.flush()
+
+    repository_id = str(repo.id)
+    graph_repository = Neo4jGraphRepository(get_driver())
+    await graph_repository.replace_repository_graph(
+        repository_id,
+        GraphPayload(
+            nodes=[
+                GraphNode(
+                    id=f"{repository_id}:component:OrderController",
+                    labels=["Component", "Controller"],
+                    properties={"name": "OrderController"},
+                )
+            ]
+        ),
+    )
+    return repo
+
+
+class TestRealNeo4jTraversalIntegration:
+    """Phase 10 follow-up — the reviewer's specific ask: does the real
+    Neo4j traversal LEG (`TraverseArchitectureGraphTool` actually
+    issuing a live Neo4j query, not short-circuiting on an empty
+    repository list) also produce a correct top-level `ToolResult.summary`
+    and correct Control-Plane classification? `TestRealNeo4jGraphToolIntegration`
+    above deliberately did NOT exercise this leg (0 indexed repositories,
+    matching the real Phase 9 browser acceptance run) — this class closes
+    that specific gap using a real, minimal, deterministic Neo4j fixture
+    (one `Component` node) rather than a shared/external environment.
+    """
+
+    async def test_direct_tool_call_proves_traversal_actually_ran_and_summary_reflects_it(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Calls the real `Neo4jGraphTool.execute` directly (bypassing
+        HTTP/Control Plane entirely) so the raw `ToolResult` — including
+        `data["components"]`, which the API never exposes (Phase 8
+        Design Audit's own scope boundary: no raw `ToolResult.data` is
+        ever surfaced) — can be inspected directly, proving the
+        traversal genuinely reached Neo4j and returned the seeded node,
+        not merely that the HTTP response looked plausible."""
+        user_id = uuid.uuid4()
+        db_session.add(
+            User(
+                id=user_id,
+                email=f"{uuid.uuid4()}@example.com",
+                full_name="Real Traversal Tester",
+                auth_provider="local",
+            )
+        )
+        await db_session.flush()
+        await _seed_real_repository_with_graph(db_session, user_id=user_id, name="direct-call-repo")
+
+        tool = Neo4jGraphTool(config={})
+        result = await tool.execute(
+            ToolInput(query="find repositories", parameters={"db": db_session, "user_id": user_id})
+        )
+
+        assert result.success is True
+        assert result.data["components"], "expected the real traversal to return the seeded node"
+        assert result.data["components"][0]["name"] == "OrderController"
+        # The core Phase 10 proof, at the raw-ToolResult level: `summary`
+        # is a TOP-LEVEL field (never nested in `.data`), non-empty, and
+        # reflects the genuinely-traversed component count.
+        assert result.summary
+        assert "1 component" in result.summary
+
+    async def test_control_plane_records_summary_and_classifies_expected_end_to_end(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The full stack: real HTTP request -> real Control Plane
+        dispatch -> real `Neo4jGraphTool` -> real Neo4j traversal ->
+        `ObservationRecorded` -> Independent Verification. Proves the
+        Control Plane actually RECORDS the real, traversal-derived
+        summary (not just that the Tool itself produced one) and that
+        both generator and verifier classify `expected`."""
+        app = _override_app(db_session, tool_cls=Neo4jGraphTool)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers, user_id = await _register_and_login_as(
+                client, "real-traversal-e2e@example.com"
+            )
+            await _seed_real_repository_with_graph(
+                db_session, user_id=user_id, name="e2e-traversal-repo"
+            )
+            response = await client.post(
+                "/api/v1/engineering-tasks",
+                headers=headers,
+                json={"description": "find repositories", "postconditions": ["found"]},
+            )
+        app.dependency_overrides.clear()
+
+        assert response.status_code == 201, response.text
+        body = response.json()
+
+        for observation_key in ("generator_observation", "verifier_observation"):
+            observation = body[observation_key]
+            assert observation["success"] is True
+            assert observation["capability"] == "query_knowledge_graph"
+            # The Control Plane recorded the REAL, traversal-derived
+            # summary — not null, and reflecting the actual component
+            # count the real Neo4j query returned.
+            assert observation["summary"] is not None
+            assert "1 component" in observation["summary"]
+            assert observation["error"] is None
+            # The core Phase 10 proof, now through the real traversal
+            # leg specifically: a genuinely non-empty real Neo4j result
+            # classifies as "expected", not "uncertain_outcome".
+            assert observation["classification"] == "expected"

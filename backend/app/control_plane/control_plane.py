@@ -832,7 +832,16 @@ class ControlPlane:
                 # existing event type, not a new shape for it.
                 "raw_result": {
                     "success": tool_result.success,
-                    "summary": tool_result.data.get("summary") if tool_result.data else None,
+                    # Phase 10 fix: `summary` is a TOP-LEVEL `ToolResult`
+                    # field (see `ToolResult`'s own dataclass shape,
+                    # `app.tools.interfaces`), never a key nested inside
+                    # `.data` — `tool_result.data.get("summary")` was
+                    # reading the wrong location and silently returned
+                    # `None` for every real Tool (whose `data` dict never
+                    # contains a `"summary"` key), even on a fully
+                    # successful, non-empty result. See Phase 10 Design
+                    # Audit §5/§6.
+                    "summary": tool_result.summary or None,
                     "error": tool_result.error,
                 },
                 "capability": action.capability_id,
@@ -916,21 +925,35 @@ class ControlPlane:
 
         This phase's minimal, deterministic evaluator for the one
         registered Capability's shape: does the Tool's actual result
-        data contain a truthy value at `prediction.target_observable`?
-        Present and truthy -> "true"; present but falsy/empty -> "false";
-        absent entirely -> "inconclusive". This is deliberately NOT a
-        general Prediction-evaluation engine (Cap §13's
-        `evaluation_procedure` free-text field is declarative, not
-        executed — see `app.control_plane.model.Prediction`'s own
-        docstring on requirement 5 being "declared, not mechanically
-        checked") — it is the smallest real evaluation that makes Cap
-        §16.2 steps 5-6 reachable at all for `query_knowledge_graph`.
+        carry a truthy value at `prediction.target_observable`? Present
+        and truthy -> "true"; present but falsy/empty -> "false"; absent
+        entirely -> "inconclusive". This is deliberately NOT a general
+        Prediction-evaluation engine (Cap §13's `evaluation_procedure`
+        free-text field is declarative, not executed — see
+        `app.control_plane.model.Prediction`'s own docstring on
+        requirement 5 being "declared, not mechanically checked") — it
+        is the smallest real evaluation that makes Cap §16.2 steps 5-6
+        reachable at all for `query_knowledge_graph`.
+
+        Phase 10 fix: `target_observable` is checked at Proposal
+        Conformance (Cap §13 req. 1, `_check_prediction_admissibility`)
+        against the Capability's declared `output_schema` — and that
+        schema (`app.capabilities.setup`) names TOP-LEVEL `ToolResult`
+        fields (`data`, `summary`, `evidence_items`), matching
+        `ToolResult`'s own dataclass shape exactly, NOT keys nested
+        inside `tool_result.data`. Resolving against `tool_result.data`
+        unconditionally (the pre-Phase-10 behavior) silently returned
+        "inconclusive" for every real Tool, because no real Tool nests
+        `output_schema`-declared fields inside `.data` — only the
+        test suite's fake tools did (a fixture bug, not a production
+        contract). Resolving against the `ToolResult` object's own
+        attributes is what actually matches the declared contract.
         """
-        if not tool_result.success or not tool_result.data:
+        if not tool_result.success:
             return "inconclusive"
-        if prediction.target_observable not in tool_result.data:
+        if not hasattr(tool_result, prediction.target_observable):
             return "inconclusive"
-        value = tool_result.data[prediction.target_observable]
+        value = getattr(tool_result, prediction.target_observable)
         return "true" if value else "false"
 
     # ------------------------------------------------------------------
