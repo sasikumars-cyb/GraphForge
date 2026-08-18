@@ -101,6 +101,27 @@ class _FailingGraphTool(_FakeGraphTool):
         )
 
 
+class _CredentialLeakingGraphTool(_FakeGraphTool):
+    """Phase 8 — simulates a Tool whose failure text happens to contain
+    credential-shaped substrings (the exact residual risk the Phase 8
+    Design Audit §4 names: a future Capability's `except Exception:
+    error=str(exc)` catch-all is not guaranteed credential-free). Used
+    to prove `redact_secrets()` is actually applied end-to-end, through
+    a real HTTP round trip, not just at the unit level."""
+
+    async def execute(self, input: ToolInput) -> ToolResult:
+        return ToolResult(
+            tool_id=self.tool_id,
+            tool_name=self.display_name,
+            success=False,
+            error=(
+                "connection failed: aws_access_key_id=AKIAABCDEFGHIJKLMNOP "
+                "api_key: 'sk-live-abcdef1234567890' "
+                "token=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ"
+            ),
+        )
+
+
 class _ContradictingGraphTool(_FakeGraphTool):
     """Returns an empty summary — falsifies the Prediction
     `ReasoningPlane` always constructs (`target_observable="summary"`,
@@ -465,6 +486,152 @@ class TestToolFailure:
         assert body["generator_observation"]["success"] is False
         assert body["generator_observation"]["classification"] == "anomaly"
         assert body["verifier_observation"]["classification"] == "anomaly"
+
+
+class TestObservationDetailSurfacing:
+    """Phase 8 — Observation/Evidence Detail Surfacing. Proves `summary`/
+    `error`/`capability` are correctly projected end-to-end through a
+    real HTTP round trip, and that `redact_secrets()` is genuinely
+    applied before the response ever leaves the server — not merely
+    exercised at the unit level."""
+
+    async def test_expected_observation_exposes_summary_and_capability(
+        self, engineering_task_client: AsyncClient
+    ) -> None:
+        headers, _ = await _register_and_login(engineering_task_client)
+        response = await engineering_task_client.post(
+            "/api/v1/engineering-tasks",
+            headers=headers,
+            json={"description": "find repositories", "postconditions": ["found"]},
+        )
+        assert response.status_code == 201, response.text
+        body = response.json()
+
+        for observation_key in ("generator_observation", "verifier_observation"):
+            observation = body[observation_key]
+            assert observation["capability"] == "query_knowledge_graph"
+            assert observation["summary"] is not None
+            assert "result for:" in observation["summary"]
+            assert observation["error"] is None
+
+    async def test_anomaly_observation_exposes_the_actual_tool_reported_error(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The core Phase 8 fix: an Anomaly is no longer a dead end — the
+        real Tool-reported reason is now readable."""
+        app = _override_app(db_session, tool_cls=_FailingGraphTool)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers, _ = await _register_and_login(client)
+            response = await client.post(
+                "/api/v1/engineering-tasks",
+                headers=headers,
+                json={"description": "find repositories", "postconditions": ["found"]},
+            )
+        app.dependency_overrides.clear()
+
+        assert response.status_code == 201, response.text
+        body = response.json()
+        for observation_key in ("generator_observation", "verifier_observation"):
+            observation = body[observation_key]
+            assert observation["classification"] == "anomaly"
+            assert observation["error"] == "simulated infrastructure failure"
+            assert observation["capability"] == "query_knowledge_graph"
+
+    async def test_credential_shaped_error_text_is_redacted_before_leaving_the_api(
+        self, db_session: AsyncSession
+    ) -> None:
+        """Security requirement: known credential/token patterns are
+        redacted before API exposure — proven by asserting the RAW
+        secret values are absent from the response, not merely that
+        SOME redaction marker is present."""
+        app = _override_app(db_session, tool_cls=_CredentialLeakingGraphTool)
+        transport = ASGITransport(app=app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            headers, _ = await _register_and_login(client)
+            response = await client.post(
+                "/api/v1/engineering-tasks",
+                headers=headers,
+                json={"description": "find repositories", "postconditions": ["found"]},
+            )
+        app.dependency_overrides.clear()
+
+        assert response.status_code == 201, response.text
+        raw_body_text = response.text
+
+        # The raw secret substrings must not appear ANYWHERE in the
+        # response body — not just in the field we expect them in.
+        assert "AKIAABCDEFGHIJKLMNOP" not in raw_body_text
+        assert "sk-live-abcdef1234567890" not in raw_body_text
+        assert "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dQw4w9WgXcQ" not in raw_body_text
+
+        error_text = response.json()["generator_observation"]["error"]
+        assert error_text is not None
+        assert "[REDACTED:" in error_text
+
+    async def test_historical_observation_with_no_summary_or_error_key_is_none(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A pre-Phase-8 Observation whose `raw_result` never had
+        `summary`/`error` keys at all (only `success`) must not crash
+        and must project as `None`, not an empty string or a KeyError."""
+        from app.engineering_state import events as ev
+        from app.engineering_state.materialize import fold
+        from app.services.engineering_task_service import _observation_view
+
+        repo = EngineeringEventRepository(db_session)
+        task_id = uuid.uuid4()
+        goal_event = await repo.append(
+            task_id=task_id,
+            event_type=ev.GOAL_CREATED,
+            payload={"description": "d", "postconditions": ["p"]},
+            actor="api:engineering_tasks",
+        )
+        plan_event = await repo.append(
+            task_id=task_id,
+            event_type=ev.PLAN_CREATED,
+            payload={"goal_event_id": str(goal_event.id), "scope": []},
+            actor="test",
+            causation_event_id=goal_event.id,
+        )
+        plan_step_event = await repo.append(
+            task_id=task_id,
+            event_type=ev.PLAN_STEP_CREATED,
+            payload={
+                "plan_event_id": str(plan_event.id),
+                "description": "d",
+                "postcondition": "p",
+            },
+            actor="test",
+            causation_event_id=plan_event.id,
+        )
+        await repo.append(
+            task_id=task_id,
+            event_type=ev.OBSERVATION_RECORDED,
+            payload={
+                # Pre-Phase-8 shape: only `success` inside raw_result,
+                # no `summary`/`error` keys at all.
+                "raw_result": {"success": True},
+                "capability": "query_knowledge_graph",
+                "action_id": str(uuid.uuid4()),
+                "tool_id": "neo4j_graph",
+                "success": True,
+                "grant_id": str(uuid.uuid4()),
+                "plan_step_id": str(plan_step_event.id),
+            },
+            actor="control_plane",
+        )
+        await db_session.commit()
+
+        events = await repo.list_for_task(task_id)
+        state = fold(events)
+        observation = state.observations[0]
+        view = _observation_view(observation)
+
+        assert view.summary is None
+        assert view.error is None
+        assert view.capability == "query_knowledge_graph"
+        assert view.success is True
 
 
 class TestContradictionReadiness:

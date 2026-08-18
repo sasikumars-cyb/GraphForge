@@ -52,9 +52,28 @@ const PENDING: ClassificationPresentation = {
   explanation: "No verified outcome is recorded for this task yet.",
 };
 
+/** Phase 8 — Engineering State contract §8/§18.12: `ActionOutcomeUnknown`
+ * MUST be recorded honestly, "never optimistically... nor pessimistically
+ * resolved." Conflating it with `PENDING` ("nothing happened yet") would be
+ * exactly the blur the contract warns against — an indeterminate outcome is
+ * a genuinely different fact from no observation existing at all. Not
+ * currently reachable in this codebase (`outcome` is unconditionally
+ * `"completed"` under today's synchronous dispatch — Phase 8 Design Audit
+ * §6), but the UI must still represent it distinctly if the backend's
+ * existing `outcome` field ever carries this value. */
+const OUTCOME_UNKNOWN: ClassificationPresentation = {
+  label: "Outcome unknown",
+  tone: "warning",
+  explanation:
+    "The result could not be determined and is awaiting reconciliation — not yet resolved as succeeded or failed.",
+};
+
 export function classificationPresentation(
   classification: string | null,
+  outcome?: string | null,
 ): ClassificationPresentation {
-  if (classification === null) return PENDING;
+  if (classification === null) {
+    return outcome === "outcome_unknown" ? OUTCOME_UNKNOWN : PENDING;
+  }
   return PRESENTATIONS[classification] ?? { label: classification, tone: "neutral", explanation: "" };
 }

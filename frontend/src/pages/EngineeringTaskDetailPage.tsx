@@ -30,7 +30,7 @@ function ObservationCard({
   title: string;
   observation: EngineeringTaskObservation;
 }) {
-  const presentation = classificationPresentation(observation.classification);
+  const presentation = classificationPresentation(observation.classification, observation.outcome);
   return (
     <Card title={title}>
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
@@ -38,6 +38,8 @@ function ObservationCard({
         <dd>
           <StatusBadge label={presentation.label} tone={presentation.tone} />
         </dd>
+        <dt className="text-fg-muted">Capability</dt>
+        <dd className="font-mono text-xs">{observation.capability ?? "—"}</dd>
         <dt className="text-fg-muted">Outcome</dt>
         <dd>{observation.outcome ?? "—"}</dd>
         <dt className="text-fg-muted">Success</dt>
@@ -56,6 +58,23 @@ function ObservationCard({
         <p className="mt-3 border-t border-line-muted pt-3 text-xs text-fg-muted">
           {presentation.explanation}
         </p>
+      )}
+      {/* Phase 8 — Observation/Evidence Detail Surfacing: the actual
+          Tool-reported result/reason, already durable in Engineering
+          State, redacted server-side before this ever renders. This is
+          the diagnostic content the Phase 8 Design Audit found missing —
+          "Anomaly" alone told the user nothing about WHY. */}
+      {observation.summary && (
+        <div className="mt-3 border-t border-line-muted pt-3">
+          <p className="text-xs font-medium text-fg-secondary">Result summary</p>
+          <p className="mt-0.5 text-xs whitespace-pre-wrap text-fg-muted">{observation.summary}</p>
+        </div>
+      )}
+      {observation.error && (
+        <div className="mt-3 border-t border-line-muted pt-3">
+          <p className="text-xs font-medium text-danger-fg">Reported error</p>
+          <p className="mt-0.5 text-xs whitespace-pre-wrap text-danger-fg">{observation.error}</p>
+        </div>
       )}
     </Card>
   );
@@ -178,7 +197,10 @@ export function EngineeringTaskDetailPage() {
     return null;
   }
 
-  const overall = classificationPresentation(task.verifier_observation.classification);
+  const overall = classificationPresentation(
+    task.verifier_observation.classification,
+    task.verifier_observation.outcome,
+  );
 
   return (
     <div className="flex flex-col gap-4 p-6">

@@ -55,6 +55,7 @@ from app.control_plane.control_plane import (
 )
 from app.control_plane.policy import PolicyStore
 from app.core.exceptions import AppError, ForbiddenError
+from app.core.redact import redact_secrets
 from app.engineering_state.events import GOAL_CREATED, PLAN_CREATED
 from app.engineering_state.materialize import (
     MaterializedEngineeringState,
@@ -358,16 +359,39 @@ def _build_response(task_id: uuid.UUID, events: list[EngineeringEvent]) -> Engin
 def _observation_view(observation: ObservationRecord | None) -> EngineeringTaskObservation:
     if observation is None:
         return EngineeringTaskObservation(
-            success=None, outcome=None, classification=None, actor=None
+            success=None,
+            outcome=None,
+            classification=None,
+            actor=None,
+            summary=None,
+            error=None,
+            capability=None,
         )
-    success = (
-        observation.raw_result.get("success") if isinstance(observation.raw_result, dict) else None
-    )
+    raw_result = observation.raw_result if isinstance(observation.raw_result, dict) else {}
+    success = raw_result.get("success")
+    # Phase 8 (Observation/Evidence Detail Surfacing): `summary`/`error`
+    # are already durably recorded on `raw_result` (Phase 1's original
+    # shape, `app.control_plane.control_plane`'s ObservationRecorded
+    # append) — never fetched live, never fabricated. Redacted through
+    # the SAME, already-established mechanism used elsewhere for
+    # LLM-prompt/Evidence text (`app.core.redact.redact_secrets`) —
+    # known credential/token-shaped patterns are redacted; this is not a
+    # claim of perfect semantic secrecy (Phase 8 Design Audit §4).
+    # `.get(...)` on a dict returns `None` for a historical Observation
+    # recorded before this field existed — `redact_secrets(None)` would
+    # fail, so redaction is applied only when a value is actually present.
+    raw_summary = raw_result.get("summary")
+    raw_error = raw_result.get("error")
+    summary = redact_secrets(raw_summary) if raw_summary is not None else None
+    error = redact_secrets(raw_error) if raw_error is not None else None
     return EngineeringTaskObservation(
         success=success,
         outcome=observation.outcome,
         classification=observation.classification,
         actor=observation.actor,
+        summary=summary,
+        error=error,
+        capability=observation.capability,
     )
 
 

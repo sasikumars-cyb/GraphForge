@@ -25,6 +25,14 @@ export interface EngineeringTaskObservation {
   outcome: string | null;
   classification: string | null;
   actor: string | null;
+  /** Phase 8 — already-durable `raw_result.summary`, redacted server-side
+   * via `redact_secrets()` before it ever reaches this response. */
+  summary: string | null;
+  /** Phase 8 — already-durable `raw_result.error`, redacted server-side.
+   * The concrete "why did this happen" answer for Anomaly/Contradiction. */
+  error: string | null;
+  /** Phase 8 — already-durable `capability` (e.g. "query_knowledge_graph"). */
+  capability: string | null;
 }
 
 export interface EngineeringTask {

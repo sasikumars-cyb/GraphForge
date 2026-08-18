@@ -33,12 +33,18 @@ function makeTask(overrides: Partial<EngineeringTask> = {}): EngineeringTask {
       outcome: "completed",
       classification: "expected",
       actor: null,
+      summary: "Knowledge Graph: 3 repositories, 12 components.",
+      error: null,
+      capability: "query_knowledge_graph",
     },
     verifier_observation: {
       success: true,
       outcome: "completed",
       classification: "expected",
       actor: "control_plane_verifier",
+      summary: "Knowledge Graph: 3 repositories, 12 components.",
+      error: null,
+      capability: "query_knowledge_graph",
     },
     ...overrides,
   };
@@ -131,12 +137,18 @@ describe("EngineeringTaskDetailPage", () => {
           outcome: "completed",
           classification: "anomaly",
           actor: null,
+          summary: null,
+          error: "ToolInput.parameters['db'] (AsyncSession) is required.",
+          capability: "query_knowledge_graph",
         },
         verifier_observation: {
           success: false,
           outcome: "completed",
           classification: "anomaly",
           actor: "control_plane_verifier",
+          summary: null,
+          error: "ToolInput.parameters['db'] (AsyncSession) is required.",
+          capability: "query_knowledge_graph",
         },
       }),
     );
@@ -146,6 +158,94 @@ describe("EngineeringTaskDetailPage", () => {
     expect(
       screen.getAllByText(/Something unexpected happened at the infrastructure/).length,
     ).toBeGreaterThan(0);
+  });
+
+  it("renders the result summary when present (Phase 8)", async () => {
+    vi.mocked(engineeringTasksApi.getEngineeringTask).mockResolvedValue(makeTask());
+    renderPage();
+    await screen.findAllByText("find repositories containing payment processing code");
+    expect(
+      screen.getAllByText("Knowledge Graph: 3 repositories, 12 components.").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("renders the actual tool-reported error for an anomaly (Phase 8)", async () => {
+    vi.mocked(engineeringTasksApi.getEngineeringTask).mockResolvedValue(
+      makeTask({
+        generator_observation: {
+          success: false,
+          outcome: "completed",
+          classification: "anomaly",
+          actor: null,
+          summary: null,
+          error: "ToolInput.parameters['db'] (AsyncSession) is required.",
+          capability: "query_knowledge_graph",
+        },
+        verifier_observation: {
+          success: false,
+          outcome: "completed",
+          classification: "anomaly",
+          actor: "control_plane_verifier",
+          summary: null,
+          error: "ToolInput.parameters['db'] (AsyncSession) is required.",
+          capability: "query_knowledge_graph",
+        },
+      }),
+    );
+    renderPage();
+    await screen.findAllByText("find repositories containing payment processing code");
+    expect(
+      screen.getAllByText("ToolInput.parameters['db'] (AsyncSession) is required.").length,
+    ).toBeGreaterThan(0);
+  });
+
+  it("renders the capability for Execution and Verification (Phase 8)", async () => {
+    vi.mocked(engineeringTasksApi.getEngineeringTask).mockResolvedValue(makeTask());
+    renderPage();
+    await screen.findAllByText("find repositories containing payment processing code");
+    expect(screen.getAllByText("query_knowledge_graph").length).toBeGreaterThan(0);
+  });
+
+  it("shows a dash for capability/summary/error when absent, never a crash (Phase 8)", async () => {
+    vi.mocked(engineeringTasksApi.getEngineeringTask).mockResolvedValue(
+      makeTask({
+        generator_observation: {
+          success: null,
+          outcome: null,
+          classification: null,
+          actor: null,
+          summary: null,
+          error: null,
+          capability: null,
+        },
+      }),
+    );
+    renderPage();
+    await screen.findAllByText("find repositories containing payment processing code");
+    // No throw, and the capability dash renders somewhere.
+    expect(screen.getAllByText("—").length).toBeGreaterThan(0);
+  });
+
+  it("distinguishes outcome_unknown from a pending/no-observation state (Phase 8)", async () => {
+    vi.mocked(engineeringTasksApi.getEngineeringTask).mockResolvedValue(
+      makeTask({
+        generator_observation: {
+          success: null,
+          outcome: "outcome_unknown",
+          classification: null,
+          actor: null,
+          summary: null,
+          error: null,
+          capability: "query_knowledge_graph",
+        },
+      }),
+    );
+    renderPage();
+    await screen.findAllByText("find repositories containing payment processing code");
+    expect(screen.getByText("Outcome unknown")).toBeInTheDocument();
+    expect(
+      screen.getByText(/awaiting reconciliation/),
+    ).toBeInTheDocument();
   });
 
   it("shows a loading state before the response resolves", () => {

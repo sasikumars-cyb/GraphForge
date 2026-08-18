@@ -237,3 +237,79 @@ def test_engineering_tasks_router_get_handler_does_not_call_tool_executor() -> N
         "app/api/v1/routers/engineering_tasks.py imports ToolExecutor directly — "
         "Tool dispatch must remain exclusively inside EngineeringTaskService/ControlPlane."
     )
+
+
+# --- Phase 8: Observation/Evidence Detail Surfacing — read-only guarantee ---
+
+
+def test_observation_view_never_appends_an_event_or_commits() -> None:
+    """Phase 8 extended `_observation_view` to project `summary`/`error`/
+    `capability` from already-durable state — it must remain a pure
+    projection function: no `.append(`, no `EngineeringEventRepository`
+    construction, no `.commit()` anywhere in its body. Structural proof,
+    not merely "the diff looked read-only"."""
+    import ast
+
+    from tests.unit.architecture._source_scan import APP_ROOT
+
+    path = APP_ROOT / "services" / "engineering_task_service.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_observation_view":
+            for inner in ast.walk(node):
+                if isinstance(inner, ast.Attribute) and inner.attr in {"append", "commit"}:
+                    offenders.append(
+                        f"_observation_view calls .{inner.attr}( at line {inner.lineno}"
+                    )
+                if isinstance(inner, ast.Name) and inner.id == "EngineeringEventRepository":
+                    offenders.append(
+                        f"_observation_view references EngineeringEventRepository at line "
+                        f"{inner.lineno}"
+                    )
+
+    assert not offenders, f"_observation_view is no longer a pure projection: {offenders}."
+
+
+def test_observation_view_applies_redact_secrets_to_summary_and_error() -> None:
+    """Positive proof the Phase 8 security requirement is actually wired
+    in — `redact_secrets` MUST be called inside `_observation_view`, not
+    merely imported at module level and left unused."""
+    import ast
+
+    from tests.unit.architecture._source_scan import APP_ROOT
+
+    path = APP_ROOT / "services" / "engineering_task_service.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    calls_redact_secrets = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_observation_view":
+            for inner in ast.walk(node):
+                if (
+                    isinstance(inner, ast.Call)
+                    and isinstance(inner.func, ast.Name)
+                    and inner.func.id == "redact_secrets"
+                ):
+                    calls_redact_secrets = True
+
+    assert calls_redact_secrets, (
+        "_observation_view no longer calls redact_secrets() — the Phase 8 security "
+        "requirement (known credential/token patterns redacted before API exposure) "
+        "would silently regress."
+    )
+
+
+def test_engineering_task_service_module_does_not_import_tool_implementations() -> None:
+    """Phase 8 adds no Tool dispatch of any kind — confirms no
+    `app.tools.implementations.*` import was introduced alongside the
+    diagnostic projection."""
+    from tests.unit.architecture._source_scan import APP_ROOT
+
+    path = APP_ROOT / "services" / "engineering_task_service.py"
+    source = path.read_text(encoding="utf-8")
+    assert "app.tools.implementations" not in source, (
+        "app/services/engineering_task_service.py imports a Tool implementation directly — "
+        "Phase 8 must remain a read-only projection over already-durable Engineering State."
+    )

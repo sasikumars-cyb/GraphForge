@@ -1,6 +1,7 @@
 """Request/response schemas for `POST`/`GET /api/v1/engineering-tasks` —
 Phase 7's minimal end-to-end integration, the Phase 7.1 read-only
-visibility slice, and Phase 7.2's productization (list view).
+visibility slice, Phase 7.2's productization (list view), and Phase 8's
+Observation/Evidence detail surfacing.
 
 Deliberately exposes only what these endpoints need to demonstrate: no
 internal Grant/Policy details, no raw Engineering State payloads.
@@ -47,12 +48,24 @@ class EngineeringTaskPlanStep(BaseModel):
 
 class EngineeringTaskObservation(BaseModel):
     """A minimal, non-internal view of one `ObservationRecorded` event —
-    no raw Grant/Tool internals exposed."""
+    no raw Grant/Tool internals exposed.
+
+    Phase 8 (Observation/Evidence Detail Surfacing) adds `summary`,
+    `error`, and `capability` — all already durably recorded on the
+    event (`raw_result.summary`/`raw_result.error`/`capability`;
+    Phase 8 Design Audit §2), never fetched live from a Tool and never
+    fabricated here. `summary`/`error` are passed through
+    `app.core.redact.redact_secrets` before being set on this model —
+    known credential/token-shaped patterns are redacted; this is NOT a
+    claim of perfect semantic secrecy (Phase 8 Design Audit §4)."""
 
     success: bool | None
     outcome: str | None
     classification: str | None
     actor: str | None
+    summary: str | None
+    error: str | None
+    capability: str | None
 
 
 class EngineeringTaskResponse(BaseModel):
